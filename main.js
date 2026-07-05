@@ -457,27 +457,29 @@ function drawFarmer(f, sx, sy) {
         frame = frames.sleep;
     }
 
-    const px = Math.floor(sx - 6);
-    const py = Math.floor(sy + TILE_H / 2 - 15);
+    const fw = frame.width, fh = frame.height;
+    const px = Math.floor(sx - fw / 2);
+    const py = Math.floor(sy + TILE_H / 2 - fh + 2);
+    const footY = py + fh - 2;
 
     // lantern glow for anyone up and about at night
     const awakeAtNight = world.isNight() && f.state !== 'sleep' && f.state !== 'shelter';
     if (awakeAtNight) {
         const flick = 0.5 + 0.12 * Math.sin(f.animTime * 9);
-        const g = ctx.createRadialGradient(sx, py + 7, 2, sx, py + 7, 20);
+        const g = ctx.createRadialGradient(sx, py + 10, 2, sx, py + 10, 22);
         g.addColorStop(0, `rgba(245,215,90,${0.45 * flick})`);
         g.addColorStop(1, 'rgba(245,215,90,0)');
         ctx.fillStyle = g;
-        ctx.fillRect(sx - 20, py - 13, 40, 40);
+        ctx.fillRect(sx - 22, py - 12, 44, 44);
     }
 
     // tiny shadow
     ctx.fillStyle = 'rgba(10,14,10,0.35)';
-    ctx.fillRect(px + 2, py + 14, 8, 2);
+    ctx.fillRect(px + 4, footY, fw - 8, 2);
 
     if (f.facing < 0) {
         ctx.save();
-        ctx.translate(px + 12, py);
+        ctx.translate(px + fw, py);
         ctx.scale(-1, 1);
         ctx.drawImage(frame, 0, 0);
         ctx.restore();
@@ -488,36 +490,36 @@ function drawFarmer(f, sx, sy) {
     // sick tint overlay
     if (f.health === 'sick' && f.state !== 'sleep') {
         ctx.fillStyle = 'rgba(120,200,120,0.28)';
-        ctx.fillRect(px + 2, py + 3, 8, 8);
+        ctx.fillRect(px + 4, py + 3, fw - 8, 8);
     }
 
     // carried lantern when working at night
     if (awakeAtNight && (f.state === 'work' || f.state === 'walk' || f.state === 'build')) {
-        ctx.drawImage(lanternSprite, px + (f.facing < 0 ? -3 : 11), py + 6);
+        ctx.drawImage(lanternSprite, px + (f.facing < 0 ? -3 : fw - 1), py + 9);
     }
 
     // carrying water indicator
     if (f.carryWater > 0 && f.state !== 'sleep') {
         ctx.fillStyle = '#5a8ac8';
-        ctx.fillRect(px + (f.facing < 0 ? -2 : 12), py + 8, 2, 3);
+        ctx.fillRect(px + (f.facing < 0 ? -2 : fw), py + 11, 2, 3);
     }
 
     // work progress pips
     if (f.state === 'work' && f.action) {
         const p = 1 - f.action.timer / f.action.total;
         ctx.fillStyle = '#20222c';
-        ctx.fillRect(px, py - 4, 12, 2);
+        ctx.fillRect(px + 2, py - 4, 12, 2);
         ctx.fillStyle = '#7dd069';
-        ctx.fillRect(px, py - 4, Math.floor(12 * p), 2);
+        ctx.fillRect(px + 2, py - 4, Math.floor(12 * p), 2);
     }
 
     // status icon: sick (+) or worn out (~) while out and about, unless a bubble shows
     if (!f.bubble) {
         if (f.health === 'sick') {
             const bob = Math.floor(Math.sin(performance.now() / 400) * 1);
-            drawText(ctx, '+', px + 4, py - 8 + bob, '#c05840');
+            drawText(ctx, '+', px + 6, py - 8 + bob, '#c05840');
         } else if (f.tired) {
-            drawText(ctx, '~', px + 4, py - 7, '#e0a03c');
+            drawText(ctx, '~', px + 6, py - 7, '#e0a03c');
         }
     }
 

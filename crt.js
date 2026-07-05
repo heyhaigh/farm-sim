@@ -11,53 +11,39 @@ void main() {
 }
 `;
 
+// Game Boy COLOR look: full color, crisp pixels, a faint LCD grid + soft
+// vignette. No monochrome quantization — the vibrant palette shows through.
 const FRAG = `
 precision mediump float;
 uniform sampler2D uTex;
 uniform vec2 uRes;        // output resolution
 uniform vec2 uTexRes;     // game canvas resolution
 uniform float uTime;
-uniform vec3 uPal0;       // darkest
-uniform vec3 uPal1;
-uniform vec3 uPal2;
-uniform vec3 uPal3;       // lightest
 varying vec2 vUv;
-
-// 4x4 ordered (Bayer) dither -> smooth GB-style ramps between the 4 shades
-float bayer4x4(vec2 p) {
-    int x = int(mod(p.x, 4.0));
-    int y = int(mod(p.y, 4.0));
-    int idx = x + y * 4;
-    float b = 0.0;
-    if (idx == 0) b = 0.0;  else if (idx == 1) b = 8.0;  else if (idx == 2) b = 2.0;  else if (idx == 3) b = 10.0;
-    else if (idx == 4) b = 12.0; else if (idx == 5) b = 4.0;  else if (idx == 6) b = 14.0; else if (idx == 7) b = 6.0;
-    else if (idx == 8) b = 3.0;  else if (idx == 9) b = 11.0; else if (idx == 10) b = 1.0; else if (idx == 11) b = 9.0;
-    else if (idx == 12) b = 15.0; else if (idx == 13) b = 7.0; else if (idx == 14) b = 13.0; else b = 5.0;
-    return b / 16.0;
-}
 
 void main() {
     vec2 uv = vUv;
     vec2 c = uv - 0.5;
 
-    // sample the game frame and reduce to luminance (the DMG is monochrome)
-    vec3 src = texture2D(uTex, uv).rgb;
-    float lum = dot(src, vec3(0.30, 0.59, 0.11));
+    vec3 col = texture2D(uTex, uv).rgb;
 
-    // faint LCD scanline + corner vignette bias the luminance (stays on-palette)
-    float scan = 0.94 + 0.06 * sin(uv.y * uTexRes.y * 3.14159 * 2.0);
-    lum *= scan;
+    // gentle contrast + saturation lift for that punchy GBC screen
+    col = (col - 0.5) * 1.08 + 0.5;
+    float lum = dot(col, vec3(0.30, 0.59, 0.11));
+    col = clamp(mix(vec3(lum), col, 1.22), 0.0, 1.0);
+
+    // faint LCD pixel grid keyed to the game's own pixels
+    vec2 texel = uv * uTexRes;
+    vec2 g = abs(fract(texel) - 0.5);
+    float grid = 1.0 - 0.10 * smoothstep(0.35, 0.5, max(g.x, g.y));
+    col *= grid;
+
+    // soft corner vignette
     float r2 = dot(c, c);
-    float vig = clamp(1.0 - 1.05 * pow(r2, 1.7), 0.0, 1.0);
-    lum *= mix(0.72, 1.0, vig);
-    lum *= 0.99 + 0.01 * sin(uTime * 90.0);        // gentle flicker
+    float vig = clamp(1.0 - 0.85 * pow(r2, 1.8), 0.0, 1.0);
+    col *= mix(0.82, 1.0, vig);
 
-    // ordered-dither then quantize to 4 shades
-    float d = (bayer4x4(gl_FragCoord.xy) - 0.5) * 0.34;
-    float q = clamp(floor((lum + d) * 3.0 + 0.5), 0.0, 3.0);
-    vec3 pal = q < 0.5 ? uPal0 : (q < 1.5 ? uPal1 : (q < 2.5 ? uPal2 : uPal3));
-
-    gl_FragColor = vec4(pal, 1.0);
+    gl_FragColor = vec4(col, 1.0);
 }
 `;
 
@@ -116,7 +102,7 @@ export class CRT {
         gl.uniform2f(this.uRes, this.out.width, this.out.height);
         gl.uniform2f(this.uTexRes, this.src.width, this.src.height);
         gl.uniform1f(this.uTime, time);
-        for (let i = 0; i < 4; i++) gl.uniform3fv(this.uPal[i], this.palette[i]);
+        for (let i = 0; i < 4; i++) if (this.uPal[i]) gl.uniform3fv(this.uPal[i], this.palette[i]);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
 

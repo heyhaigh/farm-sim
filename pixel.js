@@ -80,148 +80,168 @@ function spriteFromMap(rows, colorKey) {
 }
 
 // ---------------------------------------------------------------------------
-// Farmer sprites — 12x16, generated per character sheet
+// Farmer sprites — 16x20 characters composed procedurally, GBC full color.
+// Each Ry's head shape, hairstyle, eye style and build are seeded from their
+// memory so the town reads as a crowd of individuals (à la the Pokémon
+// head+eye-shape variety breakdown).
 // ---------------------------------------------------------------------------
 
-// S skin, H hair, T shirt, P pants, O outline/shoes, W eye white, E eye dark
-const FARMER_FRAMES = {
-    idle: [
-        '............',
-        '...HHHHHH...',
-        '..HHHHHHHH..',
-        '..HSSSSSSH..',
-        '..SSESSESS..',
-        '..SSSSSSSS..',
-        '...SSSSSS...',
-        '..TTTTTTTT..',
-        '.STTTTTTTTS.',
-        '.STTTTTTTTS.',
-        '..TTTTTTTT..',
-        '...PPPPPP...',
-        '...PP..PP...',
-        '...PP..PP...',
-        '...OO..OO...',
-        '............',
-    ],
-    walk1: [
-        '............',
-        '...HHHHHH...',
-        '..HHHHHHHH..',
-        '..HSSSSSSH..',
-        '..SSESSESS..',
-        '..SSSSSSSS..',
-        '...SSSSSS...',
-        '..TTTTTTTT..',
-        '.STTTTTTTT..',
-        '.STTTTTTTTS.',
-        '..TTTTTTTTS.',
-        '...PPPPPP...',
-        '...PP..PP...',
-        '..PP....PP..',
-        '..OO....OO..',
-        '............',
-    ],
-    walk2: [
-        '............',
-        '...HHHHHH...',
-        '..HHHHHHHH..',
-        '..HSSSSSSH..',
-        '..SSESSESS..',
-        '..SSSSSSSS..',
-        '...SSSSSS...',
-        '..TTTTTTTT..',
-        '..TTTTTTTTS.',
-        '.STTTTTTTTS.',
-        '.STTTTTTTT..',
-        '...PPPPPP...',
-        '....PPPP....',
-        '...PP..PP...',
-        '...OO..OO...',
-        '............',
-    ],
-    work: [
-        '.........S..',
-        '...HHHHHHS..',
-        '..HHHHHHHH..',
-        '..HSSSSSSH..',
-        '..SSESSESS..',
-        '..SSSSSSSS..',
-        '...SSSSSS...',
-        '..TTTTTTTT..',
-        '.STTTTTTTT..',
-        '.STTTTTTTT..',
-        '..TTTTTTTT..',
-        '...PPPPPP...',
-        '...PP..PP...',
-        '...PP..PP...',
-        '...OO..OO...',
-        '............',
-    ],
-    sleep: [
-        '............',
-        '............',
-        '............',
-        '............',
-        '............',
-        '...HHHHHH...',
-        '..HHHHHHHH..',
-        '..HSSSSSSH..',
-        '..S-S--S-S..',
-        '..SSSSSSSS..',
-        '..TTTTTTTTT.',
-        '.TTTTTTTTTTT',
-        '.TTTTTTTTTTT',
-        '..OO....OO..',
-        '............',
-        '............',
-    ],
-};
+export const FARM_SPRITE_W = 16;
+export const FARM_SPRITE_H = 20;
+const OUTLINE = '#1c2028';
 
-function drawHat(ctx, hat, hatColor) {
-    ctx.fillStyle = hatColor;
-    switch (hat) {
-        case 'strawhat':
-            ctx.fillRect(1, 2, 10, 1);
-            ctx.fillRect(3, 0, 6, 2);
-            break;
-        case 'hardhat':
-            ctx.fillRect(3, 0, 6, 1);
-            ctx.fillRect(2, 1, 8, 2);
-            break;
-        case 'cap':
-            ctx.fillRect(3, 0, 6, 2);
-            ctx.fillRect(2, 2, 10, 1);
-            break;
-        case 'beret':
-            ctx.fillRect(2, 0, 7, 2);
-            ctx.fillRect(8, 0, 2, 1);
-            break;
-        case 'headband':
-            ctx.fillRect(2, 3, 8, 1);
-            break;
-        case 'headset':
-            ctx.fillRect(2, 1, 8, 1);
-            ctx.fillRect(1, 3, 1, 3);
-            ctx.fillRect(10, 3, 1, 3);
-            ctx.fillRect(1, 6, 2, 1);
-            break;
+function shade(hex, f) {
+    const n = parseInt(hex.slice(1), 16);
+    const r = Math.max(0, Math.min(255, Math.round(((n >> 16) & 255) * f)));
+    const g = Math.max(0, Math.min(255, Math.round(((n >> 8) & 255) * f)));
+    const b = Math.max(0, Math.min(255, Math.round((n & 255) * f)));
+    return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`;
+}
+
+// derive appearance traits deterministically from the seed (unsigned shifts!)
+function look(seed) {
+    const s = seed >>> 0;
+    return {
+        head: (s >>> 0) % 3,          // 0 round, 1 oval, 2 wide
+        hair: (s >>> 2) % 7,          // 0 short,1 bowl,2 spiky,3 tuft,4 bun,5 long,6 bald
+        eyes: (s >>> 5) % 4,          // 0 dots,1 beady,2 happy,3 sleepy
+        build: (s >>> 8) % 2,         // 0 slim, 1 stocky
+        brow: (s >>> 10) % 2,
+    };
+}
+
+function px(ctx, x, y, w, h, col) { ctx.fillStyle = col; ctx.fillRect(x, y, w, h); }
+
+function drawHead(ctx, L, C, yOff) {
+    // head box per shape
+    let x0, x1, y0, y1;
+    if (L.head === 0) { x0 = 4; x1 = 11; y0 = 2; y1 = 9; }         // round
+    else if (L.head === 1) { x0 = 5; x1 = 10; y0 = 1; y1 = 9; }    // oval (tall)
+    else { x0 = 3; x1 = 12; y0 = 3; y1 = 9; }                      // wide
+    y0 += yOff; y1 += yOff;
+    const w = x1 - x0 + 1, h = y1 - y0 + 1;
+    px(ctx, x0, y0, w, h, C.skin);
+    // rounded corners
+    px(ctx, x0, y0, 1, 1, 'rgba(0,0,0,0)'); ctx.clearRect(x0, y0, 1, 1);
+    ctx.clearRect(x1, y0, 1, 1); ctx.clearRect(x0, y1, 1, 1); ctx.clearRect(x1, y1, 1, 1);
+    // soft cheek shade + chin outline
+    px(ctx, x0, y1 - 1, w, 1, shade(C.skin, 0.82));
+    px(ctx, x0 + 1, y1 + 1, w - 2, 1, shade(C.skin, 0.7));
+    return { x0, x1, y0, y1 };
+}
+
+function drawHair(ctx, L, C, hb) {
+    const { x0, x1, y0 } = hb;
+    const hair = C.hair, hairD = shade(C.hair, 0.7);
+    const w = x1 - x0 + 1;
+    if (L.hair === 6) return;   // bald
+    // base cap over the crown
+    px(ctx, x0, y0 - 1, w, 2, hair);
+    px(ctx, x0 - 1, y0, 1, 2, hair); px(ctx, x1 + 1, y0, 1, 2, hair);
+    px(ctx, x0, y0 - 1, w, 1, shade(hair, 1.15));   // top highlight
+    switch (L.hair) {
+        case 0: /* short */ px(ctx, x0, y0 + 1, 1, 2, hair); px(ctx, x1, y0 + 1, 1, 2, hair); break;
+        case 1: /* bowl */ px(ctx, x0 - 1, y0 + 1, 1, 3, hair); px(ctx, x1 + 1, y0 + 1, 1, 3, hair); px(ctx, x0, y0 + 1, w, 1, hairD); break;
+        case 2: /* spiky */ for (let i = 0; i < w; i += 2) px(ctx, x0 + i, y0 - 2, 1, 1, hair); break;
+        case 3: /* tuft */ px(ctx, x0 + Math.floor(w / 2) - 1, y0 - 3, 2, 2, hair); break;
+        case 4: /* bun */ px(ctx, x0 + Math.floor(w / 2) - 1, y0 - 3, 3, 2, hair); px(ctx, x0 + Math.floor(w / 2), y0 - 3, 1, 1, hairD); break;
+        case 5: /* long */ px(ctx, x0 - 1, y0 + 1, 1, 5, hair); px(ctx, x1 + 1, y0 + 1, 1, 5, hair); px(ctx, x0 - 1, y0 + 5, 1, 1, hairD); px(ctx, x1 + 1, y0 + 5, 1, 1, hairD); break;
     }
 }
 
-export function makeFarmerSprites(sheet) {
-    const c = sheet.colors;
-    const key = {
-        'S': c.skin, 'H': c.hair, 'T': c.shirt, 'P': c.pants,
-        'O': '#20222c', 'E': '#20222c', '-': '#20222c',
-    };
-    const out = {};
-    for (const [name, rows] of Object.entries(FARMER_FRAMES)) {
-        const sprite = spriteFromMap(rows, key);
-        const ctx = sprite.getContext('2d');
-        if (name !== 'sleep') drawHat(ctx, sheet.hat, c.hatColor);
-        out[name] = sprite;
+function drawEyes(ctx, L, C, hb, sleeping) {
+    const { x0, x1, y0 } = hb;
+    const ey = y0 + 3;
+    const lx = x0 + 1, rx = x1 - 2;
+    if (sleeping || L.eyes === 3) {
+        px(ctx, lx, ey + 1, 2, 1, OUTLINE); px(ctx, rx, ey + 1, 2, 1, OUTLINE); return;
     }
-    return out;
+    if (L.eyes === 2) { // happy ^ ^
+        px(ctx, lx, ey + 1, 1, 1, OUTLINE); px(ctx, lx + 1, ey, 1, 1, OUTLINE);
+        px(ctx, rx + 1, ey + 1, 1, 1, OUTLINE); px(ctx, rx, ey, 1, 1, OUTLINE);
+        return;
+    }
+    if (L.eyes === 1) { // beady with white
+        px(ctx, lx, ey, 2, 2, '#ffffff'); px(ctx, rx, ey, 2, 2, '#ffffff');
+        px(ctx, lx, ey, 1, 2, OUTLINE); px(ctx, rx + 1, ey, 1, 2, OUTLINE);
+        return;
+    }
+    // dots
+    px(ctx, lx + 1, ey, 1, 2, OUTLINE); px(ctx, rx, ey, 1, 2, OUTLINE);
+    if (L.brow) { px(ctx, lx, ey - 1, 2, 1, shade(C.hair, 0.6)); px(ctx, rx, ey - 1, 2, 1, shade(C.hair, 0.6)); }
+}
+
+function drawHat2(ctx, hat, hatColor, hb) {
+    const { x0, x1, y0 } = hb; const w = x1 - x0 + 1; const hd = shade(hatColor, 0.75);
+    px(ctx, 0, 0, 0, 0, hatColor);
+    switch (hat) {
+        case 'strawhat': px(ctx, x0 - 2, y0 - 1, w + 4, 1, hatColor); px(ctx, x0, y0 - 3, w, 2, hatColor); px(ctx, x0, y0 - 1, w, 1, hd); break;
+        case 'hardhat': px(ctx, x0, y0 - 3, w, 1, hatColor); px(ctx, x0 - 1, y0 - 2, w + 2, 2, hatColor); px(ctx, x0 - 1, y0, w + 2, 1, hd); break;
+        case 'cap': px(ctx, x0, y0 - 3, w, 2, hatColor); px(ctx, x1 - 1, y0 - 1, 4, 1, hatColor); px(ctx, x0, y0 - 1, w, 1, hd); break;
+        case 'beret': px(ctx, x0, y0 - 3, w - 1, 2, hatColor); px(ctx, x1, y0 - 3, 1, 1, hatColor); break;
+        case 'headband': px(ctx, x0 - 1, y0 + 1, w + 2, 1, hatColor); break;
+        case 'headset': px(ctx, x0, y0 - 2, w, 1, OUTLINE); px(ctx, x0 - 1, y0 + 1, 1, 3, OUTLINE); px(ctx, x1 + 1, y0 + 1, 1, 3, OUTLINE); px(ctx, x0 - 1, y0 + 4, 2, 1, hatColor); break;
+    }
+}
+
+function drawBody(ctx, L, C, pose, frame) {
+    const shirt = C.shirt, shirtD = shade(C.shirt, 0.78);
+    const pants = C.pants, pantsD = shade(C.pants, 0.78);
+    const bx0 = L.build ? 4 : 5, bx1 = L.build ? 11 : 10;
+    const bw = bx1 - bx0 + 1;
+    const ty = 10;
+    // torso
+    px(ctx, bx0, ty, bw, 5, shirt);
+    px(ctx, bx0, ty + 3, bw, 2, shirtD);
+    px(ctx, bx0 + Math.floor(bw / 2), ty, 1, 5, shade(shirt, 0.9)); // collar seam
+    // arms
+    const armUp = pose === 'work';
+    px(ctx, bx0 - 1, ty, 1, 4, shirt);
+    px(ctx, bx1 + 1, ty, 1, 4, shirt);
+    if (armUp) { px(ctx, bx1 + 1, ty - 3, 1, 3, C.skin); px(ctx, bx1 + 1, ty - 4, 1, 1, C.skin); } // raised hand/tool
+    else { px(ctx, bx0 - 1, ty + 4, 1, 1, C.skin); px(ctx, bx1 + 1, ty + 4, 1, 1, C.skin); } // hands
+    // legs + shoes, animated
+    let l1 = 6, r1 = 8;
+    if (pose === 'walk1') { l1 = 5; r1 = 9; }
+    else if (pose === 'walk2') { l1 = 6; r1 = 8; }
+    px(ctx, l1, 15, 2, 3, pants); px(ctx, r1, 15, 2, 3, pants);
+    px(ctx, l1, 17, 2, 1, pantsD); px(ctx, r1, 17, 2, 1, pantsD);
+    px(ctx, l1, 18, 2, 1, '#3a2e28'); px(ctx, r1, 18, 2, 1, '#3a2e28');   // shoes
+}
+
+function composeFarmer(sheet, pose) {
+    const [c, ctx] = makeCanvas(FARM_SPRITE_W, FARM_SPRITE_H);
+    const C = sheet.colors;
+    const L = look(sheet.seed >>> 0);
+    const sleeping = pose === 'sleep';
+
+    if (sleeping) {
+        // lying down: shift the whole body downward, eyes closed, no hat
+        ctx.translate(0, 4);
+        drawBody(ctx, L, C, 'idle', 0);
+        const hb = drawHead(ctx, L, C, 0);
+        drawHair(ctx, L, C, hb);
+        drawEyes(ctx, L, C, hb, true);
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        return c;
+    }
+
+    drawBody(ctx, L, C, pose, 0);
+    const hb = drawHead(ctx, L, C, 0);
+    drawHair(ctx, L, C, hb);
+    drawEyes(ctx, L, C, hb, false);
+    drawHat2(ctx, sheet.hat, C.hatColor, hb);
+    return c;
+}
+
+export function makeFarmerSprites(sheet) {
+    return {
+        idle: composeFarmer(sheet, 'idle'),
+        walk1: composeFarmer(sheet, 'walk1'),
+        walk2: composeFarmer(sheet, 'walk2'),
+        work: composeFarmer(sheet, 'work'),
+        sleep: composeFarmer(sheet, 'sleep'),
+    };
 }
 
 // ---------------------------------------------------------------------------
