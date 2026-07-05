@@ -979,7 +979,21 @@ function frame(now) {
     drawWeather(dt, t);
     drawUI();
 
+    crt.setPalette(hexPalette(world.seasonDef.dmg));
     crt.render(t);
+}
+
+// convert a season's 4 hex shades into [r,g,b] 0..1 arrays for the shader
+const _palCache = {};
+function hexPalette(hexes) {
+    const key = hexes.join(',');
+    if (_palCache[key]) return _palCache[key];
+    const pal = hexes.map(h => {
+        const n = parseInt(h.slice(1), 16);
+        return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+    });
+    _palCache[key] = pal;
+    return pal;
 }
 
 // boot screen: static + title card

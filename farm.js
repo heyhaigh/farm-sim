@@ -28,14 +28,20 @@ const WEATHER_STATES = {
     drought: { label: 'DROUGHT', next: { sun: 1.5, cloud: 1 }, dur: [22, 40] },
 };
 
+// Each season also carries a `dmg` 4-shade Game Boy palette (darkest -> lightest)
+// that the CRT shader quantizes the whole scene into.
 export const SEASONS = [
     { name: 'SPRING', growth: 1.15, waterMul: 1.0, ground: ['#4a7a42', '#457540'], tilled: '#6a4c30', accent: '#7dd069',
+      dmg: ['#0f2110', '#35602f', '#84a52c', '#e2f2b0'],
       weather: { sun: 3, cloud: 3, rain: 3, storm: 1, drought: 0.3 } },
     { name: 'SUMMER', growth: 1.3, waterMul: 1.5, ground: ['#5f8a38', '#578235'], tilled: '#6e4e2e', accent: '#f0d060',
+      dmg: ['#12240c', '#3a6a22', '#9ab52e', '#eef8bc'],
       weather: { sun: 5, cloud: 2, rain: 1.5, storm: 1.5, drought: 2.5 } },
     { name: 'FALL', growth: 0.8, waterMul: 0.8, ground: ['#8a7038', '#7c6634'], tilled: '#5e4228', accent: '#e0803c',
+      dmg: ['#201606', '#5c451c', '#b48a2c', '#f2e2a0'],
       weather: { sun: 3, cloud: 4, rain: 3, storm: 1.5, drought: 0.5 } },
     { name: 'WINTER', growth: 0.4, waterMul: 0.4, ground: ['#c6ced6', '#bac2ca'], tilled: '#8a7a68', accent: '#a8c8e8',
+      dmg: ['#101c22', '#385158', '#82a0a6', '#e6f2f2'],
       weather: { sun: 2, cloud: 4, rain: 1, storm: 2, drought: 0 } },
 ];
 export const SEASON_LENGTH = 3;

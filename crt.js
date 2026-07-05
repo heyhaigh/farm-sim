@@ -17,52 +17,47 @@ uniform sampler2D uTex;
 uniform vec2 uRes;        // output resolution
 uniform vec2 uTexRes;     // game canvas resolution
 uniform float uTime;
+uniform vec3 uPal0;       // darkest
+uniform vec3 uPal1;
+uniform vec3 uPal2;
+uniform vec3 uPal3;       // lightest
 varying vec2 vUv;
 
-float hash(vec2 p) {
-    return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+// 4x4 ordered (Bayer) dither -> smooth GB-style ramps between the 4 shades
+float bayer4x4(vec2 p) {
+    int x = int(mod(p.x, 4.0));
+    int y = int(mod(p.y, 4.0));
+    int idx = x + y * 4;
+    float b = 0.0;
+    if (idx == 0) b = 0.0;  else if (idx == 1) b = 8.0;  else if (idx == 2) b = 2.0;  else if (idx == 3) b = 10.0;
+    else if (idx == 4) b = 12.0; else if (idx == 5) b = 4.0;  else if (idx == 6) b = 14.0; else if (idx == 7) b = 6.0;
+    else if (idx == 8) b = 3.0;  else if (idx == 9) b = 11.0; else if (idx == 10) b = 1.0; else if (idx == 11) b = 9.0;
+    else if (idx == 12) b = 15.0; else if (idx == 13) b = 7.0; else if (idx == 14) b = 13.0; else b = 5.0;
+    return b / 16.0;
 }
 
 void main() {
     vec2 uv = vUv;
-
-    // chromatic aberration, stronger at the edges
     vec2 c = uv - 0.5;
-    float ab = dot(c, c) * 0.0035 + 0.0004;
-    vec3 col;
-    col.r = texture2D(uTex, uv + c * ab * 2.0).r;
-    col.g = texture2D(uTex, uv).g;
-    col.b = texture2D(uTex, uv - c * ab * 2.0).b;
 
-    // scanlines follow the game canvas rows
-    float scan = 0.82 + 0.18 * sin(uv.y * uTexRes.y * 3.14159 * 2.0);
-    col *= scan;
+    // sample the game frame and reduce to luminance (the DMG is monochrome)
+    vec3 src = texture2D(uTex, uv).rgb;
+    float lum = dot(src, vec3(0.30, 0.59, 0.11));
 
-    // RGB aperture stripes on output pixels
-    float stripe = mod(gl_FragCoord.x, 3.0);
-    vec3 mask = stripe < 1.0 ? vec3(1.05, 0.92, 0.92)
-              : stripe < 2.0 ? vec3(0.92, 1.05, 0.92)
-                             : vec3(0.92, 0.92, 1.05);
-    col *= mask;
-
-    // corner vignette — soft in the middle, heavy in the corners
+    // faint LCD scanline + corner vignette bias the luminance (stays on-palette)
+    float scan = 0.94 + 0.06 * sin(uv.y * uTexRes.y * 3.14159 * 2.0);
+    lum *= scan;
     float r2 = dot(c, c);
-    float vig = 1.0 - 1.15 * pow(r2, 1.6);
-    vig = clamp(vig, 0.0, 1.0);
-    col *= vig;
+    float vig = clamp(1.0 - 1.05 * pow(r2, 1.7), 0.0, 1.0);
+    lum *= mix(0.72, 1.0, vig);
+    lum *= 0.99 + 0.01 * sin(uTime * 90.0);        // gentle flicker
 
-    // subtle rolling brightness band
-    float band = 0.985 + 0.015 * sin(uv.y * 4.0 - uTime * 0.7);
-    col *= band;
+    // ordered-dither then quantize to 4 shades
+    float d = (bayer4x4(gl_FragCoord.xy) - 0.5) * 0.34;
+    float q = clamp(floor((lum + d) * 3.0 + 0.5), 0.0, 3.0);
+    vec3 pal = q < 0.5 ? uPal0 : (q < 1.5 ? uPal1 : (q < 2.5 ? uPal2 : uPal3));
 
-    // flicker + noise
-    col *= 0.985 + 0.015 * sin(uTime * 110.0);
-    col += (hash(uv * uTime) - 0.5) * 0.035;
-
-    // slight brightness lift so scanlines don't crush it
-    col *= 1.18;
-
-    gl_FragColor = vec4(col, 1.0);
+    gl_FragColor = vec4(pal, 1.0);
 }
 `;
 
@@ -105,7 +100,13 @@ export class CRT {
         this.uRes = gl.getUniformLocation(prog, 'uRes');
         this.uTexRes = gl.getUniformLocation(prog, 'uTexRes');
         this.uTime = gl.getUniformLocation(prog, 'uTime');
+        this.uPal = [0, 1, 2, 3].map(i => gl.getUniformLocation(prog, `uPal${i}`));
+        // default DMG green until a palette is supplied
+        this.palette = [[0.06, 0.13, 0.06], [0.21, 0.38, 0.18], [0.52, 0.65, 0.17], [0.89, 0.95, 0.69]];
     }
+
+    // palette: array of 4 [r,g,b] in 0..1, darkest -> lightest
+    setPalette(palette) { if (palette) this.palette = palette; }
 
     render(time) {
         const gl = this.gl;
@@ -115,6 +116,7 @@ export class CRT {
         gl.uniform2f(this.uRes, this.out.width, this.out.height);
         gl.uniform2f(this.uTexRes, this.src.width, this.src.height);
         gl.uniform1f(this.uTime, time);
+        for (let i = 0; i < 4; i++) gl.uniform3fv(this.uPal[i], this.palette[i]);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
 
