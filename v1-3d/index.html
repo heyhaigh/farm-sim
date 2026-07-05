@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex, nofollow">
+    <meta name="description" content="Ry Bots — procedural worker Ryans grown from Ryan's SuperMemory knowledge graph.">
+    <title>Ry Bots | heyhaigh.ai</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { height: 100%; overflow: hidden; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0e0f14;
+            color: #eaeaf2;
+        }
+        #scene { position: fixed; inset: 0; }
+        canvas { display: block; }
+
+        .hud { position: fixed; z-index: 10; pointer-events: none; }
+        .hud > * { pointer-events: auto; }
+
+        #title-block {
+            top: 20px; left: 20px; max-width: 340px;
+        }
+        #title-block h1 {
+            font-size: 26px; letter-spacing: 0.14em; font-weight: 800;
+        }
+        #title-block h1 span { color: #7dd069; }
+        #title-block p {
+            font-size: 12px; color: #9aa0b4; margin-top: 6px; line-height: 1.5;
+        }
+        .pill-row { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+        button.pill {
+            font: inherit; font-size: 12px; font-weight: 600;
+            color: #eaeaf2; background: rgba(255,255,255,0.07);
+            border: 1px solid rgba(255,255,255,0.15);
+            padding: 7px 14px; border-radius: 999px; cursor: pointer;
+            backdrop-filter: blur(6px);
+            transition: background 0.15s ease, transform 0.1s ease;
+        }
+        button.pill:hover { background: rgba(255,255,255,0.14); }
+        button.pill:active { transform: scale(0.96); }
+        button.pill.primary { background: #7dd069; color: #10240c; border-color: #7dd069; }
+        button.pill.primary:hover { background: #92e07e; }
+
+        #status {
+            bottom: 16px; left: 50%; transform: translateX(-50%);
+            font-size: 12px; color: #9aa0b4;
+            background: rgba(14,15,20,0.7); padding: 6px 14px; border-radius: 999px;
+            backdrop-filter: blur(6px);
+            white-space: nowrap;
+        }
+
+        /* Inspector card */
+        #inspector {
+            top: 20px; right: 20px; width: 320px; max-height: calc(100vh - 40px);
+            background: rgba(20,22,30,0.88); backdrop-filter: blur(12px);
+            border: 1px solid rgba(255,255,255,0.12); border-radius: 16px;
+            padding: 16px; overflow-y: auto;
+            display: none;
+            animation: cardIn 0.25s cubic-bezier(0.34,1.56,0.64,1);
+        }
+        #inspector.open { display: block; }
+        @keyframes cardIn {
+            from { opacity: 0; transform: translateY(-8px) scale(0.97); }
+            to   { opacity: 1; transform: none; }
+        }
+        #inspector .bot-name { font-size: 18px; font-weight: 800; }
+        #inspector .bot-archetype {
+            display: inline-block; font-size: 10px; font-weight: 700;
+            letter-spacing: 0.1em; text-transform: uppercase;
+            padding: 3px 8px; border-radius: 6px; margin-top: 6px;
+            background: rgba(125,208,105,0.15); color: #7dd069;
+        }
+        #inspector h4 {
+            font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+            color: #9aa0b4; margin: 14px 0 6px;
+        }
+        #inspector .memory-title { font-size: 13px; font-weight: 600; line-height: 1.4; }
+        #inspector .memory-summary { font-size: 12px; color: #b8bdcf; line-height: 1.55; margin-top: 6px; }
+        #inspector pre {
+            font-size: 10.5px; line-height: 1.5; color: #a9d6a0;
+            background: rgba(0,0,0,0.35); border-radius: 10px; padding: 10px;
+            overflow-x: auto; white-space: pre;
+        }
+        #inspector .close-btn {
+            position: absolute; top: 10px; right: 10px;
+            width: 26px; height: 26px; border-radius: 8px;
+            background: rgba(255,255,255,0.08); border: none; color: #9aa0b4;
+            font-size: 15px; cursor: pointer; line-height: 1;
+        }
+        #inspector .close-btn:hover { background: rgba(255,255,255,0.16); color: #fff; }
+
+        /* Floating name tags */
+        .bot-tag {
+            position: fixed; z-index: 5; pointer-events: none;
+            transform: translate(-50%, -100%);
+            font-size: 11px; font-weight: 700; letter-spacing: 0.02em;
+            color: #fff; text-shadow: 0 1px 4px rgba(0,0,0,0.6);
+            background: rgba(14,15,20,0.55); padding: 3px 9px; border-radius: 999px;
+            border: 1px solid rgba(255,255,255,0.12);
+            white-space: nowrap;
+            transition: opacity 0.2s ease;
+        }
+
+        #loading {
+            position: fixed; inset: 0; z-index: 20;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            background: #0e0f14; gap: 14px;
+            transition: opacity 0.5s ease;
+        }
+        #loading.done { opacity: 0; pointer-events: none; }
+        #loading .orb {
+            width: 44px; height: 44px; border-radius: 50%;
+            background: #7dd069;
+            animation: orbPulse 1s ease-in-out infinite;
+        }
+        @keyframes orbPulse {
+            0%, 100% { transform: scale(1) translateY(0); border-radius: 50%; }
+            50% { transform: scale(1.15, 0.85) translateY(6px); border-radius: 45% 45% 55% 55%; }
+        }
+        #loading p { font-size: 12px; color: #9aa0b4; letter-spacing: 0.08em; }
+
+        @media (max-width: 720px) {
+            #title-block { max-width: 240px; }
+            #title-block h1 { font-size: 20px; }
+            #inspector { width: calc(100vw - 32px); right: 16px; top: auto; bottom: 16px; max-height: 46vh; }
+            #status { display: none; }
+        }
+    </style>
+</head>
+<body>
+    <div id="scene"></div>
+
+    <div id="loading">
+        <div class="orb"></div>
+        <p>GROWING RY BOTS FROM MEMORIES…</p>
+    </div>
+
+    <div class="hud" id="title-block">
+        <h1>RY <span>BOTS</span></h1>
+        <p>Procedural worker Ryans, grown from real memories in Ryan's SuperMemory knowledge graph. Each bot's body, gait and personality are seeded by one memory. Click a bot to inspect it.</p>
+        <div class="pill-row">
+            <button class="pill primary" id="btn-spawn">+ Grow a bot</button>
+            <button class="pill" id="btn-respawn">↻ New crew</button>
+        </div>
+    </div>
+
+    <div class="hud" id="inspector">
+        <button class="close-btn" id="btn-close" aria-label="Close inspector">×</button>
+        <div class="bot-name" id="insp-name"></div>
+        <div class="bot-archetype" id="insp-archetype"></div>
+        <h4>Grown from memory</h4>
+        <div class="memory-title" id="insp-memory-title"></div>
+        <div class="memory-summary" id="insp-memory-summary"></div>
+        <h4>DNA</h4>
+        <pre id="insp-dna"></pre>
+        <div class="pill-row">
+            <button class="pill" id="btn-mutate">🧬 Mutate</button>
+        </div>
+    </div>
+
+    <div class="hud" id="status">memories: — · bots: —</div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+        }
+    }
+    </script>
+    <script type="module" src="./main.js"></script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+# macOS
+.DS_Store
+
+# editor
+.vscode/
+.idea/
+
+# scratch / screenshots
+*.log
+screenshots/
+.playwright-mcp/
+
+# node (only if tooling is added later)
+node_modules/
