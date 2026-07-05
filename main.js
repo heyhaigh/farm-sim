@@ -1064,9 +1064,9 @@ function drawMinimap() {
     const t2m = (i, j) => [mx + (i / GRID) * mw, my + (j / GRID) * mh];
     const dot = (i, j, col, s = 1) => { const [px, py] = t2m(i, j); ctx.fillStyle = col; ctx.fillRect(Math.floor(px), Math.floor(py), s, s); };
 
-    ctx.fillStyle = 'rgba(12,14,22,0.85)';
+    ctx.fillStyle = 'rgba(10,11,15,0.9)';
     ctx.fillRect(mx - 3, my - 3, mw + 6, mh + 6);
-    ctx.fillStyle = 'rgba(74,110,66,0.45)';           // faint meadow
+    ctx.fillStyle = 'rgba(34,36,42,0.92)';            // dark-gray field
     ctx.fillRect(mx, my, mw, mh);
     ctx.strokeStyle = 'rgba(255,255,255,0.22)';
     ctx.strokeRect(mx - 2.5, my - 2.5, mw + 5, mh + 5);
@@ -1075,7 +1075,7 @@ function drawMinimap() {
     ctx.beginPath(); ctx.rect(mx, my, mw, mh); ctx.clip();
 
     // owned land (very low contrast)
-    ctx.fillStyle = 'rgba(150,180,110,0.22)';
+    ctx.fillStyle = 'rgba(255,255,255,0.07)';
     for (const p of world.plots) {
         const [px, py] = t2m(p.x, p.y);
         ctx.fillRect(Math.floor(px), Math.floor(py), Math.max(1, Math.round(p.w / GRID * mw)), Math.max(1, Math.round(p.h / GRID * mh)));
@@ -1087,8 +1087,8 @@ function drawMinimap() {
     for (const s of world.structures) dot(s.i, s.j, 'rgba(160,160,180,0.7)', 2);
     // facilities (coop/barn) low-contrast
     for (const p of world.plots) for (const fac of p.facilities) if (fac.struct) dot(fac.struct.i, fac.struct.j, 'rgba(150,120,90,0.7)', 2);
-    // homes = a 4-dot (2x2) low-contrast red cluster
-    ctx.fillStyle = 'rgba(200,90,70,0.65)';
+    // homes = a 4-dot (2x2) low-contrast grey cluster
+    ctx.fillStyle = 'rgba(150,156,168,0.75)';
     for (const p of world.plots) { const [px, py] = t2m(p.house.i, p.house.j); ctx.fillRect(Math.floor(px), Math.floor(py), 2, 2); }
 
     // current viewport (the on-screen diamond)
