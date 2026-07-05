@@ -309,13 +309,18 @@ function pickLoadedImage(store, names, i, j, seed = 0) {
     }
     return null;
 }
+// ONE scale for every real-asset wild billboard. Never scale sprites individually:
+// each is drawn at its native pixel size * WILD_SCALE, so the pixel grid is identical
+// across all of them. Variety comes from different source images + position, not resizing.
+const WILD_SCALE = 0.42;
+function wildDims(img) { return { w: Math.round(img.naturalWidth * WILD_SCALE), h: Math.round(img.naturalHeight * WILD_SCALE) }; }
 function wildSpec(i, j, t, season) {
     if (t === T.TREE) {
         const treeSet = TREE_SETS[season.name] || TREE_SETS.SUMMER;
         const img = pickLoadedImage(treeImg, treeSet, i, j, 61);
         if (img) {
-            const size = Math.round(44 + rand2(i, j, 62) * 13 + (rand2(i, j, 70) > 0.9 ? 4 : 0));
-            return { img, w: size, h: size, anchor: 0.82, depth: 0.4, leaves: season.name === 'FALL', seed: hash2(i, j, 73) };
+            const { w, h } = wildDims(img);
+            return { img, w, h, anchor: 0.82, depth: 0.4, leaves: season.name === 'FALL', seed: hash2(i, j, 73) };
         }
         const species = TREE_SPECIES[hash2(i, j, 63) % TREE_SPECIES.length];
         const spr = treeSprite(species, season.name);
@@ -325,16 +330,16 @@ function wildSpec(i, j, t, season) {
         const bushSet = BUSH_SETS[season.name] || BUSH_SETS.SUMMER;
         const img = pickLoadedImage(bushImg, bushSet, i, j, 64);
         if (img) {
-            const size = Math.round(21 + rand2(i, j, 65) * 7);
-            return { img, w: size, h: size, anchor: 0.74, depth: -1 };
+            const { w, h } = wildDims(img);
+            return { img, w, h, anchor: 0.74, depth: -1 };
         }
         return { img: flowerSprite, w: flowerSprite.width, h: flowerSprite.height, anchor: 1, nudgeY: 2, depth: -1 };
     }
     if (t === T.WHEAT) {
         const img = pickLoadedImage(bushImg, FERN_NAMES, i, j, 66);
         if (img) {
-            const size = Math.round(19 + rand2(i, j, 67) * 7);
-            return { img, w: size, h: size, anchor: 0.72, depth: -1 };
+            const { w, h } = wildDims(img);
+            return { img, w, h, anchor: 0.72, depth: -1 };
         }
         return { img: wheatSprite, w: wheatSprite.width, h: wheatSprite.height, anchor: 1, nudgeY: 2, depth: -1 };
     }
@@ -344,9 +349,8 @@ function wildSpec(i, j, t, season) {
     if (t === T.ROCK) {
         const img = pickLoadedImage(rockImg, ROCK_NAMES, i, j, 68);
         if (!img) return null;
-        const base = img.naturalWidth >= 64 ? 36 : img.naturalWidth >= 32 ? 24 : 14;
-        const size = Math.round(base * (0.9 + rand2(i, j, 69) * 0.22));
-        return { img, w: size, h: size, anchor: 0.86, depth: -0.25 };
+        const { w, h } = wildDims(img);
+        return { img, w, h, anchor: 0.86, depth: -0.25 };
     }
     return null;
 }

@@ -42,7 +42,7 @@ const WEATHER_STATES = {
 // Each season also carries a `dmg` 4-shade Game Boy palette (darkest -> lightest)
 // that the CRT shader quantizes the whole scene into.
 export const SEASONS = [
-    { name: 'SPRING', growth: 1.15, waterMul: 1.0, ground: ['#4a7a42', '#457540'], tilled: '#6a4c30', accent: '#7dd069',
+    { name: 'SPRING', growth: 1.15, waterMul: 1.0, ground: ['#6e8f4d', '#658447'], tilled: '#6a4c30', accent: '#7dd069',
       dmg: ['#0f2110', '#35602f', '#84a52c', '#e2f2b0'],
       weather: { sun: 3, cloud: 3, rain: 3, storm: 1, drought: 0.3 } },
     { name: 'SUMMER', growth: 1.3, waterMul: 1.5, ground: ['#5f8a38', '#578235'], tilled: '#6e4e2e', accent: '#f0d060',
