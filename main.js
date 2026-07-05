@@ -116,9 +116,56 @@ function loadImageSet(base, sets, store, onReady) {
         store[n] = img;
     }
 }
+// Animal walk-sheets: 6 cols x 8 rows grids. We slice the side-profile row.
+const ANIMAL_ART_BASE = './assets/craftpix-net-291971-free-top-down-animals-farm-pixel-art-sprites/PNG/Without_shadow/';
+const ANIMAL_SHEETS = {
+    cow:     { file: 'Bull_animation_without_shadow', fw: 64, fh: 64, disp: 46 },
+    pig:     { file: 'Piglet_animation_without_shadow', fw: 32, fh: 32, disp: 30 },
+    goat:    { file: 'Sheep_animation_without_shadow', fw: 32, fh: 32, disp: 30 },
+    chicken: { file: 'Rooster_animation_without_shadow', fw: 32, fh: 32, disp: 22 },
+};
+const ANIMAL_COLS = 6;
+let ANIMAL_SIDE_ROW = 5;   // side-profile (right-facing) row; tuned by eye
+const animalImg = {};
+let animalArtReady = false;
+function loadAnimalArt() {
+    const kinds = Object.keys(ANIMAL_SHEETS);
+    let pending = kinds.length;
+    const done = () => { if (--pending <= 0) animalArtReady = true; };
+    for (const k of kinds) {
+        const img = new Image();
+        img.onload = done;
+        img.onerror = done;
+        img.src = ANIMAL_ART_BASE + ANIMAL_SHEETS[k].file + '.png';
+        animalImg[k] = img;
+    }
+}
+
 function loadAssetArt() {
     loadImageSet(TREE_ART_BASE, TREE_SETS, treeImg, () => { treeArtReady = true; });
     loadImageSet(BUSH_ART_BASE, BUSH_SETS, bushImg, () => { bushArtReady = true; });
+    loadAnimalArt();
+}
+
+// draw a sliced side-profile animal frame at (px,py); returns false if not ready
+function drawAnimal(p, px, py) {
+    const cfg = ANIMAL_SHEETS[p.kind], img = animalImg[p.kind];
+    if (!cfg || !img || !img.complete || !img.naturalWidth) return false;
+    const moving = Math.abs(p.vx) + Math.abs(p.vy) > 0.05;
+    const col = moving ? Math.floor(p.anim * 6) % ANIMAL_COLS : 0;
+    const disp = cfg.disp, top = Math.floor(py - disp * 0.86);
+    ctx.imageSmoothingEnabled = false;
+    if (p.flip < 0) {
+        ctx.save();
+        ctx.translate(Math.floor(px + disp / 2), top);
+        ctx.scale(-1, 1);
+        ctx.drawImage(img, col * cfg.fw, ANIMAL_SIDE_ROW * cfg.fh, cfg.fw, cfg.fh, 0, 0, disp, disp);
+        ctx.restore();
+    } else {
+        ctx.drawImage(img, col * cfg.fw, ANIMAL_SIDE_ROW * cfg.fh, cfg.fw, cfg.fh, Math.floor(px - disp / 2), top, disp, disp);
+    }
+    ctx.imageSmoothingEnabled = false;
+    return true;
 }
 
 // trees vary by species AND season; pre-render + cache each combination (fallback)
@@ -243,13 +290,14 @@ function redrawTerrain() {
         }
     }
 
-    // woodland + forage pass (drawn over ground so canopies overlap tiles behind)
+    // woodland + forage pass (drawn over ground so canopies overlap tiles behind).
+    // Crisp (nearest-neighbor) blits at source-respecting scale — no bilinear
+    // blur, which made the little bushes look soft and blown-up.
     const treeSet = TREE_SETS[season.name] || TREE_SETS.SUMMER;
     const bushSet = BUSH_SETS[season.name] || BUSH_SETS.SUMMER;
+    tctx.imageSmoothingEnabled = false;
     const blit = (img, cxp, baseY, H, anchor) => {
-        tctx.imageSmoothingEnabled = true;
         tctx.drawImage(img, Math.floor(cxp - H / 2), Math.floor(baseY - H * anchor), H, H);
-        tctx.imageSmoothingEnabled = false;
     };
     for (let j = 0; j < GRID; j++) {
         for (let i = 0; i < GRID; i++) {
@@ -258,11 +306,11 @@ function redrawTerrain() {
             const cxp = TERRAIN_OX + isoX(i, j);
             const baseY = isoY(i, j) + TILE_H;
             if (t === T.TREE && treeArtReady) {
-                blit(treeImg[treeSet[(i * 7 + j * 5) % treeSet.length]], cxp, baseY, 60, 0.82);
+                blit(treeImg[treeSet[(i * 7 + j * 5) % treeSet.length]], cxp, baseY, 44, 0.82);
                 continue;
             }
             if (t === T.FLOWER && bushArtReady) {
-                blit(bushImg[bushSet[(i * 5 + j * 3) % bushSet.length]], cxp, baseY, 26, 0.78);
+                blit(bushImg[bushSet[(i * 5 + j * 3) % bushSet.length]], cxp, baseY, 16, 0.74);
                 continue;
             }
             let spr;
@@ -530,6 +578,17 @@ function drawProducer(p, px, py) {
     if (p.kind === 'pad') {
         const spr = lilyPadSprites[p.ready ? 1 : 0];
         ctx.drawImage(spr, Math.floor(px - 7), Math.floor(py - 5));
+        return;
+    }
+    // real animal sheets for livestock/poultry
+    if (p.kind !== 'fish' && drawAnimal(p, px, py)) {
+        if (p.ready) {
+            const bob = Math.round(Math.sin(performance.now() / 250 + p.anim) * 1);
+            ctx.fillStyle = PRODUCT_ICON[p.kind] || '#fff';
+            const iy = Math.floor(py - (ANIMAL_SHEETS[p.kind].disp * 0.86) - 4 + bob);
+            ctx.fillRect(Math.floor(px - 1), iy, 2, 2);
+            ctx.fillRect(Math.floor(px - 2), iy + 1, 4, 1);
+        }
         return;
     }
     const frame = Math.floor(p.anim * (p.kind === 'chicken' ? 6 : 3)) % 2;
@@ -1179,5 +1238,6 @@ function drawBootScreen(t) {
         world, cam,
         select: (i) => { selected = world.farmers[i] || null; },
         speed: (mult) => { world._speedMult = mult; },
+        animalRow: (n) => { ANIMAL_SIDE_ROW = n; },
     };
 })();
