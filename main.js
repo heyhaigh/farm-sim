@@ -96,7 +96,9 @@ const BUSH_SETS = {
     SUMMER: ['Bush_orange_flowers1', 'Bush_red_flowers1', 'Bush_pink_flowers2', 'Bush_blue_flowers2'],
     FALL: ['Autumn_bush1', 'Autumn_bush2', 'Autumn_bush3', 'Bush_orange_flowers2'],
     WINTER: ['Snow_bush1', 'Snow_bush2', 'Snow_bush3'],
+    _fern: ['Fern1_1', 'Fern1_2', 'Fern2_1', 'Fern2_2'],   // for wild-wheat/grass forage
 };
+const FERN_NAMES = ['Fern1_1', 'Fern1_2', 'Fern2_1', 'Fern2_2'];
 
 // Shared async image-set loader: fills `store` and flips `readyFlag` (+ redraws
 // terrain) once every image in the sets has loaded. Falls back to procedural
@@ -119,10 +121,10 @@ function loadImageSet(base, sets, store, onReady) {
 // Animal walk-sheets: 6 cols x 8 rows grids. We slice the side-profile row.
 const ANIMAL_ART_BASE = './assets/craftpix-net-291971-free-top-down-animals-farm-pixel-art-sprites/PNG/Without_shadow/';
 const ANIMAL_SHEETS = {
-    cow:     { file: 'Bull_animation_without_shadow', fw: 64, fh: 64, disp: 46 },
-    pig:     { file: 'Piglet_animation_without_shadow', fw: 32, fh: 32, disp: 30 },
-    goat:    { file: 'Sheep_animation_without_shadow', fw: 32, fh: 32, disp: 30 },
-    chicken: { file: 'Rooster_animation_without_shadow', fw: 32, fh: 32, disp: 22 },
+    cow:     { file: 'Bull_animation_without_shadow', fw: 64, fh: 64, disp: 62 },
+    pig:     { file: 'Piglet_animation_without_shadow', fw: 32, fh: 32, disp: 42 },
+    goat:    { file: 'Sheep_animation_without_shadow', fw: 32, fh: 32, disp: 42 },
+    chicken: { file: 'Rooster_animation_without_shadow', fw: 32, fh: 32, disp: 30 },
 };
 const ANIMAL_COLS = 6;
 let ANIMAL_SIDE_ROW = 5;   // side-profile (right-facing) row; tuned by eye
@@ -145,7 +147,7 @@ function loadAnimalArt() {
 const HOME_BASE = './assets/craftpix-net-654184-main-characters-home-free-top-down-pixel-art-asset/PNG/';
 const homeSheet = new Image();
 let homeReady = false;
-const HOUSE_SRC = { x: 1, y: 4, w: 137, h: 136 };   // house within exterior.png
+const HOUSE_SRC = { x: 2, y: 5, w: 137, h: 125 };   // house within exterior.png (trimmed of the stone-wall row below)
 
 function loadAssetArt() {
     loadImageSet(TREE_ART_BASE, TREE_SETS, treeImg, () => { treeArtReady = true; });
@@ -315,11 +317,15 @@ function redrawTerrain() {
             const cxp = TERRAIN_OX + isoX(i, j);
             const baseY = isoY(i, j) + TILE_H;
             if (t === T.TREE && treeArtReady) {
-                blit(treeImg[treeSet[(i * 7 + j * 5) % treeSet.length]], cxp, baseY, 44, 0.82);
+                blit(treeImg[treeSet[(i * 7 + j * 5) % treeSet.length]], cxp, baseY, 72, 0.82);
                 continue;
             }
             if (t === T.FLOWER && bushArtReady) {
-                blit(bushImg[bushSet[(i * 5 + j * 3) % bushSet.length]], cxp, baseY, 16, 0.74);
+                blit(bushImg[bushSet[(i * 5 + j * 3) % bushSet.length]], cxp, baseY, 24, 0.74);
+                continue;
+            }
+            if (t === T.WHEAT && bushArtReady) {
+                blit(bushImg[FERN_NAMES[(i * 3 + j * 7) % FERN_NAMES.length]], cxp, baseY, 22, 0.72);
                 continue;
             }
             let spr;
@@ -442,7 +448,7 @@ function collectDrawables() {
             y: sy + TILE_H, draw: () => {
                 let roofY;
                 if (homeReady) {
-                    const dispW = 58, dispH = Math.round(dispW * HOUSE_SRC.h / HOUSE_SRC.w);
+                    const dispW = 104, dispH = Math.round(dispW * HOUSE_SRC.h / HOUSE_SRC.w);
                     const hx = Math.floor(sx - dispW / 2), hy = Math.floor(sy + TILE_H - dispH + 3);
                     ctx.imageSmoothingEnabled = false;
                     ctx.drawImage(homeSheet, HOUSE_SRC.x, HOUSE_SRC.y, HOUSE_SRC.w, HOUSE_SRC.h, hx, hy, dispW, dispH);

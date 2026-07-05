@@ -13,6 +13,7 @@ import { mulberry32, mod, growFarmer } from './dna.js';
 
 export const GRID = 78;
 export const CENTER = GRID / 2;
+const FOREST_BORDER = 4;   // keep trees this many tiles off the map edge
 
 export const T = { GRASS: 0, PATH: 1, TILLED: 2, HOUSE: 3, WELL: 4, SIGN: 5, STRUCT: 6, WATER: 7, COOP: 8, BARN: 9, TREE: 10, STUMP: 11, WHEAT: 12, FLOWER: 13 };
 export const FORAGE_TILES = [T.WHEAT, T.FLOWER];
@@ -130,22 +131,25 @@ export class World {
         this.#growForest();
     }
 
-    // Wild lands on the town's outskirts: a forest band (trees -> wood) plus
-    // scattered patches of wild wheat (foraged for food). Both regrow over time.
+    // Wild lands on the town's outskirts: forest that grows in CLUSTERS (dense
+    // copses with open meadows between), plus wild wheat + wildflower patches.
+    // Trees stay clear of a border so they never clip the map edge.
     #growForest() {
         for (let j = 0; j < GRID; j++) {
             for (let i = 0; i < GRID; i++) {
                 if (this.get(i, j) !== T.GRASS) continue;
+                if (i < FOREST_BORDER || j < FOREST_BORDER || i >= GRID - FOREST_BORDER || j >= GRID - FOREST_BORDER) continue;
                 const dx = i - CENTER, dy = j - CENTER;
                 const r = Math.sqrt(dx * dx + dy * dy);
-                const n = Math.sin(i * 0.7) * Math.cos(j * 0.6) + Math.sin((i + j) * 0.35);
+                // low-frequency "cluster" field -> clumps where high, open where low
+                const cluster = 0.55 + 0.45 * Math.sin(i * 0.17) * Math.cos(j * 0.15) + 0.28 * Math.sin((i + j) * 0.09 + 1.3);
                 const wheatN = Math.sin(i * 0.31 + 2.0) * Math.cos(j * 0.29 - 1.0);
                 const flowerN = Math.sin(i * 0.27 - 1.3) * Math.cos(j * 0.33 + 2.2);
                 let pt = 0, pw = 0, pf = 0;
-                if (r > 30 && r < 37) pt = 0.55 + n * 0.15;                 // outer forest band
-                else if (r > 9 && r < 26) pt = 0.04 + Math.max(0, n) * 0.05; // sparse inner copses
-                if (r > 12 && r < 33) pw = Math.max(0, wheatN - 0.55) * 0.9;  // wild wheat clumps
-                if (r > 10 && r < 30) pf = Math.max(0, flowerN - 0.5) * 0.7;  // wildflower meadows
+                if (r > 22) pt = Math.max(0, cluster - 0.5) * 1.5;            // outer clumped forest
+                else if (r > 9) pt = Math.max(0, cluster - 0.85) * 0.7;      // sparse inner copses
+                if (r > 12) pw = Math.max(0, wheatN - 0.55) * 0.9;           // wild wheat clumps
+                if (r > 10) pf = Math.max(0, flowerN - 0.5) * 0.7;           // wildflower meadows
                 if (this.rand() < pt) this.set(i, j, T.TREE);
                 else if (this.rand() < pw) this.set(i, j, T.WHEAT);
                 else if (this.rand() < pf) this.set(i, j, T.FLOWER);
@@ -162,10 +166,11 @@ export class World {
             const j = 2 + Math.floor(this.rand() * (GRID - 4));
             const t = this.get(i, j);
             if ((t !== T.GRASS && t !== T.STUMP) || inAnyPlot(i, j)) continue;
+            if (i < FOREST_BORDER || j < FOREST_BORDER || i >= GRID - FOREST_BORDER || j >= GRID - FOREST_BORDER) continue;
             const r = Math.hypot(i - CENTER, j - CENTER);
-            if (r > 28) {
+            if (r > 24) {
                 // near the forest: stumps sprout saplings, gaps refill with wild growth
-                if (this.rand() < 0.5) { this.set(i, j, T.TREE); treesGrown++; }
+                if (this.rand() < 0.45) { this.set(i, j, T.TREE); treesGrown++; }
                 else if (this.rand() < 0.4) { this.set(i, j, this.rand() < 0.6 ? T.WHEAT : T.FLOWER); wheatGrown++; }
             } else if (r > 10 && this.rand() < 0.16) { this.set(i, j, this.rand() < 0.5 ? T.WHEAT : T.FLOWER); wheatGrown++; }
         }
