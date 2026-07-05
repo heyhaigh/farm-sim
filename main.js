@@ -90,20 +90,35 @@ const TREE_SETS = {
     FALL: ['Autumn_tree1', 'Autumn_tree2', 'Autumn_tree3', 'Tree3'],
     WINTER: ['Snow_tree1', 'Snow_tree2', 'Snow_tree3', 'Christmas_tree1', 'Snow_christmass_tree1'],
 };
-const treeImg = {};
-let treeArtReady = false;
-function loadTreeArt() {
+const BUSH_ART_BASE = './assets/craftpix-net-141354-free-top-down-bushes-pixel-art/PNG/Assets/';
+const BUSH_SETS = {
+    SPRING: ['Bush_pink_flowers1', 'Bush_pink_flowers2', 'Bush_blue_flowers1', 'Bush_pink_flowers3'],
+    SUMMER: ['Bush_orange_flowers1', 'Bush_red_flowers1', 'Bush_pink_flowers2', 'Bush_blue_flowers2'],
+    FALL: ['Autumn_bush1', 'Autumn_bush2', 'Autumn_bush3', 'Bush_orange_flowers2'],
+    WINTER: ['Snow_bush1', 'Snow_bush2', 'Snow_bush3'],
+};
+
+// Shared async image-set loader: fills `store` and flips `readyFlag` (+ redraws
+// terrain) once every image in the sets has loaded. Falls back to procedural
+// sprites until then.
+const treeImg = {}; let treeArtReady = false;
+const bushImg = {}; let bushArtReady = false;
+function loadImageSet(base, sets, store, onReady) {
     const names = new Set();
-    for (const s of Object.values(TREE_SETS)) s.forEach(n => names.add(n));
+    for (const s of Object.values(sets)) s.forEach(n => names.add(n));
     let pending = names.size;
-    const done = () => { if (--pending <= 0) { treeArtReady = true; terrainDirty = true; } };
+    const done = () => { if (--pending <= 0) { onReady(); terrainDirty = true; } };
     for (const n of names) {
         const img = new Image();
         img.onload = done;
         img.onerror = done;
-        img.src = TREE_ART_BASE + n + '.png';
-        treeImg[n] = img;
+        img.src = base + n + '.png';
+        store[n] = img;
     }
+}
+function loadAssetArt() {
+    loadImageSet(TREE_ART_BASE, TREE_SETS, treeImg, () => { treeArtReady = true; });
+    loadImageSet(BUSH_ART_BASE, BUSH_SETS, bushImg, () => { bushArtReady = true; });
 }
 
 // trees vary by species AND season; pre-render + cache each combination (fallback)
@@ -230,6 +245,12 @@ function redrawTerrain() {
 
     // woodland + forage pass (drawn over ground so canopies overlap tiles behind)
     const treeSet = TREE_SETS[season.name] || TREE_SETS.SUMMER;
+    const bushSet = BUSH_SETS[season.name] || BUSH_SETS.SUMMER;
+    const blit = (img, cxp, baseY, H, anchor) => {
+        tctx.imageSmoothingEnabled = true;
+        tctx.drawImage(img, Math.floor(cxp - H / 2), Math.floor(baseY - H * anchor), H, H);
+        tctx.imageSmoothingEnabled = false;
+    };
     for (let j = 0; j < GRID; j++) {
         for (let i = 0; i < GRID; i++) {
             const t = world.get(i, j);
@@ -237,12 +258,11 @@ function redrawTerrain() {
             const cxp = TERRAIN_OX + isoX(i, j);
             const baseY = isoY(i, j) + TILE_H;
             if (t === T.TREE && treeArtReady) {
-                // real hi-res CraftPix tree, scaled + smoothed, base anchored on the tile
-                const img = treeImg[treeSet[(i * 7 + j * 5) % treeSet.length]];
-                const H = 60, W = 60;
-                tctx.imageSmoothingEnabled = true;
-                tctx.drawImage(img, Math.floor(cxp - W / 2), Math.floor(baseY - H * 0.82), W, H);
-                tctx.imageSmoothingEnabled = false;
+                blit(treeImg[treeSet[(i * 7 + j * 5) % treeSet.length]], cxp, baseY, 60, 0.82);
+                continue;
+            }
+            if (t === T.FLOWER && bushArtReady) {
+                blit(bushImg[bushSet[(i * 5 + j * 3) % bushSet.length]], cxp, baseY, 26, 0.78);
                 continue;
             }
             let spr;
@@ -1131,7 +1151,7 @@ function drawBootScreen(t) {
 
 (async function boot() {
     requestAnimationFrame(frame);
-    loadTreeArt();
+    loadAssetArt();
 
     const result = await fetchMemories();
     memories = result.memories;
