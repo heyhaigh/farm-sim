@@ -67,6 +67,9 @@ export const PROD = {
     goat:    { rate: 0.026, feedDecay: 0.011, yieldLo: 1, yieldHi: 2, collectT: 2.0, feedT: 1.6, wander: true },
 };
 
+// plot cell-set key (plots are tile-sets so they can grow into non-rectangular shapes)
+export function pkey(i, j) { return i + ',' + j; }
+
 function tileHash(i, j, seed = 0) {
     let h = Math.imul(i | 0, 374761393) ^ Math.imul(j | 0, 668265263) ^ Math.imul(seed | 0, 2246822519);
     h = Math.imul(h ^ (h >>> 13), 1274126177);
@@ -469,7 +472,11 @@ export class World {
             // house upper-center: ~4 tiles of fenced yard behind it, garden room in front, facility room to the sides
             house: { i: slot.i + 5, j: slot.j + 5 },
             fields: [], facilities: [],
+            // plot area is a SET of tiles (starts as the base square) so it can later grow
+            // into L-shapes; `rev` bumps whenever `cells` changes so the renderer re-traces fences.
+            cells: new Set(), rev: 0,
         };
+        for (let j = slot.j; j < slot.j + B; j++) for (let i = slot.i; i < slot.i + B; i++) plot.cells.add(pkey(i, j));
         // Clear a small canopy buffer so homesteads read as deliberate clearings.
         this.#clearPlotWildBuffer(plot, 2);
         for (let di = 0; di < 2; di++) for (let dj = 0; dj < 2; dj++) this.set(plot.house.i + di, plot.house.j + dj, T.HOUSE);
@@ -484,15 +491,32 @@ export class World {
         return farmer;
     }
 
-    // field tiles = interior grass/tilled that isn't house, commons, or a facility
+    #hasCell(plot, i, j) { return plot.cells.has(pkey(i, j)); }
+    // a cell is "interior" (plantable) only if all 4 orthogonal neighbours are also in the
+    // plot — this keeps a 1-tile margin inside the fence for any shape, not just rectangles.
+    #interiorCell(plot, i, j) {
+        return this.#hasCell(plot, i - 1, j) && this.#hasCell(plot, i + 1, j) &&
+            this.#hasCell(plot, i, j - 1) && this.#hasCell(plot, i, j + 1);
+    }
+    #recomputeBounds(plot) {
+        let minI = Infinity, minJ = Infinity, maxI = -Infinity, maxJ = -Infinity;
+        for (const key of plot.cells) {
+            const c = key.indexOf(','), i = +key.slice(0, c), j = +key.slice(c + 1);
+            if (i < minI) minI = i; if (i > maxI) maxI = i;
+            if (j < minJ) minJ = j; if (j > maxJ) maxJ = j;
+        }
+        plot.x = minI; plot.y = minJ; plot.w = maxI - minI + 1; plot.h = maxJ - minJ + 1;
+        plot.rev++;   // geometry changed -> renderer re-traces the fence outline
+    }
+
+    // field tiles = interior grass/tilled cells that aren't the house or a facility
     #rebuildFields(plot) {
         plot.fields = [];
-        for (let i = plot.x + 1; i < plot.x + plot.w - 1; i++) {
-            for (let j = plot.y + 1; j < plot.y + plot.h - 1; j++) {
-                if (this.#inHouse(plot, i, j)) continue;
-                const t = this.get(i, j);
-                if (t === T.GRASS || t === T.TILLED) plot.fields.push({ i, j });
-            }
+        for (const key of plot.cells) {
+            const c = key.indexOf(','), i = +key.slice(0, c), j = +key.slice(c + 1);
+            if (this.#inHouse(plot, i, j) || !this.#interiorCell(plot, i, j)) continue;
+            const t = this.get(i, j);
+            if (t === T.GRASS || t === T.TILLED) plot.fields.push({ i, j });
         }
     }
 

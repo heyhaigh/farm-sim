@@ -649,6 +649,25 @@ function drawWeather(dt, t) {
 // World rendering
 // ---------------------------------------------------------------------------
 
+// Trace the fence outline (boundary corners = posts, boundary edges = rails) of a plot's
+// cell set. Cached per plot.rev so the topology is only recomputed when the plot grows.
+function plotOutline(plot) {
+    if (plot._outline && plot._outlineRev === plot.rev) return plot._outline;
+    const cells = plot.cells, rails = [], postSet = new Set();
+    const addPost = (ci, cj) => postSet.add(ci + ',' + cj);
+    for (const key of cells) {
+        const c = key.indexOf(','), i = +key.slice(0, c), j = +key.slice(c + 1);
+        if (!cells.has(i + ',' + (j - 1))) { rails.push(i, j, i + 1, j); addPost(i, j); addPost(i + 1, j); }
+        if (!cells.has((i + 1) + ',' + j)) { rails.push(i + 1, j, i + 1, j + 1); addPost(i + 1, j); addPost(i + 1, j + 1); }
+        if (!cells.has(i + ',' + (j + 1))) { rails.push(i, j + 1, i + 1, j + 1); addPost(i, j + 1); addPost(i + 1, j + 1); }
+        if (!cells.has((i - 1) + ',' + j)) { rails.push(i, j, i, j + 1); addPost(i, j); addPost(i, j + 1); }
+    }
+    const posts = [];
+    for (const k of postSet) { const c = k.indexOf(','); posts.push(+k.slice(0, c), +k.slice(c + 1)); }
+    plot._outline = { posts, rails }; plot._outlineRev = plot.rev;
+    return plot._outline;
+}
+
 function collectDrawables() {
     const list = [];
 
@@ -659,14 +678,12 @@ function collectDrawables() {
     }
     addBirds(list);
 
-    // fences: a post on every perimeter tile, joined by two rails along each edge
+    // fences: trace the outline of each plot's cell set (works for any shape, incl.
+    // L-shapes). The topology is cached per plot.rev so we don't recompute it each frame.
     for (const plot of world.plots) {
-        const x0 = plot.x, y0 = plot.y, x1 = plot.x + plot.w, y1 = plot.y + plot.h;
-        for (let i = x0; i <= x1; i++) { list.push(post(i, y0)); list.push(post(i, y1)); }
-        for (let j = y0 + 1; j < y1; j++) { list.push(post(x0, j)); list.push(post(x1, j)); }
-        // rails between adjacent posts (top/bottom run along +i, left/right along +j)
-        for (let i = x0; i < x1; i++) { list.push(rail(i, y0, i + 1, y0)); list.push(rail(i, y1, i + 1, y1)); }
-        for (let j = y0; j < y1; j++) { list.push(rail(x0, j, x0, j + 1)); list.push(rail(x1, j, x1, j + 1)); }
+        const o = plotOutline(plot);
+        for (let k = 0; k < o.posts.length; k += 2) list.push(post(o.posts[k], o.posts[k + 1]));
+        for (let k = 0; k < o.rails.length; k += 4) list.push(rail(o.rails[k], o.rails[k + 1], o.rails[k + 2], o.rails[k + 3]));
     }
     function post(i, j) {
         const sx = cam.x + isoX(i, j), sy = cam.y + isoY(i, j);
