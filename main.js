@@ -674,8 +674,18 @@ function collectDrawables() {
 
     // Wild foliage has height, so it participates in the same footline sort as
     // farmers and buildings instead of being baked flat into the terrain.
-    for (let j = 0; j < GRID; j++) {
-        for (let i = 0; i < GRID; i++) addWildDrawable(list, i, j);
+    // Viewport-cull: only scan tiles that can reach the screen (the visible (i,j)
+    // diamond + a margin for tall sprites drawn from tiles just off the bottom edge).
+    {
+        const cs = [screenToTile(0, 0), screenToTile(GW, 0), screenToTile(GW, GH), screenToTile(0, GH)];
+        const M = 12;
+        let iMin = Infinity, iMax = -Infinity, jMin = Infinity, jMax = -Infinity;
+        for (const c of cs) { if (c.i < iMin) iMin = c.i; if (c.i > iMax) iMax = c.i; if (c.j < jMin) jMin = c.j; if (c.j > jMax) jMax = c.j; }
+        iMin = Math.max(0, Math.floor(iMin) - M); iMax = Math.min(GRID - 1, Math.ceil(iMax) + M);
+        jMin = Math.max(0, Math.floor(jMin) - M); jMax = Math.min(GRID - 1, Math.ceil(jMax) + M);
+        for (let j = jMin; j <= jMax; j++) {
+            for (let i = iMin; i <= iMax; i++) addWildDrawable(list, i, j);
+        }
     }
     addBirds(list);
 
