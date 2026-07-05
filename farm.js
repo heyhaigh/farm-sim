@@ -977,6 +977,7 @@ export class Farmer {
         this.path = null;
         this.facing = 1;
         this.carryWater = 0;
+        this.carryCrop = null;     // { type, t } — produce held up briefly after a harvest
         this.bubble = null;
         this.sparkle = 0;
         this.wanderTimer = 0;
@@ -1439,6 +1440,7 @@ export class Farmer {
         const ownerSheet = (helping && owner) ? owner.sheet : s;
         ownerSheet.harvested += yieldN; w.harvestTotal += yieldN;
         if (yieldN > 0 && !check.crit) this.say(`+${yieldN} ${c.type}`);
+        if (yieldN > 0) this.carryCrop = { type: c.type, t: 2.2 };   // hold the picked produce up
         w.crops.delete(`${crop.i},${crop.j}`);
         this.gainXP(3 + yieldN);
         this.#milestones(helping && owner ? owner : this);
@@ -1526,6 +1528,7 @@ export class Farmer {
         this.poachCooldown = Math.max(0, this.poachCooldown - dt);
         this.thoughtBubbleTimer -= dt;
         if (this.bubble) { this.bubble.t -= dt; if (this.bubble.t <= 0) this.bubble = null; }
+        if (this.carryCrop) { this.carryCrop.t -= dt; if (this.carryCrop.t <= 0) this.carryCrop = null; }
         this.sparkle = Math.max(0, this.sparkle - dt);
 
         if (this.state === 'sleep') this.energy = Math.min(1, this.energy + SLEEP_RESTORE * dt);

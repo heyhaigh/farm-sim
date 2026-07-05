@@ -175,6 +175,27 @@ const DIRT_DECALS = [
     { x: 10, y: 14, w: 34, h: 26 }, { x: 96, y: 40, w: 34, h: 26 }, { x: 210, y: 70, w: 34, h: 26 },
 ];
 
+// Garden crops from CraftPix Plants.png / Supplies.png (left half of Plants is a duplicate).
+const PLANTS_BASE = './assets/craftpix-net-200380-free-pixel-art-plants-for-farm/PNG/';
+const plantsSheet = new Image(); let plantsReady = false;
+const suppliesSheet = new Image(); let suppliesReady = false;
+// Growth-stage source rects into Plants.png. Order matches crop.stage 0..3:
+// [seed, sprout, mature-foliage, ripe-with-fruit]  (measured from the sheet)
+const CROP_FRAMES = {
+    tomato: [[11, 112, 12, 14], [40, 105, 19, 21], [101, 96, 22, 30], [68, 96, 23, 30]],   // ripe = red
+    carrot: [[9, 141, 13, 10], [39, 140, 19, 14], [102, 138, 22, 17], [70, 138, 22, 17]],  // ripe = leafy head
+    rose: [[9, 9, 13, 37], [41, 9, 13, 37], [100, 9, 24, 37], [68, 9, 24, 37]],            // ripe = purple cluster
+    pumpkin: [[7, 296, 13, 11], [34, 290, 22, 21], [96, 288, 29, 27], [64, 289, 29, 26]],  // ripe = orange gourd
+    wheat: [[9, 371, 11, 10], [39, 363, 14, 18], [39, 363, 14, 18], [68, 353, 22, 28]],    // ripe = grain
+    sunflower: [[12, 416, 11, 14], [37, 410, 21, 20], [37, 410, 21, 20], [67, 396, 25, 34]],
+};
+const CROP_SCALE = 0.72;   // shrink sheet plants to sit nicely on a 20px tile
+// Harvested-produce icons in Supplies.png (loose items), shown when a crop is picked / carried.
+const PRODUCE_ICONS = {
+    tomato: [195, 147, 9, 9], carrot: [147, 210, 11, 11], rose: [242, 209, 11, 14],
+    pumpkin: [85, 166, 20, 17], wheat: [1, 176, 13, 15], sunflower: [244, 132, 10, 9],
+};
+
 function loadAssetArt() {
     loadImageSet(TREE_ART_BASE, TREE_SETS, treeImg, () => { treeArtReady = true; });
     loadImageSet(BUSH_ART_BASE, BUSH_SETS, bushImg, () => { bushArtReady = true; });
@@ -192,6 +213,27 @@ function loadAssetArt() {
     grassDetailsImg.onload = () => { grassDetailsReady = true; terrainDirty = true; };
     grassDetailsImg.onerror = () => {};
     grassDetailsImg.src = HOME_BASE + 'ground_grass_details.png';
+    plantsSheet.onload = () => { plantsReady = true; };
+    plantsSheet.onerror = () => {};
+    plantsSheet.src = PLANTS_BASE + 'Plants.png';
+    suppliesSheet.onload = () => { suppliesReady = true; };
+    suppliesSheet.onerror = () => {};
+    suppliesSheet.src = PLANTS_BASE + 'Supplies.png';
+}
+
+// Draw a crop at tile-screen (sx,sy): real sheet frame when available, else procedural fallback.
+function drawCropSprite(crop, sx, sy) {
+    const frames = CROP_FRAMES[crop.type];
+    if (plantsReady && imageLoaded(plantsSheet) && frames && !crop.withered) {
+        const f = frames[Math.min(crop.stage, 3)];
+        const w = Math.max(1, Math.round(f[2] * CROP_SCALE)), h = Math.max(1, Math.round(f[3] * CROP_SCALE));
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(plantsSheet, f[0], f[1], f[2], f[3], Math.floor(sx - w / 2), Math.floor(sy + 7 - h), w, h);
+        return;
+    }
+    const sprites = makeCropSprites(crop.type);
+    const spr = crop.withered ? sprites[4] : sprites[crop.stage];
+    ctx.drawImage(spr, Math.floor(sx - 6), Math.floor(sy - 7));
 }
 
 // draw a sliced side-profile animal frame at (px,py); returns false if not ready
@@ -741,14 +783,12 @@ function collectDrawables() {
     // crops
     for (const crop of world.crops.values()) {
         const sx = cam.x + isoX(crop.i, crop.j), sy = cam.y + isoY(crop.i, crop.j);
-        const sprites = makeCropSprites(crop.type);
-        const spr = crop.withered ? sprites[4] : sprites[crop.stage];
         list.push({
             y: sy + TILE_H * 0.5, draw: () => {
                 if (crop.water > 0.45 && !crop.withered) {
                     fillDiamondAlpha(sx - TILE_W / 2 + TILE_W / 2 - 10, sy, 'rgba(40,28,16,0.5)');
                 }
-                ctx.drawImage(spr, Math.floor(sx + TILE_W / 2 - 6 - 10), Math.floor(sy + TILE_H / 2 - 12));
+                drawCropSprite(crop, sx, sy);
                 if (crop.stage === 3 && !crop.withered) {
                     // ready sparkle
                     const tt = performance.now() / 300;
@@ -921,6 +961,16 @@ function drawFarmer(f, sx, sy) {
     if (f.carryWater > 0 && f.state !== 'sleep') {
         ctx.fillStyle = '#5a8ac8';
         ctx.fillRect(px + (f.facing < 0 ? -2 : fw), py + 11, 2, 3);
+    }
+
+    // freshly-picked produce held up above the head (real Supplies.png icon)
+    if (f.carryCrop && suppliesReady && imageLoaded(suppliesSheet) && PRODUCE_ICONS[f.carryCrop.type]) {
+        const [ix, iy, iw, ih] = PRODUCE_ICONS[f.carryCrop.type];
+        const sc = Math.min(1, 11 / Math.max(iw, ih));
+        const dw = Math.max(1, Math.round(iw * sc)), dh = Math.max(1, Math.round(ih * sc));
+        const bob = Math.round(Math.sin(performance.now() / 200));
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(suppliesSheet, ix, iy, iw, ih, Math.floor(px + fw / 2 - dw / 2), Math.floor(py - dh - 3 + bob), dw, dh);
     }
 
     // work progress pips
