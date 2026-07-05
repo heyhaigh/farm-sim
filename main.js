@@ -141,10 +141,19 @@ function loadAnimalArt() {
     }
 }
 
+// Home/exterior tileset — we slice the detailed house from the top-left.
+const HOME_BASE = './assets/craftpix-net-654184-main-characters-home-free-top-down-pixel-art-asset/PNG/';
+const homeSheet = new Image();
+let homeReady = false;
+const HOUSE_SRC = { x: 1, y: 4, w: 137, h: 136 };   // house within exterior.png
+
 function loadAssetArt() {
     loadImageSet(TREE_ART_BASE, TREE_SETS, treeImg, () => { treeArtReady = true; });
     loadImageSet(BUSH_ART_BASE, BUSH_SETS, bushImg, () => { bushArtReady = true; });
     loadAnimalArt();
+    homeSheet.onload = () => { homeReady = true; };
+    homeSheet.onerror = () => {};
+    homeSheet.src = HOME_BASE + 'exterior.png';
 }
 
 // draw a sliced side-profile animal frame at (px,py); returns false if not ready
@@ -431,15 +440,29 @@ function collectDrawables() {
         const indoors = isIndoors(f);
         list.push({
             y: sy + TILE_H, draw: () => {
-                ctx.drawImage(spr, Math.floor(sx - 17), Math.floor(sy - 22));
-                // lit windows when someone is home at night
-                if (night && (indoors || true)) {
-                    ctx.fillStyle = indoors ? '#f0d060' : 'rgba(240,208,96,0.35)';
-                    ctx.fillRect(Math.floor(sx - 17) + 7, Math.floor(sy - 22) + 17, 4, 4);
-                    ctx.fillRect(Math.floor(sx - 17) + 23, Math.floor(sy - 22) + 17, 4, 4);
+                let roofY;
+                if (homeReady) {
+                    const dispW = 58, dispH = Math.round(dispW * HOUSE_SRC.h / HOUSE_SRC.w);
+                    const hx = Math.floor(sx - dispW / 2), hy = Math.floor(sy + TILE_H - dispH + 3);
+                    ctx.imageSmoothingEnabled = false;
+                    ctx.drawImage(homeSheet, HOUSE_SRC.x, HOUSE_SRC.y, HOUSE_SRC.w, HOUSE_SRC.h, hx, hy, dispW, dispH);
+                    if (night) {
+                        ctx.fillStyle = indoors ? 'rgba(255,220,120,0.5)' : 'rgba(255,220,120,0.22)';
+                        ctx.fillRect(hx + Math.floor(dispW * 0.24), hy + Math.floor(dispH * 0.5), 5, 5);
+                        ctx.fillRect(hx + Math.floor(dispW * 0.55), hy + Math.floor(dispH * 0.5), 5, 5);
+                    }
+                    roofY = hy - 6;
+                } else {
+                    ctx.drawImage(spr, Math.floor(sx - 17), Math.floor(sy - 22));
+                    if (night) {
+                        ctx.fillStyle = indoors ? '#f0d060' : 'rgba(240,208,96,0.35)';
+                        ctx.fillRect(Math.floor(sx - 17) + 7, Math.floor(sy - 22) + 17, 4, 4);
+                        ctx.fillRect(Math.floor(sx - 17) + 23, Math.floor(sy - 22) + 17, 4, 4);
+                    }
+                    roofY = Math.floor(sy - 30);
                 }
                 // indoor status floating over the roof
-                const roofX = Math.floor(sx), roofY = Math.floor(sy - 30);
+                const roofX = Math.floor(sx);
                 if (indoors) {
                     if (f.state === 'sick') {
                         const bob = Math.round(Math.sin(performance.now() / 400));
