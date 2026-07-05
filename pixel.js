@@ -644,6 +644,81 @@ export function makeTrough() {
     return c;
 }
 
+// ---------------------------------------------------------------------------
+// Woodland + wild forage
+// ---------------------------------------------------------------------------
+
+export function makeTree(variant) {
+    const [c, ctx] = makeCanvas(16, 22);
+    // trunk
+    ctx.fillStyle = '#6a4a2c';
+    ctx.fillRect(7, 15, 3, 6);
+    ctx.fillStyle = '#503a22';
+    ctx.fillRect(9, 15, 1, 6);
+    // canopy — layered blobs, slight variant shift
+    const g1 = variant ? '#3e7a34' : '#458038';
+    const g2 = variant ? '#5a9a44' : '#62a248';
+    const g3 = '#78ba58';
+    ctx.fillStyle = g1;
+    ctx.fillRect(3, 6, 11, 8);
+    ctx.fillRect(2, 8, 13, 5);
+    ctx.fillRect(4, 4, 9, 3);
+    ctx.fillStyle = g2;
+    ctx.fillRect(4, 6, 9, 5);
+    ctx.fillRect(3, 8, 7, 3);
+    ctx.fillStyle = g3;                 // top highlight
+    ctx.fillRect(5, 5, 4, 2);
+    ctx.fillRect(4, 7, 2, 2);
+    ctx.fillStyle = '#2e5a28';          // underside shade
+    ctx.fillRect(3, 12, 11, 2);
+    return c;
+}
+
+export function makeStump() {
+    const [c, ctx] = makeCanvas(12, 10);
+    ctx.fillStyle = '#6a4a2c';
+    ctx.fillRect(3, 4, 6, 4);
+    ctx.fillStyle = '#503a22';
+    ctx.fillRect(3, 7, 6, 1);
+    ctx.fillStyle = '#8a6640';          // cut top
+    ctx.fillRect(3, 3, 6, 2);
+    ctx.fillStyle = '#a07850';          // rings
+    ctx.fillRect(5, 3, 2, 1);
+    ctx.fillStyle = '#3a2a18';          // roots
+    ctx.fillRect(2, 7, 1, 1); ctx.fillRect(9, 7, 1, 1);
+    return c;
+}
+
+export function makeWildWheat() {
+    const [c, ctx] = makeCanvas(12, 12);
+    ctx.fillStyle = '#7a6a2a';           // stalks
+    for (const x of [3, 6, 9]) ctx.fillRect(x, 5, 1, 6);
+    ctx.fillStyle = '#d8c050';           // heads
+    ctx.fillRect(2, 2, 3, 4); ctx.fillRect(5, 1, 3, 4); ctx.fillRect(8, 3, 3, 4);
+    ctx.fillStyle = '#f0e090';           // highlights
+    ctx.fillRect(3, 2, 1, 2); ctx.fillRect(6, 1, 1, 2); ctx.fillRect(9, 3, 1, 2);
+    ctx.fillStyle = '#b09838';           // shade
+    ctx.fillRect(2, 5, 3, 1); ctx.fillRect(5, 4, 3, 1); ctx.fillRect(8, 6, 3, 1);
+    return c;
+}
+
+export function makeWildFlowers() {
+    const [c, ctx] = makeCanvas(12, 10);
+    // little clump of mixed blossoms on green
+    ctx.fillStyle = '#4a8038';                          // leaves
+    ctx.fillRect(2, 6, 8, 2); ctx.fillRect(4, 5, 4, 1);
+    ctx.fillStyle = '#3a6a2c';
+    ctx.fillRect(5, 7, 1, 2); ctx.fillRect(8, 6, 1, 2);
+    const blooms = [[2, 2, '#e85888'], [5, 1, '#f0d048'], [8, 3, '#8a6ae0'], [4, 4, '#e8e8f0'], [9, 5, '#e878b0']];
+    for (const [x, y, col] of blooms) {
+        ctx.fillStyle = col;
+        ctx.fillRect(x, y, 2, 2);
+        ctx.fillStyle = '#f0e060';                      // pollen center
+        ctx.fillRect(x, y, 1, 1);
+    }
+    return c;
+}
+
 export function makeLantern() {
     const [c, ctx] = makeCanvas(6, 8);
     ctx.fillStyle = '#584838';

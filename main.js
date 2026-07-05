@@ -7,6 +7,7 @@ import {
     makeFarmerSprites, makeCropSprites, makeHouse, makeWell, makeSign, makeFencePost,
     makeScaffold, makeToolshed, makeWindmill, makeTower, makeLantern,
     makeLilyPad, makeFish, makeChicken, makeCow, makePig, makeGoat, makeCoop, makeBarn, makeTrough,
+    makeTree, makeStump, makeWildWheat, makeWildFlowers,
     fillDiamond, strokeDiamond,
 } from './pixel.js';
 import { CRT } from './crt.js';
@@ -74,6 +75,10 @@ const structSprites = {
 const coopSprite = makeCoop();
 const barnSprite = makeBarn();
 const troughSprite = makeTrough();
+const treeSprites = [makeTree(0), makeTree(1)];
+const stumpSprite = makeStump();
+const wheatSprite = makeWildWheat();
+const flowerSprite = makeWildFlowers();
 const lilyPadSprites = [makeLilyPad(false), makeLilyPad(true)];
 const producerSprites = {
     fish: [makeFish(0), makeFish(1)],
@@ -114,40 +119,93 @@ let terrainDirty = true;
 
 const PATH_C = '#8a7a58';
 
+function shade(hex, f) {
+    const n = parseInt(hex.slice(1), 16);
+    const r = Math.max(0, Math.min(255, Math.round(((n >> 16) & 255) * f)));
+    const g = Math.max(0, Math.min(255, Math.round(((n >> 8) & 255) * f)));
+    const b = Math.max(0, Math.min(255, Math.round((n & 255) * f)));
+    return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`;
+}
+
+// low-frequency noise -> which grass "patch" a tile belongs to (0..3)
+function grassPatch(i, j) {
+    const n = Math.sin(i * 0.33) * Math.cos(j * 0.29) + 0.6 * Math.sin((i + j) * 0.17) + 0.5 * Math.cos((i - j) * 0.21);
+    if (n < -0.7) return 1;   // shaded meadow
+    if (n > 0.9) return 2;    // sunlit patch
+    if (n > 0.2) return 3;    // wildflower / tufted patch
+    return 0;                 // plain
+}
+
 function redrawTerrain() {
     const season = world.seasonDef;
     const [GRASS_A, GRASS_B] = season.ground;
     const TILLED_C = season.tilled;
     const winter = season.name === 'WINTER';
+    const flower = winter ? '#e8eef4' : season.name === 'FALL' ? '#c89040' : season.name === 'SUMMER' ? '#f0d84a' : '#e8709a';
     tctx.fillStyle = '#2a3438';
     tctx.fillRect(0, 0, terrain.width, terrain.height);
+
+    // ground pass
     for (let j = 0; j < GRID; j++) {
         for (let i = 0; i < GRID; i++) {
             const t = world.get(i, j);
             const sx = TERRAIN_OX + isoX(i, j) - TILE_W / 2;
             const sy = isoY(i, j);
+            const grassy = t === T.GRASS || t === T.TREE || t === T.STUMP || t === T.WHEAT || t === T.FLOWER;
             let col = (i + j) % 2 ? GRASS_A : GRASS_B;
+            let patch = 0;
+            if (grassy) {
+                patch = grassPatch(i, j);
+                if (patch === 1) col = shade(col, 0.88);
+                else if (patch === 2) col = shade(col, 1.08);
+            }
             if (t === T.TILLED) col = TILLED_C;
             if (t === T.PATH) col = PATH_C;
             if (t === T.HOUSE) col = '#5a5044';
             if (t === T.WATER) col = winter ? '#5a7590' : ((i + j) % 2 ? '#2a5a72' : '#26506a');
-            if (t === T.COOP || t === T.BARN) col = '#6a5a44';   // packed earth under the building
+            if (t === T.COOP || t === T.BARN) col = '#6a5a44';
             fillDiamond(tctx, sx, sy, col);
+
             if (t === T.WATER) {
-                // still-water highlight ripples
                 tctx.fillStyle = winter ? '#8aa8c0' : '#3a6e86';
                 tctx.fillRect(sx + 5 + ((i * 5 + j) % 6), sy + 3 + ((i + j) % 3), 2, 1);
             } else if (t === T.TILLED) {
                 tctx.fillStyle = winter ? '#b8c0c8' : '#584028';
                 tctx.fillRect(sx + 6, sy + 4, 8, 1);
                 tctx.fillRect(sx + 6, sy + 6, 8, 1);
-            } else if (t === T.GRASS && (i * 7 + j * 13) % 5 === 0) {
-                // seasonal ground speckle: flowers in spring, snow in winter, etc.
-                tctx.fillStyle = winter ? '#e8eef4'
-                    : season.name === 'FALL' ? '#b8863c'
-                    : season.name === 'SUMMER' ? '#6fa048' : '#e8709a';
-                tctx.fillRect(sx + 6 + ((i * 3 + j) % 8), sy + 3 + ((i + j * 5) % 4), 1, 1);
+            } else if (grassy) {
+                // patch-specific ground detail breaks up the flat green
+                if (patch === 3) {
+                    tctx.fillStyle = flower;
+                    tctx.fillRect(sx + 6 + ((i * 3 + j) % 7), sy + 3 + ((i + j * 5) % 4), 1, 1);
+                    tctx.fillRect(sx + 4 + ((i * 2 + j * 3) % 9), sy + 5 + ((i * 3) % 3), 1, 1);
+                } else if (patch === 1) {
+                    tctx.fillStyle = shade(GRASS_A, 0.8);           // sparse tufts
+                    tctx.fillRect(sx + 7 + ((i + j) % 5), sy + 4, 2, 1);
+                } else if (patch === 2 && (i * 7 + j * 13) % 3 === 0) {
+                    tctx.fillStyle = shade(GRASS_A, 1.16);          // bright blades
+                    tctx.fillRect(sx + 8 + ((i * 5) % 4), sy + 4, 1, 2);
+                } else if ((i * 7 + j * 13) % 6 === 0) {
+                    tctx.fillStyle = shade(GRASS_B, 0.92);
+                    tctx.fillRect(sx + 9, sy + 5, 1, 1);
+                }
             }
+        }
+    }
+
+    // woodland + forage pass (drawn over ground so canopies overlap tiles behind)
+    for (let j = 0; j < GRID; j++) {
+        for (let i = 0; i < GRID; i++) {
+            const t = world.get(i, j);
+            if (t !== T.TREE && t !== T.STUMP && t !== T.WHEAT && t !== T.FLOWER) continue;
+            const cxp = TERRAIN_OX + isoX(i, j);
+            const baseY = isoY(i, j) + TILE_H;
+            let spr;
+            if (t === T.TREE) spr = treeSprites[(i * 5 + j * 3) % 2];
+            else if (t === T.STUMP) spr = stumpSprite;
+            else if (t === T.WHEAT) spr = wheatSprite;
+            else spr = flowerSprite;
+            tctx.drawImage(spr, Math.floor(cxp - spr.width / 2), Math.floor(baseY - spr.height + 2));
         }
     }
     terrainDirty = false;
@@ -451,7 +509,7 @@ function drawFarmer(f, sx, sy) {
     let frame = frames.idle;
     if (f.state === 'walk') {
         frame = Math.floor(f.animTime * 7) % 2 ? frames.walk1 : frames.walk2;
-    } else if (f.state === 'work' || f.state === 'build') {
+    } else if (f.state === 'work' || f.state === 'build' || f.state === 'chop' || f.state === 'break' || f.state === 'forage') {
         frame = Math.floor(f.animTime * 5) % 2 ? frames.work : frames.idle;
     } else if (f.state === 'sleep') {
         frame = frames.sleep;
@@ -660,7 +718,7 @@ function drawSheet(f) {
     const memLines = wrapText(s.memory.title, 33).slice(0, 3);
     const thinkLines = wrapText(f.thought, 33).slice(0, 2);
     const creedLines = wrapText(p.creed, 33).slice(0, 2);
-    const PH = 222 + (memLines.length + thinkLines.length + creedLines.length) * 7;
+    const PH = 230 + (memLines.length + thinkLines.length + creedLines.length) * 7;
 
     ctx.fillStyle = 'rgba(12,14,24,0.95)';
     ctx.fillRect(PX, PY, PW, PH);
@@ -711,10 +769,14 @@ function drawSheet(f) {
     const facs = ['crops', ...f.plot.facilities.map(fc => FAC_SHORT[fc.type] || fc.type)];
     drawText(ctx, `HAS: ${facs.join(' + ')}`.slice(0, 34), PX + 5, y, '#7dd0c0'); y += 8;
     const rep = Math.round(f.reputation * 100);
-    drawText(ctx, `YIELD:${s.harvested} BONDS:${world.bondCount(f)} REP:${rep}`, PX + 5, y, '#e8c860'); y += 8;
+    drawText(ctx, `YIELD:${s.harvested} WOOD:${f.wood} REP:${rep}`, PX + 5, y, '#e8c860'); y += 8;
+    drawText(ctx, `BONDS:${world.bondCount(f)}${f.wantExpand ? '  (WANTS LAND)' : f.wantFacility ? '  (WANTS TO BUILD)' : ''}`, PX + 5, y, '#e8c860'); y += 8;
     const helping = f.helpTask ? ` ${f.helpTask.requester.sheet.name.split(' ')[0]}` : '';
     const actWord = f.action ? (ACT_WORD[f.action.task?.act] || f.action.task?.act || 'working') : '';
     const doing = f.state === 'work' ? actWord + helping
+        : f.state === 'chop' ? 'chopping wood'
+        : f.state === 'break' ? 'clearing a stump'
+        : f.state === 'forage' ? 'foraging wheat'
         : f.state === 'poach' ? 'sneaking'
         : f.state === 'build' ? 'building'
         : f.state === 'care' ? 'tending sick'
