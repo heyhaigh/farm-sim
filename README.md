@@ -41,12 +41,53 @@ Those stats drive real behavior:
 |------|-------------------|
 | **STR** | Water-carrying capacity (4 vs 2 pails) and build speed |
 | **DEX** | Walk and work speed |
-| **CON** | Keeps working through storms; crops roll the owner's CON to survive lightning (DC 12) |
+| **CON** | Keeps working through storms; crops roll the owner's CON to survive lightning (DC 12); resists illness |
 | **INT** | "Green thumb" growth bonus + the harvest d20 (natural 20 = ×3 crit yield) |
 | **WIS** | Harvests ripe crops before a storm hits; waters early in a drought |
 | **CHA** | 14+ radiates a morale aura: +15% work speed to farmers within 6 tiles |
 
 Farmers earn XP from work and level up, gaining +1 to a random stat.
+
+## Personality — who a farmer *chooses* to be
+
+Where stats decide how *well* a farmer works, four personality axes (also read
+from the memory) decide *how they behave*. Each is a 0–1 value, and their blend
+produces a named identity and a one-line creed (Pillar, Cutthroat, Schemer,
+Lone Wolf, Workaholic, Free Spirit, Straight Shooter, and more):
+
+- **Teamwork (collaboration)** — high: readily answers the help board, joins
+  town projects, checks on sick neighbors. Low: keeps to their own fence line.
+- **Drive (competitiveness)** — high: chases the top of the harvest
+  leaderboard, works later when behind, won't help their direct rival.
+- **Honesty** — high: only asks for help when truly needed, always reciprocates,
+  calls out thieves. Low (manipulative): posts *fake* help requests to farm free
+  labor, and will quietly **poach a ripe crop** from a neighbor when nobody's
+  watching — losing reputation if an honest neighbor catches them.
+- **Work ethic (diligence)** — sets how late they'll stay up (see below).
+
+Every farmer also carries a **reputation** that helping raises and cheating
+lowers; low-reputation farmers get help less readily.
+
+## Energy, sleep & sickness — nobody's on the same clock
+
+Work drains energy; sleeping in one's own house restores it. Crucially, **each
+farmer picks their own bedtime** from their work ethic and competitiveness — a
+Free Spirit turns in the moment night falls, while a Workaholic (or someone
+trailing the leaderboard) burns the midnight oil, working by lantern-light long
+after the others are asleep. Tired farmers move and work slower and fumble
+harvests more.
+
+But there's a cost to overwork: chronic late nights build **sleep debt**, and
+each dawn an exhausted farmer must make a CON save or **fall ill**. A sick
+farmer stays home in bed, works at a crawl, and recovers over a few days —
+faster if a kind-hearted neighbor brings them soup.
+
+## Seasons
+
+The year loops **Spring → Summer → Fall → Winter** (a few days each). Seasons
+retint the ground, shift the weather odds (summer brings droughts, winter brings
+storms and snow), and change how fast crops grow — winter nearly freezes growth,
+while summer races it. Watch for drifting snow and falling autumn leaves.
 
 ## The agent layer
 
@@ -69,8 +110,11 @@ Farmers aren't on fixed scripts — each runs a small decision loop every tick:
 ## Controls
 
 - **Drag** to pan the camera.
-- **Click** a farmer to open their character sheet (stats, current thought,
-  bonds, farm size, and the memory they were grown from).
+- **Click** a farmer to open their character sheet (personality traits, energy &
+  health, stats, current thought, bonds, reputation, farm size, and the memory
+  they were grown from).
+- **ROSTER** (top-right) opens a scrollable town-wide list — every Ry's level
+  and stats at a glance, sorted by yield. Click a row to jump to their sheet.
 - **+RY** (top-right) grows a new farmer from an unused memory.
 
 ## Files

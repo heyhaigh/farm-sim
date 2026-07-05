@@ -476,6 +476,22 @@ export function makeFencePost() {
     return c;
 }
 
+export function makeLantern() {
+    const [c, ctx] = makeCanvas(6, 8);
+    ctx.fillStyle = '#584838';
+    ctx.fillRect(2, 0, 2, 1);      // handle top
+    ctx.fillRect(1, 1, 1, 1); ctx.fillRect(4, 1, 1, 1);
+    ctx.fillStyle = '#6a5844';
+    ctx.fillRect(1, 2, 4, 1);      // cap
+    ctx.fillStyle = '#f0d040';
+    ctx.fillRect(1, 3, 4, 4);      // glass glow
+    ctx.fillStyle = '#fff2b0';
+    ctx.fillRect(2, 4, 2, 2);      // flame
+    ctx.fillStyle = '#584838';
+    ctx.fillRect(1, 7, 4, 1);      // base
+    return c;
+}
+
 // ---------------------------------------------------------------------------
 // Iso tile helpers
 // ---------------------------------------------------------------------------

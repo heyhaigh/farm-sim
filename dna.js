@@ -138,6 +138,77 @@ export function fmtMod(score) {
 }
 
 // ---------------------------------------------------------------------------
+// Personality — four behavioral axes, each 0..1, seeded + keyword-nudged.
+// These decide HOW a farmer acts (who they help, whether they cheat, when
+// they sleep), independent of the D&D stats (which decide how WELL they act).
+// ---------------------------------------------------------------------------
+
+export const TRAIT_NAMES = ['collaboration', 'competitiveness', 'honesty', 'diligence'];
+
+export const TRAIT_LABELS = {
+    collaboration: 'TEAMWORK',
+    competitiveness: 'DRIVE',
+    honesty: 'HONESTY',
+    diligence: 'WORK ETHIC',
+};
+
+// keywords that push a trait UP (+) or DOWN (-)
+const TRAIT_KEYWORDS = {
+    collaboration: {
+        up: ['team', 'collaborat', 'partner', 'leadership', 'community', 'together', 'network', 'family', 'care', 'elder', 'help', 'contact', 'linkedin'],
+        down: ['solo', 'independent', 'personal', 'own'],
+    },
+    competitiveness: {
+        up: ['soccer', 'sport', 'launch', 'startup', 'zero-to-one', 'first', 'lead', 'compete', 'defender', 'win', 'success', 'metrics', 'growth'],
+        down: ['pottery', 'clay', 'hobby', 'relax', 'wheel'],
+    },
+    honesty: {
+        up: ['guidance', 'guidelines', 'accurate', 'legitimate', 'real data', 'advice', 'patent', 'observations', 'vision', 'anticipate'],
+        down: ['showcase', 'demo', 'marketing', 'showing', 'metrics'],
+    },
+    diligence: {
+        up: ['years', 'seven-year', '12-year', 'daily', 'consistent', 'experience', 'career', 'persistent', 'build', 'shipping', 'endurance'],
+        down: ['hobby', 'relax', 'enjoy', 'fun'],
+    },
+};
+
+function rollTrait(name, rand, text) {
+    let v = 0.35 + rand() * 0.3; // base 0.35..0.65, personality-neutral-ish
+    const kw = TRAIT_KEYWORDS[name];
+    for (const w of kw.up) if (text.includes(w)) v += 0.11;
+    for (const w of kw.down) if (text.includes(w)) v -= 0.11;
+    // a dash of chaos so two similar memories still differ
+    v += (rand() - 0.5) * 0.2;
+    return Math.max(0.05, Math.min(0.95, v));
+}
+
+// Turn the four axes into a human-readable identity + a one-line creed.
+export function personalityLabel(p) {
+    const { collaboration: co, competitiveness: cm, honesty: ho, diligence: di } = p;
+    // manipulative streak dominates the read when honesty is low
+    if (ho < 0.32 && cm > 0.55) return { label: 'Cutthroat', creed: 'Wins by any means necessary.' };
+    if (ho < 0.32 && co > 0.55) return { label: 'Schemer', creed: 'Smiles while counting your crops.' };
+    if (ho < 0.35) return { label: 'Trickster', creed: 'Bends the truth when it suits them.' };
+    if (co > 0.66 && ho > 0.6) return { label: 'Pillar', creed: 'The heart of the town.' };
+    if (co > 0.62 && cm < 0.45) return { label: 'Team Player', creed: 'Happiest lending a hand.' };
+    if (cm > 0.66 && co < 0.45) return { label: 'Lone Wolf', creed: 'Runs their own race.' };
+    if (cm > 0.62) return { label: 'Go-Getter', creed: 'Always chasing the top spot.' };
+    if (di > 0.7) return { label: 'Workaholic', creed: 'Burns the midnight oil.' };
+    if (di < 0.32) return { label: 'Free Spirit', creed: 'Works to live, not the reverse.' };
+    if (ho > 0.68) return { label: 'Straight Shooter', creed: 'Says it like it is.' };
+    return { label: 'Steady Hand', creed: 'Reliable, even-keeled, kind enough.' };
+}
+
+export function growPersonality(rand, text) {
+    const p = {};
+    for (const name of TRAIT_NAMES) p[name] = rollTrait(name, rand, text);
+    const id = personalityLabel(p);
+    p.label = id.label;
+    p.creed = id.creed;
+    return p;
+}
+
+// ---------------------------------------------------------------------------
 // Farmer sheet generation
 // ---------------------------------------------------------------------------
 
@@ -160,12 +231,15 @@ export function growFarmer(memory, mutation = 0) {
         stats[s] = Math.max(3, Math.min(18, v));
     }
 
+    const personality = growPersonality(rand, text);
+
     return {
         seed,
         name: `${arch.names[Math.floor(rand() * arch.names.length)]} Ry`,
         archetype: arch.label,
         archetypeKey: key,
         stats,
+        personality,
         level: 1,
         xp: 0,
         harvested: 0,

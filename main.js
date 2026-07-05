@@ -1,11 +1,11 @@
 // main.js — Ry Farms: rendering, camera, input, UI, boot.
 
-import { fetchMemories, mod, fmtMod, STAT_NAMES } from './dna.js';
+import { fetchMemories, mod, fmtMod, STAT_NAMES, TRAIT_NAMES, TRAIT_LABELS } from './dna.js';
 import { World, GRID, T, DAY_LENGTH, NIGHT_LENGTH } from './farm.js';
 import {
     TILE_W, TILE_H, makeCanvas, drawText, textWidth,
     makeFarmerSprites, makeCropSprites, makeHouse, makeWell, makeSign, makeFencePost,
-    makeScaffold, makeToolshed, makeWindmill, makeTower,
+    makeScaffold, makeToolshed, makeWindmill, makeTower, makeLantern,
     fillDiamond, strokeDiamond,
 } from './pixel.js';
 import { CRT } from './crt.js';
@@ -48,6 +48,9 @@ const usedMemoryIds = new Set();
 let selected = null;
 let bootTime = 0;
 let booted = false;
+let rosterOpen = false;
+let rosterScroll = 0;
+const ROSTER_BTN = { x: 0, y: 3, w: 44, h: 12 };   // positioned in drawUI
 
 const cam = { x: 0, y: 0 };
 const mouse = { x: -1, y: -1, downX: 0, downY: 0, dragging: false, panStart: null };
@@ -58,6 +61,7 @@ const wellSprite = makeWell();
 const signSprite = makeSign();
 const fencePost = makeFencePost();
 const scaffoldSprite = makeScaffold();
+const lanternSprite = makeLantern();
 const structSprites = {
     toolshed: makeToolshed(),
     windmill: [makeWindmill(0), makeWindmill(1)],
@@ -92,9 +96,13 @@ const TERRAIN_OX = (GRID * TILE_W) / 2;
 const [terrain, tctx] = makeCanvas(GRID * TILE_W + TILE_W, GRID * TILE_H + TILE_H);
 let terrainDirty = true;
 
-const GRASS_A = '#4a7a42', GRASS_B = '#457540', TILLED_C = '#6a4c30', PATH_C = '#8a7a58';
+const PATH_C = '#8a7a58';
 
 function redrawTerrain() {
+    const season = world.seasonDef;
+    const [GRASS_A, GRASS_B] = season.ground;
+    const TILLED_C = season.tilled;
+    const winter = season.name === 'WINTER';
     tctx.fillStyle = '#2a3438';
     tctx.fillRect(0, 0, terrain.width, terrain.height);
     for (let j = 0; j < GRID; j++) {
@@ -108,11 +116,14 @@ function redrawTerrain() {
             if (t === T.HOUSE) col = '#5a5044';
             fillDiamond(tctx, sx, sy, col);
             if (t === T.TILLED) {
-                tctx.fillStyle = '#584028';
+                tctx.fillStyle = winter ? '#b8c0c8' : '#584028';
                 tctx.fillRect(sx + 6, sy + 4, 8, 1);
                 tctx.fillRect(sx + 6, sy + 6, 8, 1);
             } else if (t === T.GRASS && (i * 7 + j * 13) % 5 === 0) {
-                tctx.fillStyle = '#548a4a';
+                // seasonal ground speckle: flowers in spring, snow in winter, etc.
+                tctx.fillStyle = winter ? '#e8eef4'
+                    : season.name === 'FALL' ? '#b8863c'
+                    : season.name === 'SUMMER' ? '#6fa048' : '#e8709a';
                 tctx.fillRect(sx + 6 + ((i * 3 + j) % 8), sy + 3 + ((i + j * 5) % 4), 1, 1);
             }
         }
@@ -127,6 +138,12 @@ function redrawTerrain() {
 const rain = [];
 for (let i = 0; i < 140; i++) rain.push({ x: Math.random() * GW, y: Math.random() * GH, s: 2.4 + Math.random() * 2 });
 
+// season particles: drifting snow / leaves
+const drift = [];
+for (let i = 0; i < 90; i++) drift.push({ x: Math.random() * GW, y: Math.random() * GH, s: 0.5 + Math.random(), ph: Math.random() * 6.28 });
+
+const LEAF_COLORS = ['#e0803c', '#c85838', '#d8a038', '#a86828'];
+
 function drawWeather(dt, t) {
     const w = world.weather;
     if (w === 'rain' || w === 'storm') {
@@ -140,10 +157,28 @@ function drawWeather(dt, t) {
             ctx.fillRect(Math.floor(p.x), Math.floor(p.y), 1, 3);
         }
     }
+
+    // seasonal drift particles (skip during rain to avoid clutter)
+    const sName = world.seasonName;
+    if ((sName === 'WINTER' || sName === 'FALL') && w !== 'rain' && w !== 'storm') {
+        const isSnow = sName === 'WINTER';
+        const n = isSnow ? 90 : 55;
+        for (let i = 0; i < n; i++) {
+            const p = drift[i];
+            p.y += p.s * dt * 60 * (isSnow ? 0.6 : 1);
+            p.x += Math.sin(t * 1.5 + p.ph) * dt * (isSnow ? 14 : 24);
+            if (p.y > GH) { p.y = -4; p.x = Math.random() * GW; }
+            if (isSnow) { ctx.fillStyle = 'rgba(240,246,252,0.9)'; ctx.fillRect(Math.floor(p.x), Math.floor(p.y), 1, 1); }
+            else { ctx.fillStyle = LEAF_COLORS[i % LEAF_COLORS.length]; ctx.fillRect(Math.floor(p.x), Math.floor(p.y), 2, 1); }
+        }
+    }
+
     // tints
     if (w === 'storm') { ctx.fillStyle = 'rgba(30,34,60,0.32)'; ctx.fillRect(0, 0, GW, GH); }
     else if (w === 'cloud') { ctx.fillStyle = 'rgba(60,66,80,0.16)'; ctx.fillRect(0, 0, GW, GH); }
     else if (w === 'drought') { ctx.fillStyle = 'rgba(230,150,50,0.12)'; ctx.fillRect(0, 0, GW, GH); }
+    // gentle cool cast over winter
+    if (sName === 'WINTER') { ctx.fillStyle = 'rgba(150,190,230,0.10)'; ctx.fillRect(0, 0, GW, GH); }
 
     if (world.lightningFlash > 0) {
         ctx.fillStyle = `rgba(240,245,255,${world.lightningFlash * 0.55})`;
@@ -200,13 +235,35 @@ function collectDrawables() {
         const sy = cam.y + isoY(h.i + 1, h.j + 1);
         const spr = houseSprite(f.sheet.colors.hatColor);
         const night = world.isNight();
+        const indoors = isIndoors(f);
         list.push({
             y: sy + TILE_H, draw: () => {
                 ctx.drawImage(spr, Math.floor(sx - 17), Math.floor(sy - 22));
-                if (night) {
-                    ctx.fillStyle = '#f0d060';
+                // lit windows when someone is home at night
+                if (night && (indoors || true)) {
+                    ctx.fillStyle = indoors ? '#f0d060' : 'rgba(240,208,96,0.35)';
                     ctx.fillRect(Math.floor(sx - 17) + 7, Math.floor(sy - 22) + 17, 4, 4);
                     ctx.fillRect(Math.floor(sx - 17) + 23, Math.floor(sy - 22) + 17, 4, 4);
+                }
+                // indoor status floating over the roof
+                const roofX = Math.floor(sx), roofY = Math.floor(sy - 30);
+                if (indoors) {
+                    if (f.state === 'sick') {
+                        const bob = Math.round(Math.sin(performance.now() / 400));
+                        drawText(ctx, '+', roofX - 1, roofY + bob, '#c05840');
+                    } else if (f.state === 'shelter') {
+                        drawText(ctx, '!', roofX - 1, roofY, '#e0a03c');
+                    } else {
+                        const zt = Math.floor(f.animTime * 2) % 3;
+                        drawText(ctx, 'Z', roofX - 1, roofY - zt * 3, `rgba(200,210,255,${1 - zt * 0.25})`);
+                    }
+                }
+                // selection marker over the house if the selected farmer is inside
+                if (selected === f && indoors) {
+                    const bounce = Math.floor(Math.abs(Math.sin(performance.now() / 250)) * 3);
+                    ctx.fillStyle = '#7dd069';
+                    ctx.fillRect(roofX - 2, roofY - 8 - bounce, 4, 2);
+                    ctx.fillRect(roofX - 1, roofY - 6 - bounce, 2, 2);
                 }
             }
         });
@@ -286,8 +343,9 @@ function collectDrawables() {
         });
     }
 
-    // farmers
+    // farmers (skip anyone tucked inside their house)
     for (const f of world.farmers) {
+        if (isIndoors(f)) continue;
         const sx = cam.x + isoX(f.pos.i, f.pos.j);
         const sy = cam.y + isoY(f.pos.i, f.pos.j);
         list.push({ y: sy + TILE_H * 0.5 + 0.1, draw: () => drawFarmer(f, sx, sy) });
@@ -298,6 +356,11 @@ function collectDrawables() {
 
 function fillDiamondAlpha(sx, sy, color) {
     fillDiamond(ctx, Math.floor(sx), Math.floor(sy), color);
+}
+
+// Is this farmer tucked inside their house (asleep / resting / ill / sheltering)?
+function isIndoors(f) {
+    return f.state === 'sleep' || f.state === 'rest' || f.state === 'sick' || f.state === 'shelter';
 }
 
 function drawFarmer(f, sx, sy) {
@@ -314,6 +377,17 @@ function drawFarmer(f, sx, sy) {
     const px = Math.floor(sx - 6);
     const py = Math.floor(sy + TILE_H / 2 - 15);
 
+    // lantern glow for anyone up and about at night
+    const awakeAtNight = world.isNight() && f.state !== 'sleep' && f.state !== 'shelter';
+    if (awakeAtNight) {
+        const flick = 0.5 + 0.12 * Math.sin(f.animTime * 9);
+        const g = ctx.createRadialGradient(sx, py + 7, 2, sx, py + 7, 20);
+        g.addColorStop(0, `rgba(245,215,90,${0.45 * flick})`);
+        g.addColorStop(1, 'rgba(245,215,90,0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(sx - 20, py - 13, 40, 40);
+    }
+
     // tiny shadow
     ctx.fillStyle = 'rgba(10,14,10,0.35)';
     ctx.fillRect(px + 2, py + 14, 8, 2);
@@ -326,6 +400,17 @@ function drawFarmer(f, sx, sy) {
         ctx.restore();
     } else {
         ctx.drawImage(frame, px, py);
+    }
+
+    // sick tint overlay
+    if (f.health === 'sick' && f.state !== 'sleep') {
+        ctx.fillStyle = 'rgba(120,200,120,0.28)';
+        ctx.fillRect(px + 2, py + 3, 8, 8);
+    }
+
+    // carried lantern when working at night
+    if (awakeAtNight && (f.state === 'work' || f.state === 'walk' || f.state === 'build')) {
+        ctx.drawImage(lanternSprite, px + (f.facing < 0 ? -3 : 11), py + 6);
     }
 
     // carrying water indicator
@@ -343,10 +428,14 @@ function drawFarmer(f, sx, sy) {
         ctx.fillRect(px, py - 4, Math.floor(12 * p), 2);
     }
 
-    // sleep Z
-    if (f.state === 'sleep') {
-        const zt = Math.floor(f.animTime * 2) % 3;
-        drawText(ctx, 'Z', px + 12, py - 2 - zt * 3, `rgba(200,210,255,${1 - zt * 0.25})`);
+    // status icon: sick (+) or worn out (~) while out and about, unless a bubble shows
+    if (!f.bubble) {
+        if (f.health === 'sick') {
+            const bob = Math.floor(Math.sin(performance.now() / 400) * 1);
+            drawText(ctx, '+', px + 4, py - 8 + bob, '#c05840');
+        } else if (f.tired) {
+            drawText(ctx, '~', px + 4, py - 7, '#e0a03c');
+        }
     }
 
     // speech bubble
@@ -397,29 +486,38 @@ function drawUI() {
     ctx.fillRect(0, 18, GW, 1);
 
     drawText(ctx, 'RY FARMS', 4, 4, '#7dd069', 2);
-    const dayStr = `DAY ${world.day}`;
-    drawText(ctx, dayStr, 76, 7, '#c8ccd8');
+    let hx = 74;
+    hx += drawText(ctx, `DAY ${world.day}`, hx, 7, '#c8ccd8') + 8;
+
+    // season (color-coded)
+    const season = world.seasonDef;
+    hx += drawText(ctx, season.name, hx, 7, season.accent) + 8;
 
     // weather (blink on storm)
     const wl = world.weatherLabel;
     const blink = world.weather === 'storm' && Math.floor(performance.now() / 300) % 2 === 0;
     const wcol = { sun: '#f0d060', cloud: '#9aa0b4', rain: '#6a9ade', storm: '#e05840', drought: '#e0a03c' }[world.weather];
-    if (!blink) drawText(ctx, wl, 120, 7, wcol);
+    if (!blink) drawText(ctx, wl, hx, 7, wcol);
+    hx += textWidth(wl) + 8;
 
-    const harv = `CROPS ${world.harvestTotal}`;
-    drawText(ctx, harv, 178, 7, '#e8c860');
-
-    const mems = `MEM ${memories.length}`;
-    drawText(ctx, mems, 240, 7, '#9aa0b4');
+    hx += drawText(ctx, `CROPS ${world.harvestTotal}`, hx, 7, '#e8c860') + 8;
+    hx += drawText(ctx, `MEM ${memories.length}`, hx, 7, '#9aa0b4') + 8;
 
     // night indicator
-    if (world.isNight()) drawText(ctx, 'NIGHT', 290, 7, '#8a9ade');
+    if (world.isNight()) hx += drawText(ctx, 'NIGHT', hx, 7, '#8a9ade') + 6;
 
     // open help requests
     if (world.helpBoard.length) {
-        const blink2 = Math.floor(performance.now() / 500) % 2 === 0;
-        if (blink2) drawText(ctx, `HELP!X${world.helpBoard.length}`, 330, 7, '#e0a03c');
+        if (Math.floor(performance.now() / 500) % 2 === 0) drawText(ctx, `HELP!X${world.helpBoard.length}`, hx, 7, '#e0a03c');
     }
+
+    // roster nav button (left of +RY)
+    ROSTER_BTN.x = BTN.x - ROSTER_BTN.w - 6;
+    ctx.fillStyle = rosterOpen ? '#7dd069' : 'rgba(255,255,255,0.08)';
+    ctx.fillRect(ROSTER_BTN.x, ROSTER_BTN.y, ROSTER_BTN.w, ROSTER_BTN.h);
+    ctx.fillStyle = rosterOpen ? '#7dd069' : 'rgba(255,255,255,0.2)';
+    if (!rosterOpen) { ctx.strokeStyle = 'rgba(255,255,255,0.2)'; }
+    drawText(ctx, 'ROSTER', ROSTER_BTN.x + 5, ROSTER_BTN.y + 4, rosterOpen ? '#10240c' : '#c8ccd8');
 
     // spawn button
     const full = !world.slots.some(s => !s.used);
@@ -439,7 +537,8 @@ function drawUI() {
         drawText(ctx, text, 4, GH - 19 + i * 8, l.color);
     });
 
-    if (selected) drawSheet(selected);
+    if (rosterOpen) drawRoster();
+    else if (selected) drawSheet(selected);
 }
 
 function wrapText(str, maxChars) {
@@ -456,16 +555,30 @@ function wrapText(str, maxChars) {
     return lines;
 }
 
+const TRAIT_COLORS = {
+    collaboration: '#7dd069', competitiveness: '#e0803c', honesty: '#6a9ade', diligence: '#f0d060',
+};
+
+function barFill(x, y, w, frac, color, bg = '#20242f') {
+    ctx.fillStyle = bg;
+    ctx.fillRect(x, y, w, 3);
+    ctx.fillStyle = color;
+    ctx.fillRect(x, y, Math.max(0, Math.floor(w * Math.min(frac, 1))), 3);
+}
+
 function drawSheet(f) {
     const s = f.sheet;
-    const PW = 128, PX = GW - PW - 4, PY = 24;
-    const memLines = wrapText(s.memory.title, 30).slice(0, 3);
-    const thinkLines = wrapText(f.thought, 30).slice(0, 2);
-    const PH = 133 + memLines.length * 7 + thinkLines.length * 7;
+    const p = s.personality;
+    const PW = 142, PX = GW - PW - 4, PY = 22;
+    const memLines = wrapText(s.memory.title, 33).slice(0, 3);
+    const thinkLines = wrapText(f.thought, 33).slice(0, 2);
+    const creedLines = wrapText(p.creed, 33).slice(0, 2);
+    const PH = 214 + (memLines.length + thinkLines.length + creedLines.length) * 7;
 
-    ctx.fillStyle = 'rgba(12,14,24,0.94)';
+    ctx.fillStyle = 'rgba(12,14,24,0.95)';
     ctx.fillRect(PX, PY, PW, PH);
-    ctx.fillStyle = '#7dd069';
+    const border = f.health === 'sick' ? '#c05840' : '#7dd069';
+    ctx.fillStyle = border;
     ctx.fillRect(PX, PY, PW, 1);
     ctx.fillRect(PX, PY + PH - 1, PW, 1);
     ctx.fillRect(PX, PY, 1, PH);
@@ -473,17 +586,30 @@ function drawSheet(f) {
 
     let y = PY + 5;
     drawText(ctx, s.name, PX + 5, y, '#fff', 1); y += 8;
-    drawText(ctx, `${s.archetype}  LV${s.level}`, PX + 5, y, '#7dd069'); y += 8;
+    drawText(ctx, `${p.label.toUpperCase()} - ${s.archetype} LV${s.level}`, PX + 5, y, '#7dd069'); y += 7;
+    for (const line of creedLines) { drawText(ctx, `"${line}"`, PX + 5, y, '#9aa0b4'); y += 7; }
 
     // xp bar
-    ctx.fillStyle = '#20242f';
-    ctx.fillRect(PX + 5, y, PW - 10, 3);
-    ctx.fillStyle = '#5a8ac8';
-    ctx.fillRect(PX + 5, y, Math.floor((PW - 10) * Math.min(s.xp / (s.level * 12), 1)), 3);
-    y += 7;
+    barFill(PX + 5, y, PW - 10, Math.min(s.xp / (s.level * 12), 1), '#5a8ac8'); y += 7;
+
+    // energy + health line
+    const eCol = f.health === 'sick' ? '#c05840' : f.tired ? '#e0a03c' : '#7dd069';
+    drawText(ctx, 'ENERGY', PX + 5, y, '#9aa0b4');
+    barFill(PX + 42, y, PW - 82, f.energy, eCol);
+    const hStr = f.health === 'sick' ? 'SICK' : f.tired ? 'TIRED' : 'WELL';
+    drawText(ctx, hStr, PX + PW - 32, y, eCol);
+    y += 9;
+
+    // personality trait bars
+    TRAIT_NAMES.forEach((tn) => {
+        drawText(ctx, TRAIT_LABELS[tn], PX + 5, y, '#9aa0b4');
+        barFill(PX + 58, y, PW - 66, p[tn], TRAIT_COLORS[tn]);
+        y += 7;
+    });
+    y += 3;
 
     // stats, two columns
-    const cols = [PX + 5, PX + 66];
+    const cols = [PX + 5, PX + 74];
     STAT_NAMES.forEach((st, i) => {
         const cx = cols[i % 2];
         const cy = y + Math.floor(i / 2) * 8;
@@ -493,11 +619,15 @@ function drawSheet(f) {
     });
     y += 26;
 
-    drawText(ctx, `CROP: ${s.crop}  FARM ${f.plot.w}X${f.plot.h}`, PX + 5, y, '#e8c860'); y += 8;
-    drawText(ctx, `HARVESTED: ${s.harvested}  BONDS: ${world.bondCount(f)}`, PX + 5, y, '#e8c860'); y += 8;
-    const helping = f.helpTask ? ` (HELPING ${f.helpTask.request.farmer.sheet.name.split(' ')[0]})` : '';
+    drawText(ctx, `CROP:${s.crop} FARM ${f.plot.w}X${f.plot.h}`, PX + 5, y, '#e8c860'); y += 8;
+    const rep = Math.round(f.reputation * 100);
+    drawText(ctx, `YIELD:${s.harvested} BONDS:${world.bondCount(f)} REP:${rep}`, PX + 5, y, '#e8c860'); y += 8;
+    const helping = f.helpTask ? ` ${f.helpTask.request.farmer.sheet.name.split(' ')[0]}` : '';
     const doing = f.state === 'work' && f.action ? f.action.kind + helping
         : f.state === 'build' ? 'building'
+        : f.state === 'care' ? 'tending sick'
+        : f.state === 'sick' ? 'recovering'
+        : f.state === 'rest' ? 'napping'
         : f.state === 'decide-help' || (f.state === 'walk' && f.helpTask) ? 'helping' + helping
         : f.state === 'sleep' ? 'sleeping'
         : f.state === 'shelter' ? 'sheltering'
@@ -505,15 +635,106 @@ function drawSheet(f) {
     drawText(ctx, `NOW: ${doing}`, PX + 5, y, '#c8ccd8'); y += 10;
 
     drawText(ctx, 'THINKS:', PX + 5, y, '#9aa0b4'); y += 7;
-    for (const line of thinkLines) {
-        drawText(ctx, `"${line}"`, PX + 5, y, '#c8ccd8'); y += 7;
-    }
+    for (const line of thinkLines) { drawText(ctx, `"${line}"`, PX + 5, y, '#c8ccd8'); y += 7; }
     y += 3;
 
     drawText(ctx, 'GROWN FROM MEMORY:', PX + 5, y, '#9aa0b4'); y += 7;
-    for (const line of memLines) {
-        drawText(ctx, line, PX + 5, y, '#8a9ade'); y += 7;
+    for (const line of memLines) { drawText(ctx, line, PX + 5, y, '#8a9ade'); y += 7; }
+}
+
+// ---------------------------------------------------------------------------
+// Roster — a simplified stat list of every farmer, sorted by yield
+// ---------------------------------------------------------------------------
+
+let rosterRows = [];              // { farmer, y0, y1 } hit regions (screen px)
+let rosterView = null;            // { x, y, w, h, bodyTop, bodyBot, rowH, maxScroll }
+
+function rosterSorted() {
+    return [...world.farmers].sort((a, b) => b.sheet.harvested - a.sheet.harvested);
+}
+
+function drawRoster() {
+    const PW = Math.min(GW - 24, 300);
+    const PH = GH - 40;
+    const PX = Math.floor((GW - PW) / 2);
+    const PY = 22;
+    rosterRows = [];
+
+    // dim the world behind
+    ctx.fillStyle = 'rgba(6,7,11,0.72)';
+    ctx.fillRect(0, 18, GW, GH - 40);
+
+    // panel
+    ctx.fillStyle = 'rgba(12,14,24,0.97)';
+    ctx.fillRect(PX, PY, PW, PH);
+    ctx.fillStyle = '#7dd069';
+    ctx.fillRect(PX, PY, PW, 1); ctx.fillRect(PX, PY + PH - 1, PW, 1);
+    ctx.fillRect(PX, PY, 1, PH); ctx.fillRect(PX + PW - 1, PY, 1, PH);
+
+    // header
+    drawText(ctx, 'TOWN ROSTER', PX + 6, PY + 5, '#7dd069', 1);
+    drawText(ctx, `${world.farmers.length} RYS`, PX + PW - 40, PY + 5, '#9aa0b4');
+    // close X
+    drawText(ctx, 'X', PX + PW - 10, PY + 5, '#c8ccd8');
+
+    // column header
+    const hy = PY + 16;
+    const colName = PX + 6;
+    const colStats = PX + 78;
+    const statW = (PW - 78 - 30) / 6;
+    drawText(ctx, 'NAME', colName, hy, '#6a6f7c');
+    drawText(ctx, 'LV', PX + 60, hy, '#6a6f7c');
+    ['ST', 'DE', 'CO', 'IN', 'WI', 'CH'].forEach((c, i) =>
+        drawText(ctx, c, Math.floor(colStats + i * statW), hy, '#6a6f7c'));
+    drawText(ctx, 'YLD', PX + PW - 22, hy, '#6a6f7c');
+    ctx.fillStyle = '#20242f';
+    ctx.fillRect(PX + 4, hy + 8, PW - 8, 1);
+
+    // scrollable body (clipped)
+    const bodyTop = hy + 11;
+    const bodyBot = PY + PH - 5;
+    const rowH = 11;
+    const rows = rosterSorted();
+    const maxScroll = Math.max(0, rows.length * rowH - (bodyBot - bodyTop));
+    rosterScroll = Math.max(0, Math.min(rosterScroll, maxScroll));
+    rosterView = { x: PX, y: PY, w: PW, h: PH, bodyTop, bodyBot, rowH, maxScroll };
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(PX + 1, bodyTop - 1, PW - 2, bodyBot - bodyTop + 1);
+    ctx.clip();
+
+    rows.forEach((f, idx) => {
+        const ry = bodyTop + idx * rowH - rosterScroll;
+        if (ry + rowH < bodyTop || ry > bodyBot) return;   // off-screen
+        const s = f.sheet;
+        const isLeader = world.leader === f;
+        if (selected === f) { ctx.fillStyle = 'rgba(125,208,105,0.16)'; ctx.fillRect(PX + 2, ry - 1, PW - 4, rowH); }
+        // health-tinted name; leader gets a star
+        const nameCol = f.health === 'sick' ? '#e07868' : f.tired ? '#e0a03c' : '#e8ecf5';
+        const nm = (isLeader ? '*' : '') + s.name.replace(' Ry', '');
+        drawText(ctx, nm.slice(0, 14), colName, ry + 1, nameCol);
+        drawText(ctx, String(s.level), PX + 60, ry + 1, '#7dd069');
+        STAT_NAMES.forEach((st, i) => {
+            drawText(ctx, String(s.stats[st]).padStart(2), Math.floor(colStats + i * statW), ry + 1, '#c8ccd8');
+        });
+        drawText(ctx, String(s.harvested), PX + PW - 22, ry + 1, '#e8c860');
+        rosterRows.push({ farmer: f, y0: ry, y1: ry + rowH });
+    });
+    ctx.restore();
+
+    // scrollbar
+    if (maxScroll > 0) {
+        const trackH = bodyBot - bodyTop;
+        const thumbH = Math.max(8, trackH * trackH / (rows.length * rowH));
+        const thumbY = bodyTop + (trackH - thumbH) * (rosterScroll / maxScroll);
+        ctx.fillStyle = 'rgba(255,255,255,0.14)';
+        ctx.fillRect(PX + PW - 3, bodyTop, 2, trackH);
+        ctx.fillStyle = '#7dd069';
+        ctx.fillRect(PX + PW - 3, Math.floor(thumbY), 2, Math.floor(thumbH));
     }
+
+    drawText(ctx, 'CLICK A RY FOR DETAILS - SCROLL TO SEE MORE', PX + 6, PY + PH - 9, '#4a4f5c');
 }
 
 // ---------------------------------------------------------------------------
@@ -528,7 +749,7 @@ function gamePoint(e) {
 out.addEventListener('pointerdown', (e) => {
     const p = gamePoint(e);
     mouse.downX = p.x; mouse.downY = p.y;
-    mouse.panStart = { x: p.x, y: p.y, camX: cam.x, camY: cam.y };
+    mouse.panStart = rosterOpen ? null : { x: p.x, y: p.y, camX: cam.x, camY: cam.y };
     mouse.dragging = false;
     out.setPointerCapture(e.pointerId);
 });
@@ -546,6 +767,8 @@ out.addEventListener('pointermove', (e) => {
     }
 });
 
+function inRect(p, r) { return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h; }
+
 out.addEventListener('pointerup', (e) => {
     const wasDrag = mouse.dragging;
     mouse.panStart = null;
@@ -553,11 +776,33 @@ out.addEventListener('pointerup', (e) => {
     if (wasDrag || !booted) return;
     const p = gamePoint(e);
 
-    // button?
-    if (p.x >= BTN.x && p.x <= BTN.x + BTN.w && p.y >= BTN.y && p.y <= BTN.y + BTN.h) {
-        spawnFarmer();
+    // roster toggle button
+    if (inRect(p, ROSTER_BTN)) { rosterOpen = !rosterOpen; return; }
+
+    // roster overlay interactions
+    if (rosterOpen) {
+        const rv = rosterView;
+        if (rv) {
+            // close X (top-right of panel) or clicking outside the panel closes it
+            if ((p.x > rv.x + rv.w - 14 && p.y < rv.y + 12) ||
+                p.x < rv.x || p.x > rv.x + rv.w || p.y < rv.y || p.y > rv.y + rv.h) {
+                rosterOpen = false;
+                return;
+            }
+            // row click -> select that farmer, keep roster open for browsing
+            for (const row of rosterRows) {
+                if (p.y >= row.y0 && p.y <= row.y1 && p.x > rv.x && p.x < rv.x + rv.w) {
+                    selected = row.farmer;
+                    rosterOpen = false;   // jump to their detail sheet
+                    return;
+                }
+            }
+        }
         return;
     }
+
+    // spawn button
+    if (inRect(p, BTN)) { spawnFarmer(); return; }
 
     // farmer?
     let best = null, bestD = 1.6;
@@ -568,6 +813,13 @@ out.addEventListener('pointerup', (e) => {
     }
     selected = best;
 });
+
+// wheel scrolls the roster
+out.addEventListener('wheel', (e) => {
+    if (!rosterOpen) return;
+    e.preventDefault();
+    rosterScroll += e.deltaY * 0.5;
+}, { passive: false });
 
 // ---------------------------------------------------------------------------
 // Spawning

@@ -1,16 +1,20 @@
-// farm.js — the Ry Farms simulation: world grid, plots, crops, weather,
-// day/night cycle, farmer agents (thoughts, help requests, collaboration),
-// communal building projects, and farm expansion. No rendering here.
+// farm.js — the Ry Farms simulation.
+//
+// V2: farmers are agents with personalities (collaboration / competitiveness /
+// honesty / diligence) that shape WHO they help, whether they cheat, and WHEN
+// they sleep. On top of that sits an energy + health economy: work drains
+// energy, sleep restores it, and farmers who chronically burn the midnight oil
+// risk falling ill. Nobody sleeps on the same schedule anymore.
 
-import { mulberry32, mod, growFarmer } from './dna.js';
+import { mulberry32, mod, growFarmer, personalityLabel } from './dna.js';
 
-export const GRID = 72;           // world is GRID x GRID tiles
+export const GRID = 72;
 export const CENTER = GRID / 2;
 
 export const T = { GRASS: 0, PATH: 1, TILLED: 2, HOUSE: 3, WELL: 4, SIGN: 5, STRUCT: 6 };
 
-export const DAY_LENGTH = 80;     // seconds of daylight
-export const NIGHT_LENGTH = 18;   // seconds of night
+export const DAY_LENGTH = 80;
+export const NIGHT_LENGTH = 22;
 
 const WEATHER_STATES = {
     sun: { label: 'SUNNY', next: { sun: 2, cloud: 3, drought: 0.6 }, dur: [18, 40] },
@@ -20,7 +24,6 @@ const WEATHER_STATES = {
     drought: { label: 'DROUGHT', next: { sun: 1.5, cloud: 1 }, dur: [16, 30] },
 };
 
-// Communal projects, in unlock order. `at` = town harvest total that triggers it.
 const PROJECT_DEFS = [
     { type: 'toolshed', label: 'TOOLSHED', at: 20, needed: 30, perk: 'ALL WORK +12% FASTER' },
     { type: 'windmill', label: 'WINDMILL', at: 55, needed: 45, perk: 'CROPS GROW +15% FASTER' },
@@ -33,6 +36,26 @@ const HELP_KINDS = {
     harvest: { stat: 'dex', verb: 'harvesting' },
     till: { stat: 'str', verb: 'tilling' },
 };
+
+// Seasons loop spring -> summer -> fall -> winter. Each shifts crop growth,
+// ground color, weather odds, and the mood of the scene.
+export const SEASONS = [
+    { name: 'SPRING', growth: 1.15, waterMul: 1.0, ground: ['#4a7a42', '#457540'], tilled: '#6a4c30', accent: '#7dd069',
+      weather: { sun: 3, cloud: 3, rain: 3, storm: 1, drought: 0.3 } },
+    { name: 'SUMMER', growth: 1.3, waterMul: 1.5, ground: ['#5f8a38', '#578235'], tilled: '#6e4e2e', accent: '#f0d060',
+      weather: { sun: 5, cloud: 2, rain: 1.5, storm: 1.5, drought: 2.5 } },
+    { name: 'FALL', growth: 0.8, waterMul: 0.8, ground: ['#8a7038', '#7c6634'], tilled: '#5e4228', accent: '#e0803c',
+      weather: { sun: 3, cloud: 4, rain: 3, storm: 1.5, drought: 0.5 } },
+    { name: 'WINTER', growth: 0.4, waterMul: 0.4, ground: ['#c6ced6', '#bac2ca'], tilled: '#8a7a68', accent: '#a8c8e8',
+      weather: { sun: 2, cloud: 4, rain: 1, storm: 2, drought: 0 } },
+];
+export const SEASON_LENGTH = 3;   // days per season -> 12-day year
+
+// energy / health tuning
+const AWAKE_DRAIN = 0.0032;       // per second, just being up
+const SLEEP_RESTORE = 0.05;       // per second asleep
+const REST_RESTORE = 0.03;        // per second daytime nap
+const ACTION_ENERGY = { till: 0.05, plant: 0.03, water: 0.03, harvest: 0.045, clear: 0.035, build: 0.05 };
 
 export function d20(rand, modifier) {
     const roll = 1 + Math.floor(rand() * 20);
@@ -47,7 +70,7 @@ export class World {
     constructor(seed = 1337) {
         this.rand = mulberry32(seed);
         this.tiles = new Uint8Array(GRID * GRID).fill(T.GRASS);
-        this.crops = new Map();       // "i,j" -> crop
+        this.crops = new Map();
         this.plots = [];
         this.farmers = [];
         this.log = [];
@@ -55,30 +78,32 @@ export class World {
         this.clock = 0;
         this.harvestTotal = 0;
 
+        this.season = 0;       // index into SEASONS
+        this.seasonDay = 0;
+        this.year = 1;
+
         this.weather = 'sun';
         this.weatherTimer = 20;
         this.lightningTimer = 0;
         this.lightningFlash = 0;
         this.struckTile = null;
 
-        // collaboration state
-        this.helpBoard = [];          // { farmer, kind, stat }
-        this.project = null;          // active build site
-        this.projectIndex = 0;        // next PROJECT_DEFS entry
-        this.structures = [];         // completed { type, i, j }
-        this.bonds = new Map();       // "seedA|seedB" -> count
+        this.helpBoard = [];
+        this.project = null;
+        this.projectIndex = 0;
+        this.structures = [];
+        this.bonds = new Map();
         this.workMult = 1;
         this.growthMult = 1;
         this.lightningMult = 1;
+        this.leader = null;           // current top harvester
 
-        // commons
         this.well = { i: CENTER, j: CENTER };
         this.sign = { i: CENTER + 2, j: CENTER + 1 };
         this.wells = [this.well];
         this.set(this.well.i, this.well.j, T.WELL);
         this.set(this.sign.i, this.sign.j, T.SIGN);
 
-        // homestead slots — ring 1; ring 2 opens when the town fills up
         this.slots = [];
         this.ringCount = 0;
         this.#addRing(12, 8, 0.42);
@@ -108,6 +133,22 @@ export class World {
     }
 
     isNight() { return this.clock > DAY_LENGTH; }
+    nightProgress() { return this.isNight() ? (this.clock - DAY_LENGTH) / NIGHT_LENGTH : 0; }
+    get seasonDef() { return SEASONS[this.season]; }
+    get seasonName() { return SEASONS[this.season].name; }
+
+    #advanceSeason() {
+        this.seasonDay++;
+        if (this.seasonDay >= SEASON_LENGTH) {
+            this.seasonDay = 0;
+            this.season = (this.season + 1) % SEASONS.length;
+            if (this.season === 0) { this.year++; this.addLog(`A new year dawns on Ry Farms — Year ${this.year}!`, '#f0d060'); }
+            const def = SEASONS[this.season];
+            this.addLog(`${def.name} has arrived.`, def.accent);
+            this._tilesChanged = true;   // ground color changes
+            this._seasonChanged = true;  // let the renderer refresh
+        }
+    }
 
     addLog(text, color = '#c8ccd8') {
         this.log.push({ text, color, t: performance.now() });
@@ -123,14 +164,14 @@ export class World {
         return best;
     }
 
-    // ---- bonds ------------------------------------------------------------------
+    // ---- bonds & reputation ------------------------------------------------------
 
     bondKey(a, b) {
         return a.sheet.seed < b.sheet.seed ? `${a.sheet.seed}|${b.sheet.seed}` : `${b.sheet.seed}|${a.sheet.seed}`;
     }
-    addBond(a, b) {
+    addBond(a, b, delta = 1) {
         const k = this.bondKey(a, b);
-        this.bonds.set(k, (this.bonds.get(k) || 0) + 1);
+        this.bonds.set(k, (this.bonds.get(k) || 0) + delta);
     }
     bondCount(f) {
         let n = 0;
@@ -140,12 +181,28 @@ export class World {
         return n;
     }
 
-    // ---- farmers ------------------------------------------------------------------
+    // ---- leaderboard -------------------------------------------------------------
+
+    updateLeader() {
+        let top = null, best = -1;
+        for (const f of this.farmers) {
+            if (f.sheet.harvested > best) { best = f.sheet.harvested; top = f; }
+        }
+        if (top && this.leader !== top && best > 3) {
+            const prev = this.leader;
+            this.leader = top;
+            if (prev && prev !== top) {
+                this.addLog(`${top.sheet.name} overtook ${prev.sheet.name} as top farmer!`, '#f0d060');
+                if (top.sheet.personality.competitiveness > 0.55) { top.say('TOP OF THE TOWN!', '#f0d060'); top.sparkle = 2; }
+            }
+        }
+    }
+
+    // ---- farmers -----------------------------------------------------------------
 
     addFarmer(memory, mutation = 0) {
         let slot = this.slots.find(s => !s.used);
         if (!slot && this.ringCount === 1) {
-            // the town grows: open a second ring of homesteads farther out
             this.#addRing(21, 10, 0.18);
             this.addLog('The town has grown! New homesteads opened further out.', '#7dd069');
             slot = this.slots.find(s => !s.used);
@@ -168,7 +225,8 @@ export class World {
         farmer.pos = { i: plot.x + plot.w / 2, j: plot.y + plot.h };
         this.plots.push(plot);
         this.farmers.push(farmer);
-        this.addLog(`${sheet.name} the ${sheet.archetype} claimed a plot!`, '#7dd069');
+        const p = sheet.personality;
+        this.addLog(`${sheet.name} the ${p.label} settled in. "${p.creed}"`, '#7dd069');
         return farmer;
     }
 
@@ -186,28 +244,23 @@ export class World {
         }
     }
 
-    // ---- farm expansion -------------------------------------------------------------
+    // ---- farm expansion ----------------------------------------------------------
 
     expandPlot(farmer) {
         const p = farmer.plot;
         const MAX = 13;
         if (p.w >= MAX) return false;
         const nx = p.x - 1, ny = p.y - 1, nw = p.w + 2, nh = p.h + 2;
-
-        // stay in bounds
         if (nx < 2 || ny < 2 || nx + nw > GRID - 2 || ny + nh > GRID - 2) return false;
-        // don't collide with other plots (with 1 tile of breathing room)
         for (const other of this.plots) {
             if (other === p) continue;
             if (nx < other.x + other.w + 1 && nx + nw > other.x - 1 &&
                 ny < other.y + other.h + 1 && ny + nh > other.y - 1) return false;
         }
-        // don't swallow the commons or structures
         const blocked = [...this.wells, this.sign, ...this.structures, this.project?.site].filter(Boolean);
         for (const b of blocked) {
             if (b.i >= nx - 1 && b.i <= nx + nw && b.j >= ny - 1 && b.j <= ny + nh) return false;
         }
-
         p.x = nx; p.y = ny; p.w = nw; p.h = nh;
         this.#rebuildFields(p);
         this._tilesChanged = true;
@@ -215,14 +268,12 @@ export class World {
         return true;
     }
 
-    // ---- communal projects ------------------------------------------------------------
+    // ---- communal projects -------------------------------------------------------
 
     #maybeStartProject() {
         if (this.project || this.projectIndex >= PROJECT_DEFS.length) return;
         const def = PROJECT_DEFS[this.projectIndex];
         if (this.harvestTotal < def.at) return;
-
-        // pick a free spot near the commons
         const site = this.#findStructureSpot();
         if (!site) return;
         this.projectIndex++;
@@ -264,40 +315,41 @@ export class World {
         const { type, site, label, perk } = pr;
         this.structures.push({ type, i: site.i, j: site.j });
         this.set(site.i, site.j, T.STRUCT);
-
         if (type === 'toolshed') this.workMult *= 1.12;
         else if (type === 'windmill') this.growthMult *= 1.15;
         else if (type === 'tower') this.lightningMult = 0.5;
-        else if (type === 'well2') { this.wells.push({ i: site.i, j: site.j }); }
-
+        else if (type === 'well2') this.wells.push({ i: site.i, j: site.j });
         this.addLog(`The ${label} is finished! ${perk}`, '#f0d060');
         for (const f of pr.builders) {
             f.gainXP(6);
             f.say('HOORAY!', '#f0d060');
             f.sparkle = 3;
-            // builders bond with each other
             for (const g of pr.builders) if (g !== f && this.rand() < 0.6) this.addBond(f, g);
         }
     }
 
-    // ---- help board -----------------------------------------------------------------
+    // ---- help board --------------------------------------------------------------
 
-    postHelp(farmer, kind) {
+    postHelp(farmer, kind, genuine = true) {
         if (this.helpBoard.some(r => r.farmer === farmer)) return;
-        this.helpBoard.push({ farmer, kind, stat: HELP_KINDS[kind].stat });
+        this.helpBoard.push({ farmer, kind, stat: HELP_KINDS[kind].stat, genuine });
         this.addLog(`${farmer.sheet.name} posted: NEED HELP ${HELP_KINDS[kind].verb.toUpperCase()}`, '#e0a03c');
     }
 
+    // A prospective helper evaluates the board through their personality.
     takeHelp(helper) {
+        const hp = helper.sheet.personality;
+        if (hp.collaboration < 0.3 && this.rand() > 0.15) return null;   // loners rarely bother
         for (let i = 0; i < this.helpBoard.length; i++) {
             const req = this.helpBoard[i];
             if (req.farmer === helper) continue;
+            // competitive farmers won't help their direct rival (the leader), unless very kind
+            if (hp.competitiveness > 0.6 && req.farmer === this.leader && hp.collaboration < 0.6) continue;
+            // wary of a bad reputation
+            if (req.farmer.reputation < 0.35 && this.rand() > hp.collaboration) continue;
             const m = mod(helper.sheet.stats[req.stat]);
-            const kind = m >= 1 || helper.sheet.stats.cha >= 14;
-            if (kind) {
-                this.helpBoard.splice(i, 1);
-                return req;
-            }
+            const willing = m >= 1 || helper.sheet.stats.cha >= 14 || hp.collaboration > 0.7;
+            if (willing) { this.helpBoard.splice(i, 1); return req; }
         }
         return null;
     }
@@ -306,14 +358,21 @@ export class World {
         this.helpBoard = this.helpBoard.filter(r => r.farmer !== farmer);
     }
 
-    // ---- weather ----------------------------------------------------------------------
+    // ---- weather -----------------------------------------------------------------
 
     #rollWeather() {
+        // blend the transition odds with the current season's base weather bias
         const table = WEATHER_STATES[this.weather].next;
+        const seasonBias = this.seasonDef.weather;
+        const blended = {};
         let sum = 0;
-        for (const w of Object.values(table)) sum += w;
-        let r = this.rand() * sum;
         for (const [state, w] of Object.entries(table)) {
+            const v = w * (0.4 + (seasonBias[state] ?? 1));
+            blended[state] = v;
+            sum += v;
+        }
+        let r = this.rand() * sum;
+        for (const [state, w] of Object.entries(blended)) {
             r -= w;
             if (r <= 0) { this.#setWeather(state); return; }
         }
@@ -329,28 +388,25 @@ export class World {
 
     get weatherLabel() { return WEATHER_STATES[this.weather].label; }
 
-    // ---- crops -------------------------------------------------------------------------
+    // ---- crops -------------------------------------------------------------------
 
     cropAt(i, j) { return this.crops.get(`${i},${j}`); }
 
     plantCrop(i, j, type, owner) {
         this.crops.set(`${i},${j}`, {
-            i, j, type, owner,
-            stage: 0, growth: 0, water: 0.7, withered: false,
-            dryTime: 0,
+            i, j, type, owner, stage: 0, growth: 0, water: 0.7, withered: false, dryTime: 0,
         });
     }
 
     #tickCrops(dt) {
         const growthBonus = { sun: 1.15, cloud: 1, rain: 1.2, storm: 0.6, drought: 0.55 }[this.weather];
-        const waterDecay = { sun: 0.014, cloud: 0.007, rain: 0, storm: 0, drought: 0.045 }[this.weather];
+        const season = this.seasonDef;
+        const waterDecay = { sun: 0.014, cloud: 0.007, rain: 0, storm: 0, drought: 0.045 }[this.weather] * season.waterMul;
         const night = this.isNight();
-
         for (const crop of this.crops.values()) {
             if (crop.withered) continue;
             if (this.weather === 'rain' || this.weather === 'storm') crop.water = 1;
             crop.water = Math.max(0, crop.water - waterDecay * dt);
-
             if (crop.water <= 0.02) {
                 crop.dryTime += dt;
                 if (crop.dryTime > 14 && this.rand() < dt * 0.05) {
@@ -361,15 +417,11 @@ export class World {
             } else {
                 crop.dryTime = 0;
             }
-
             if (!night && crop.stage < 3) {
                 const greenThumb = 1 + mod(crop.owner.sheet.stats.int) * 0.08;
                 const waterFactor = 0.25 + 0.75 * crop.water;
-                crop.growth += dt * 0.028 * waterFactor * growthBonus * greenThumb * this.growthMult;
-                if (crop.growth >= 1) {
-                    crop.growth = 0;
-                    crop.stage++;
-                }
+                crop.growth += dt * 0.028 * waterFactor * growthBonus * greenThumb * this.growthMult * season.growth;
+                if (crop.growth >= 1) { crop.growth = 0; crop.stage++; }
             }
         }
     }
@@ -401,23 +453,60 @@ export class World {
         }
     }
 
-    // ---- main tick -----------------------------------------------------------------------
+    // Daily health reckoning: overwork + exhaustion -> CON save vs illness.
+    #dailyHealthCheck() {
+        for (const f of this.farmers) {
+            if (f.health === 'sick') {
+                f.sickDays -= 1;
+                if (f.sickDays <= 0) {
+                    f.health = 'healthy';
+                    f.energy = Math.max(f.energy, 0.5);
+                    this.addLog(`${f.sheet.name} recovered and is back on their feet.`, '#7dd069');
+                    f.say('ALL BETTER!', '#7dd069');
+                }
+                f.workedLate = false;
+                continue;
+            }
+            if (f.workedLate) f.sleepDebt += 1.5;
+            else f.sleepDebt = Math.max(0, f.sleepDebt - 1);
+            f.workedLate = false;
+
+            const risky = f.energy < 0.35 || f.sleepDebt >= 3;
+            if (risky) {
+                const dc = 10 + Math.floor(f.sleepDebt) + (f.energy < 0.2 ? 3 : 0);
+                const save = d20(this.rand, mod(f.sheet.stats.con));
+                if (save.total < dc && !save.crit) {
+                    f.health = 'sick';
+                    f.sickDays = 2 + Math.floor(this.rand() * 3);
+                    f.energy = Math.min(f.energy, 0.3);
+                    this.addLog(`${f.sheet.name} fell ill from overwork! (CON ${save.total} vs DC ${dc})`, '#c05840');
+                    f.say('I... dont feel well', '#c05840');
+                } else if (f.sleepDebt >= 2) {
+                    this.addLog(`${f.sheet.name} looks worn out but powers through (CON ${save.total} vs ${dc})`, '#e0a03c');
+                }
+            }
+        }
+    }
+
+    // ---- main tick ---------------------------------------------------------------
 
     tick(dt) {
         this.clock += dt;
         if (this.clock >= DAY_LENGTH + NIGHT_LENGTH) {
             this.clock = 0;
             this.day++;
+            this.#dailyHealthCheck();
+            this.#advanceSeason();
             this.addLog(`Day ${this.day} begins on Ry Farms`, '#f0d060');
             if (this.rand() < 0.5) this.#rollWeather();
         }
-
         this.weatherTimer -= dt;
         if (this.weatherTimer <= 0) this.#rollWeather();
 
         this.#tickCrops(dt);
         this.#tickLightning(dt);
         this.#maybeStartProject();
+        this.updateLeader();
 
         for (const f of this.farmers) f.tick(dt);
     }
@@ -443,6 +532,7 @@ export class Farmer {
         this.plot = plot;
         this.world = world;
         this.rand = mulberry32(sheet.seed ^ 0x51ed);
+        this.p = sheet.personality;
 
         this.pos = { i: plot.x + 3, j: plot.y + 3 };
         this.state = 'decide';
@@ -458,41 +548,57 @@ export class Farmer {
         // agent mind
         this.thought = 'A NEW FARM. A NEW LIFE.';
         this.thoughtBubbleTimer = 4 + this.rand() * 8;
-        this.helpTask = null;         // { request, actionsLeft }
-        this.helpCooldown = 0;        // seconds until we may post again
-        this.nextExpand = 8;          // harvest count that triggers fence expansion
+        this.helpTask = null;
+        this.helpCooldown = 0;
+        this.nextExpand = 8;
+
+        // energy / health
+        this.energy = 0.8 + this.rand() * 0.2;
+        this.sleepDebt = 0;
+        this.health = 'healthy';       // healthy | sick
+        this.sickDays = 0;
+        this.workedLate = false;
+        this.reputation = 0.55;        // town standing
+        this.poachCooldown = 6 + this.rand() * 10;
+        this.visitedSick = new Set();
     }
+
+    // ---- derived ----------------------------------------------------------------
+
+    get tired() { return this.energy < 0.35; }
 
     get speed() {
-        return Math.max(0.8, 1.7 + mod(this.sheet.stats.dex) * 0.22);
+        let s = 1.7 + mod(this.sheet.stats.dex) * 0.22;
+        if (this.health === 'sick') s *= 0.6;
+        if (this.tired) s *= 0.8;
+        return Math.max(0.6, s);
     }
 
-    get maxWater() {
-        return this.sheet.stats.str >= 14 ? 4 : 2;
-    }
+    get maxWater() { return this.sheet.stats.str >= 14 ? 4 : 2; }
 
     workSpeed() {
         let s = (1 + mod(this.sheet.stats.dex) * 0.08) * this.world.workMult;
+        s *= (0.55 + 0.45 * Math.max(0, this.energy));    // tired = slower
+        if (this.health === 'sick') s *= 0.4;
         for (const other of this.world.farmers) {
             if (other === this || other.sheet.stats.cha < 14) continue;
             const d = Math.abs(other.pos.i - this.pos.i) + Math.abs(other.pos.j - this.pos.j);
             if (d < 6) { s *= 1.15; break; }
         }
-        return s;
+        return Math.max(0.2, s);
     }
 
-    say(text, color = '#fff') {
-        this.bubble = { text, color, t: 2.4 };
-    }
+    say(text, color = '#fff') { this.bubble = { text, color, t: 2.4 }; }
 
     think(text) {
         this.thought = text.toUpperCase();
-        // occasionally surface the thought as a bubble so the town feels alive
         if (this.thoughtBubbleTimer <= 0) {
             this.say(this.thought.length > 26 ? this.thought.slice(0, 26) + '..' : this.thought, '#c8ccd8');
             this.thoughtBubbleTimer = 9 + this.rand() * 10;
         }
     }
+
+    adjustReputation(d) { this.reputation = Math.max(0, Math.min(1, this.reputation + d)); }
 
     gainXP(n) {
         const s = this.sheet;
@@ -509,7 +615,12 @@ export class Farmer {
         }
     }
 
-    // ---- perception --------------------------------------------------------------
+    isBehindLeader() {
+        const L = this.world.leader;
+        return L && L !== this && L.sheet.harvested > this.sheet.harvested + 2;
+    }
+
+    // ---- perception -------------------------------------------------------------
 
     #findCrop(pred, plot = this.plot) {
         let best = null, bestD = 1e9;
@@ -541,55 +652,109 @@ export class Farmer {
         return n;
     }
 
-    // ---- deciding what to do -------------------------------------------------------
+    #nearestNeighborRipe() {
+        let best = null, bestD = 8;
+        for (const plot of this.world.plots) {
+            if (plot === this.plot) continue;
+            for (const f of plot.fields) {
+                const crop = this.world.cropAt(f.i, f.j);
+                if (!crop || crop.stage !== 3 || crop.withered) continue;
+                const d = Math.abs(f.i - this.pos.i) + Math.abs(f.j - this.pos.j);
+                if (d < bestD) { bestD = d; best = crop; }
+            }
+        }
+        return best;
+    }
+
+    // ---- sleep decision ---------------------------------------------------------
+
+    #shouldSleepNow() {
+        if (this.health === 'sick') return true;
+        if (this.energy < 0.2) return true;                 // exhausted
+        const np = this.world.nightProgress();
+        let threshold = 0.1 + this.p.diligence * 0.55;      // workaholics stay up
+        if (this.isBehindLeader()) threshold += this.p.competitiveness * 0.3;
+        threshold = Math.min(threshold, 0.85);
+        return np > threshold;
+    }
+
+    // ---- deciding ---------------------------------------------------------------
 
     #maybeAskForHelp() {
         if (this.helpCooldown > 0) return;
         const w = this.world, s = this.sheet;
-
         const thirsty = this.#countCrops(c => !c.withered && c.water < 0.3 && c.stage < 3);
         const ripe = this.#countCrops(c => c.stage === 3 && !c.withered);
         let untilled = 0;
         for (const f of this.plot.fields) if (w.get(f.i, f.j) === T.GRASS) untilled++;
 
-        let kind = null;
+        let kind = null, genuine = true;
         if (thirsty >= 3 && mod(s.stats.str) <= 0) kind = 'water';
         else if (ripe >= 3 && mod(s.stats.dex) <= 0) kind = 'harvest';
         else if (untilled >= 5 && mod(s.stats.str) <= 0) kind = 'till';
 
+        // manipulators cry wolf: post a fake request to farm free labor
+        if (!kind && this.p.honesty < 0.3 && this.p.collaboration < 0.5 && this.rand() < 0.12) {
+            kind = ['water', 'harvest', 'till'][Math.floor(this.rand() * 3)];
+            genuine = false;
+            this.think('IF I LOOK BUSY, SOMEONE WILL DO IT FOR ME');
+        }
+
         if (kind) {
-            w.postHelp(this, kind);
+            w.postHelp(this, kind, genuine);
             this.helpCooldown = 30;
-            this.think(`TOO MUCH ${kind.toUpperCase()}ING FOR ME ALONE...`);
+            if (genuine) this.think(`TOO MUCH ${kind.toUpperCase()}ING FOR ME ALONE...`);
         }
     }
 
     #decide() {
         const w = this.world, s = this.sheet;
 
-        // night: head home
-        if (w.isNight()) {
-            this.think('TIME TO SLEEP');
-            this.#goTo(this.plot.house.i - 1 + 0.5, this.plot.house.j + 2.5, 'sleepwalk');
+        // sickness overrides everything
+        if (this.health === 'sick') {
+            this.think('NEED TO REST AND GET WELL');
+            this.#goTo(this.plot.house.i - 1 + 0.5, this.plot.house.j + 2.5, 'sick');
             return;
+        }
+
+        // daytime exhaustion: take a nap
+        if (!w.isNight() && this.energy < 0.14) {
+            this.think('IM SPENT. NEED A QUICK REST.');
+            this.#goTo(this.plot.house.i - 1 + 0.5, this.plot.house.j + 2.5, 'rest');
+            return;
+        }
+
+        // night: personal bedtime
+        if (w.isNight()) {
+            if (this.#shouldSleepNow()) {
+                this.think(this.p.diligence > 0.6 ? 'ONE MORE THING... OK, BED.' : 'TIME TO SLEEP');
+                this.#goTo(this.plot.house.i - 1 + 0.5, this.plot.house.j + 2.5, 'sleepwalk');
+                return;
+            }
+            this.awakeAtNight = true;
+            if (w.nightProgress() > 0.4) this.workedLate = true;
         }
 
         // storm behavior
         if (w.weather === 'storm') {
             const ripe = this.#findCrop(c => c.stage === 3 && !c.withered);
-            if (ripe && s.stats.wis >= 13) {
-                this.think("STORM'S HERE. SAVE THE CROPS FIRST!");
-                this.#goWork('harvest', ripe);
-                return;
-            }
-            if (s.stats.con < 13) {
-                this.think('I HATE THUNDER. HIDING AT HOME.');
-                this.#goTo(this.plot.house.i - 1 + 0.5, this.plot.house.j + 2.5, 'shelter');
+            if (ripe && s.stats.wis >= 13) { this.think("STORM'S HERE. SAVE THE CROPS!"); this.#goWork('harvest', ripe); return; }
+            if (s.stats.con < 13) { this.think('I HATE THUNDER. HIDING.'); this.#goTo(this.plot.house.i - 1 + 0.5, this.plot.house.j + 2.5, 'shelter'); return; }
+        }
+
+        // collaborative farmers check on sick neighbors
+        if (this.p.collaboration > 0.55 && !w.isNight()) {
+            const sick = w.farmers.find(o => o !== this && o.health === 'sick' && !this.visitedSick.has(o.sheet.seed) &&
+                Math.abs(o.pos.i - this.pos.i) + Math.abs(o.pos.j - this.pos.j) < 16);
+            if (sick && this.rand() < 0.5) {
+                this.visitedSick.add(sick.sheet.seed);
+                this.careTarget = sick;
+                this.think(`${sick.sheet.name.split(' ')[0].toUpperCase()} IS SICK. I'LL LOOK IN.`);
+                this.#goTo(sick.plot.house.i + 0.5, sick.plot.house.j + 2.5, 'care');
                 return;
             }
         }
 
-        // is my farm swamped? maybe post to the help board
         this.#maybeAskForHelp();
 
         const thirstThreshold = w.weather === 'drought' && mod(s.stats.wis) > 0 ? 0.55 : 0.32;
@@ -616,10 +781,10 @@ export class Farmer {
         const untilled = this.#findField(f => w.get(f.i, f.j) === T.GRASS);
         if (untilled) { this.think('BREAKING NEW GROUND'); this.#goWork('till', untilled); return; }
 
-        // 2. a neighbor needs help
+        // 2. a neighbor needs help (collaboration-gated inside takeHelp)
         const req = w.takeHelp(this);
         if (req) {
-            this.helpTask = { request: req, actionsLeft: 3 + Math.max(0, mod(s.stats[req.stat])) };
+            this.helpTask = { request: req, actionsLeft: 3 + Math.max(0, mod(s.stats[req.stat])), genuine: req.genuine, didWork: false };
             this.think(`${req.farmer.sheet.name.toUpperCase()} NEEDS A HAND!`);
             this.say(`COMING ${req.farmer.sheet.name.split(' ')[0].toUpperCase()}!`, '#7dd069');
             w.addLog(`${s.name} went to help ${req.farmer.sheet.name} with ${req.kind}ing`, '#7dd069');
@@ -627,8 +792,18 @@ export class Farmer {
             return;
         }
 
-        // 3. town project
-        if (w.project) {
+        // 3. manipulators with idle hands poach a neighbor's ripe crop
+        if (this.p.honesty < 0.32 && this.poachCooldown <= 0 && !w.isNight()) {
+            const steal = this.#nearestNeighborRipe();
+            if (steal) {
+                this.think('NOBODYS WATCHING THAT ONE...');
+                this.#goWork('poach', steal);
+                return;
+            }
+        }
+
+        // 4. town project (collaboration-gated)
+        if (w.project && this.p.collaboration > 0.35 && this.energy > 0.3) {
             this.think(`RAISING THE ${w.project.label}!`);
             const site = w.project.site;
             const off = (this.sheet.seed % 3) - 1;
@@ -636,7 +811,18 @@ export class Farmer {
             return;
         }
 
-        // 4. nothing to do: wander + muse
+        // 5. competitive & behind: keep grinding instead of idling
+        if (this.isBehindLeader() && this.p.competitiveness > 0.55 && this.energy > 0.4) {
+            const anyField = this.#findField(f => w.get(f.i, f.j) === T.TILLED && !w.cropAt(f.i, f.j)) ||
+                             this.#findField(f => w.get(f.i, f.j) === T.GRASS);
+            if (anyField) {
+                this.think('I WILL NOT FALL BEHIND');
+                this.#goWork(w.get(anyField.i, anyField.j) === T.GRASS ? 'till' : 'plant', anyField);
+                return;
+            }
+        }
+
+        // 6. wander + muse
         this.think(this.rand() < 0.4
             ? `REMEMBERING: ${String(s.memory.title).slice(0, 26)}..`
             : IDLE_THOUGHTS[Math.floor(this.rand() * IDLE_THOUGHTS.length)]);
@@ -646,7 +832,6 @@ export class Farmer {
         this.#goTo(wi, wj, 'wander');
     }
 
-    // help-mode decision: work the requester's farm
     #decideHelp() {
         const w = this.world;
         const task = this.helpTask;
@@ -677,21 +862,27 @@ export class Farmer {
         const task = this.helpTask;
         if (task) {
             const other = task.request.farmer;
-            this.world.addBond(this, other);
-            this.world.addLog(`${this.sheet.name} finished helping ${other.sheet.name} (+bond)`, '#7dd069');
-            other.say('THANKS FRIEND!', '#7dd069');
-            other.helpCooldown = 20;
-            this.gainXP(3);
+            if (task.genuine === false && !task.didWork) {
+                this.think('THERE WAS NOTHING TO DO HERE. HMPH.');
+                this.say('...you tricked me', '#e0a03c');
+                this.world.addLog(`${this.sheet.name} realized ${other.sheet.name}'s plea was a ruse`, '#e0a03c');
+                other.adjustReputation(-0.12);
+                this.adjustReputation(0.02);
+            } else {
+                this.world.addBond(this, other);
+                this.world.addLog(`${this.sheet.name} finished helping ${other.sheet.name} (+bond)`, '#7dd069');
+                other.say('THANKS FRIEND!', '#7dd069');
+                other.helpCooldown = 20;
+                this.adjustReputation(0.05);
+                this.gainXP(3);
+            }
             this.helpTask = null;
             this.helpPlot = null;
         }
         this.state = 'decide';
     }
 
-    #goTo(i, j, then) {
-        this.path = { i, j, then };
-        this.state = 'walk';
-    }
+    #goTo(i, j, then) { this.path = { i, j, then }; this.state = 'walk'; }
 
     #goWork(kind, target, helping = false) {
         this.pendingWork = { kind, target, helping };
@@ -699,7 +890,8 @@ export class Farmer {
     }
 
     #startAction(kind, target, helping) {
-        const t = (ACTION_TIME[kind] || 2) / this.workSpeed();
+        const base = ACTION_TIME[kind === 'poach' ? 'harvest' : kind] || 2;
+        const t = base / this.workSpeed();
         this.action = { kind, target, timer: t, total: t, helping };
         this.state = 'work';
     }
@@ -708,6 +900,7 @@ export class Farmer {
         const w = this.world, s = this.sheet;
         const { kind, target, helping } = this.action;
         this.action = null;
+        this.energy = Math.max(0, this.energy - (ACTION_ENERGY[kind === 'poach' ? 'harvest' : kind] || 0.03));
         const owner = helping ? this.helpTask?.request.farmer : this;
 
         switch (kind) {
@@ -730,24 +923,45 @@ export class Farmer {
                 w.crops.delete(`${target.i},${target.j}`);
                 w.set(target.i, target.j, T.TILLED);
                 break;
+            case 'poach': {
+                const crop = w.cropAt(target.i, target.j);
+                if (crop && crop.stage === 3 && !crop.withered) {
+                    s.harvested += 1;
+                    w.harvestTotal += 1;
+                    w.crops.delete(`${target.i},${target.j}`);
+                    this.adjustReputation(-0.06);
+                    const witness = w.farmers.find(o => o !== this && o.health !== 'sick' &&
+                        o.p.honesty > 0.55 && Math.abs(o.pos.i - target.i) + Math.abs(o.pos.j - target.j) < 6);
+                    if (witness) {
+                        witness.say('HEY! THIEF!', '#c05840');
+                        this.say('uh oh', '#e0a03c');
+                        this.adjustReputation(-0.12);
+                        w.addBond(this, witness, -1);
+                        w.addLog(`${witness.sheet.name} caught ${s.name} stealing a crop!`, '#c05840');
+                    } else {
+                        w.addLog(`${s.name} quietly poached a ripe ${crop.type} from ${(owner && owner.sheet) ? owner.sheet.name : 'a neighbor'}`, '#e0a03c');
+                    }
+                }
+                this.poachCooldown = 20 + this.rand() * 25;
+                break;
+            }
             case 'harvest': {
                 const crop = w.cropAt(target.i, target.j);
                 if (crop && crop.stage === 3 && !crop.withered) {
-                    const check = d20(this.rand, mod(s.stats.int));
+                    let bonusMod = mod(s.stats.int);
+                    if (this.tired) bonusMod -= 2;   // clumsy when exhausted
+                    const check = d20(this.rand, bonusMod);
                     let yieldN = 1;
                     if (check.crit || check.total >= 18) {
                         yieldN = 3;
-                        w.addLog(`CRIT! ${s.name} harvests x3 ${crop.type} (d20:${check.roll}${check.mod >= 0 ? '+' : ''}${check.mod})`, '#f0d060');
-                        this.say('CRITICAL!', '#f0d060');
-                        this.sparkle = 1.5;
+                        w.addLog(`CRIT! ${s.name} harvests x3 ${crop.type} (d20:${check.roll})`, '#f0d060');
+                        this.say('CRITICAL!', '#f0d060'); this.sparkle = 1.5;
                     } else if (check.fumble) {
                         yieldN = 0;
                         w.addLog(`${s.name} fumbled the harvest... (d20:1)`, '#c05840');
                         this.say('oops', '#c05840');
-                    } else if (check.total >= 10) {
-                        yieldN = 2;
-                    }
-                    // harvests credit the plot owner
+                    } else if (check.total >= 10) yieldN = 2;
+
                     const ownerSheet = (helping && owner) ? owner.sheet : s;
                     ownerSheet.harvested += yieldN;
                     w.harvestTotal += yieldN;
@@ -755,14 +969,10 @@ export class Farmer {
                     w.crops.delete(`${target.i},${target.j}`);
                     this.gainXP(3 + yieldN);
 
-                    // fence expansion milestones (owner's farm)
                     const grower = (helping && owner) ? owner : this;
                     if (grower.sheet.harvested >= grower.nextExpand) {
                         grower.nextExpand = Math.round(grower.nextExpand * 2.1);
-                        if (w.expandPlot(grower)) {
-                            grower.say('MORE LAND!', '#7dd069');
-                            grower.think('MY FARM GROWS');
-                        }
+                        if (w.expandPlot(grower)) { grower.say('MORE LAND!', '#7dd069'); grower.think('MY FARM GROWS'); }
                     }
                 }
                 break;
@@ -770,6 +980,7 @@ export class Farmer {
         }
 
         if (helping && this.helpTask) {
+            this.helpTask.didWork = true;
             this.helpTask.actionsLeft--;
             this.state = 'decide-help';
         } else {
@@ -780,21 +991,20 @@ export class Farmer {
     tick(dt) {
         this.animTime += dt;
         this.helpCooldown = Math.max(0, this.helpCooldown - dt);
+        this.poachCooldown = Math.max(0, this.poachCooldown - dt);
         this.thoughtBubbleTimer -= dt;
-        if (this.bubble) {
-            this.bubble.t -= dt;
-            if (this.bubble.t <= 0) this.bubble = null;
-        }
+        if (this.bubble) { this.bubble.t -= dt; if (this.bubble.t <= 0) this.bubble = null; }
         this.sparkle = Math.max(0, this.sparkle - dt);
 
-        switch (this.state) {
-            case 'decide':
-                this.#decide();
-                break;
+        // passive energy
+        if (this.state === 'sleep') this.energy = Math.min(1, this.energy + SLEEP_RESTORE * dt);
+        else if (this.state === 'rest') this.energy = Math.min(1, this.energy + REST_RESTORE * dt);
+        else if (this.state === 'sick') this.energy = Math.min(1, this.energy + REST_RESTORE * 0.6 * dt);
+        else this.energy = Math.max(0, this.energy - AWAKE_DRAIN * dt);
 
-            case 'decide-help':
-                this.#decideHelp();
-                break;
+        switch (this.state) {
+            case 'decide': this.#decide(); break;
+            case 'decide-help': this.#decideHelp(); break;
 
             case 'walk': {
                 const dx = this.path.i - this.pos.i;
@@ -811,21 +1021,16 @@ export class Farmer {
                         this.carryWater = this.maxWater;
                         this.say('splash');
                         this.state = then === 'fetchwater-help' ? 'decide-help' : 'decide';
-                    } else if (then === 'sleepwalk') {
-                        this.state = 'sleep';
-                    } else if (then === 'shelter') {
-                        this.state = 'shelter';
-                        this.say('yikes!');
-                    } else if (then === 'build') {
-                        this.state = 'build';
-                    } else {
-                        this.state = 'idle';
-                        this.wanderTimer = 1 + this.rand() * 2.5;
-                    }
+                    } else if (then === 'sleepwalk') { this.state = 'sleep'; }
+                    else if (then === 'rest') { this.state = 'rest'; }
+                    else if (then === 'sick') { this.state = 'sick'; }
+                    else if (then === 'shelter') { this.state = 'shelter'; this.say('yikes!'); }
+                    else if (then === 'build') { this.state = 'build'; }
+                    else if (then === 'care') { this.state = 'care'; this.careTimer = 1.5; }
+                    else { this.state = 'idle'; this.wanderTimer = 1 + this.rand() * 2.5; }
                 } else {
                     const step = Math.min((this.speed * dt) / dist, 1);
-                    this.pos.i += dx * step;
-                    this.pos.j += dy * step;
+                    this.pos.i += dx * step; this.pos.j += dy * step;
                     const sx = dx - dy;
                     if (Math.abs(sx) > 0.05) this.facing = sx > 0 ? 1 : -1;
                 }
@@ -841,8 +1046,27 @@ export class Farmer {
                 const pr = this.world.project;
                 if (!pr) { this.state = 'decide'; break; }
                 this.world.contributeBuild(this, dt);
-                // check back on the farm every so often
-                if (this.world.isNight() || this.rand() < dt * 0.06) this.state = 'decide';
+                this.energy = Math.max(0, this.energy - ACTION_ENERGY.build * dt);
+                if (this.world.isNight() || this.energy < 0.3 || this.rand() < dt * 0.06) this.state = 'decide';
+                break;
+            }
+
+            case 'care': {
+                this.careTimer -= dt;
+                if (this.careTimer <= 0) {
+                    const sick = this.careTarget;
+                    if (sick && sick.health === 'sick') {
+                        sick.sickDays = Math.max(1, sick.sickDays - 1);
+                        sick.energy = Math.min(1, sick.energy + 0.15);
+                        sick.say('THANK YOU...', '#7dd069');
+                        this.say('REST UP, FRIEND', '#7dd069');
+                        this.world.addBond(this, sick);
+                        this.adjustReputation(0.06);
+                        this.world.addLog(`${this.sheet.name} brought soup to ${sick.sheet.name}`, '#7dd069');
+                    }
+                    this.careTarget = null;
+                    this.state = 'decide';
+                }
                 break;
             }
 
@@ -852,10 +1076,21 @@ export class Farmer {
                 break;
 
             case 'sleep':
+                // stay down until morning (energy simply caps at 1) — waking early
+                // to re-decide caused a sleep<->walk flip-flop flicker
                 if (!this.world.isNight()) {
                     this.state = 'decide';
                     this.say('good morning!');
+                    this.visitedSick.clear();
                 }
+                break;
+
+            case 'rest':
+                if (this.energy > 0.5) { this.state = 'decide'; this.say('back to it'); }
+                break;
+
+            case 'sick':
+                if (this.health !== 'sick') this.state = 'decide';
                 break;
 
             case 'shelter':
