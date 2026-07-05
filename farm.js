@@ -296,14 +296,25 @@ export class World {
 
     #findFacilityRegion(plot, type) {
         const def = FACILITY_DEFS[type];
-        // scan interior for a clear w x h block of plain field tiles
+        // Need a clear w x h block of plain field tiles, PLUS a 1-tile buffer so a
+        // facility never sits flush against water, a building, or the house — which
+        // caused ponds/coops to overlap and animals to appear standing on water.
         for (let y = plot.y + 1; y + def.h <= plot.y + plot.h - 1; y++) {
             for (let x = plot.x + 1; x + def.w <= plot.x + plot.w - 1; x++) {
                 let ok = true;
+                // the region itself must be plain, crop-free ground
                 for (let j = y; j < y + def.h && ok; j++) {
                     for (let i = x; i < x + def.w; i++) {
                         const t = this.get(i, j);
                         if (this.#inHouse(plot, i, j) || (t !== T.GRASS && t !== T.TILLED) || this.cropAt(i, j)) { ok = false; break; }
+                    }
+                }
+                // the 1-tile border must not be water / a building / the house
+                for (let j = y - 1; j <= y + def.h && ok; j++) {
+                    for (let i = x - 1; i <= x + def.w; i++) {
+                        if (i >= x && i < x + def.w && j >= y && j < y + def.h) continue; // skip interior
+                        const t = this.get(i, j);
+                        if (t === T.WATER || t === T.COOP || t === T.BARN || t === T.STRUCT || this.#inHouse(plot, i, j)) { ok = false; break; }
                     }
                 }
                 if (ok) return { x, y, w: def.w, h: def.h };
