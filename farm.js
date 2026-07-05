@@ -28,8 +28,8 @@ const FACILITY_WOOD = 6;   // wood to raise a facility
 const START_WOOD = 4;
 
 // Longer days so the world breathes slowly while the (now faster) farmers bustle.
-export const DAY_LENGTH = 150;
-export const NIGHT_LENGTH = 40;
+export const DAY_LENGTH = 300;
+export const NIGHT_LENGTH = 80;
 
 const WEATHER_STATES = {
     sun: { label: 'SUNNY', next: { sun: 2, cloud: 3, drought: 0.6 }, dur: [26, 54] },
@@ -55,7 +55,7 @@ export const SEASONS = [
       dmg: ['#101c22', '#385158', '#82a0a6', '#e6f2f2'],
       weather: { sun: 2, cloud: 4, rain: 1, storm: 2, drought: 0 } },
 ];
-export const SEASON_LENGTH = 3;
+export const SEASON_LENGTH = 15;
 
 // producer tuning per kind
 export const PROD = {
@@ -546,36 +546,59 @@ export class World {
         return tiles;
     }
 
-    // Inspect a plot's next expansion. Grows DIRECTIONALLY into open space rather
-    // than all four sides at once, so a farm boxed in on one side still grows on
-    // the others (and toward the forest) — instead of only the one lucky farm
-    // with room on every side ever expanding.
-    // Returns { state: 'max'|'blocked'|'trees'|'clear', tiles?, rect? }
+    // Can a single tile be annexed into `plot`? 'clear' = plain/forage ground, 'tree' =
+    // needs chopping first, 'blocked' = off-limits (edge, another farm + its buffer, the
+    // commons, water, or a rock). Rocks/neighbours block, which is what carves plots into
+    // non-rectangular (L) shapes as they grow around each other.
+    #annexClass(plot, i, j) {
+        if (i < 2 || j < 2 || i >= GRID - 2 || j >= GRID - 2) return 'blocked';
+        for (const other of this.plots) {
+            if (other.cells.has(pkey(i, j))) return 'blocked';
+            if (other === plot) continue;
+            for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++)
+                if (other.cells.has(pkey(i + di, j + dj))) return 'blocked';   // 1-tile gap between farms
+        }
+        const blockers = [...this.wells, this.sign, ...this.structures, this.project?.site].filter(Boolean);
+        for (const b of blockers) if (Math.abs(b.i - i) <= 1 && Math.abs(b.j - j) <= 1) return 'blocked';
+        const t = this.get(i, j);
+        if (t === T.TREE || t === T.STUMP) return 'tree';
+        if (t === T.GRASS || t === T.WHEAT || t === T.FLOWER) return 'clear';
+        return 'blocked';   // water / rock / anything built
+    }
+
+    // Inspect a plot's next expansion: pick a side (outward first) and annex the FREE
+    // cells along that whole frontier. Partly-blocked frontiers annex only their free
+    // cells, so the plot grows into L-shapes instead of forced rectangles.
+    // Returns { state: 'max'|'blocked'|'trees'|'clear', tiles?, cells? }
     expansionInfo(plot) {
         const MAX = World.MAX_PLOT;
         if (plot.w >= MAX && plot.h >= MAX) return { state: 'max' };
         const cx = plot.x + plot.w / 2, cy = plot.y + plot.h / 2;
-        const outR = cx > CENTER, outL = cx < CENTER, outB = cy > CENTER, outT = cy < CENTER;
-        const canLR = plot.w < MAX, canTB = plot.h < MAX;
-        // candidate side-sets {l,r,t,b}, best (biggest, outward) first
-        const cand = [
-            { l: canLR, r: canLR, t: canTB, b: canTB },
-            { l: canLR && outL, r: canLR && outR, t: canTB && outT, b: canTB && outB },
-            { l: canLR && outL, r: canLR && outR, t: false, b: false },
-            { l: false, r: false, t: canTB && outT, b: canTB && outB },
-            { l: canLR, r: false, t: false, b: false },
-            { r: canLR, l: false, t: false, b: false },
-            { t: canTB, l: false, r: false, b: false },
-            { b: canTB, l: false, r: false, t: false },
+        const dirs = [
+            { di: 1, dj: 0, out: cx > CENTER, axisOk: plot.w < MAX },
+            { di: -1, dj: 0, out: cx < CENTER, axisOk: plot.w < MAX },
+            { di: 0, dj: 1, out: cy > CENTER, axisOk: plot.h < MAX },
+            { di: 0, dj: -1, out: cy < CENTER, axisOk: plot.h < MAX },
         ];
-        for (const c of cand) {
-            if (!(c.l || c.r || c.t || c.b)) continue;
-            const nx = plot.x - (c.l ? 1 : 0), ny = plot.y - (c.t ? 1 : 0);
-            const nw = plot.w + (c.l ? 1 : 0) + (c.r ? 1 : 0), nh = plot.h + (c.t ? 1 : 0) + (c.b ? 1 : 0);
-            const tiles = this.#candidateBlockers(plot, nx, ny, nw, nh);
-            if (tiles === null) continue;
-            const rect = { nx, ny, nw, nh };
-            return tiles.length ? { state: 'trees', tiles, rect } : { state: 'clear', rect };
+        for (const outwardPass of [true, false]) {
+            for (const d of dirs) {
+                if (!d.axisOk || d.out !== outwardPass) continue;
+                const clear = [], trees = [];
+                let frontier = 0;
+                for (const key of plot.cells) {
+                    const c = key.indexOf(','), i = +key.slice(0, c), j = +key.slice(c + 1);
+                    const ni = i + d.di, nj = j + d.dj;
+                    if (plot.cells.has(pkey(ni, nj))) continue;
+                    frontier++;
+                    const a = this.#annexClass(plot, ni, nj);
+                    if (a === 'clear') clear.push({ i: ni, j: nj });
+                    else if (a === 'tree') trees.push({ i: ni, j: nj });
+                }
+                const usable = clear.length + trees.length;
+                if (usable === 0 || usable < Math.ceil(frontier * 0.5)) continue;  // need real progress
+                if (trees.length) return { state: 'trees', tiles: trees };
+                return { state: 'clear', cells: clear };
+            }
         }
         return { state: 'blocked' };
     }
@@ -585,12 +608,15 @@ export class World {
         const info = this.expansionInfo(farmer.plot);
         if (info.state !== 'clear') return false;
         const p = farmer.plot;
-        const { nx, ny, nw, nh } = info.rect;
-        p.x = nx; p.y = ny; p.w = nw; p.h = nh;
+        for (const { i, j } of info.cells) {
+            p.cells.add(pkey(i, j));
+            if (this.get(i, j) === T.WHEAT || this.get(i, j) === T.FLOWER) this.set(i, j, T.GRASS);
+        }
+        this.#recomputeBounds(p);   // updates x/y/w/h + bumps rev (re-traces fence)
         this.#clearPlotWildBuffer(p, 1);
         this.#rebuildFields(p);
         this._tilesChanged = true;
-        this.addLog(`${farmer.sheet.name} fenced in new land! (${nw}x${nh})`, '#7dd069');
+        this.addLog(`${farmer.sheet.name} fenced in new land!`, '#7dd069');
         return true;
     }
 
@@ -652,11 +678,11 @@ export class World {
         for (let y = plot.y + 1; y + def.h <= plot.y + plot.h - 1; y++) {
             for (let x = plot.x + 1; x + def.w <= plot.x + plot.w - 1; x++) {
                 let ok = true;
-                // the region itself must be plain, crop-free ground
+                // the region itself must be plain, crop-free ground the plot actually owns
                 for (let j = y; j < y + def.h && ok; j++) {
                     for (let i = x; i < x + def.w; i++) {
                         const t = this.get(i, j);
-                        if (this.#inHouse(plot, i, j) || (t !== T.GRASS && t !== T.TILLED) || this.cropAt(i, j)) { ok = false; break; }
+                        if (!this.#hasCell(plot, i, j) || this.#inHouse(plot, i, j) || (t !== T.GRASS && t !== T.TILLED) || this.cropAt(i, j)) { ok = false; break; }
                     }
                 }
                 // the 1-tile border must not be water / a building / the house
