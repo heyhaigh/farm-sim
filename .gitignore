@@ -12,3 +12,6 @@ screenshots/
 
 # node (only if tooling is added later)
 node_modules/
+
+# licensed reference art (CraftPix) used as inspiration only + workflow scratch
+assets/
