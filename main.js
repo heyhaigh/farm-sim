@@ -129,13 +129,18 @@ function loadImageSet(base, sets, store, onReady) {
         store[n] = img;
     }
 }
+// ONE global scale for EVERY real CraftPix asset (house, trees, bushes, ferns, rocks,
+// animals, crops). They share the same source-library dimensions, so a single modifier
+// keeps every sprite at the same pixel density; relative sizes come from native art.
+const ASSET_SCALE = 0.76;
+
 // Animal walk-sheets: 6 cols x 8 rows grids. We slice the side-profile row.
 const ANIMAL_ART_BASE = './assets/craftpix-net-291971-free-top-down-animals-farm-pixel-art-sprites/PNG/Without_shadow/';
 const ANIMAL_SHEETS = {
-    cow:     { file: 'Bull_animation_without_shadow', fw: 64, fh: 64, disp: 62 },
-    pig:     { file: 'Piglet_animation_without_shadow', fw: 32, fh: 32, disp: 42 },
-    goat:    { file: 'Sheep_animation_without_shadow', fw: 32, fh: 32, disp: 42 },
-    chicken: { file: 'Rooster_animation_without_shadow', fw: 32, fh: 32, disp: 30 },
+    cow:     { file: 'Bull_animation_without_shadow', fw: 64, fh: 64 },
+    pig:     { file: 'Piglet_animation_without_shadow', fw: 32, fh: 32 },
+    goat:    { file: 'Sheep_animation_without_shadow', fw: 32, fh: 32 },
+    chicken: { file: 'Rooster_animation_without_shadow', fw: 32, fh: 32 },
 };
 const ANIMAL_COLS = 6;
 let ANIMAL_SIDE_ROW = 5;   // side-profile (right-facing) row; tuned by eye
@@ -191,7 +196,7 @@ const CROP_FRAMES = {
     wheat: [[9, 371, 11, 10], [39, 363, 14, 18], [39, 363, 14, 18], [68, 353, 22, 28]],    // ripe = grain
     sunflower: [[12, 416, 11, 14], [37, 410, 21, 20], [37, 410, 21, 20], [67, 396, 25, 34]],
 };
-const CROP_SCALE = 0.72;   // shrink sheet plants to sit nicely on a 20px tile
+const CROP_SCALE = ASSET_SCALE;   // crops share the one global asset scale
 // Harvested-produce icons in Supplies.png (loose items), shown when a crop is picked / carried.
 const PRODUCE_ICONS = {
     tomato: [195, 147, 9, 9], carrot: [147, 210, 11, 11], rose: [242, 209, 11, 14],
@@ -246,7 +251,7 @@ function drawAnimal(p, px, py) {
     if (!cfg || !img || !img.complete || !img.naturalWidth) return false;
     const moving = Math.abs(p.vx) + Math.abs(p.vy) > 0.05;
     const col = moving ? Math.floor(p.anim * 6) % ANIMAL_COLS : 0;
-    const disp = cfg.disp, top = Math.floor(py - disp * 0.86);
+    const disp = Math.round(cfg.fw * ASSET_SCALE), top = Math.floor(py - disp * 0.86);
     ctx.imageSmoothingEnabled = false;
     if (p.flip < 0) {
         ctx.save();
@@ -310,13 +315,8 @@ function pickLoadedImage(store, names, i, j, seed = 0) {
     }
     return null;
 }
-// ONE scale for every hi-res iso billboard (house, trees, bushes, ferns, rocks). Never
-// scale sprites individually: each is drawn at native pixel size * ASSET_SCALE, so the
-// pixel grid is identical across all of them and relative sizes come from the source art.
-// Pinned to the house's native->display ratio (104/137) so trees render house-height.
-const ASSET_SCALE = 0.76;
-const WILD_SCALE = ASSET_SCALE;
-function wildDims(img) { return { w: Math.round(img.naturalWidth * WILD_SCALE), h: Math.round(img.naturalHeight * WILD_SCALE) }; }
+// Wild billboards use the shared ASSET_SCALE (defined up top) like everything else.
+function wildDims(img) { return { w: Math.round(img.naturalWidth * ASSET_SCALE), h: Math.round(img.naturalHeight * ASSET_SCALE) }; }
 function wildSpec(i, j, t, season) {
     if (t === T.TREE) {
         const treeSet = TREE_SETS[season.name] || TREE_SETS.SUMMER;
@@ -898,7 +898,7 @@ function drawProducer(p, px, py) {
         if (p.ready) {
             const bob = Math.round(Math.sin(performance.now() / 250 + p.anim) * 1);
             ctx.fillStyle = PRODUCT_ICON[p.kind] || '#fff';
-            const iy = Math.floor(py - (ANIMAL_SHEETS[p.kind].disp * 0.86) - 4 + bob);
+            const iy = Math.floor(py - (ANIMAL_SHEETS[p.kind].fw * ASSET_SCALE * 0.86) - 4 + bob);
             ctx.fillRect(Math.floor(px - 1), iy, 2, 2);
             ctx.fillRect(Math.floor(px - 2), iy + 1, 4, 1);
         }
