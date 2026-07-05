@@ -449,18 +449,23 @@ export class World {
     // ---- farmers -----------------------------------------------------------------
 
     addFarmer(memory, mutation = 0) {
-        let slot = this.slots.find(s => !s.used);
+        const B = World.BASE_PLOT;
+        // only accept a slot whose plot rect (+buffer) clears every existing farm / the
+        // commons / the map edge — ring geometry alone doesn't guarantee this once the
+        // second ring opens, so validate instead of trusting the radii.
+        const fits = (s) => !s.used && this.#candidateBlockers(null, s.i, s.j, B, B) !== null;
+        let slot = this.slots.find(fits);
         if (!slot && this.ringCount === 1) {
             this.#addRing(40, 11, 0.18);
             this.addLog('The town has grown! New homesteads opened further out.', '#7dd069');
-            slot = this.slots.find(s => !s.used);
+            slot = this.slots.find(fits);
         }
         if (!slot) return null;
         slot.used = true;
 
         const sheet = growFarmer(memory, mutation);
         const plot = {
-            x: slot.i, y: slot.j, w: 13, h: 13,
+            x: slot.i, y: slot.j, w: B, h: B,
             // house upper-center: ~4 tiles of fenced yard behind it, garden room in front, facility room to the sides
             house: { i: slot.i + 5, j: slot.j + 5 },
             fields: [], facilities: [],
@@ -494,6 +499,7 @@ export class World {
     // ---- farm expansion + diversification ---------------------------------------
 
     static MAX_PLOT = 23;
+    static BASE_PLOT = 13;   // starting plot size (square); house + garden + facility zones fit inside
     expandCost(plot) { return 4 + Math.max(0, Math.floor((Math.max(plot.w, plot.h) - 13) / 2)) * 2; }
 
     // Validate a candidate rect for a plot; returns null if it collides with a
@@ -509,7 +515,7 @@ export class World {
         for (const b of blockers) if (b.i >= nx - 1 && b.i <= nx + nw && b.j >= ny - 1 && b.j <= ny + nh) return null;
         const tiles = [];
         for (let j = ny; j < ny + nh; j++) for (let i = nx; i < nx + nw; i++) {
-            if (i >= plot.x && i < plot.x + plot.w && j >= plot.y && j < plot.y + plot.h) continue; // old interior
+            if (plot && i >= plot.x && i < plot.x + plot.w && j >= plot.y && j < plot.y + plot.h) continue; // old interior
             const t = this.get(i, j);
             if (t === T.TREE || t === T.STUMP) tiles.push({ i, j });
         }
@@ -1466,7 +1472,7 @@ export class Farmer {
         let name = 'crop', pos;
         if (loot.crop) {
             const c = w.cropAt(loot.crop.i, loot.crop.j);
-            if (c && c.stage === 3 && !c.withered) { name = c.type; w.crops.delete(`${loot.crop.i},${loot.crop.j}`); s.harvested += 1; w.harvestTotal += 1; pos = loot.crop; }
+            if (c && c.stage === 3 && !c.withered) { name = c.type; this.carryCrop = { type: c.type, t: 2.2 }; w.crops.delete(`${loot.crop.i},${loot.crop.j}`); s.harvested += 1; w.harvestTotal += 1; pos = loot.crop; }
         } else if (loot.prod && loot.prod.ready) {
             name = FACILITY_YIELD_NAME[loot.prod.kind] || 'produce'; loot.prod.ready = false; loot.prod.prod = 0; s.harvested += 1; w.harvestTotal += 1;
             pos = { i: Math.round(loot.prod.fx), j: Math.round(loot.prod.fy) };

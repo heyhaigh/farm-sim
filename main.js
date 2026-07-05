@@ -1,6 +1,6 @@
 // main.js — Ry Farms: rendering, camera, input, UI, boot.
 
-import { fetchMemories, mod, fmtMod, STAT_NAMES, TRAIT_NAMES, TRAIT_LABELS } from './dna.js';
+import { fetchMemories, mod, fmtMod, STAT_NAMES, TRAIT_NAMES, TRAIT_LABELS, hashString } from './dna.js';
 import { World, GRID, CENTER, T, DAY_LENGTH, NIGHT_LENGTH } from './farm.js';
 import {
     TILE_W, TILE_H, makeCanvas, drawText, textWidth,
@@ -158,6 +158,7 @@ const HOME_BASE = './assets/craftpix-net-654184-main-characters-home-free-top-do
 const homeSheet = new Image();
 let homeReady = false;
 const HOUSE_SRC = { x: 2, y: 5, w: 137, h: 125 };   // house within exterior.png (trimmed of the stone-wall row below)
+const SMOKE_ENABLED = false;   // chimney smoke off until per-house (sheet-row) alignment is nailed
 const smokeSheet = new Image();
 let smokeReady = false;
 const birdJumpSheet = new Image();
@@ -204,9 +205,11 @@ function loadAssetArt() {
     homeSheet.onload = () => { homeReady = true; };
     homeSheet.onerror = () => {};
     homeSheet.src = HOME_BASE + 'exterior.png';
-    smokeSheet.onload = () => { smokeReady = true; };
-    smokeSheet.onerror = () => {};
-    smokeSheet.src = HOME_BASE + 'Smoke_animation.png';
+    if (SMOKE_ENABLED) {
+        smokeSheet.onload = () => { smokeReady = true; };
+        smokeSheet.onerror = () => {};
+        smokeSheet.src = HOME_BASE + 'Smoke_animation.png';
+    }
     birdJumpSheet.onload = () => { birdJumpReady = true; };
     birdJumpSheet.onerror = () => {};
     birdJumpSheet.src = HOME_BASE + 'bird_jump_animation.png';
@@ -700,8 +703,7 @@ function collectDrawables() {
                     const hx = Math.floor(sx - dispW / 2), hy = Math.floor(sy + TILE_H - dispH + 3);
                     ctx.imageSmoothingEnabled = false;
                     ctx.drawImage(homeSheet, HOUSE_SRC.x, HOUSE_SRC.y, HOUSE_SRC.w, HOUSE_SRC.h, hx, hy, dispW, dispH);
-                    // Chimney smoke disabled until per-house alignment is nailed down.
-                    // drawSmoke(hx, hy, dispW, dispH, f.sheet.seed % 9);
+                    if (SMOKE_ENABLED) drawSmoke(hx, hy, dispW, dispH, f.sheet.seed % 9);
                     if (night) {
                         ctx.fillStyle = indoors ? 'rgba(255,220,120,0.5)' : 'rgba(255,220,120,0.22)';
                         ctx.fillRect(hx + Math.floor(dispW * 0.24), hy + Math.floor(dispH * 0.5), 5, 5);
@@ -1393,9 +1395,15 @@ out.addEventListener('wheel', (e) => {
 function pickMemory() {
     const unused = memories.filter(m => !usedMemoryIds.has(m.id));
     const pool = unused.length ? unused : memories;
-    const m = pool[Math.floor(Math.random() * pool.length)];
-    usedMemoryIds.add(m.id);
-    return m;
+    // Deterministic pick: stable order by hashed id, so the same seed + docs always
+    // grow the same roster (reproducible cast of Ry Bots each load).
+    let best = pool[0], bestH = 0xffffffff;
+    for (const m of pool) {
+        const h = hashString((m.id || m.title || '') + ':pick');
+        if (h < bestH) { bestH = h; best = m; }
+    }
+    usedMemoryIds.add(best.id);
+    return best;
 }
 
 function spawnFarmer() {
