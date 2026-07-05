@@ -79,7 +79,34 @@ const stumpSprite = makeStump();
 const wheatSprite = makeWildWheat();
 const flowerSprite = makeWildFlowers();
 
-// trees vary by species AND season; pre-render + cache each combination
+// ---------------------------------------------------------------------------
+// Real hi-res tree art (CraftPix, iso billboards) — loaded async, with the
+// procedural trees below as fallback until the images arrive.
+// ---------------------------------------------------------------------------
+const TREE_ART_BASE = './assets/craftpix-net-385863-free-top-down-trees-pixel-art/PNG/Assets_separately/Trees/';
+const TREE_SETS = {
+    SPRING: ['Tree1', 'Tree2', 'Tree3', 'Flower_tree1', 'Flower_tree2', 'Fruit_tree1'],
+    SUMMER: ['Tree1', 'Tree2', 'Tree3', 'Fruit_tree2', 'Moss_tree1', 'Moss_tree2'],
+    FALL: ['Autumn_tree1', 'Autumn_tree2', 'Autumn_tree3', 'Tree3'],
+    WINTER: ['Snow_tree1', 'Snow_tree2', 'Snow_tree3', 'Christmas_tree1', 'Snow_christmass_tree1'],
+};
+const treeImg = {};
+let treeArtReady = false;
+function loadTreeArt() {
+    const names = new Set();
+    for (const s of Object.values(TREE_SETS)) s.forEach(n => names.add(n));
+    let pending = names.size;
+    const done = () => { if (--pending <= 0) { treeArtReady = true; terrainDirty = true; } };
+    for (const n of names) {
+        const img = new Image();
+        img.onload = done;
+        img.onerror = done;
+        img.src = TREE_ART_BASE + n + '.png';
+        treeImg[n] = img;
+    }
+}
+
+// trees vary by species AND season; pre-render + cache each combination (fallback)
 const TREE_SPECIES = ['oak', 'pine', 'birch', 'oak', 'bush', 'birch'];
 const treeCache = new Map();
 function treeSprite(species, season) {
@@ -202,12 +229,22 @@ function redrawTerrain() {
     }
 
     // woodland + forage pass (drawn over ground so canopies overlap tiles behind)
+    const treeSet = TREE_SETS[season.name] || TREE_SETS.SUMMER;
     for (let j = 0; j < GRID; j++) {
         for (let i = 0; i < GRID; i++) {
             const t = world.get(i, j);
             if (t !== T.TREE && t !== T.STUMP && t !== T.WHEAT && t !== T.FLOWER) continue;
             const cxp = TERRAIN_OX + isoX(i, j);
             const baseY = isoY(i, j) + TILE_H;
+            if (t === T.TREE && treeArtReady) {
+                // real hi-res CraftPix tree, scaled + smoothed, base anchored on the tile
+                const img = treeImg[treeSet[(i * 7 + j * 5) % treeSet.length]];
+                const H = 60, W = 60;
+                tctx.imageSmoothingEnabled = true;
+                tctx.drawImage(img, Math.floor(cxp - W / 2), Math.floor(baseY - H * 0.82), W, H);
+                tctx.imageSmoothingEnabled = false;
+                continue;
+            }
             let spr;
             if (t === T.TREE) spr = treeSprite(TREE_SPECIES[(i * 7 + j * 5) % TREE_SPECIES.length], season.name);
             else if (t === T.STUMP) spr = stumpSprite;
@@ -1094,6 +1131,7 @@ function drawBootScreen(t) {
 
 (async function boot() {
     requestAnimationFrame(frame);
+    loadTreeArt();
 
     const result = await fetchMemories();
     memories = result.memories;

@@ -266,76 +266,209 @@ export function makeCropSprites(type) {
 
     for (let stage = 0; stage <= 3; stage++) {
         const [c, ctx] = makeCanvas(12, 14);
-        drawCropStage(ctx, style, stage, false);
+        drawCropStage(ctx, style, type, stage, false);
         sprites.push(c);
     }
     const [wc, wctx] = makeCanvas(12, 14);
-    drawCropStage(wctx, style, 2, true);
-    sprites.push(wc); // index 4 = withered
+    drawCropStage(wctx, style, type, 3, true); // index 4 = withered
+    sprites.push(wc);
+
     cropCache[type] = sprites;
     return sprites;
 }
 
-function drawCropStage(ctx, style, stage, withered) {
-    const leaf = withered ? '#907850' : style.leaf;
-    const fruit = withered ? '#786048' : style.fruit;
-    const stem = withered ? '#807050' : '#3e7038';
-    const base = 13;
+function drawCropStage(ctx, style, type, stage, withered) {
+    const leaf = style.leaf;
+    const leafD = shade(leaf, 0.66);
+    const leafL = shade(leaf, 1.24);
+    const fruit = style.fruit;
+    const fruitD = shade(fruit, 0.72);
+    const fruitL = shade(fruit, 1.28);
+    const stem = '#4a7a38';
+    const stemD = '#356028';
 
+    // little soil mound the plant roots into
+    const soil = () => {
+        px(ctx, 3, 11, 6, 2, '#5a4028');   // mid dirt
+        px(ctx, 4, 11, 4, 1, '#6d5034');   // sunlit crest
+        px(ctx, 3, 13, 6, 1, '#3a2818');   // 1px dark underside
+    };
+
+    // ---- withered: drooping brown husk (any type) ----
+    if (withered) {
+        const wStem = '#7a5c34', wLeaf = '#8a6a3c', wLeafD = '#654c28';
+        soil();
+        px(ctx, 5, 5, 2, 6, wStem);        // bent stalk
+        px(ctx, 6, 5, 1, 6, wLeafD);
+        px(ctx, 2, 7, 3, 2, wLeaf);        // sagging leaves
+        px(ctx, 7, 8, 3, 2, wLeaf);
+        px(ctx, 4, 5, 2, 2, wLeafD);
+        px(ctx, 2, 9, 1, 1, wLeafD);
+        px(ctx, 9, 10, 1, 1, wLeafD);
+        px(ctx, 5, 4, 2, 1, wLeaf);        // drooping tip
+        return;
+    }
+
+    // ---- stage 0: seed mound with a single germinating tip ----
     if (stage === 0) {
-        // seed mound
-        ctx.fillStyle = '#584028';
-        ctx.fillRect(4, base - 2, 4, 2);
-        ctx.fillStyle = '#88b060';
-        ctx.fillRect(5, base - 3, 1, 1);
+        soil();
+        px(ctx, 5, 10, 2, 1, stem);        // tiny sprout
+        px(ctx, 5, 9, 1, 1, leafL);
         return;
     }
+
+    // ---- stage 1: small sprout, two seed leaves ----
     if (stage === 1) {
-        ctx.fillStyle = stem;
-        ctx.fillRect(5, base - 4, 2, 4);
-        ctx.fillStyle = leaf;
-        ctx.fillRect(3, base - 5, 2, 2);
-        ctx.fillRect(7, base - 5, 2, 2);
+        soil();
+        px(ctx, 5, 7, 2, 4, stem);         // stem
+        px(ctx, 6, 7, 1, 4, stemD);
+        px(ctx, 3, 6, 2, 2, leaf);         // left leaf
+        px(ctx, 7, 6, 2, 2, leaf);         // right leaf
+        px(ctx, 3, 6, 1, 1, leafL);
+        px(ctx, 8, 6, 1, 1, leafL);
+        px(ctx, 5, 5, 2, 2, leaf);         // crown bud
         return;
     }
-    if (style.form === 'tall') {
-        const h = stage === 2 ? 7 : 10;
-        ctx.fillStyle = stem;
-        ctx.fillRect(5, base - h, 2, h);
-        ctx.fillStyle = leaf;
-        ctx.fillRect(2, base - h + 3, 3, 2);
-        ctx.fillRect(7, base - h + 4, 3, 2);
-        if (stage === 3) {
-            ctx.fillStyle = fruit;
-            ctx.fillRect(3, 0, 6, 5);
-            ctx.fillStyle = withered ? '#605040' : '#805828';
-            ctx.fillRect(5, 1, 2, 2);
-        } else if (!withered) {
-            ctx.fillStyle = fruit;
-            ctx.fillRect(4, base - h - 2, 4, 3);
+
+    // stages 2 (leafy) and 3 (ripe) diverge per crop type.
+    soil();
+
+    switch (type) {
+        // ---------------------------------------------------------------
+        case 'carrot': { // feathery fronds; ripe = orange shoulders poking up
+            if (stage === 2) {
+                px(ctx, 5, 4, 2, 7, stem);
+                px(ctx, 6, 4, 1, 7, stemD);
+                px(ctx, 3, 6, 2, 3, leaf); px(ctx, 7, 6, 2, 3, leaf);
+                px(ctx, 4, 3, 1, 4, leafL); px(ctx, 7, 3, 1, 4, leafL);
+                px(ctx, 5, 2, 2, 3, leaf);
+                px(ctx, 3, 8, 1, 1, leafD); px(ctx, 8, 8, 1, 1, leafD);
+            } else {
+                // orange root shoulders
+                px(ctx, 4, 9, 4, 3, fruit);
+                px(ctx, 5, 12, 2, 1, fruit);      // taper into soil
+                px(ctx, 4, 9, 4, 1, fruitL);      // top highlight
+                px(ctx, 7, 9, 1, 3, fruitD);      // side shade
+                px(ctx, 3, 10, 1, 1, fruitD);
+                // green frond crown
+                px(ctx, 4, 5, 4, 4, leaf);
+                px(ctx, 5, 2, 2, 3, leaf);
+                px(ctx, 3, 6, 1, 2, leafL); px(ctx, 8, 6, 1, 2, leafL);
+                px(ctx, 4, 5, 3, 1, leafL);
+                px(ctx, 4, 8, 4, 1, leafD);
+            }
+            break;
         }
-    } else if (style.form === 'bush') {
-        const s = stage === 2 ? 3 : 5;
-        ctx.fillStyle = leaf;
-        ctx.fillRect(6 - s, base - 2 - s, s * 2, s + 2);
-        ctx.fillStyle = stem;
-        ctx.fillRect(5, base - 2, 2, 2);
-        if (stage === 3) {
-            ctx.fillStyle = fruit;
-            ctx.fillRect(3, base - 6, 2, 2);
-            ctx.fillRect(8, base - 7, 2, 2);
-            ctx.fillRect(5, base - 4, 2, 2);
+        // ---------------------------------------------------------------
+        case 'tomato': { // leafy bush on a stake; ripe = red tomatoes
+            px(ctx, 8, 4, 1, 7, '#9a7a4a');      // support stake
+            if (stage === 2) {
+                px(ctx, 3, 6, 6, 5, leafD);
+                px(ctx, 3, 5, 6, 4, leaf);
+                px(ctx, 4, 4, 4, 3, leaf);
+                px(ctx, 4, 5, 3, 2, leafL);
+                px(ctx, 5, 4, 2, 1, leafL);
+            } else {
+                px(ctx, 3, 5, 6, 6, leafD);
+                px(ctx, 3, 4, 6, 4, leaf);
+                px(ctx, 4, 4, 3, 2, leafL);
+                // ripe fruit clusters
+                px(ctx, 3, 8, 2, 2, fruit); px(ctx, 3, 8, 1, 1, fruitL); px(ctx, 4, 9, 1, 1, fruitD);
+                px(ctx, 7, 7, 2, 2, fruit); px(ctx, 7, 7, 1, 1, fruitL); px(ctx, 8, 8, 1, 1, fruitD);
+                px(ctx, 5, 10, 2, 2, fruit); px(ctx, 5, 10, 1, 1, fruitL); px(ctx, 6, 11, 1, 1, fruitD);
+            }
+            break;
         }
-    } else { // ground
-        ctx.fillStyle = leaf;
-        ctx.fillRect(4, base - 5, 4, 3);
-        ctx.fillRect(2, base - 4, 2, 2);
-        ctx.fillRect(8, base - 4, 2, 2);
-        if (stage === 3) {
-            ctx.fillStyle = fruit;
-            ctx.fillRect(3, base - 3, 6, 3);
-            ctx.fillStyle = leaf;
-            ctx.fillRect(5, base - 4, 2, 1);
+        // ---------------------------------------------------------------
+        case 'sunflower': { // tall stalk; ripe = big yellow head, brown center
+            if (stage === 2) {
+                px(ctx, 5, 4, 2, 7, stem);
+                px(ctx, 6, 4, 1, 7, stemD);
+                px(ctx, 2, 7, 3, 2, leaf); px(ctx, 7, 6, 3, 2, leaf);
+                px(ctx, 2, 7, 1, 1, leafL); px(ctx, 9, 6, 1, 1, leafL);
+                px(ctx, 4, 3, 4, 2, leafD);          // green bud
+                px(ctx, 5, 2, 2, 2, leaf);
+            } else {
+                px(ctx, 5, 7, 2, 5, stem);           // stalk
+                px(ctx, 6, 7, 1, 5, stemD);
+                px(ctx, 2, 9, 3, 2, leaf); px(ctx, 7, 9, 3, 2, leaf);
+                px(ctx, 2, 9, 1, 1, leafL); px(ctx, 9, 9, 1, 1, leafL);
+                // petal ring
+                px(ctx, 3, 1, 6, 6, fruit);
+                px(ctx, 2, 2, 8, 4, fruit);
+                px(ctx, 4, 0, 1, 1, fruitL); px(ctx, 7, 0, 1, 1, fruitL);
+                px(ctx, 3, 1, 6, 1, fruitL);         // sunlit top petals
+                px(ctx, 2, 5, 8, 1, fruitD);         // shaded bottom petals
+                // seed disc
+                px(ctx, 4, 3, 4, 3, '#6b4423');
+                px(ctx, 4, 3, 3, 1, '#835331');
+                px(ctx, 5, 4, 2, 1, '#4a2e17');
+            }
+            break;
+        }
+        // ---------------------------------------------------------------
+        case 'pumpkin': { // sprawling leaves; ripe = big ribbed orange gourd
+            if (stage === 2) {
+                px(ctx, 2, 7, 8, 4, leafD);
+                px(ctx, 3, 6, 6, 4, leaf);
+                px(ctx, 2, 7, 3, 2, leafL);
+                px(ctx, 5, 5, 3, 2, leaf);
+                px(ctx, 5, 5, 1, 1, leafL);
+                px(ctx, 2, 10, 8, 1, leafD);
+            } else {
+                px(ctx, 8, 5, 3, 2, leaf);           // leaf peeking behind
+                px(ctx, 8, 5, 1, 1, leafL);
+                // gourd body
+                px(ctx, 2, 8, 8, 4, fruit);
+                px(ctx, 3, 7, 6, 1, fruit);
+                px(ctx, 2, 8, 8, 1, fruitL);         // top highlight
+                px(ctx, 2, 11, 8, 1, fruitD);        // dark underside
+                px(ctx, 4, 8, 1, 4, fruitD);         // ribs
+                px(ctx, 7, 8, 1, 4, fruitD);
+                px(ctx, 5, 6, 2, 2, stem);           // stubby stem
+                px(ctx, 5, 6, 1, 2, stemD);
+            }
+            break;
+        }
+        // ---------------------------------------------------------------
+        case 'rose': { // leafy bush; ripe = pink rose blooms
+            if (stage === 2) {
+                px(ctx, 3, 6, 6, 5, leafD);
+                px(ctx, 3, 5, 6, 4, leaf);
+                px(ctx, 4, 4, 4, 3, leaf);
+                px(ctx, 4, 5, 3, 2, leafL);
+                px(ctx, 5, 3, 2, 2, leaf);           // rising stem tip
+            } else {
+                px(ctx, 3, 7, 6, 4, leafD);
+                px(ctx, 3, 6, 6, 3, leaf);
+                px(ctx, 4, 8, 3, 2, leafL);
+                // pink blooms
+                px(ctx, 2, 3, 3, 3, fruit); px(ctx, 2, 3, 3, 1, fruitL); px(ctx, 3, 4, 1, 1, fruitD); px(ctx, 3, 3, 1, 1, '#f8b0cc');
+                px(ctx, 7, 4, 3, 3, fruit); px(ctx, 7, 4, 3, 1, fruitL); px(ctx, 8, 5, 1, 1, fruitD);
+                px(ctx, 5, 5, 2, 2, fruitD);         // lower bloom in shade
+                px(ctx, 5, 5, 1, 1, fruit);
+            }
+            break;
+        }
+        // ---------------------------------------------------------------
+        case 'wheat':
+        default: { // upright blades; ripe = golden grain heads
+            if (stage === 2) {
+                px(ctx, 3, 5, 1, 6, stem); px(ctx, 6, 4, 1, 7, stem); px(ctx, 8, 5, 1, 6, stem);
+                px(ctx, 6, 4, 1, 4, stemD);
+                px(ctx, 2, 6, 2, 1, leaf); px(ctx, 7, 6, 2, 1, leaf); px(ctx, 4, 5, 2, 1, leaf);
+                px(ctx, 6, 3, 1, 2, leafL);
+                px(ctx, 3, 8, 1, 1, leafD); px(ctx, 8, 8, 1, 1, leafD);
+            } else {
+                const straw = '#a8863a';
+                px(ctx, 3, 6, 1, 6, straw); px(ctx, 6, 5, 1, 7, straw); px(ctx, 9, 6, 1, 6, straw);
+                // grain heads
+                px(ctx, 2, 2, 3, 4, fruit); px(ctx, 5, 1, 3, 4, fruit); px(ctx, 8, 3, 3, 4, fruit);
+                px(ctx, 3, 2, 1, 2, fruitL); px(ctx, 6, 1, 1, 2, fruitL); px(ctx, 9, 3, 1, 2, fruitL);
+                px(ctx, 2, 5, 3, 1, fruitD); px(ctx, 5, 4, 3, 1, fruitD); px(ctx, 8, 6, 3, 1, fruitD);
+                px(ctx, 3, 0, 1, 1, fruit); px(ctx, 6, 0, 1, 1, fruit); // awns
+            }
+            break;
         }
     }
 }
@@ -541,60 +674,184 @@ export function makeFish(frame) {
     return c;
 }
 
+// Shared quadruped body: rounded barrel + 3/4-lit shading + a 2-frame walk.
+// The near legs (frame arg) swing opposite the far legs so the stride reads.
+function drawQuadruped(ctx, o, frame) {
+    const body = o.body;
+    const dark = o.dark;
+    const light = o.light;
+    const legCol = o.legCol;
+    const hoof = o.hoof;
+    const face = o.face || body;
+    const faceDark = shade(face, 0.8);
+    const farLeg = shade(dark, 0.86);
+
+    // Leg stride: [x, top, w, h]. far pair drawn behind (darker), near in front.
+    const legs = frame === 0
+        ? { far: [[4, 8, 1, 2], [8, 8, 1, 3]], near: [[3, 8, 1, 3], [9, 8, 1, 2]] }
+        : { far: [[3, 8, 1, 3], [9, 8, 1, 2]], near: [[4, 8, 1, 2], [8, 8, 1, 3]] };
+
+    // far legs first (behind the body)
+    for (const [x, y, w, h] of legs.far) {
+        px(ctx, x, y, w, h, farLeg);
+        px(ctx, x, y + h - 1, w, 1, hoof);
+    }
+
+    // barrel body ------------------------------------------------------------
+    px(ctx, 2, 4, 9, 4, body);        // main mass
+    px(ctx, 3, 3, 6, 1, body);        // rounded back
+    px(ctx, 3, 3, 5, 1, light);       // sunlit spine highlight
+    px(ctx, 2, 7, 9, 1, dark);        // belly / underside shade
+    px(ctx, 2, 4, 1, 3, dark);        // shaded rump edge (rear-left)
+    px(ctx, 10, 4, 1, 3, shade(body, 0.9)); // shoulder seam into neck
+
+    if (o.woolly) {
+        // cloud-bump wool along the top & rump for a fleecy silhouette
+        for (const [x, y] of [[2, 3], [4, 2], [6, 3], [8, 2], [2, 4], [3, 7], [6, 8]]) {
+            px(ctx, x, y, 1, 1, x % 2 ? body : light);
+        }
+        px(ctx, 1, 5, 1, 2, body);    // fluffy rump tuft
+        px(ctx, 1, 4, 1, 1, light);
+    }
+
+    // head + muzzle ----------------------------------------------------------
+    px(ctx, 9, 3, 4, 4, face);        // head block
+    px(ctx, 10, 2, 2, 1, face);       // crown
+    px(ctx, 9, 6, 4, 1, faceDark);    // jaw shadow
+    px(ctx, 12, 4, 1, 2, face);       // muzzle pushed forward
+    px(ctx, 12, 3, 1, 1, shade(face, 1.1)); // nose-bridge glint
+
+    // near legs on top -------------------------------------------------------
+    for (const [x, y, w, h] of legs.near) {
+        px(ctx, x, y, w, h, legCol);
+        px(ctx, x, y + h - 1, w, 1, hoof);
+    }
+
+    // eye
+    px(ctx, 11, 4, 1, 1, o.eye || '#20242c');
+}
+
+// Cow — cream Holstein with dark patches, stubby horns, pink muzzle.
+export function makeCow(frame) {
+    const [c, ctx] = makeCanvas(14, 11);
+    const patch = '#4a4038';
+    drawQuadruped(ctx, {
+        body: '#f4f0e8', dark: '#cdbfa8', light: '#ffffff',
+        legCol: '#d8cdbb', hoof: '#3a332c',
+    }, frame);
+    // dark hide patches
+    px(ctx, 3, 4, 3, 2, patch);
+    px(ctx, 4, 3, 1, 1, patch);
+    px(ctx, 7, 5, 2, 2, patch);
+    // stubby horns + tufted ear
+    px(ctx, 10, 1, 1, 1, '#efe7d2'); px(ctx, 11, 1, 1, 1, '#d8cdb8');
+    px(ctx, 9, 2, 1, 1, '#cdbfa8'); // ear
+    // pink muzzle + nostril
+    px(ctx, 12, 5, 1, 1, '#e79aa0');
+    px(ctx, 13, 4, 1, 2, '#e79aa0');
+    px(ctx, 13, 5, 1, 1, '#b26e74');
+    // pink udder
+    px(ctx, 6, 7, 1, 1, '#e79aa0');
+    // tail with dark switch
+    px(ctx, 1, 4, 1, 3, '#cdbfa8'); px(ctx, 1, 7, 1, 2, '#4a4038');
+    return c;
+}
+
+// Pig — round pink body, snout with nostrils, floppy ear, curly tail.
+export function makePig(frame) {
+    const [c, ctx] = makeCanvas(14, 11);
+    drawQuadruped(ctx, {
+        body: '#eb9fab', dark: '#cd7f8b', light: '#f6c2ca',
+        legCol: '#cd7f8b', hoof: '#8a5560', eye: '#20242c',
+    }, frame);
+    // snout disc pushed forward with two nostrils
+    px(ctx, 13, 4, 1, 2, '#e58c99');
+    px(ctx, 13, 4, 1, 1, '#a5636e');
+    px(ctx, 12, 4, 1, 1, '#f6c2ca'); // snout highlight
+    // floppy ear over the brow
+    px(ctx, 10, 2, 2, 2, '#cd7f8b');
+    px(ctx, 11, 4, 1, 1, '#b26e79');
+    // curly tail (little corkscrew at the rear)
+    px(ctx, 1, 4, 1, 1, '#eb9fab');
+    px(ctx, 0, 5, 1, 1, '#cd7f8b');
+    px(ctx, 1, 6, 1, 1, '#eb9fab');
+    return c;
+}
+
+// Goat — pale tan body, back-swept horns, chin beard, perky ear.
+export function makeGoat(frame) {
+    const [c, ctx] = makeCanvas(14, 11);
+    drawQuadruped(ctx, {
+        body: '#ded8ca', dark: '#b3ab98', light: '#f2eee2',
+        legCol: '#b3ab98', hoof: '#4a4238',
+    }, frame);
+    // back-swept horns rising off the crown
+    px(ctx, 10, 1, 1, 1, '#7a7060');
+    px(ctx, 9, 0, 1, 1, '#8a8070');
+    px(ctx, 11, 1, 1, 1, '#7a7060');
+    // perky ear
+    px(ctx, 9, 3, 1, 1, '#b3ab98');
+    // chin beard
+    px(ctx, 11, 7, 1, 2, '#f2eee2');
+    px(ctx, 11, 8, 1, 1, '#cfc9ba');
+    // dark muzzle tip
+    px(ctx, 13, 5, 1, 1, '#8a8070');
+    // short upright tail
+    px(ctx, 1, 3, 1, 2, '#ded8ca');
+    return c;
+}
+
+// Sheep — NEW. Fleecy cream body with a dark face + legs, fluffy tail.
+export function makeSheep(frame) {
+    const [c, ctx] = makeCanvas(14, 11);
+    drawQuadruped(ctx, {
+        body: '#f0eadc', dark: '#d2cbb8', light: '#ffffff',
+        legCol: '#55493d', hoof: '#2e2620',
+        face: '#6f6455', eye: '#0e1014', woolly: true,
+    }, frame);
+    // little dark ear off the woolly face
+    px(ctx, 9, 3, 1, 1, '#574d40');
+    // white glint on the dark eye so it reads
+    px(ctx, 11, 3, 1, 1, '#efe9db');
+    // pale muzzle tip
+    px(ctx, 13, 5, 1, 1, '#a89a86');
+    return c;
+}
+
+// Chicken — polished 9x9 hen: plump white body, wing, tail, comb + wattle.
 export function makeChicken(frame) {
     const [c, ctx] = makeCanvas(9, 9);
-    const legY = frame ? 8 : 7;
-    ctx.fillStyle = '#f4f0e8';       // body
-    ctx.fillRect(2, 3, 5, 4);
-    ctx.fillRect(3, 2, 3, 1);
-    ctx.fillStyle = '#e8e0d4';
-    ctx.fillRect(2, 5, 5, 2);
-    ctx.fillStyle = '#f4f0e8';       // head
-    ctx.fillRect(5, 1, 3, 3);
-    ctx.fillStyle = '#e05040';       // comb
-    ctx.fillRect(6, 0, 2, 1);
-    ctx.fillStyle = '#f0a030';       // beak
-    ctx.fillRect(8, 2, 1, 1);
-    ctx.fillStyle = '#20242c';       // eye
-    ctx.fillRect(6, 2, 1, 1);
-    ctx.fillStyle = '#f0a030';       // legs
-    ctx.fillRect(3, 7, 1, legY - 7 + 1);
-    ctx.fillRect(5, 7, 1, (frame ? 6 : 8) - 7 + 1 < 1 ? 1 : 1);
-    ctx.fillRect(5, 7, 1, 1);
-    return c;
-}
-
-function animalSprite(body, dark, spots, frame) {
-    const [c, ctx] = makeCanvas(14, 11);
-    const legY = 8, legH = frame ? 2 : 3;
-    ctx.fillStyle = body;
-    ctx.fillRect(2, 3, 9, 5);        // body
-    ctx.fillRect(10, 3, 3, 3);       // head
-    ctx.fillStyle = dark;
-    ctx.fillRect(2, 6, 9, 2);
-    if (spots) {                     // cow patches
-        ctx.fillStyle = dark;
-        ctx.fillRect(4, 4, 2, 2); ctx.fillRect(8, 3, 2, 2);
+    const body = '#f6f2ea', dark = '#ddd6c8', light = '#ffffff';
+    // tail feathers (rear-left, angled up)
+    px(ctx, 0, 2, 2, 3, body);
+    px(ctx, 0, 4, 2, 1, dark);
+    px(ctx, 0, 2, 1, 1, light);
+    // plump body
+    px(ctx, 2, 3, 5, 4, body);
+    px(ctx, 3, 2, 3, 1, body);        // rounded back
+    px(ctx, 3, 2, 2, 1, light);       // spine highlight
+    px(ctx, 2, 6, 5, 1, dark);        // belly shade
+    // folded wing
+    px(ctx, 3, 4, 3, 2, dark);
+    px(ctx, 3, 4, 3, 1, '#e9e2d4');
+    // head
+    px(ctx, 5, 1, 3, 3, body);
+    px(ctx, 5, 1, 3, 1, light);
+    // red comb + wattle
+    px(ctx, 6, 0, 2, 1, '#e0483c');
+    px(ctx, 5, 0, 1, 1, '#c73a30');
+    px(ctx, 6, 4, 1, 1, '#e0483c');   // wattle under the beak
+    // beak
+    px(ctx, 8, 2, 1, 1, '#f0a030');
+    px(ctx, 8, 3, 1, 1, '#cf7f1e');
+    // eye
+    px(ctx, 6, 2, 1, 1, '#20242c');
+    // orange legs with a 2-frame step
+    const legs = frame === 0 ? [[3, 7, 2], [5, 7, 2]] : [[4, 7, 2], [6, 7, 2]];
+    for (const [x, y, h] of legs) {
+        px(ctx, x, y, 1, h, '#e08820');
+        px(ctx, x, y + h - 1, 1, 1, '#b8641a'); // foot
     }
-    ctx.fillStyle = '#20242c';
-    ctx.fillRect(12, 4, 1, 1);       // eye
-    ctx.fillStyle = dark;            // legs
-    ctx.fillRect(3, legY, 1, legH); ctx.fillRect(6, legY, 1, legH + (frame ? 1 : -1));
-    ctx.fillRect(8, legY, 1, legH); ctx.fillRect(10, legY, 1, legH + (frame ? -1 : 1));
-    ctx.fillStyle = dark;            // tail
-    ctx.fillRect(1, 3, 1, 4);
-    return c;
-}
-
-export function makeCow(frame) { return animalSprite('#f0ece4', '#3a3630', true, frame); }
-export function makePig(frame) { return animalSprite('#e8a0a8', '#c07880', false, frame); }
-export function makeGoat(frame) {
-    const c = animalSprite('#d8d0c4', '#8a8078', false, frame);
-    const ctx = c.getContext('2d');
-    ctx.fillStyle = '#6a6058';       // horns
-    ctx.fillRect(11, 2, 1, 1); ctx.fillRect(12, 1, 1, 1);
-    ctx.fillStyle = '#e8e0d4';       // beard
-    ctx.fillRect(12, 6, 1, 2);
     return c;
 }
 
@@ -648,125 +905,361 @@ export function makeTrough() {
 // Woodland + wild forage
 // ---------------------------------------------------------------------------
 
-// Seasonal leaf ramps for deciduous canopies (dark, mid, light[, blossom])
-const LEAF_SEASON = {
-    SPRING: ['#2e6a2c', '#4e9438', '#74bc54', '#f0a8cc'],
-    SUMMER: ['#286026', '#3e8630', '#5aa844', null],
-    FALL:   ['#8a4a1e', '#c07828', '#e0a83c', null],
-    WINTER: null,   // bare / snow handled specially
+// Seasonal canopy ramps: dark base, mid body, light highlight, optional blossom.
+const TREE_LEAF = {
+    SPRING: { dark: '#2f6d2b', mid: '#4faa3c', light: '#79c657', blossom: '#f4b8d8' },
+    SUMMER: { dark: '#256022', mid: '#3d8a30', light: '#61b048', blossom: null },
+    FALL:   { dark: '#8a4218', mid: '#c9782a', light: '#eaa83e', blossom: '#f2d24a' },
+    WINTER: null, // bare branches / snow — handled specially
 };
 
-function treeTrunk(ctx, x, birch) {
-    if (birch) {
-        ctx.fillStyle = '#d8d8d0'; ctx.fillRect(x, 15, 3, 6);
-        ctx.fillStyle = '#20242c';                      // birch bark dashes
-        ctx.fillRect(x, 16, 2, 1); ctx.fillRect(x + 1, 18, 2, 1);
-    } else {
-        ctx.fillStyle = '#6a4a2c'; ctx.fillRect(x, 15, 3, 6);
-        ctx.fillStyle = '#503a22'; ctx.fillRect(x + 2, 15, 1, 6);
+// A soft rounded canopy: layered ellipses (dark → mid → light) lit from the
+// upper-left, with a darker underside crescent so it reads as a 3/4 sphere.
+function canopyBlob(ctx, cx, cy, rx, ry, ramp, blossom) {
+    const ellipse = (ox, oy, rrx, rry, col) => {
+        for (let y = -rry; y <= rry; y++) {
+            const t = y / rry;
+            const half = Math.round(rrx * Math.sqrt(Math.max(0, 1 - t * t)));
+            if (half < 1) continue;
+            px(ctx, cx + ox - half, cy + oy + y, half * 2, 1, col);
+        }
+    };
+    // 1) full dark silhouette
+    ellipse(0, 0, rx, ry, ramp.dark);
+    // 2) darker underside crescent (bottom two rows of the sphere)
+    const under = shade(ramp.dark, 0.7);
+    for (let y = ry - 2; y <= ry; y++) {
+        const t = y / ry;
+        const half = Math.round(rx * Math.sqrt(Math.max(0, 1 - t * t)));
+        if (half < 1) continue;
+        px(ctx, cx - half, cy + y, half * 2, 1, under);
+    }
+    // 3) mid body, nudged up-left
+    ellipse(-1, -1, rx - 1, ry - 2, ramp.mid);
+    // 4) light highlight, small, upper-left
+    ellipse(-Math.round(rx * 0.35), -Math.round(ry * 0.42),
+        Math.max(1, Math.round(rx * 0.5)), Math.max(1, Math.round(ry * 0.42)), ramp.light);
+    // 5) a couple of dark leaf-clump dots for texture on the shadow side
+    px(ctx, cx + Math.round(rx * 0.35), cy + 1, 1, 1, ramp.dark);
+    px(ctx, cx + Math.round(rx * 0.15), cy + Math.round(ry * 0.4), 1, 1, ramp.dark);
+    // 6) blossoms / fruit dots, deterministic scatter
+    if (blossom) {
+        const spots = [
+            [-rx + 2, -1], [rx - 3, -2], [-1, -ry + 2],
+            [Math.round(rx * 0.4), Math.round(ry * 0.3)],
+            [-Math.round(rx * 0.5), Math.round(ry * 0.25)],
+            [Math.round(rx * 0.1), -Math.round(ry * 0.2)],
+        ];
+        for (const [dx, dy] of spots) {
+            px(ctx, cx + dx, cy + dy, 1, 1, blossom);
+            px(ctx, cx + dx, cy + dy, 1, 1, blossom);
+        }
     }
 }
 
-// makeTree(species, seasonName) — oak | pine | birch | bush, drawn seasonally.
+// Root-flared trunk. Sits at the base of the sprite; widens into little roots.
+function trunkFlared(ctx, cx, topY, botY, birch) {
+    const barkD = birch ? '#b9b9b1' : '#523a23';
+    const bark  = birch ? '#e2e2da' : '#7a5433';
+    const barkL = birch ? '#f3f3ed' : '#946c46';
+    const h = botY - topY + 1;
+    // shaft (3 wide) with left highlight + right shadow
+    px(ctx, cx - 1, topY, 3, h, bark);
+    px(ctx, cx - 1, topY, 1, h, barkL);
+    px(ctx, cx + 1, topY, 1, h, barkD);
+    // root flare — widen the last two rows into feet
+    px(ctx, cx - 2, botY - 1, 5, 2, bark);
+    px(ctx, cx - 2, botY - 1, 1, 2, barkL);
+    px(ctx, cx + 2, botY - 1, 1, 2, barkD);
+    // 1px darker underside / ground contact
+    px(ctx, cx - 2, botY, 5, 1, shade(barkD, 0.8));
+    px(ctx, cx - 3, botY, 1, 1, shade(barkD, 0.8));
+    px(ctx, cx + 3, botY, 1, 1, shade(barkD, 0.8));
+    if (birch) {
+        px(ctx, cx - 1, topY + 1, 2, 1, '#2a2c30'); // bark dashes
+        px(ctx, cx, topY + 3, 2, 1, '#2a2c30');
+        px(ctx, cx - 1, topY + 5, 1, 1, '#2a2c30');
+    }
+}
+
+// makeTree(species, seasonName) — 'oak' | 'pine' | 'birch' | 'bush', seasonal.
 export function makeTree(species = 'oak', season = 'SUMMER') {
     const [c, ctx] = makeCanvas(16, 22);
     const winter = season === 'WINTER';
-    const leaf = LEAF_SEASON[season] || LEAF_SEASON.SUMMER;
+    const ramp = TREE_LEAF[season] || TREE_LEAF.SUMMER;
+    const cx = 8;
 
+    // ---- PINE / spruce: soft tiered cone, stays green, snow-capped in winter
     if (species === 'pine') {
-        treeTrunk(ctx, 7, false);
-        const g = winter ? ['#1e4a24', '#2e6030'] : season === 'FALL' ? ['#2e5a26', '#3e7030'] : ['#215024', '#316834'];
-        for (let k = 0; k < 3; k++) {
-            const y = 3 + k * 4, w = 4 + k * 3, x = 8 - w;
-            ctx.fillStyle = g[0]; ctx.fillRect(x, y, w * 2, 4);
-            ctx.fillStyle = g[1]; ctx.fillRect(x + 1, y, w * 2 - 2, 2);
-            if (winter) { ctx.fillStyle = '#e8f0f0'; ctx.fillRect(x + 1, y, w * 2 - 3, 1); }  // snow on boughs
+        trunkFlared(ctx, cx, 16, 21, false);
+        const dark = winter ? '#1f4a26' : season === 'FALL' ? '#245222' : '#20502a';
+        const mid  = winter ? '#2f6234' : season === 'FALL' ? '#356e2c' : '#2f6c3a';
+        const light = winter ? '#3f7a44' : '#43854c';
+        // three overlapping rounded tiers, widest at the bottom
+        const tiers = [[16, 7, 3], [11, 6, 3], [6, 4, 3]];
+        for (const [baseY, w, hh] of tiers) {
+            for (let row = 0; row < hh + 2; row++) {
+                const yy = baseY - row;
+                const half = Math.round(w * (row) / (hh + 1));
+                const hw = w - half;
+                if (hw < 1) continue;
+                px(ctx, cx - hw, yy, hw * 2, 1, dark);
+            }
+            // mid + light on the sunlit left of each tier
+            for (let row = 1; row < hh + 1; row++) {
+                const yy = baseY - row;
+                const half = Math.round(w * row / (hh + 1));
+                const hw = w - half;
+                px(ctx, cx - hw + 1, yy, Math.max(1, hw), 1, mid);
+                px(ctx, cx - hw + 1, yy, Math.max(1, hw - 2), 1, light);
+            }
+            if (winter) { px(ctx, cx - w + 1, baseY - hh, (w - 1) * 2 - 1, 1, '#eef4f4'); }
         }
-        ctx.fillStyle = g[1]; ctx.fillRect(7, 1, 2, 2);
+        px(ctx, cx - 1, 2, 2, 2, dark);      // tip
+        px(ctx, cx - 1, 2, 1, 1, light);
+        if (winter) px(ctx, cx - 1, 1, 2, 1, '#eef4f4');
         return c;
     }
 
+    // ---- BUSH: low rounded shrub, no real trunk
     if (species === 'bush') {
-        if (winter) {                                   // snow-dusted shrub
-            ctx.fillStyle = '#3a5236'; ctx.fillRect(4, 14, 8, 5);
-            ctx.fillStyle = '#e8f0f0'; ctx.fillRect(4, 13, 8, 2);
+        if (winter) {
+            canopyBlob(ctx, cx, 15, 6, 4, { dark: '#3a5236', mid: '#4c6a46', light: '#5c7a55' }, null);
+            px(ctx, cx - 5, 12, 10, 2, '#eef4f4'); // snow cap
+            px(ctx, cx - 4, 11, 7, 1, '#ffffff');
         } else {
-            ctx.fillStyle = leaf[0]; ctx.fillRect(3, 13, 10, 6);
-            ctx.fillStyle = leaf[1]; ctx.fillRect(4, 12, 8, 4);
-            ctx.fillStyle = leaf[2]; ctx.fillRect(5, 12, 4, 2);
-            if (leaf[3]) { ctx.fillStyle = leaf[3]; ctx.fillRect(5, 13, 1, 1); ctx.fillRect(9, 14, 1, 1); }
+            canopyBlob(ctx, cx, 15, 6, 4, ramp, ramp.blossom);
+            // tiny ground shadow contact
+            px(ctx, cx - 4, 19, 8, 1, shade(ramp.dark, 0.7));
         }
         return c;
     }
 
-    // oak / birch: trunk + rounded canopy (or bare branches in winter)
-    treeTrunk(ctx, 7, species === 'birch');
+    // ---- OAK / BIRCH ------------------------------------------------------
+    const birch = species === 'birch';
+    trunkFlared(ctx, cx, birch ? 12 : 14, 21, birch);
+
     if (winter) {
-        ctx.strokeStyle = species === 'birch' ? '#b8b8b0' : '#5a4230';
-        ctx.fillStyle = species === 'birch' ? '#c8c8c0' : '#5a4230';
-        ctx.fillRect(6, 8, 1, 7); ctx.fillRect(4, 9, 2, 1); ctx.fillRect(10, 10, 2, 1);
-        ctx.fillRect(8, 7, 1, 6); ctx.fillRect(9, 8, 2, 1); ctx.fillRect(3, 11, 2, 1);
-        ctx.fillStyle = '#e8f0f0'; ctx.fillRect(5, 8, 2, 1); ctx.fillRect(9, 9, 2, 1);   // snow
+        // bare branch fan
+        const wood = birch ? '#d0d0c8' : '#5a4230';
+        const woodD = birch ? '#a8a8a0' : '#452f1f';
+        px(ctx, cx - 1, 6, 2, 9, wood);
+        px(ctx, cx + 1, 6, 1, 9, woodD);
+        px(ctx, cx - 4, 9, 3, 1, wood); px(ctx, cx - 5, 8, 2, 1, wood);
+        px(ctx, cx + 2, 8, 3, 1, wood); px(ctx, cx + 4, 6, 2, 1, wood);
+        px(ctx, cx - 2, 5, 1, 3, wood); px(ctx, cx + 1, 4, 1, 3, wood);
+        px(ctx, cx - 5, 7, 1, 1, woodD); px(ctx, cx + 5, 5, 1, 1, woodD);
+        // dabs of snow resting on the boughs
+        px(ctx, cx - 4, 8, 2, 1, '#eef4f4');
+        px(ctx, cx + 3, 7, 2, 1, '#eef4f4');
+        px(ctx, cx - 1, 4, 2, 1, '#eef4f4');
         return c;
     }
-    const narrow = species === 'birch';
-    const [x0, w0] = narrow ? [4, 8] : [2, 12];
-    ctx.fillStyle = leaf[0];
-    ctx.fillRect(x0, 6, w0, 8); ctx.fillRect(x0 + 1, 8, w0 - 2, 5); ctx.fillRect(x0 + 2, 4, w0 - 4, 3);
-    ctx.fillStyle = leaf[1];
-    ctx.fillRect(x0 + 1, 6, w0 - 3, 5); ctx.fillRect(x0, 8, w0 - 5, 3);
-    ctx.fillStyle = leaf[2];
-    ctx.fillRect(x0 + 2, 5, 4, 2); ctx.fillRect(x0 + 1, 7, 2, 2);
-    if (leaf[3]) {                                       // spring blossoms
-        ctx.fillStyle = leaf[3];
-        ctx.fillRect(x0 + 3, 6, 1, 1); ctx.fillRect(x0 + w0 - 4, 7, 1, 1); ctx.fillRect(x0 + 5, 9, 1, 1);
+
+    if (birch) {
+        // narrower, taller oval canopy
+        canopyBlob(ctx, cx, 7, 5, 6, ramp, ramp.blossom);
+    } else {
+        // big round oak crown
+        canopyBlob(ctx, cx, 8, 7, 7, ramp, ramp.blossom);
     }
-    ctx.fillStyle = leaf[0];                             // underside shade
-    ctx.fillRect(x0, 12, w0, 2);
     return c;
 }
 
+// A cleaner tree stump with cut rings and root flare.
 export function makeStump() {
     const [c, ctx] = makeCanvas(12, 10);
-    ctx.fillStyle = '#6a4a2c';
-    ctx.fillRect(3, 4, 6, 4);
-    ctx.fillStyle = '#503a22';
-    ctx.fillRect(3, 7, 6, 1);
-    ctx.fillStyle = '#8a6640';          // cut top
-    ctx.fillRect(3, 3, 6, 2);
-    ctx.fillStyle = '#a07850';          // rings
-    ctx.fillRect(5, 3, 2, 1);
-    ctx.fillStyle = '#3a2a18';          // roots
-    ctx.fillRect(2, 7, 1, 1); ctx.fillRect(9, 7, 1, 1);
+    const bark = '#6a4a2c', barkD = '#4b3420', barkL = '#835c38';
+    // body
+    px(ctx, 3, 4, 6, 4, bark);
+    px(ctx, 3, 4, 1, 4, barkL);
+    px(ctx, 8, 4, 1, 4, barkD);
+    px(ctx, 3, 7, 6, 1, barkD); // underside
+    // cut top (ellipse-ish rings)
+    px(ctx, 3, 3, 6, 2, '#a9814f');
+    px(ctx, 4, 2, 4, 1, '#b98f58');
+    px(ctx, 5, 3, 2, 1, '#7a5836'); // inner ring
+    px(ctx, 5, 2, 2, 1, '#c69a63');
+    // root flare feet
+    px(ctx, 2, 7, 1, 1, bark); px(ctx, 9, 7, 1, 1, bark);
+    px(ctx, 1, 8, 2, 1, barkD); px(ctx, 9, 8, 2, 1, barkD);
+    px(ctx, 3, 8, 6, 1, shade(barkD, 0.85)); // ground shadow
     return c;
 }
 
+// A mossy fallen log lying across the tile (matches the reference's logs).
+export function makeFallenLog() {
+    const [c, ctx] = makeCanvas(20, 9);
+    const bark = '#6a4a2c', barkD = '#4b3420', barkL = '#835c38';
+    // long horizontal trunk
+    px(ctx, 2, 3, 16, 4, bark);
+    px(ctx, 2, 3, 16, 1, barkL);   // top highlight
+    px(ctx, 2, 6, 16, 1, barkD);   // underside
+    px(ctx, 2, 7, 16, 1, shade(barkD, 0.8)); // ground shadow
+    // bark grain streaks
+    px(ctx, 5, 4, 4, 1, shade(bark, 0.85));
+    px(ctx, 11, 5, 5, 1, shade(bark, 0.85));
+    // cut end (rings) on the right
+    px(ctx, 17, 3, 2, 4, '#a9814f');
+    px(ctx, 18, 4, 1, 2, '#c69a63');
+    px(ctx, 17, 4, 1, 2, '#7a5836');
+    // knot on the left end
+    px(ctx, 1, 4, 1, 2, barkD);
+    // patches of moss
+    px(ctx, 6, 3, 3, 1, '#4f8a3c');
+    px(ctx, 7, 3, 1, 1, '#6fb054');
+    px(ctx, 12, 3, 2, 1, '#4f8a3c');
+    return c;
+}
+
+// makeWildWheat() — a lush golden tuft that fans out of a small grassy base.
 export function makeWildWheat() {
     const [c, ctx] = makeCanvas(12, 12);
-    ctx.fillStyle = '#7a6a2a';           // stalks
-    for (const x of [3, 6, 9]) ctx.fillRect(x, 5, 1, 6);
-    ctx.fillStyle = '#d8c050';           // heads
-    ctx.fillRect(2, 2, 3, 4); ctx.fillRect(5, 1, 3, 4); ctx.fillRect(8, 3, 3, 4);
-    ctx.fillStyle = '#f0e090';           // highlights
-    ctx.fillRect(3, 2, 1, 2); ctx.fillRect(6, 1, 1, 2); ctx.fillRect(9, 3, 1, 2);
-    ctx.fillStyle = '#b09838';           // shade
-    ctx.fillRect(2, 5, 3, 1); ctx.fillRect(5, 4, 3, 1); ctx.fillRect(8, 6, 3, 1);
+
+    const grain = '#e8c24e';                 // mid golden
+    const grainL = '#f6e6a2';                // sun highlight
+    const grainD = '#b08a2e';                // shaded underside
+    const stem = '#a8862e';
+    const stemD = '#856616';
+
+    // little green foraging base so it reads as a wild clump, not just wheat
+    px(ctx, 3, 10, 6, 2, '#3a6a2c');
+    px(ctx, 4, 9, 4, 1, '#4e9438');
+    px(ctx, 2, 11, 8, 1, shade('#3a6a2c', 0.8));
+
+    // five stalks fanning from the base center (6,10) to spread heads.
+    // [headX, headY]
+    const heads = [[1, 3], [3, 1], [6, 0], [9, 1], [10, 4]];
+    const bx = 6, by = 10;
+
+    for (let i = 0; i < heads.length; i++) {
+        const [hx, hy] = heads[i];
+        // stem: step from base to just under the head, leaning outward
+        const topY = hy + 3;
+        for (let y = by; y >= topY; y--) {
+            const t = (by - y) / (by - topY);
+            const sx = Math.round(bx + (hx - bx) * t);
+            px(ctx, sx, y, 1, 1, stem);
+            if (y > topY) px(ctx, sx, y, 1, 1, y % 2 ? stem : stemD); // subtle segment
+        }
+
+        // grain head: a small teardrop cluster of kernels
+        px(ctx, hx, hy, 2, 4, grain);            // core
+        px(ctx, hx - 1, hy + 1, 1, 2, grain);    // left kernels
+        px(ctx, hx + 2, hy + 1, 1, 2, grain);    // right kernels
+        px(ctx, hx, hy - 1, 1, 1, grain);        // tip
+        px(ctx, hx, hy, 1, 2, grainL);           // lit face
+        px(ctx, hx, hy - 1, 1, 1, grainL);
+        px(ctx, hx + 1, hy + 3, 1, 1, grainD);   // shaded underside
+        px(ctx, hx - 1, hy + 2, 1, 1, grainD);
+    }
     return c;
 }
 
+// makeWildFlowers() — a colorful blossom clump on a rounded green mound.
 export function makeWildFlowers() {
     const [c, ctx] = makeCanvas(12, 10);
-    // little clump of mixed blossoms on green
-    ctx.fillStyle = '#4a8038';                          // leaves
-    ctx.fillRect(2, 6, 8, 2); ctx.fillRect(4, 5, 4, 1);
-    ctx.fillStyle = '#3a6a2c';
-    ctx.fillRect(5, 7, 1, 2); ctx.fillRect(8, 6, 1, 2);
-    const blooms = [[2, 2, '#e85888'], [5, 1, '#f0d048'], [8, 3, '#8a6ae0'], [4, 4, '#e8e8f0'], [9, 5, '#e878b0']];
-    for (const [x, y, col] of blooms) {
-        ctx.fillStyle = col;
-        ctx.fillRect(x, y, 2, 2);
-        ctx.fillStyle = '#f0e060';                      // pollen center
-        ctx.fillRect(x, y, 1, 1);
+
+    const leaf = '#4e9438', leafD = '#2e6a2c', leafL = '#74bc54';
+
+    // rounded leafy mound (dark silhouette -> mid -> a couple lit tufts)
+    const mound = [[6, 3, 6], [7, 2, 8], [8, 3, 7], [9, 4, 5]];
+    for (const [y, x, w] of mound) px(ctx, x, y, w, 1, leafD);
+    px(ctx, 3, 7, 6, 1, leaf);
+    px(ctx, 4, 6, 4, 1, leaf);
+    px(ctx, 4, 6, 2, 1, leafL);                  // tuft highlight
+    px(ctx, 8, 7, 1, 1, leafL);
+    px(ctx, 2, 9, 8, 1, shade(leafD, 0.78));     // 1px darker underside
+
+    // mixed blossoms, each a tiny 3x3 flower: 4 petals + pollen center.
+    // [cx, cy, petal, highlight]
+    const blooms = [
+        [2, 2, '#e85888', '#f6a0c0'],   // pink
+        [5, 1, '#f0c838', '#fbe79a'],   // yellow
+        [8, 2, '#8a6ae0', '#bfa8f2'],   // purple
+        [4, 4, '#eef0f8', '#ffffff'],   // white
+        [9, 4, '#e04860', '#f28a9a'],   // red
+    ];
+    for (const [cx, cy, petal, hi] of blooms) {
+        // tiny stem down into the mound
+        px(ctx, cx, cy + 1, 1, 2, leafD);
+        // petals
+        px(ctx, cx - 1, cy, 1, 1, petal);
+        px(ctx, cx + 1, cy, 1, 1, petal);
+        px(ctx, cx, cy - 1, 1, 1, petal);
+        px(ctx, cx, cy + 1, 1, 1, petal);
+        px(ctx, cx - 1, cy - 1, 1, 1, hi);       // top-left lit petal
+        // pollen center
+        px(ctx, cx, cy, 1, 1, '#f6e27a');
+    }
+    return c;
+}
+
+// makeBush(variant) — decorative round shrub for scatter. ~12x10.
+//   variant 0 = plain green, 1 = berry bush, 2 = blue-flowering bush
+export function makeBush(variant = 0) {
+    const [c, ctx] = makeCanvas(12, 10);
+
+    const leafD = '#2e6a2c', leaf = '#4e9438', leafL = '#74bc54';
+
+    // full rounded silhouette (dark base) — [y, x, w]
+    const sil = [
+        [1, 4, 4],
+        [2, 2, 8],
+        [3, 1, 10],
+        [4, 1, 10],
+        [5, 1, 10],
+        [6, 2, 9],
+        [7, 3, 6],
+    ];
+    for (const [y, x, w] of sil) px(ctx, x, y, w, 1, leafD);
+
+    // mid-green body, inset so the dark rim reads as an outline
+    const body = [
+        [2, 3, 6],
+        [3, 2, 8],
+        [4, 2, 7],
+        [5, 3, 6],
+        [6, 4, 5],
+    ];
+    for (const [y, x, w] of body) px(ctx, x, y, w, 1, leaf);
+
+    // bright top-left lobes (three tone highlight, suggests clumped leaves)
+    px(ctx, 3, 2, 3, 1, leafL);
+    px(ctx, 3, 3, 2, 1, leafL);
+    px(ctx, 7, 3, 2, 1, leafL);
+    px(ctx, 5, 4, 2, 1, leafL);
+
+    // 1px darker underside
+    px(ctx, 3, 7, 6, 1, shade(leafD, 0.78));
+    px(ctx, 2, 6, 1, 1, shade(leafD, 0.78));
+    px(ctx, 10, 6, 1, 1, shade(leafD, 0.78));
+
+    if (variant === 1) {
+        // berry bush — plump red berries with a lit dot
+        const berry = '#e0402c', berryL = '#f47a54';
+        const spots = [[3, 3], [6, 2], [8, 4], [4, 5], [9, 5], [6, 6]];
+        for (const [x, y] of spots) {
+            px(ctx, x, y, 2, 2, berry);
+            px(ctx, x, y, 1, 1, berryL);         // shine
+        }
+    } else if (variant === 2) {
+        // blue-flowering bush — small blue blossoms with pale centers
+        const petal = '#5878d8', petalL = '#9db4f0';
+        const flowers = [[3, 2], [7, 3], [5, 5], [9, 4], [2, 5]];
+        for (const [cx, cy] of flowers) {
+            px(ctx, cx - 1, cy, 1, 1, petal);
+            px(ctx, cx + 1, cy, 1, 1, petal);
+            px(ctx, cx, cy - 1, 1, 1, petal);
+            px(ctx, cx, cy + 1, 1, 1, petal);
+            px(ctx, cx, cy - 1, 1, 1, petalL);   // lit petal
+            px(ctx, cx, cy, 1, 1, '#eef2ff');    // pale center
+        }
+    } else {
+        // plain green — a few extra lit specks for leafy texture
+        px(ctx, 4, 3, 1, 1, leafL);
+        px(ctx, 8, 4, 1, 1, leafL);
+        px(ctx, 6, 5, 1, 1, leafL);
     }
     return c;
 }
