@@ -11,9 +11,9 @@
 
 import { mulberry32, mod, growFarmer } from './dna.js';
 
-export const GRID = 78;
+export const GRID = 110;
 export const CENTER = GRID / 2;
-const FOREST_BORDER = 4;   // keep trees this many tiles off the map edge
+const FOREST_BORDER = 5;   // keep trees this many tiles off the map edge
 const ISO_HALF_W = 10;     // mirrors TILE_W / 2 without importing renderer code
 const ISO_HALF_H = 5;      // mirrors TILE_H / 2 without importing renderer code
 
@@ -150,7 +150,7 @@ export class World {
 
         this.slots = [];
         this.ringCount = 0;
-        this.#addRing(17, 8, 0.42);
+        this.#addRing(26, 8, 0.42);
 
         this.#growForest();
     }
@@ -355,9 +355,11 @@ export class World {
     }
 
     // house occupies a 2x2 footprint; keep crops/facilities off it and its door
+    // Reserve the house's VISUAL footprint (the sprite is ~5 tiles wide / taller than its
+    // 2x3 tile base), so crops and facilities never get placed under the house sprite.
     #inHouse(plot, i, j) {
         const h = plot.house;
-        return i >= h.i && i <= h.i + 1 && j >= h.j && j <= h.j + 2;
+        return i >= h.i - 1 && i <= h.i + 2 && j >= h.j - 1 && j <= h.j + 3;
     }
 
     #addRing(radius, count, phase) {
@@ -449,7 +451,7 @@ export class World {
     addFarmer(memory, mutation = 0) {
         let slot = this.slots.find(s => !s.used);
         if (!slot && this.ringCount === 1) {
-            this.#addRing(29, 11, 0.18);
+            this.#addRing(40, 11, 0.18);
             this.addLog('The town has grown! New homesteads opened further out.', '#7dd069');
             slot = this.slots.find(s => !s.used);
         }
@@ -458,8 +460,9 @@ export class World {
 
         const sheet = growFarmer(memory, mutation);
         const plot = {
-            x: slot.i, y: slot.j, w: 7, h: 7,
-            house: { i: slot.i + 1, j: slot.j + 1 },
+            x: slot.i, y: slot.j, w: 13, h: 13,
+            // house upper-center: ~4 tiles of fenced yard behind it, garden room in front, facility room to the sides
+            house: { i: slot.i + 5, j: slot.j + 5 },
             fields: [], facilities: [],
         };
         // Clear a small canopy buffer so homesteads read as deliberate clearings.
@@ -490,8 +493,8 @@ export class World {
 
     // ---- farm expansion + diversification ---------------------------------------
 
-    static MAX_PLOT = 15;
-    expandCost(plot) { return 4 + Math.max(0, Math.floor((Math.max(plot.w, plot.h) - 7) / 2)) * 2; }
+    static MAX_PLOT = 23;
+    expandCost(plot) { return 4 + Math.max(0, Math.floor((Math.max(plot.w, plot.h) - 13) / 2)) * 2; }
 
     // Validate a candidate rect for a plot; returns null if it collides with a
     // neighbor plot / commons / edge, else the list of woodland tiles to clear.

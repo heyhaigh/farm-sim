@@ -364,10 +364,12 @@ function drawSmoke(hx, hy, dispW, dispH, seed = 0) {
     const w = Math.round(dispW * 0.26);
     const h = Math.round(w / 3);
     // Chimney mouth (measured from exterior.png crop): center 26.6% across, top 7.2% down.
-    // Smoke puff within its 48x16 cell is off-center: puff center at 38.5% across, base at 97% down.
+    // The puff is off-center within its 48x16 cell AND differs per sheet row (measured):
+    // row0 center ~0.39, row1 ~0.59, row2 ~0.63; base is at the cell bottom for every frame.
+    const puffCx = [0.39, 0.59, 0.63][row];
     const bob = Math.round(Math.sin(performance.now() / 450 + seed) * 1);
-    const x = hx + Math.round(dispW * 0.266 - w * 0.385);   // align puff center to the mouth
-    const y = hy + Math.round(dispH * 0.072 - h * 0.97) - bob; // sit the puff base on the mouth, rising up
+    const x = hx + Math.round(dispW * 0.266 - w * puffCx);   // align this row's puff center to the mouth
+    const y = hy + Math.round(dispH * 0.072 - h) - bob;      // sit the puff base on the mouth, rising up
     ctx.imageSmoothingEnabled = false;
     ctx.globalAlpha = 0.85;
     ctx.drawImage(smokeSheet, sx, sy, 48, 16, x, y, w, h);
@@ -608,20 +610,36 @@ function collectDrawables() {
     }
     addBirds(list);
 
-    // fences
+    // fences: a post on every perimeter tile, joined by two rails along each edge
     for (const plot of world.plots) {
-        for (let i = plot.x; i <= plot.x + plot.w; i += 1) {
-            list.push(post(i, plot.y));
-            list.push(post(i, plot.y + plot.h));
-        }
-        for (let j = plot.y + 1; j < plot.y + plot.h; j++) {
-            list.push(post(plot.x, j));
-            list.push(post(plot.x + plot.w, j));
-        }
+        const x0 = plot.x, y0 = plot.y, x1 = plot.x + plot.w, y1 = plot.y + plot.h;
+        for (let i = x0; i <= x1; i++) { list.push(post(i, y0)); list.push(post(i, y1)); }
+        for (let j = y0 + 1; j < y1; j++) { list.push(post(x0, j)); list.push(post(x1, j)); }
+        // rails between adjacent posts (top/bottom run along +i, left/right along +j)
+        for (let i = x0; i < x1; i++) { list.push(rail(i, y0, i + 1, y0)); list.push(rail(i, y1, i + 1, y1)); }
+        for (let j = y0; j < y1; j++) { list.push(rail(x0, j, x0, j + 1)); list.push(rail(x1, j, x1, j + 1)); }
     }
     function post(i, j) {
         const sx = cam.x + isoX(i, j), sy = cam.y + isoY(i, j);
         return { y: sy, draw: () => ctx.drawImage(fencePost, Math.floor(sx - 2), Math.floor(sy - 8)) };
+    }
+    function rail(i0, j0, i1, j1) {
+        const ax = cam.x + isoX(i0, j0), ay = cam.y + isoY(i0, j0);
+        const bx = cam.x + isoX(i1, j1), by = cam.y + isoY(i1, j1);
+        return {
+            y: (ay + by) / 2 - 1,      // sort just behind the posts it connects
+            draw: () => {
+                const steps = Math.max(Math.abs(bx - ax), Math.abs(by - ay), 1);
+                // two rails across the upper half of the posts
+                for (const [off, col] of [[-6, '#9a7452'], [-1, '#7a5c3c']]) {
+                    ctx.fillStyle = col;
+                    for (let s = 0; s <= steps; s++) {
+                        const t = s / steps;
+                        ctx.fillRect(Math.round(ax + (bx - ax) * t) - 1, Math.round(ay + off + (by - ay) * t), 2, 2);
+                    }
+                }
+            },
+        };
     }
 
     // houses
@@ -640,7 +658,8 @@ function collectDrawables() {
                     const hx = Math.floor(sx - dispW / 2), hy = Math.floor(sy + TILE_H - dispH + 3);
                     ctx.imageSmoothingEnabled = false;
                     ctx.drawImage(homeSheet, HOUSE_SRC.x, HOUSE_SRC.y, HOUSE_SRC.w, HOUSE_SRC.h, hx, hy, dispW, dispH);
-                    drawSmoke(hx, hy, dispW, dispH, f.sheet.seed % 9);
+                    // Chimney smoke disabled until per-house alignment is nailed down.
+                    // drawSmoke(hx, hy, dispW, dispH, f.sheet.seed % 9);
                     if (night) {
                         ctx.fillStyle = indoors ? 'rgba(255,220,120,0.5)' : 'rgba(255,220,120,0.22)';
                         ctx.fillRect(hx + Math.floor(dispW * 0.24), hy + Math.floor(dispH * 0.5), 5, 5);
