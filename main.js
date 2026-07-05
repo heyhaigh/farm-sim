@@ -149,6 +149,18 @@ const homeSheet = new Image();
 let homeReady = false;
 const HOUSE_SRC = { x: 2, y: 5, w: 137, h: 125 };   // house within exterior.png (trimmed of the stone-wall row below)
 
+// grass/dirt detail decals scattered on the ground for texture
+const grassDetailsImg = new Image();
+let grassDetailsReady = false;
+const GRASS_DECALS = [    // source rects into ground_grass_details.png (green tufts + a dirt patch)
+    { x: 6, y: 156, w: 32, h: 26 }, { x: 74, y: 176, w: 32, h: 26 },
+    { x: 150, y: 206, w: 32, h: 26 }, { x: 214, y: 150, w: 32, h: 26 },
+    { x: 250, y: 232, w: 36, h: 26 }, { x: 40, y: 244, w: 32, h: 24 },
+];
+const DIRT_DECALS = [
+    { x: 10, y: 14, w: 34, h: 26 }, { x: 96, y: 40, w: 34, h: 26 }, { x: 210, y: 70, w: 34, h: 26 },
+];
+
 function loadAssetArt() {
     loadImageSet(TREE_ART_BASE, TREE_SETS, treeImg, () => { treeArtReady = true; });
     loadImageSet(BUSH_ART_BASE, BUSH_SETS, bushImg, () => { bushArtReady = true; });
@@ -156,6 +168,9 @@ function loadAssetArt() {
     homeSheet.onload = () => { homeReady = true; };
     homeSheet.onerror = () => {};
     homeSheet.src = HOME_BASE + 'exterior.png';
+    grassDetailsImg.onload = () => { grassDetailsReady = true; terrainDirty = true; };
+    grassDetailsImg.onerror = () => {};
+    grassDetailsImg.src = HOME_BASE + 'ground_grass_details.png';
 }
 
 // draw a sliced side-profile animal frame at (px,py); returns false if not ready
@@ -282,20 +297,24 @@ function redrawTerrain() {
                 tctx.fillRect(sx + 6, sy + 4, 8, 1);
                 tctx.fillRect(sx + 6, sy + 6, 8, 1);
             } else if (grassy) {
-                // patch-specific ground detail breaks up the flat green
-                if (patch === 3) {
+                // real grass/dirt detail decals scattered for texture (deterministic)
+                const h = (i * 73856 + j * 19349) >>> 0;
+                if (t === T.GRASS && grassDetailsReady && h % 5 === 0) {
+                    const useDirt = h % 15 === 0;
+                    const set = useDirt ? DIRT_DECALS : GRASS_DECALS;
+                    const d = set[(h >>> 3) % set.length];
+                    const dw = Math.round(d.w * 0.6), dh = Math.round(d.h * 0.6);
+                    tctx.drawImage(grassDetailsImg, d.x, d.y, d.w, d.h,
+                        sx + Math.floor(TILE_W / 2 - dw / 2) + ((h >>> 5) % 5 - 2),
+                        sy + Math.floor(TILE_H / 2 - dh / 2), dw, dh);
+                }
+                // subtle procedural speckle on non-decal tiles
+                else if (patch === 3) {
                     tctx.fillStyle = flower;
                     tctx.fillRect(sx + 6 + ((i * 3 + j) % 7), sy + 3 + ((i + j * 5) % 4), 1, 1);
-                    tctx.fillRect(sx + 4 + ((i * 2 + j * 3) % 9), sy + 5 + ((i * 3) % 3), 1, 1);
-                } else if (patch === 1) {
-                    tctx.fillStyle = shade(GRASS_A, 0.8);           // sparse tufts
-                    tctx.fillRect(sx + 7 + ((i + j) % 5), sy + 4, 2, 1);
                 } else if (patch === 2 && (i * 7 + j * 13) % 3 === 0) {
-                    tctx.fillStyle = shade(GRASS_A, 1.16);          // bright blades
+                    tctx.fillStyle = shade(GRASS_A, 1.16);
                     tctx.fillRect(sx + 8 + ((i * 5) % 4), sy + 4, 1, 2);
-                } else if ((i * 7 + j * 13) % 6 === 0) {
-                    tctx.fillStyle = shade(GRASS_B, 0.92);
-                    tctx.fillRect(sx + 9, sy + 5, 1, 1);
                 }
             }
         }
