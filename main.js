@@ -1093,15 +1093,15 @@ function drawMinimap() {
 
     // current viewport (the on-screen diamond)
     const corners = [screenToTile(0, 18), screenToTile(GW, 18), screenToTile(GW, GH - 22), screenToTile(0, GH - 22)];
-    ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+    ctx.strokeStyle = 'rgba(255,255,255,0.18)';
     ctx.lineWidth = 1;
     ctx.beginPath();
     corners.forEach((c, k) => { const [px, py] = t2m(c.i, c.j); k ? ctx.lineTo(px, py) : ctx.moveTo(px, py); });
     ctx.closePath(); ctx.stroke();
 
-    // farmers = bright high-contrast dots (on top)
+    // farmers = bright uniform yellow dots (selected = white), on top
     for (const f of world.farmers) {
-        const col = f === selected ? '#ffffff' : (f.sheet.colors.hatColor || '#f0d060');
+        const col = f === selected ? '#ffffff' : '#f5d020';
         const [px, py] = t2m(f.pos.i, f.pos.j);
         if (f === selected) { ctx.fillStyle = '#000'; ctx.fillRect(Math.floor(px) - 1, Math.floor(py) - 1, 4, 4); }
         ctx.fillStyle = col; ctx.fillRect(Math.floor(px), Math.floor(py), 2, 2);
