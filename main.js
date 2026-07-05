@@ -53,6 +53,7 @@ let booted = false;
 let rosterOpen = false;
 let rosterScroll = 0;
 const ROSTER_BTN = { x: 0, y: 3, w: 44, h: 12 };   // positioned in drawUI
+const MINIMAP = { x: 0, y: 0, w: 46, h: 46 };      // bottom-right legend, positioned in drawMinimap
 
 const cam = { x: 0, y: 0 };
 const mouse = { x: -1, y: -1, downX: 0, downY: 0, dragging: false, panStart: null };
@@ -1054,6 +1055,60 @@ function drawFarmer(f, sx, sy) {
 
 const BTN = { x: GW - 34, y: 3, w: 30, h: 12 };
 
+// Minimap legend (bottom-right): faint land/buildings, bright farmer dots, a viewport box.
+// Click it to jump the camera. Buildings are low-contrast; a home = 4 dots, a well = 1.
+function drawMinimap() {
+    MINIMAP.x = GW - MINIMAP.w - 5;
+    MINIMAP.y = GH - 22 - MINIMAP.h - 5;
+    const { x: mx, y: my, w: mw, h: mh } = MINIMAP;
+    const t2m = (i, j) => [mx + (i / GRID) * mw, my + (j / GRID) * mh];
+    const dot = (i, j, col, s = 1) => { const [px, py] = t2m(i, j); ctx.fillStyle = col; ctx.fillRect(Math.floor(px), Math.floor(py), s, s); };
+
+    ctx.fillStyle = 'rgba(12,14,22,0.85)';
+    ctx.fillRect(mx - 3, my - 3, mw + 6, mh + 6);
+    ctx.fillStyle = 'rgba(74,110,66,0.45)';           // faint meadow
+    ctx.fillRect(mx, my, mw, mh);
+    ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+    ctx.strokeRect(mx - 2.5, my - 2.5, mw + 5, mh + 5);
+
+    ctx.save();
+    ctx.beginPath(); ctx.rect(mx, my, mw, mh); ctx.clip();
+
+    // owned land (very low contrast)
+    ctx.fillStyle = 'rgba(150,180,110,0.22)';
+    for (const p of world.plots) {
+        const [px, py] = t2m(p.x, p.y);
+        ctx.fillRect(Math.floor(px), Math.floor(py), Math.max(1, Math.round(p.w / GRID * mw)), Math.max(1, Math.round(p.h / GRID * mh)));
+    }
+    // wells + sign = 1 low-contrast dot each
+    for (const wl of world.wells) dot(wl.i, wl.j, 'rgba(120,170,210,0.7)', 1);
+    dot(world.sign.i, world.sign.j, 'rgba(180,150,110,0.7)', 1);
+    // communal structures = 2px low-contrast
+    for (const s of world.structures) dot(s.i, s.j, 'rgba(160,160,180,0.7)', 2);
+    // facilities (coop/barn) low-contrast
+    for (const p of world.plots) for (const fac of p.facilities) if (fac.struct) dot(fac.struct.i, fac.struct.j, 'rgba(150,120,90,0.7)', 2);
+    // homes = a 4-dot (2x2) low-contrast red cluster
+    ctx.fillStyle = 'rgba(200,90,70,0.65)';
+    for (const p of world.plots) { const [px, py] = t2m(p.house.i, p.house.j); ctx.fillRect(Math.floor(px), Math.floor(py), 2, 2); }
+
+    // current viewport (the on-screen diamond)
+    const corners = [screenToTile(0, 18), screenToTile(GW, 18), screenToTile(GW, GH - 22), screenToTile(0, GH - 22)];
+    ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    corners.forEach((c, k) => { const [px, py] = t2m(c.i, c.j); k ? ctx.lineTo(px, py) : ctx.moveTo(px, py); });
+    ctx.closePath(); ctx.stroke();
+
+    // farmers = bright high-contrast dots (on top)
+    for (const f of world.farmers) {
+        const col = f === selected ? '#ffffff' : (f.sheet.colors.hatColor || '#f0d060');
+        const [px, py] = t2m(f.pos.i, f.pos.j);
+        if (f === selected) { ctx.fillStyle = '#000'; ctx.fillRect(Math.floor(px) - 1, Math.floor(py) - 1, 4, 4); }
+        ctx.fillStyle = col; ctx.fillRect(Math.floor(px), Math.floor(py), 2, 2);
+    }
+    ctx.restore();
+}
+
 function drawUI() {
     BTN.x = GW - 34;
     // top bar
@@ -1115,7 +1170,7 @@ function drawUI() {
     });
 
     if (rosterOpen) drawRoster();
-    else if (selected) drawSheet(selected);
+    else { if (selected) drawSheet(selected); drawMinimap(); }
 }
 
 function wrapText(str, maxChars) {
@@ -1337,7 +1392,9 @@ function gamePoint(e) {
 out.addEventListener('pointerdown', (e) => {
     const p = gamePoint(e);
     mouse.downX = p.x; mouse.downY = p.y;
-    mouse.panStart = rosterOpen ? null : { x: p.x, y: p.y, camX: cam.x, camY: cam.y };
+    // don't world-pan when the gesture starts on the minimap
+    const onMap = !rosterOpen && inRect(p, MINIMAP);
+    mouse.panStart = (rosterOpen || onMap) ? null : { x: p.x, y: p.y, camX: cam.x, camY: cam.y };
     mouse.dragging = false;
     out.setPointerCapture(e.pointerId);
 });
@@ -1386,6 +1443,15 @@ out.addEventListener('pointerup', (e) => {
                 }
             }
         }
+        return;
+    }
+
+    // minimap: jump the camera to the clicked spot
+    if (inRect(p, MINIMAP)) {
+        const ti = (p.x - MINIMAP.x) / MINIMAP.w * GRID;
+        const tj = (p.y - MINIMAP.y) / MINIMAP.h * GRID;
+        cam.x = GW / 2 - isoX(ti, tj);
+        cam.y = GH / 2 - isoY(ti, tj);
         return;
     }
 
