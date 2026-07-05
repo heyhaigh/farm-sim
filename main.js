@@ -310,10 +310,12 @@ function pickLoadedImage(store, names, i, j, seed = 0) {
     }
     return null;
 }
-// ONE scale for every real-asset wild billboard. Never scale sprites individually:
-// each is drawn at its native pixel size * WILD_SCALE, so the pixel grid is identical
-// across all of them. Variety comes from different source images + position, not resizing.
-const WILD_SCALE = 0.42;
+// ONE scale for every hi-res iso billboard (house, trees, bushes, ferns, rocks). Never
+// scale sprites individually: each is drawn at native pixel size * ASSET_SCALE, so the
+// pixel grid is identical across all of them and relative sizes come from the source art.
+// Pinned to the house's native->display ratio (104/137) so trees render house-height.
+const ASSET_SCALE = 0.76;
+const WILD_SCALE = ASSET_SCALE;
 function wildDims(img) { return { w: Math.round(img.naturalWidth * WILD_SCALE), h: Math.round(img.naturalHeight * WILD_SCALE) }; }
 function wildSpec(i, j, t, season) {
     if (t === T.TREE) {
@@ -731,7 +733,7 @@ function collectDrawables() {
             y: sy + TILE_H, draw: () => {
                 let roofY;
                 if (homeReady) {
-                    const dispW = 104, dispH = Math.round(dispW * HOUSE_SRC.h / HOUSE_SRC.w);
+                    const dispW = Math.round(HOUSE_SRC.w * ASSET_SCALE), dispH = Math.round(dispW * HOUSE_SRC.h / HOUSE_SRC.w);
                     const hx = Math.floor(sx - dispW / 2), hy = Math.floor(sy + TILE_H - dispH + 3);
                     ctx.imageSmoothingEnabled = false;
                     ctx.drawImage(homeSheet, HOUSE_SRC.x, HOUSE_SRC.y, HOUSE_SRC.w, HOUSE_SRC.h, hx, hy, dispW, dispH);
