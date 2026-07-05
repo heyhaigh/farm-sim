@@ -1,7 +1,7 @@
 // main.js — Ry Farms: rendering, camera, input, UI, boot.
 
 import { fetchMemories, mod, fmtMod, STAT_NAMES, TRAIT_NAMES, TRAIT_LABELS } from './dna.js';
-import { World, GRID, T, DAY_LENGTH, NIGHT_LENGTH } from './farm.js';
+import { World, GRID, CENTER, T, DAY_LENGTH, NIGHT_LENGTH } from './farm.js';
 import {
     TILE_W, TILE_H, makeCanvas, drawText, textWidth,
     makeFarmerSprites, makeCropSprites, makeHouse, makeWell, makeSign, makeFencePost,
@@ -87,8 +87,8 @@ const TREE_ART_BASE = './assets/craftpix-net-385863-free-top-down-trees-pixel-ar
 const TREE_SETS = {
     SPRING: ['Tree1', 'Tree2', 'Tree3', 'Flower_tree1', 'Flower_tree2', 'Fruit_tree1'],
     SUMMER: ['Tree1', 'Tree2', 'Tree3', 'Fruit_tree2', 'Moss_tree1', 'Moss_tree2'],
-    FALL: ['Autumn_tree1', 'Autumn_tree2', 'Autumn_tree3', 'Tree3'],
-    WINTER: ['Snow_tree1', 'Snow_tree2', 'Snow_tree3', 'Christmas_tree1', 'Snow_christmass_tree1'],
+    FALL: ['Autumn_tree1', 'Tree1', 'Autumn_tree2', 'Moss_tree1', 'Autumn_tree3', 'Tree2', 'Tree3'],
+    WINTER: ['Snow_tree1', 'Snow_tree2', 'Snow_tree3', 'Snow_tree1', 'Snow_tree2', 'Snow_tree3', 'Snow_christmass_tree1', 'Christmas_tree1'],
 };
 const BUSH_ART_BASE = './assets/craftpix-net-141354-free-top-down-bushes-pixel-art/PNG/Assets/';
 const BUSH_SETS = {
@@ -99,12 +99,21 @@ const BUSH_SETS = {
     _fern: ['Fern1_1', 'Fern1_2', 'Fern2_1', 'Fern2_2'],   // for wild-wheat/grass forage
 };
 const FERN_NAMES = ['Fern1_1', 'Fern1_2', 'Fern2_1', 'Fern2_2'];
+const ROCK_ART_BASE = './assets/craftpix-net-974061-free-rocks-and-stones-top-down-pixel-art/PNG/Objects_separately/';
+const ROCK_NAMES = [
+    'Rock1_grass_shadow1', 'Rock1_grass_shadow2', 'Rock1_grass_shadow3', 'Rock1_grass_shadow4', 'Rock1_grass_shadow5',
+    'Rock2_grass_shadow1', 'Rock2_grass_shadow2', 'Rock2_grass_shadow3', 'Rock2_grass_shadow4', 'Rock2_grass_shadow5',
+    'Rock4_grass_shadow1', 'Rock4_grass_shadow2', 'Rock4_grass_shadow3', 'Rock4_grass_shadow4', 'Rock4_grass_shadow5',
+    'Rock5_grass_shadow1', 'Rock5_grass_shadow2', 'Rock5_grass_shadow3', 'Rock5_grass_shadow4', 'Rock5_grass_shadow5',
+    'Rock6_grass_shadow1', 'Rock6_grass_shadow2', 'Rock6_grass_shadow3', 'Rock6_grass_shadow4', 'Rock6_grass_shadow5',
+];
 
 // Shared async image-set loader: fills `store` and flips `readyFlag` (+ redraws
 // terrain) once every image in the sets has loaded. Falls back to procedural
 // sprites until then.
 const treeImg = {}; let treeArtReady = false;
 const bushImg = {}; let bushArtReady = false;
+const rockImg = {}; let rockArtReady = false;
 function loadImageSet(base, sets, store, onReady) {
     const names = new Set();
     for (const s of Object.values(sets)) s.forEach(n => names.add(n));
@@ -112,6 +121,7 @@ function loadImageSet(base, sets, store, onReady) {
     const done = () => { if (--pending <= 0) { onReady(); terrainDirty = true; } };
     for (const n of names) {
         const img = new Image();
+        img.assetName = n;
         img.onload = done;
         img.onerror = done;
         img.src = base + n + '.png';
@@ -148,6 +158,10 @@ const HOME_BASE = './assets/craftpix-net-654184-main-characters-home-free-top-do
 const homeSheet = new Image();
 let homeReady = false;
 const HOUSE_SRC = { x: 2, y: 5, w: 137, h: 125 };   // house within exterior.png (trimmed of the stone-wall row below)
+const smokeSheet = new Image();
+let smokeReady = false;
+const birdJumpSheet = new Image();
+let birdJumpReady = false;
 
 // grass/dirt detail decals scattered on the ground for texture
 const grassDetailsImg = new Image();
@@ -164,10 +178,17 @@ const DIRT_DECALS = [
 function loadAssetArt() {
     loadImageSet(TREE_ART_BASE, TREE_SETS, treeImg, () => { treeArtReady = true; });
     loadImageSet(BUSH_ART_BASE, BUSH_SETS, bushImg, () => { bushArtReady = true; });
+    loadImageSet(ROCK_ART_BASE, { ROCKS: ROCK_NAMES }, rockImg, () => { rockArtReady = true; });
     loadAnimalArt();
     homeSheet.onload = () => { homeReady = true; };
     homeSheet.onerror = () => {};
     homeSheet.src = HOME_BASE + 'exterior.png';
+    smokeSheet.onload = () => { smokeReady = true; };
+    smokeSheet.onerror = () => {};
+    smokeSheet.src = HOME_BASE + 'Smoke_animation.png';
+    birdJumpSheet.onload = () => { birdJumpReady = true; };
+    birdJumpSheet.onerror = () => {};
+    birdJumpSheet.src = HOME_BASE + 'bird_jump_animation.png';
     grassDetailsImg.onload = () => { grassDetailsReady = true; terrainDirty = true; };
     grassDetailsImg.onerror = () => {};
     grassDetailsImg.src = HOME_BASE + 'ground_grass_details.png';
@@ -232,6 +253,153 @@ function screenToTile(sx, sy) {
     return { i, j };
 }
 
+function imageLoaded(img) {
+    return !!img && img.complete && img.naturalWidth > 0;
+}
+function pickLoadedImage(store, names, i, j, seed = 0) {
+    const start = hash2(i * 31 + j * 17, j * 29 - i * 13, seed) % names.length;
+    for (let n = 0; n < names.length; n++) {
+        const img = store[names[(start + n) % names.length]];
+        if (imageLoaded(img)) return img;
+    }
+    return null;
+}
+function wildSpec(i, j, t, season) {
+    if (t === T.TREE) {
+        const treeSet = TREE_SETS[season.name] || TREE_SETS.SUMMER;
+        const img = pickLoadedImage(treeImg, treeSet, i, j, 61);
+        if (img) {
+            const size = Math.round(44 + rand2(i, j, 62) * 13 + (rand2(i, j, 70) > 0.9 ? 4 : 0));
+            return { img, w: size, h: size, anchor: 0.82, depth: 0.4, leaves: season.name === 'FALL', seed: hash2(i, j, 73) };
+        }
+        const species = TREE_SPECIES[hash2(i, j, 63) % TREE_SPECIES.length];
+        const spr = treeSprite(species, season.name);
+        return { img: spr, w: spr.width, h: spr.height, anchor: 1, nudgeY: 2, depth: 0.4, leaves: season.name === 'FALL', seed: hash2(i, j, 73) };
+    }
+    if (t === T.FLOWER) {
+        const bushSet = BUSH_SETS[season.name] || BUSH_SETS.SUMMER;
+        const img = pickLoadedImage(bushImg, bushSet, i, j, 64);
+        if (img) {
+            const size = Math.round(21 + rand2(i, j, 65) * 7);
+            return { img, w: size, h: size, anchor: 0.74, depth: -1 };
+        }
+        return { img: flowerSprite, w: flowerSprite.width, h: flowerSprite.height, anchor: 1, nudgeY: 2, depth: -1 };
+    }
+    if (t === T.WHEAT) {
+        const img = pickLoadedImage(bushImg, FERN_NAMES, i, j, 66);
+        if (img) {
+            const size = Math.round(19 + rand2(i, j, 67) * 7);
+            return { img, w: size, h: size, anchor: 0.72, depth: -1 };
+        }
+        return { img: wheatSprite, w: wheatSprite.width, h: wheatSprite.height, anchor: 1, nudgeY: 2, depth: -1 };
+    }
+    if (t === T.STUMP) {
+        return { img: stumpSprite, w: stumpSprite.width, h: stumpSprite.height, anchor: 1, nudgeY: 2, depth: -0.5 };
+    }
+    if (t === T.ROCK) {
+        const img = pickLoadedImage(rockImg, ROCK_NAMES, i, j, 68);
+        if (!img) return null;
+        const base = img.naturalWidth >= 64 ? 36 : img.naturalWidth >= 32 ? 24 : 14;
+        const size = Math.round(base * (0.9 + rand2(i, j, 69) * 0.22));
+        return { img, w: size, h: size, anchor: 0.86, depth: -0.25 };
+    }
+    return null;
+}
+function wildJitter(i, j, t) {
+    const xSpread = t === T.TREE ? 32 : t === T.ROCK ? 5 : t === T.STUMP ? 4 : 7;
+    const ySpread = t === T.TREE ? 18 : t === T.ROCK ? 3 : 4;
+    return {
+        x: Math.round((rand2(i, j, 71) - 0.5) * xSpread),
+        y: Math.round((rand2(i, j, 72) - 0.5) * ySpread),
+    };
+}
+function drawWild(spec, x, baseY) {
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(
+        spec.img,
+        Math.floor(x - spec.w / 2),
+        Math.floor(baseY - spec.h * spec.anchor + (spec.nudgeY || 0)),
+        spec.w,
+        spec.h
+    );
+    drawLeafDrift(spec, x, baseY);
+}
+function drawLeafDrift(spec, x, baseY) {
+    if (!spec.leaves || world.weather === 'rain' || world.weather === 'storm') return;
+    const now = performance.now() / 1700;
+    const colors = ['#e0803c', '#c85838', '#d8a038', '#a86828'];
+    for (let n = 0; n < 3; n++) {
+        const phase = (now + ((spec.seed >>> (n * 7)) & 255) / 255 + n * 0.29) % 1;
+        const sway = Math.sin(phase * Math.PI * 2 + n * 1.7);
+        const lx = x + sway * spec.w * 0.22 + (n - 1) * spec.w * 0.13;
+        const ly = baseY - spec.h * 0.72 + phase * spec.h * 0.52;
+        ctx.fillStyle = colors[(spec.seed + n) % colors.length];
+        ctx.fillRect(Math.floor(lx), Math.floor(ly), phase > 0.55 ? 2 : 1, 1);
+    }
+}
+function addWildDrawable(list, i, j) {
+    const t = world.get(i, j);
+    if (t !== T.TREE && t !== T.STUMP && t !== T.WHEAT && t !== T.FLOWER && t !== T.ROCK) return;
+    const spec = wildSpec(i, j, t, world.seasonDef);
+    if (!spec) return;
+    const jitter = wildJitter(i, j, t);
+    const x = cam.x + isoX(i, j) + jitter.x;
+    const baseY = cam.y + isoY(i, j) + TILE_H + jitter.y;
+    const margin = Math.max(spec.w, spec.h) + 24;
+    if (x < -margin || x > GW + margin || baseY < -margin || baseY > GH + margin) return;
+    list.push({
+        y: baseY + spec.depth,
+        layer: t === T.TREE ? -2 : t === T.ROCK ? -1 : -3,
+        x,
+        draw: () => drawWild(spec, x, baseY),
+    });
+}
+
+function drawSmoke(hx, hy, dispW, dispH, seed = 0) {
+    if (!smokeReady || !imageLoaded(smokeSheet)) return;
+    const frame = (Math.floor(performance.now() / 150 + seed) % 6);
+    const row = seed % 3;
+    const sx = frame * 48;
+    const sy = row * 16;
+    const w = Math.round(dispW * 0.28);
+    const h = Math.round(w / 3);
+    const x = hx + Math.round(dispW * 0.34);
+    const y = hy + Math.round(dispH * 0.15) - Math.round(Math.sin(performance.now() / 450 + seed) * 1);
+    ctx.imageSmoothingEnabled = false;
+    ctx.globalAlpha = 0.75;
+    ctx.drawImage(smokeSheet, sx, sy, 48, 16, x, y, w, h);
+    ctx.globalAlpha = 1;
+}
+
+function addBirds(list) {
+    if (!birdJumpReady || !imageLoaded(birdJumpSheet)) return;
+    const t = performance.now() / 1000;
+    for (let k = 0; k < 4; k++) {
+        const phase = t * 0.55 + k * 1.7;
+        const active = (phase % 9) < 3.6;
+        if (!active) continue;
+        const a = k * 1.9 + Math.floor(phase / 9) * 0.7;
+        const ri = CENTER + Math.cos(a) * (18 + k * 3);
+        const rj = CENTER + Math.sin(a * 0.9 + 0.6) * (14 + k * 2);
+        const sx = cam.x + isoX(ri, rj);
+        const sy = cam.y + isoY(ri, rj) - 38 - Math.sin((phase % 3.6) / 3.6 * Math.PI) * 12;
+        if (sx < -30 || sx > GW + 30 || sy < 18 || sy > GH - 32) continue;
+        const frame = Math.floor((phase % 3.6) / 0.15) % 24;
+        const tileId = frame < 12 ? frame * 2 : 20 + (frame - 12) * 2;
+        const srcX = (tileId % 40) * 16;
+        const srcY = Math.floor(tileId / 40) * 16;
+        list.push({
+            y: sy + 10,
+            layer: 4,
+            x: sx,
+            draw: () => {
+                ctx.imageSmoothingEnabled = false;
+                ctx.drawImage(birdJumpSheet, srcX, srcY, 32, 16, Math.floor(sx - 10), Math.floor(sy), 20, 10);
+            },
+        });
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Terrain pre-render (redrawn only when tiles change)
 // ---------------------------------------------------------------------------
@@ -241,6 +409,30 @@ const [terrain, tctx] = makeCanvas(GRID * TILE_W + TILE_W, GRID * TILE_H + TILE_
 let terrainDirty = true;
 
 const PATH_C = '#8a7a58';
+
+function hash2(i, j, seed = 0) {
+    let h = Math.imul(i | 0, 374761393) ^ Math.imul(j | 0, 668265263) ^ Math.imul(seed | 0, 2246822519);
+    h = Math.imul(h ^ (h >>> 13), 1274126177);
+    return (h ^ (h >>> 16)) >>> 0;
+}
+function rand2(i, j, seed = 0) {
+    return hash2(i, j, seed) / 4294967296;
+}
+function lerp(a, b, t) { return a + (b - a) * t; }
+function smooth(t) { return t * t * (3 - 2 * t); }
+function noise2(i, j, scale, seed = 0) {
+    const x = i / scale, y = j / scale;
+    const x0 = Math.floor(x), y0 = Math.floor(y);
+    const tx = smooth(x - x0), ty = smooth(y - y0);
+    const a = rand2(x0, y0, seed);
+    const b = rand2(x0 + 1, y0, seed);
+    const c = rand2(x0, y0 + 1, seed);
+    const d = rand2(x0 + 1, y0 + 1, seed);
+    return lerp(lerp(a, b, tx), lerp(c, d, tx), ty);
+}
+function pickTile(list, i, j, seed = 0) {
+    return list[hash2(i * 31 + j * 17, j * 29 - i * 13, seed) % list.length];
+}
 
 function shade(hex, f) {
     const n = parseInt(hex.slice(1), 16);
@@ -252,10 +444,10 @@ function shade(hex, f) {
 
 // low-frequency noise -> which grass "patch" a tile belongs to (0..3)
 function grassPatch(i, j) {
-    const n = Math.sin(i * 0.33) * Math.cos(j * 0.29) + 0.6 * Math.sin((i + j) * 0.17) + 0.5 * Math.cos((i - j) * 0.21);
-    if (n < -0.7) return 1;   // shaded meadow
-    if (n > 0.9) return 2;    // sunlit patch
-    if (n > 0.2) return 3;    // wildflower / tufted patch
+    const n = noise2(i, j, 8, 12) * 0.55 + noise2(i + 31, j - 17, 19, 13) * 0.35 + rand2(i, j, 14) * 0.1;
+    if (n < 0.24) return 1;   // shaded meadow
+    if (n > 0.78) return 2;   // sunlit patch
+    if (n > 0.55) return 3;   // wildflower / tufted patch
     return 0;                 // plain
 }
 
@@ -274,7 +466,7 @@ function redrawTerrain() {
             const t = world.get(i, j);
             const sx = TERRAIN_OX + isoX(i, j) - TILE_W / 2;
             const sy = isoY(i, j);
-            const grassy = t === T.GRASS || t === T.TREE || t === T.STUMP || t === T.WHEAT || t === T.FLOWER;
+            const grassy = t === T.GRASS || t === T.TREE || t === T.STUMP || t === T.WHEAT || t === T.FLOWER || t === T.ROCK;
             let col = (i + j) % 2 ? GRASS_A : GRASS_B;
             let patch = 0;
             if (grassy) {
@@ -297,62 +489,29 @@ function redrawTerrain() {
                 tctx.fillRect(sx + 6, sy + 4, 8, 1);
                 tctx.fillRect(sx + 6, sy + 6, 8, 1);
             } else if (grassy) {
-                // real grass/dirt detail decals scattered for texture (deterministic)
-                const h = (i * 73856 + j * 19349) >>> 0;
-                if (t === T.GRASS && grassDetailsReady && h % 5 === 0) {
-                    const useDirt = h % 15 === 0;
+                const scatter = rand2(i, j, 41);
+                const density = patch === 3 ? 0.34 : patch === 2 ? 0.24 : 0.15;
+                if (t === T.GRASS && grassDetailsReady && scatter < density) {
+                    const useDirt = rand2(i, j, 42) < 0.18;
                     const set = useDirt ? DIRT_DECALS : GRASS_DECALS;
-                    const d = set[(h >>> 3) % set.length];
-                    const dw = Math.round(d.w * 0.6), dh = Math.round(d.h * 0.6);
+                    const d = pickTile(set, i, j, 43);
+                    const scale = 0.44 + rand2(i, j, 44) * 0.24;
+                    const dw = Math.round(d.w * scale), dh = Math.round(d.h * scale);
+                    const ox = Math.round((rand2(i, j, 45) - 0.5) * 8);
+                    const oy = Math.round((rand2(i, j, 46) - 0.5) * 4);
                     tctx.drawImage(grassDetailsImg, d.x, d.y, d.w, d.h,
-                        sx + Math.floor(TILE_W / 2 - dw / 2) + ((h >>> 5) % 5 - 2),
-                        sy + Math.floor(TILE_H / 2 - dh / 2), dw, dh);
+                        sx + Math.floor(TILE_W / 2 - dw / 2) + ox,
+                        sy + Math.floor(TILE_H / 2 - dh / 2) + oy, dw, dh);
                 }
                 // subtle procedural speckle on non-decal tiles
                 else if (patch === 3) {
                     tctx.fillStyle = flower;
-                    tctx.fillRect(sx + 6 + ((i * 3 + j) % 7), sy + 3 + ((i + j * 5) % 4), 1, 1);
-                } else if (patch === 2 && (i * 7 + j * 13) % 3 === 0) {
+                    tctx.fillRect(sx + 5 + Math.floor(rand2(i, j, 47) * 10), sy + 2 + Math.floor(rand2(i, j, 48) * 6), 1, 1);
+                } else if (patch === 2 && rand2(i, j, 49) < 0.34) {
                     tctx.fillStyle = shade(GRASS_A, 1.16);
-                    tctx.fillRect(sx + 8 + ((i * 5) % 4), sy + 4, 1, 2);
+                    tctx.fillRect(sx + 6 + Math.floor(rand2(i, j, 50) * 8), sy + 3 + Math.floor(rand2(i, j, 51) * 4), 1, 2);
                 }
             }
-        }
-    }
-
-    // woodland + forage pass (drawn over ground so canopies overlap tiles behind).
-    // Crisp (nearest-neighbor) blits at source-respecting scale — no bilinear
-    // blur, which made the little bushes look soft and blown-up.
-    const treeSet = TREE_SETS[season.name] || TREE_SETS.SUMMER;
-    const bushSet = BUSH_SETS[season.name] || BUSH_SETS.SUMMER;
-    tctx.imageSmoothingEnabled = false;
-    const blit = (img, cxp, baseY, H, anchor) => {
-        tctx.drawImage(img, Math.floor(cxp - H / 2), Math.floor(baseY - H * anchor), H, H);
-    };
-    for (let j = 0; j < GRID; j++) {
-        for (let i = 0; i < GRID; i++) {
-            const t = world.get(i, j);
-            if (t !== T.TREE && t !== T.STUMP && t !== T.WHEAT && t !== T.FLOWER) continue;
-            const cxp = TERRAIN_OX + isoX(i, j);
-            const baseY = isoY(i, j) + TILE_H;
-            if (t === T.TREE && treeArtReady) {
-                blit(treeImg[treeSet[(i * 7 + j * 5) % treeSet.length]], cxp, baseY, 72, 0.82);
-                continue;
-            }
-            if (t === T.FLOWER && bushArtReady) {
-                blit(bushImg[bushSet[(i * 5 + j * 3) % bushSet.length]], cxp, baseY, 24, 0.74);
-                continue;
-            }
-            if (t === T.WHEAT && bushArtReady) {
-                blit(bushImg[FERN_NAMES[(i * 3 + j * 7) % FERN_NAMES.length]], cxp, baseY, 22, 0.72);
-                continue;
-            }
-            let spr;
-            if (t === T.TREE) spr = treeSprite(TREE_SPECIES[(i * 7 + j * 5) % TREE_SPECIES.length], season.name);
-            else if (t === T.STUMP) spr = stumpSprite;
-            else if (t === T.WHEAT) spr = wheatSprite;
-            else spr = flowerSprite;
-            tctx.drawImage(spr, Math.floor(cxp - spr.width / 2), Math.floor(baseY - spr.height + 2));
         }
     }
     terrainDirty = false;
@@ -439,6 +598,13 @@ function drawWeather(dt, t) {
 function collectDrawables() {
     const list = [];
 
+    // Wild foliage has height, so it participates in the same footline sort as
+    // farmers and buildings instead of being baked flat into the terrain.
+    for (let j = 0; j < GRID; j++) {
+        for (let i = 0; i < GRID; i++) addWildDrawable(list, i, j);
+    }
+    addBirds(list);
+
     // fences
     for (const plot of world.plots) {
         for (let i = plot.x; i <= plot.x + plot.w; i += 1) {
@@ -471,6 +637,7 @@ function collectDrawables() {
                     const hx = Math.floor(sx - dispW / 2), hy = Math.floor(sy + TILE_H - dispH + 3);
                     ctx.imageSmoothingEnabled = false;
                     ctx.drawImage(homeSheet, HOUSE_SRC.x, HOUSE_SRC.y, HOUSE_SRC.w, HOUSE_SRC.h, hx, hy, dispW, dispH);
+                    drawSmoke(hx, hy, dispW, dispH, f.sheet.seed % 9);
                     if (night) {
                         ctx.fillStyle = indoors ? 'rgba(255,220,120,0.5)' : 'rgba(255,220,120,0.22)';
                         ctx.fillRect(hx + Math.floor(dispW * 0.24), hy + Math.floor(dispH * 0.5), 5, 5);
@@ -1209,7 +1376,7 @@ function frame(now) {
 
     // y-sorted world objects
     const drawables = collectDrawables();
-    drawables.sort((a, b) => a.y - b.y);
+    drawables.sort((a, b) => (a.y - b.y) || ((a.layer || 0) - (b.layer || 0)) || ((a.x || 0) - (b.x || 0)));
     for (const d of drawables) d.draw();
 
     drawWeather(dt, t);

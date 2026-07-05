@@ -14,8 +14,10 @@ import { mulberry32, mod, growFarmer } from './dna.js';
 export const GRID = 78;
 export const CENTER = GRID / 2;
 const FOREST_BORDER = 4;   // keep trees this many tiles off the map edge
+const ISO_HALF_W = 10;     // mirrors TILE_W / 2 without importing renderer code
+const ISO_HALF_H = 5;      // mirrors TILE_H / 2 without importing renderer code
 
-export const T = { GRASS: 0, PATH: 1, TILLED: 2, HOUSE: 3, WELL: 4, SIGN: 5, STRUCT: 6, WATER: 7, COOP: 8, BARN: 9, TREE: 10, STUMP: 11, WHEAT: 12, FLOWER: 13 };
+export const T = { GRASS: 0, PATH: 1, TILLED: 2, HOUSE: 3, WELL: 4, SIGN: 5, STRUCT: 6, WATER: 7, COOP: 8, BARN: 9, TREE: 10, STUMP: 11, WHEAT: 12, FLOWER: 13, ROCK: 14 };
 export const FORAGE_TILES = [T.WHEAT, T.FLOWER];
 export const FORAGE_NAME = { [T.WHEAT]: 'wild wheat', [T.FLOWER]: 'wildflowers' };
 
@@ -65,6 +67,27 @@ export const PROD = {
     goat:    { rate: 0.026, feedDecay: 0.011, yieldLo: 1, yieldHi: 2, collectT: 2.0, feedT: 1.6, wander: true },
 };
 
+function tileHash(i, j, seed = 0) {
+    let h = Math.imul(i | 0, 374761393) ^ Math.imul(j | 0, 668265263) ^ Math.imul(seed | 0, 2246822519);
+    h = Math.imul(h ^ (h >>> 13), 1274126177);
+    return (h ^ (h >>> 16)) >>> 0;
+}
+function tileRand(i, j, seed = 0) {
+    return tileHash(i, j, seed) / 4294967296;
+}
+function lerp(a, b, t) { return a + (b - a) * t; }
+function smooth(t) { return t * t * (3 - 2 * t); }
+function tileNoise(i, j, scale, seed = 0) {
+    const x = i / scale, y = j / scale;
+    const x0 = Math.floor(x), y0 = Math.floor(y);
+    const tx = smooth(x - x0), ty = smooth(y - y0);
+    const a = tileRand(x0, y0, seed);
+    const b = tileRand(x0 + 1, y0, seed);
+    const c = tileRand(x0, y0 + 1, seed);
+    const d = tileRand(x0 + 1, y0 + 1, seed);
+    return lerp(lerp(a, b, tx), lerp(c, d, tx), ty);
+}
+
 const FACILITY_DEFS = {
     pond: { label: 'water garden', w: 3, h: 3, produce: 'lily & fish' },
     coop: { label: 'chicken coop', w: 3, h: 3, produce: 'eggs' },
@@ -88,6 +111,7 @@ export function d20(rand, modifier) {
 
 export class World {
     constructor(seed = 1337) {
+        this.seed = seed >>> 0;
         this.rand = mulberry32(seed);
         this.tiles = new Uint8Array(GRID * GRID).fill(T.GRASS);
         this.crops = new Map();
@@ -135,42 +159,196 @@ export class World {
     // copses with open meadows between), plus wild wheat + wildflower patches.
     // Trees stay clear of a border so they never clip the map edge.
     #growForest() {
+        const groves = [];
+        for (let g = 0; g < 22; g++) {
+            const a = tileRand(g, 0, this.seed + 90) * Math.PI * 2;
+            const r = 16 + tileRand(g, 1, this.seed + 91) * 23;
+            groves.push({
+                i: CENTER + Math.cos(a) * r + (tileRand(g, 2, this.seed + 92) - 0.5) * 5,
+                j: CENTER + Math.sin(a) * r + (tileRand(g, 3, this.seed + 93) - 0.5) * 5,
+                rx: 3.5 + tileRand(g, 4, this.seed + 94) * 4.8,
+                ry: 3.0 + tileRand(g, 5, this.seed + 95) * 4.2,
+                weight: 0.65 + tileRand(g, 6, this.seed + 96) * 0.45,
+            });
+        }
+
+        // Meadows and forage are tile-level texture; trees are seeded below as
+        // spaced grove points so their large billboards do not inherit grid rows.
         for (let j = 0; j < GRID; j++) {
             for (let i = 0; i < GRID; i++) {
                 if (this.get(i, j) !== T.GRASS) continue;
                 if (i < FOREST_BORDER || j < FOREST_BORDER || i >= GRID - FOREST_BORDER || j >= GRID - FOREST_BORDER) continue;
                 const dx = i - CENTER, dy = j - CENTER;
                 const r = Math.sqrt(dx * dx + dy * dy);
-                // low-frequency "cluster" field -> clumps where high, open where low
-                const cluster = 0.55 + 0.45 * Math.sin(i * 0.17) * Math.cos(j * 0.15) + 0.28 * Math.sin((i + j) * 0.09 + 1.3);
-                const wheatN = Math.sin(i * 0.31 + 2.0) * Math.cos(j * 0.29 - 1.0);
-                const flowerN = Math.sin(i * 0.27 - 1.3) * Math.cos(j * 0.33 + 2.2);
-                let pt = 0, pw = 0, pf = 0;
-                if (r > 22) pt = Math.max(0, cluster - 0.5) * 1.5;            // outer clumped forest
-                else if (r > 9) pt = Math.max(0, cluster - 0.85) * 0.7;      // sparse inner copses
-                if (r > 12) pw = Math.max(0, wheatN - 0.55) * 0.9;           // wild wheat clumps
-                if (r > 10) pf = Math.max(0, flowerN - 0.5) * 0.7;           // wildflower meadows
-                if (this.rand() < pt) this.set(i, j, T.TREE);
-                else if (this.rand() < pw) this.set(i, j, T.WHEAT);
-                else if (this.rand() < pf) this.set(i, j, T.FLOWER);
+                const wheatN =
+                    tileNoise(i - 31, j + 7, 9, this.seed + 4) * 0.58 +
+                    tileNoise(i + 5, j + 29, 21, this.seed + 5) * 0.30 +
+                    tileRand(i, j, this.seed + 6) * 0.12;
+                const flowerN =
+                    tileNoise(i + 43, j - 23, 8, this.seed + 7) * 0.56 +
+                    tileNoise(i - 13, j + 17, 18, this.seed + 8) * 0.32 +
+                    tileRand(i, j, this.seed + 9) * 0.12;
+                let pw = 0, pf = 0;
+                if (r > 12) pw = Math.max(0, wheatN - 0.55) * 0.72;         // wild wheat clumps
+                if (r > 10) pf = Math.max(0, flowerN - 0.53) * 0.64;        // wildflower meadows
+                const roll = tileRand(i, j, this.seed + 10);
+                if (roll < pw) this.set(i, j, T.WHEAT);
+                else if (roll < pw + pf) this.set(i, j, T.FLOWER);
+            }
+        }
+
+        const candidates = [];
+        for (let j = FOREST_BORDER; j < GRID - FOREST_BORDER; j++) {
+            for (let i = FOREST_BORDER; i < GRID - FOREST_BORDER; i++) {
+                const t = this.get(i, j);
+                if (t !== T.GRASS && t !== T.WHEAT && t !== T.FLOWER) continue;
+                const r = Math.hypot(i - CENTER, j - CENTER);
+                if (r < 10) continue;
+                let grove = 0;
+                for (const g of groves) {
+                    const dx = (i - g.i) / g.rx;
+                    const dy = (j - g.j) / g.ry;
+                    const v = Math.exp(-(dx * dx + dy * dy)) * g.weight;
+                    if (v > grove) grove = v;
+                }
+                const edge = Math.max(0, Math.min(1, (r - 12) / 26));
+                const texture =
+                    tileNoise(i + 11, j - 5, 12, this.seed + 101) * 0.44 +
+                    tileNoise(i - 37, j + 19, 27, this.seed + 102) * 0.34 +
+                    tileRand(i, j, this.seed + 103) * 0.22;
+                const score = grove * 0.78 + edge * 0.18 + texture * 0.30;
+                const threshold = r > 25 ? 0.43 : r > 17 ? 0.52 : 0.68;
+                if (score > threshold) {
+                    candidates.push({
+                        i, j,
+                        score: score + tileRand(i, j, this.seed + 104) * 0.24,
+                    });
+                }
+            }
+        }
+
+        candidates.sort((a, b) => b.score - a.score);
+        const targetTrees = 58 + Math.floor(tileRand(0, 0, this.seed + 105) * 14);
+        let planted = 0;
+        for (const c of candidates) {
+            if (planted >= targetTrees) break;
+            const r = Math.hypot(c.i - CENTER, c.j - CENTER);
+            const minX = r > 24 ? 46 : 52;
+            const minY = r > 24 ? 26 : 30;
+            if (!this.#treeFits(c.i, c.j, minX, minY)) continue;
+            this.set(c.i, c.j, T.TREE);
+            planted++;
+        }
+        this.#thinForest();
+        this.#seedRocks();
+    }
+
+    #countTiles(i, j, tile, radius) {
+        let n = 0;
+        for (let y = j - radius; y <= j + radius; y++) {
+            for (let x = i - radius; x <= i + radius; x++) {
+                if (x === i && y === j) continue;
+                if (this.get(x, y) === tile) n++;
+            }
+        }
+        return n;
+    }
+
+    #treeFits(i, j, minX = 48, minY = 28) {
+        if (i < FOREST_BORDER || j < FOREST_BORDER || i >= GRID - FOREST_BORDER || j >= GRID - FOREST_BORDER) return false;
+        const t = this.get(i, j);
+        if (t !== T.GRASS && t !== T.WHEAT && t !== T.FLOWER && t !== T.STUMP) return false;
+        const a = i - j, b = i + j;
+        for (let y = j - 9; y <= j + 9; y++) {
+            for (let x = i - 9; x <= i + 9; x++) {
+                if (this.get(x, y) !== T.TREE) continue;
+                const dx = Math.abs(a - (x - y)) * ISO_HALF_W;
+                const dy = Math.abs(b - (x + y)) * ISO_HALF_H;
+                const nx = dx / minX, ny = dy / minY;
+                if (nx * nx + ny * ny < 1) return false;
+                const sameScreenRow = Math.abs(b - (x + y)) <= 2 && dx < 96;
+                const sameScreenColumn = Math.abs(a - (x - y)) <= 2 && dy < 64;
+                const sameMapRow = Math.abs(j - y) <= 1 && Math.abs(i - x) < 9;
+                const sameMapColumn = Math.abs(i - x) <= 1 && Math.abs(j - y) < 9;
+                if (sameScreenRow || sameScreenColumn || sameMapRow || sameMapColumn) return false;
+            }
+        }
+        return true;
+    }
+
+    #thinForest() {
+        const changes = [];
+        for (let j = FOREST_BORDER; j < GRID - FOREST_BORDER; j++) {
+            for (let i = FOREST_BORDER; i < GRID - FOREST_BORDER; i++) {
+                if (this.get(i, j) !== T.TREE) continue;
+                const close = this.#countTiles(i, j, T.TREE, 1);
+                const near = this.#countTiles(i, j, T.TREE, 2);
+                const inLine =
+                    (this.get(i - 1, j) === T.TREE && this.get(i + 1, j) === T.TREE) ||
+                    (this.get(i, j - 1) === T.TREE && this.get(i, j + 1) === T.TREE) ||
+                    (this.get(i - 1, j - 1) === T.TREE && this.get(i + 1, j + 1) === T.TREE) ||
+                    (this.get(i + 1, j - 1) === T.TREE && this.get(i - 1, j + 1) === T.TREE);
+                let remove = 0;
+                if (close >= 6) remove = 0.92;
+                else if (close >= 5) remove = 0.78;
+                else if (close >= 4) remove = 0.56;
+                else if (close >= 3 && near >= 10) remove = 0.28;
+                if (near >= 15) remove = Math.max(remove, 0.82);
+                else if (near >= 12) remove = Math.max(remove, 0.62);
+                else if (near >= 10) remove = Math.max(remove, 0.38);
+                if (inLine) remove = Math.max(remove, 0.72);
+                if (tileRand(i, j, this.seed + 31) < remove) changes.push({ i, j });
+            }
+        }
+        for (const { i, j } of changes) {
+            const r = tileRand(i, j, this.seed + 32);
+            this.set(i, j, r < 0.08 ? T.WHEAT : r < 0.16 ? T.FLOWER : T.GRASS);
+        }
+    }
+
+    #seedRocks() {
+        for (let j = FOREST_BORDER; j < GRID - FOREST_BORDER; j++) {
+            for (let i = FOREST_BORDER; i < GRID - FOREST_BORDER; i++) {
+                if (this.get(i, j) !== T.GRASS) continue;
+                const r = Math.hypot(i - CENTER, j - CENTER);
+                const rockN =
+                    tileNoise(i + 71, j - 37, 10, this.seed + 41) * 0.55 +
+                    tileNoise(i - 17, j + 53, 24, this.seed + 42) * 0.33 +
+                    tileRand(i, j, this.seed + 43) * 0.12;
+                let p = Math.max(0, rockN - 0.62) * 0.42;
+                if (r > 23) p *= 1.45;
+                else if (r < 11) p *= 0.25;
+                if (tileRand(i, j, this.seed + 44) < p) this.set(i, j, T.ROCK);
+            }
+        }
+    }
+
+    #clearPlotWildBuffer(plot, pad = 2) {
+        for (let j = plot.y - pad; j < plot.y + plot.h + pad; j++) {
+            for (let i = plot.x - pad; i < plot.x + plot.w + pad; i++) {
+                const t = this.get(i, j);
+                const inside = i >= plot.x && i < plot.x + plot.w && j >= plot.y && j < plot.y + plot.h;
+                const tallWild = t === T.TREE || t === T.STUMP || t === T.ROCK;
+                const plotForage = inside && (t === T.WHEAT || t === T.FLOWER);
+                if (tallWild || plotForage) this.set(i, j, T.GRASS);
             }
         }
     }
 
     // Nature slowly reclaims cleared land: a few outskirt tiles regrow each day.
     #regrowWild() {
-        const inAnyPlot = (i, j) => this.plots.some(p => i >= p.x && i < p.x + p.w && j >= p.y && j < p.y + p.h);
+        const nearAnyPlot = (i, j, pad = 2) => this.plots.some(p => i >= p.x - pad && i < p.x + p.w + pad && j >= p.y - pad && j < p.y + p.h + pad);
         let treesGrown = 0, wheatGrown = 0;
         for (let k = 0; k < 24; k++) {
             const i = 2 + Math.floor(this.rand() * (GRID - 4));
             const j = 2 + Math.floor(this.rand() * (GRID - 4));
             const t = this.get(i, j);
-            if ((t !== T.GRASS && t !== T.STUMP) || inAnyPlot(i, j)) continue;
+            if ((t !== T.GRASS && t !== T.STUMP) || nearAnyPlot(i, j)) continue;
             if (i < FOREST_BORDER || j < FOREST_BORDER || i >= GRID - FOREST_BORDER || j >= GRID - FOREST_BORDER) continue;
             const r = Math.hypot(i - CENTER, j - CENTER);
             if (r > 24) {
                 // near the forest: stumps sprout saplings, gaps refill with wild growth
-                if (this.rand() < 0.45) { this.set(i, j, T.TREE); treesGrown++; }
+                if (this.rand() < 0.18 && this.#treeFits(i, j, 48, 28)) { this.set(i, j, T.TREE); treesGrown++; }
                 else if (this.rand() < 0.4) { this.set(i, j, this.rand() < 0.6 ? T.WHEAT : T.FLOWER); wheatGrown++; }
             } else if (r > 10 && this.rand() < 0.16) { this.set(i, j, this.rand() < 0.5 ? T.WHEAT : T.FLOWER); wheatGrown++; }
         }
@@ -206,7 +384,7 @@ export class World {
     }
     blocked(i, j) {
         const t = this.get(i, j);
-        return t === T.HOUSE || t === T.WELL || t === T.SIGN || t === T.STRUCT || t === T.COOP || t === T.BARN;
+        return t === T.HOUSE || t === T.WELL || t === T.SIGN || t === T.STRUCT || t === T.COOP || t === T.BARN || t === T.ROCK;
     }
 
     isNight() { return this.clock > DAY_LENGTH; }
@@ -284,10 +462,8 @@ export class World {
             house: { i: slot.i + 1, j: slot.j + 1 },
             fields: [], facilities: [],
         };
-        // clear any woodland from the starting plot — the forest matters at the edges
-        for (let j = plot.y; j < plot.y + plot.h; j++)
-            for (let i = plot.x; i < plot.x + plot.w; i++)
-                if (this.get(i, j) === T.TREE || this.get(i, j) === T.STUMP) this.set(i, j, T.GRASS);
+        // Clear a small canopy buffer so homesteads read as deliberate clearings.
+        this.#clearPlotWildBuffer(plot, 2);
         for (let di = 0; di < 2; di++) for (let dj = 0; dj < 2; dj++) this.set(plot.house.i + di, plot.house.j + dj, T.HOUSE);
         this.#rebuildFields(plot);
 
@@ -378,6 +554,7 @@ export class World {
         const p = farmer.plot;
         const { nx, ny, nw, nh } = info.rect;
         p.x = nx; p.y = ny; p.w = nw; p.h = nh;
+        this.#clearPlotWildBuffer(p, 1);
         this.#rebuildFields(p);
         this._tilesChanged = true;
         this.addLog(`${farmer.sheet.name} fenced in new land! (${nw}x${nh})`, '#7dd069');
