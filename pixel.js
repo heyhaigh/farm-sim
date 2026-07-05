@@ -476,6 +476,154 @@ export function makeFencePost() {
     return c;
 }
 
+// ---------------------------------------------------------------------------
+// Facilities: pond life + animals + their buildings
+// ---------------------------------------------------------------------------
+
+export function makeLilyPad(bloom) {
+    const [c, ctx] = makeCanvas(14, 12);
+    // giant Victoria-style pad: green disc with a reddish rim + center notch
+    ctx.fillStyle = '#3a6e3a';
+    ctx.fillRect(2, 4, 10, 5);
+    ctx.fillRect(1, 5, 12, 3);
+    ctx.fillStyle = '#5aa048';
+    ctx.fillRect(3, 4, 8, 4);
+    ctx.fillRect(2, 5, 10, 2);
+    ctx.fillStyle = '#7dc060';
+    ctx.fillRect(4, 5, 6, 1);
+    ctx.fillStyle = '#8a4a4a';      // rim
+    ctx.fillRect(1, 4, 1, 4); ctx.fillRect(12, 4, 1, 4);
+    ctx.fillStyle = '#2e5230';      // center seam
+    ctx.fillRect(6, 4, 1, 5);
+    if (bloom) {
+        ctx.fillStyle = '#f0e0ec';   // white/pink flower
+        ctx.fillRect(6, 1, 2, 2);
+        ctx.fillStyle = '#e880a8';
+        ctx.fillRect(5, 2, 1, 1); ctx.fillRect(8, 2, 1, 1); ctx.fillRect(6, 0, 2, 1);
+        ctx.fillStyle = '#f0d040';
+        ctx.fillRect(6, 2, 2, 1);
+    }
+    return c;
+}
+
+export function makeFish(frame) {
+    const [c, ctx] = makeCanvas(8, 5);
+    ctx.fillStyle = '#e08040';       // koi orange
+    ctx.fillRect(1, 1, 5, 3);
+    ctx.fillRect(2, 0, 3, 1);
+    ctx.fillStyle = '#f0a860';
+    ctx.fillRect(2, 1, 3, 1);
+    ctx.fillStyle = '#e08040';       // tail flicks
+    if (frame) { ctx.fillRect(6, 0, 2, 2); ctx.fillRect(6, 3, 2, 1); }
+    else { ctx.fillRect(6, 1, 2, 1); ctx.fillRect(6, 0, 2, 1); ctx.fillRect(6, 3, 2, 1); }
+    ctx.fillStyle = '#20242c';
+    ctx.fillRect(2, 1, 1, 1);        // eye
+    return c;
+}
+
+export function makeChicken(frame) {
+    const [c, ctx] = makeCanvas(9, 9);
+    const legY = frame ? 8 : 7;
+    ctx.fillStyle = '#f4f0e8';       // body
+    ctx.fillRect(2, 3, 5, 4);
+    ctx.fillRect(3, 2, 3, 1);
+    ctx.fillStyle = '#e8e0d4';
+    ctx.fillRect(2, 5, 5, 2);
+    ctx.fillStyle = '#f4f0e8';       // head
+    ctx.fillRect(5, 1, 3, 3);
+    ctx.fillStyle = '#e05040';       // comb
+    ctx.fillRect(6, 0, 2, 1);
+    ctx.fillStyle = '#f0a030';       // beak
+    ctx.fillRect(8, 2, 1, 1);
+    ctx.fillStyle = '#20242c';       // eye
+    ctx.fillRect(6, 2, 1, 1);
+    ctx.fillStyle = '#f0a030';       // legs
+    ctx.fillRect(3, 7, 1, legY - 7 + 1);
+    ctx.fillRect(5, 7, 1, (frame ? 6 : 8) - 7 + 1 < 1 ? 1 : 1);
+    ctx.fillRect(5, 7, 1, 1);
+    return c;
+}
+
+function animalSprite(body, dark, spots, frame) {
+    const [c, ctx] = makeCanvas(14, 11);
+    const legY = 8, legH = frame ? 2 : 3;
+    ctx.fillStyle = body;
+    ctx.fillRect(2, 3, 9, 5);        // body
+    ctx.fillRect(10, 3, 3, 3);       // head
+    ctx.fillStyle = dark;
+    ctx.fillRect(2, 6, 9, 2);
+    if (spots) {                     // cow patches
+        ctx.fillStyle = dark;
+        ctx.fillRect(4, 4, 2, 2); ctx.fillRect(8, 3, 2, 2);
+    }
+    ctx.fillStyle = '#20242c';
+    ctx.fillRect(12, 4, 1, 1);       // eye
+    ctx.fillStyle = dark;            // legs
+    ctx.fillRect(3, legY, 1, legH); ctx.fillRect(6, legY, 1, legH + (frame ? 1 : -1));
+    ctx.fillRect(8, legY, 1, legH); ctx.fillRect(10, legY, 1, legH + (frame ? -1 : 1));
+    ctx.fillStyle = dark;            // tail
+    ctx.fillRect(1, 3, 1, 4);
+    return c;
+}
+
+export function makeCow(frame) { return animalSprite('#f0ece4', '#3a3630', true, frame); }
+export function makePig(frame) { return animalSprite('#e8a0a8', '#c07880', false, frame); }
+export function makeGoat(frame) {
+    const c = animalSprite('#d8d0c4', '#8a8078', false, frame);
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#6a6058';       // horns
+    ctx.fillRect(11, 2, 1, 1); ctx.fillRect(12, 1, 1, 1);
+    ctx.fillStyle = '#e8e0d4';       // beard
+    ctx.fillRect(12, 6, 1, 2);
+    return c;
+}
+
+export function makeCoop() {
+    const [c, ctx] = makeCanvas(24, 22);
+    ctx.fillStyle = '#c07850';       // red coop body
+    ctx.fillRect(3, 10, 18, 12);
+    ctx.fillStyle = '#a86040';
+    ctx.fillRect(3, 18, 18, 2);
+    ctx.fillStyle = '#3a2e28';       // door hole
+    ctx.fillRect(9, 14, 6, 8);
+    ctx.fillStyle = '#e8c060';       // ramp
+    ctx.fillRect(8, 21, 8, 1);
+    ctx.fillStyle = '#8a4a3a';       // roof
+    for (let i = 0; i < 6; i++) ctx.fillRect(1 + i * 2, 10 - i, 22 - i * 4, 2);
+    ctx.fillStyle = '#f0f0f0';       // little window
+    ctx.fillRect(16, 13, 3, 3);
+    return c;
+}
+
+export function makeBarn() {
+    const [c, ctx] = makeCanvas(30, 26);
+    ctx.fillStyle = '#b85040';       // classic red barn
+    ctx.fillRect(3, 10, 24, 16);
+    ctx.fillStyle = '#9a4436';
+    ctx.fillRect(3, 22, 24, 4);
+    ctx.fillStyle = '#e8e0d0';       // white trim doors
+    ctx.fillRect(11, 15, 8, 11);
+    ctx.fillStyle = '#7a3628';
+    ctx.fillRect(14, 15, 2, 11);
+    ctx.fillStyle = '#e8e0d0';       // X on doors
+    ctx.fillStyle = '#5a2e22';       // roof
+    for (let i = 0; i < 7; i++) ctx.fillRect(1 + i * 2, 10 - i * 1, 28 - i * 4, 2);
+    ctx.fillStyle = '#e8e0d0';       // hayloft
+    ctx.fillRect(13, 4, 4, 4);
+    return c;
+}
+
+export function makeTrough() {
+    const [c, ctx] = makeCanvas(12, 6);
+    ctx.fillStyle = '#8a6844';
+    ctx.fillRect(0, 2, 12, 3);
+    ctx.fillStyle = '#68503c';
+    ctx.fillRect(0, 4, 12, 1);
+    ctx.fillStyle = '#d8c060';       // feed
+    ctx.fillRect(2, 1, 8, 2);
+    return c;
+}
+
 export function makeLantern() {
     const [c, ctx] = makeCanvas(6, 8);
     ctx.fillStyle = '#584838';

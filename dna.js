@@ -48,6 +48,7 @@ export const ARCHETYPES = {
         crop: 'sunflower', hat: 'headset',
         shirt: '#5dc9a0', hair: '#7a4a28',
         names: ['Echo', 'Herald', 'Whisper', 'Signal', 'Chirp'],
+        facilities: ['pond', 'coop', 'pen'], penAnimal: 'goat',
     },
     athlete: {
         label: 'Athlete',
@@ -56,6 +57,7 @@ export const ARCHETYPES = {
         crop: 'carrot', hat: 'headband',
         shirt: '#e86a5e', hair: '#2e2620',
         names: ['Turbo', 'Scout', 'Sprint', 'Striker', 'Dash'],
+        facilities: ['coop', 'pen', 'pond'], penAnimal: 'goat',
     },
     designer: {
         label: 'Designer',
@@ -64,6 +66,7 @@ export const ARCHETYPES = {
         crop: 'rose', hat: 'beret',
         shirt: '#c77dba', hair: '#503a2a',
         names: ['Pixel', 'Vector', 'Kerning', 'Bezier', 'Swatch'],
+        facilities: ['pond', 'coop', 'pen'], penAnimal: 'pig',
     },
     builder: {
         label: 'Builder',
@@ -72,6 +75,7 @@ export const ARCHETYPES = {
         crop: 'pumpkin', hat: 'hardhat',
         shirt: '#e0a03c', hair: '#3a2a1c',
         names: ['Rivet', 'Forge', 'Crane', 'Girder', 'Hex'],
+        facilities: ['pen', 'coop', 'pond'], penAnimal: 'cow',
     },
     homebody: {
         label: 'Homebody',
@@ -80,6 +84,7 @@ export const ARCHETYPES = {
         crop: 'tomato', hat: 'strawhat',
         shirt: '#8fb85e', hair: '#6a4a30',
         names: ['Biscuit', 'Clay', 'Mochi', 'Pudding', 'Bun'],
+        facilities: ['pond', 'pen', 'coop'], penAnimal: 'pig',
     },
     greeter: {
         label: 'Greeter',
@@ -88,7 +93,15 @@ export const ARCHETYPES = {
         crop: 'wheat', hat: 'cap',
         shirt: '#6a9ade', hair: '#4a3624',
         names: ['Concierge', 'Beacon', 'Usher', 'Ping', 'Docent'],
+        facilities: ['coop', 'pond', 'pen'], penAnimal: 'cow',
     },
+};
+
+// Facilities a farm can add as it grows, beyond its crop rows.
+export const FACILITY_INFO = {
+    pond: { label: 'WATER GARDEN', produce: 'lily & fish', icon: '#7dd0c0' },
+    coop: { label: 'CHICKEN COOP', produce: 'eggs', icon: '#f0e0c0' },
+    pen: { label: 'LIVESTOCK PEN', produce: 'milk', icon: '#e8e8e8' },
 };
 
 const ARCHETYPE_KEYS = Object.keys(ARCHETYPES);
@@ -245,6 +258,8 @@ export function growFarmer(memory, mutation = 0) {
         harvested: 0,
         crop: arch.crop,
         hat: arch.hat,
+        facilityPrefs: arch.facilities,
+        penAnimal: arch.penAnimal,
         colors: {
             skin: SKIN_TONES[Math.floor(rand() * SKIN_TONES.length)],
             hair: arch.hair,

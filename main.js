@@ -6,6 +6,7 @@ import {
     TILE_W, TILE_H, makeCanvas, drawText, textWidth,
     makeFarmerSprites, makeCropSprites, makeHouse, makeWell, makeSign, makeFencePost,
     makeScaffold, makeToolshed, makeWindmill, makeTower, makeLantern,
+    makeLilyPad, makeFish, makeChicken, makeCow, makePig, makeGoat, makeCoop, makeBarn, makeTrough,
     fillDiamond, strokeDiamond,
 } from './pixel.js';
 import { CRT } from './crt.js';
@@ -69,6 +70,21 @@ const structSprites = {
     well2: wellSprite,
 };
 
+// facility sprites
+const coopSprite = makeCoop();
+const barnSprite = makeBarn();
+const troughSprite = makeTrough();
+const lilyPadSprites = [makeLilyPad(false), makeLilyPad(true)];
+const producerSprites = {
+    fish: [makeFish(0), makeFish(1)],
+    chicken: [makeChicken(0), makeChicken(1)],
+    cow: [makeCow(0), makeCow(1)],
+    pig: [makePig(0), makePig(1)],
+    goat: [makeGoat(0), makeGoat(1)],
+};
+// bobbing "ready to collect" product icon colors
+const PRODUCT_ICON = { pad: '#e880a8', fish: '#e08040', chicken: '#f4f0e8', cow: '#ffffff', pig: '#d8b088', goat: '#ffffff' };
+
 function farmerSprites(f) {
     if (!spriteCache.has(f)) spriteCache.set(f, makeFarmerSprites(f.sheet));
     return spriteCache.get(f);
@@ -114,8 +130,14 @@ function redrawTerrain() {
             if (t === T.TILLED) col = TILLED_C;
             if (t === T.PATH) col = PATH_C;
             if (t === T.HOUSE) col = '#5a5044';
+            if (t === T.WATER) col = winter ? '#5a7590' : ((i + j) % 2 ? '#2a5a72' : '#26506a');
+            if (t === T.COOP || t === T.BARN) col = '#6a5a44';   // packed earth under the building
             fillDiamond(tctx, sx, sy, col);
-            if (t === T.TILLED) {
+            if (t === T.WATER) {
+                // still-water highlight ripples
+                tctx.fillStyle = winter ? '#8aa8c0' : '#3a6e86';
+                tctx.fillRect(sx + 5 + ((i * 5 + j) % 6), sy + 3 + ((i + j) % 3), 2, 1);
+            } else if (t === T.TILLED) {
                 tctx.fillStyle = winter ? '#b8c0c8' : '#584028';
                 tctx.fillRect(sx + 6, sy + 4, 8, 1);
                 tctx.fillRect(sx + 6, sy + 6, 8, 1);
@@ -331,6 +353,29 @@ function collectDrawables() {
         });
     }
 
+    // facilities: buildings, pond life, animals
+    for (const plot of world.plots) {
+        for (const fac of plot.facilities) {
+            // building (coop / barn) + feed trough
+            if (fac.struct) {
+                const b = fac.struct;
+                const bx = cam.x + isoX(b.i + 0.5, b.j + 0.5), by = cam.y + isoY(b.i + 0.5, b.j + 0.5);
+                const spr = b.kind === 'barn' ? barnSprite : coopSprite;
+                list.push({ y: by + TILE_H, draw: () => ctx.drawImage(spr, Math.floor(bx - spr.width / 2), Math.floor(by + TILE_H - spr.height)) });
+            }
+            if (fac.trough) {
+                const tr = fac.trough;
+                const tx = cam.x + isoX(tr.i + 0.5, tr.j + 0.5), ty = cam.y + isoY(tr.i + 0.5, tr.j + 0.5);
+                list.push({ y: ty + TILE_H * 0.4, draw: () => ctx.drawImage(troughSprite, Math.floor(tx - 6), Math.floor(ty - 1)) });
+            }
+            // producers
+            for (const p of fac.producers) {
+                const px = cam.x + isoX(p.fx, p.fy), py = cam.y + isoY(p.fx, p.fy);
+                list.push({ y: py + TILE_H * 0.5, draw: () => drawProducer(p, px, py) });
+            }
+        }
+    }
+
     // lightning strike marker
     if (world.struckTile) {
         const st = world.struckTile;
@@ -356,6 +401,44 @@ function collectDrawables() {
 
 function fillDiamondAlpha(sx, sy, color) {
     fillDiamond(ctx, Math.floor(sx), Math.floor(sy), color);
+}
+
+function drawProducer(p, px, py) {
+    if (p.kind === 'pad') {
+        const spr = lilyPadSprites[p.ready ? 1 : 0];
+        ctx.drawImage(spr, Math.floor(px - 7), Math.floor(py - 5));
+        return;
+    }
+    const frame = Math.floor(p.anim * (p.kind === 'chicken' ? 6 : 3)) % 2;
+    const sprSet = producerSprites[p.kind];
+    if (!sprSet) return;
+    const spr = sprSet[frame];
+    const hop = p.hop > 0 ? Math.round(Math.sin((0.35 - p.hop) / 0.35 * Math.PI) * 2) : 0;
+    const w = spr.width;
+
+    if (p.kind === 'fish') {
+        // fish shimmer just under the surface
+        ctx.globalAlpha = 0.85;
+    }
+    if (p.flip < 0) {
+        ctx.save();
+        ctx.translate(Math.floor(px + w / 2), Math.floor(py - spr.height / 2 - hop));
+        ctx.scale(-1, 1);
+        ctx.drawImage(spr, 0, 0);
+        ctx.restore();
+    } else {
+        ctx.drawImage(spr, Math.floor(px - w / 2), Math.floor(py - spr.height / 2 - hop));
+    }
+    ctx.globalAlpha = 1;
+
+    // ready-to-collect product bobbing above
+    if (p.ready) {
+        const bob = Math.round(Math.sin(performance.now() / 250 + p.anim) * 1);
+        const iy = Math.floor(py - spr.height / 2 - 6 + bob);
+        ctx.fillStyle = PRODUCT_ICON[p.kind] || '#fff';
+        ctx.fillRect(Math.floor(px - 1), iy, 2, 2);
+        ctx.fillRect(Math.floor(px - 2), iy + 1, 4, 1);
+    }
 }
 
 // Is this farmer tucked inside their house (asleep / resting / ill / sheltering)?
@@ -558,6 +641,8 @@ function wrapText(str, maxChars) {
 const TRAIT_COLORS = {
     collaboration: '#7dd069', competitiveness: '#e0803c', honesty: '#6a9ade', diligence: '#f0d060',
 };
+const FAC_SHORT = { pond: 'pond', coop: 'coop', pen: 'pen' };
+const ACT_WORD = { collect: 'gathering', tend: 'tending', harvest: 'harvesting', water: 'watering', plant: 'planting', till: 'tilling', clear: 'clearing' };
 
 function barFill(x, y, w, frac, color, bg = '#20242f') {
     ctx.fillStyle = bg;
@@ -573,7 +658,7 @@ function drawSheet(f) {
     const memLines = wrapText(s.memory.title, 33).slice(0, 3);
     const thinkLines = wrapText(f.thought, 33).slice(0, 2);
     const creedLines = wrapText(p.creed, 33).slice(0, 2);
-    const PH = 214 + (memLines.length + thinkLines.length + creedLines.length) * 7;
+    const PH = 222 + (memLines.length + thinkLines.length + creedLines.length) * 7;
 
     ctx.fillStyle = 'rgba(12,14,24,0.95)';
     ctx.fillRect(PX, PY, PW, PH);
@@ -620,10 +705,15 @@ function drawSheet(f) {
     y += 26;
 
     drawText(ctx, `CROP:${s.crop} FARM ${f.plot.w}X${f.plot.h}`, PX + 5, y, '#e8c860'); y += 8;
+    // facilities the farm has diversified into
+    const facs = ['crops', ...f.plot.facilities.map(fc => FAC_SHORT[fc.type] || fc.type)];
+    drawText(ctx, `HAS: ${facs.join(' + ')}`.slice(0, 34), PX + 5, y, '#7dd0c0'); y += 8;
     const rep = Math.round(f.reputation * 100);
     drawText(ctx, `YIELD:${s.harvested} BONDS:${world.bondCount(f)} REP:${rep}`, PX + 5, y, '#e8c860'); y += 8;
-    const helping = f.helpTask ? ` ${f.helpTask.request.farmer.sheet.name.split(' ')[0]}` : '';
-    const doing = f.state === 'work' && f.action ? f.action.kind + helping
+    const helping = f.helpTask ? ` ${f.helpTask.requester.sheet.name.split(' ')[0]}` : '';
+    const actWord = f.action ? (ACT_WORD[f.action.task?.act] || f.action.task?.act || 'working') : '';
+    const doing = f.state === 'work' ? actWord + helping
+        : f.state === 'poach' ? 'sneaking'
         : f.state === 'build' ? 'building'
         : f.state === 'care' ? 'tending sick'
         : f.state === 'sick' ? 'recovering'
