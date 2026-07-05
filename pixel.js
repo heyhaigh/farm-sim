@@ -648,29 +648,81 @@ export function makeTrough() {
 // Woodland + wild forage
 // ---------------------------------------------------------------------------
 
-export function makeTree(variant) {
+// Seasonal leaf ramps for deciduous canopies (dark, mid, light[, blossom])
+const LEAF_SEASON = {
+    SPRING: ['#2e6a2c', '#4e9438', '#74bc54', '#f0a8cc'],
+    SUMMER: ['#286026', '#3e8630', '#5aa844', null],
+    FALL:   ['#8a4a1e', '#c07828', '#e0a83c', null],
+    WINTER: null,   // bare / snow handled specially
+};
+
+function treeTrunk(ctx, x, birch) {
+    if (birch) {
+        ctx.fillStyle = '#d8d8d0'; ctx.fillRect(x, 15, 3, 6);
+        ctx.fillStyle = '#20242c';                      // birch bark dashes
+        ctx.fillRect(x, 16, 2, 1); ctx.fillRect(x + 1, 18, 2, 1);
+    } else {
+        ctx.fillStyle = '#6a4a2c'; ctx.fillRect(x, 15, 3, 6);
+        ctx.fillStyle = '#503a22'; ctx.fillRect(x + 2, 15, 1, 6);
+    }
+}
+
+// makeTree(species, seasonName) — oak | pine | birch | bush, drawn seasonally.
+export function makeTree(species = 'oak', season = 'SUMMER') {
     const [c, ctx] = makeCanvas(16, 22);
-    // trunk
-    ctx.fillStyle = '#6a4a2c';
-    ctx.fillRect(7, 15, 3, 6);
-    ctx.fillStyle = '#503a22';
-    ctx.fillRect(9, 15, 1, 6);
-    // canopy — layered blobs, slight variant shift
-    const g1 = variant ? '#3e7a34' : '#458038';
-    const g2 = variant ? '#5a9a44' : '#62a248';
-    const g3 = '#78ba58';
-    ctx.fillStyle = g1;
-    ctx.fillRect(3, 6, 11, 8);
-    ctx.fillRect(2, 8, 13, 5);
-    ctx.fillRect(4, 4, 9, 3);
-    ctx.fillStyle = g2;
-    ctx.fillRect(4, 6, 9, 5);
-    ctx.fillRect(3, 8, 7, 3);
-    ctx.fillStyle = g3;                 // top highlight
-    ctx.fillRect(5, 5, 4, 2);
-    ctx.fillRect(4, 7, 2, 2);
-    ctx.fillStyle = '#2e5a28';          // underside shade
-    ctx.fillRect(3, 12, 11, 2);
+    const winter = season === 'WINTER';
+    const leaf = LEAF_SEASON[season] || LEAF_SEASON.SUMMER;
+
+    if (species === 'pine') {
+        treeTrunk(ctx, 7, false);
+        const g = winter ? ['#1e4a24', '#2e6030'] : season === 'FALL' ? ['#2e5a26', '#3e7030'] : ['#215024', '#316834'];
+        for (let k = 0; k < 3; k++) {
+            const y = 3 + k * 4, w = 4 + k * 3, x = 8 - w;
+            ctx.fillStyle = g[0]; ctx.fillRect(x, y, w * 2, 4);
+            ctx.fillStyle = g[1]; ctx.fillRect(x + 1, y, w * 2 - 2, 2);
+            if (winter) { ctx.fillStyle = '#e8f0f0'; ctx.fillRect(x + 1, y, w * 2 - 3, 1); }  // snow on boughs
+        }
+        ctx.fillStyle = g[1]; ctx.fillRect(7, 1, 2, 2);
+        return c;
+    }
+
+    if (species === 'bush') {
+        if (winter) {                                   // snow-dusted shrub
+            ctx.fillStyle = '#3a5236'; ctx.fillRect(4, 14, 8, 5);
+            ctx.fillStyle = '#e8f0f0'; ctx.fillRect(4, 13, 8, 2);
+        } else {
+            ctx.fillStyle = leaf[0]; ctx.fillRect(3, 13, 10, 6);
+            ctx.fillStyle = leaf[1]; ctx.fillRect(4, 12, 8, 4);
+            ctx.fillStyle = leaf[2]; ctx.fillRect(5, 12, 4, 2);
+            if (leaf[3]) { ctx.fillStyle = leaf[3]; ctx.fillRect(5, 13, 1, 1); ctx.fillRect(9, 14, 1, 1); }
+        }
+        return c;
+    }
+
+    // oak / birch: trunk + rounded canopy (or bare branches in winter)
+    treeTrunk(ctx, 7, species === 'birch');
+    if (winter) {
+        ctx.strokeStyle = species === 'birch' ? '#b8b8b0' : '#5a4230';
+        ctx.fillStyle = species === 'birch' ? '#c8c8c0' : '#5a4230';
+        ctx.fillRect(6, 8, 1, 7); ctx.fillRect(4, 9, 2, 1); ctx.fillRect(10, 10, 2, 1);
+        ctx.fillRect(8, 7, 1, 6); ctx.fillRect(9, 8, 2, 1); ctx.fillRect(3, 11, 2, 1);
+        ctx.fillStyle = '#e8f0f0'; ctx.fillRect(5, 8, 2, 1); ctx.fillRect(9, 9, 2, 1);   // snow
+        return c;
+    }
+    const narrow = species === 'birch';
+    const [x0, w0] = narrow ? [4, 8] : [2, 12];
+    ctx.fillStyle = leaf[0];
+    ctx.fillRect(x0, 6, w0, 8); ctx.fillRect(x0 + 1, 8, w0 - 2, 5); ctx.fillRect(x0 + 2, 4, w0 - 4, 3);
+    ctx.fillStyle = leaf[1];
+    ctx.fillRect(x0 + 1, 6, w0 - 3, 5); ctx.fillRect(x0, 8, w0 - 5, 3);
+    ctx.fillStyle = leaf[2];
+    ctx.fillRect(x0 + 2, 5, 4, 2); ctx.fillRect(x0 + 1, 7, 2, 2);
+    if (leaf[3]) {                                       // spring blossoms
+        ctx.fillStyle = leaf[3];
+        ctx.fillRect(x0 + 3, 6, 1, 1); ctx.fillRect(x0 + w0 - 4, 7, 1, 1); ctx.fillRect(x0 + 5, 9, 1, 1);
+    }
+    ctx.fillStyle = leaf[0];                             // underside shade
+    ctx.fillRect(x0, 12, w0, 2);
     return c;
 }
 

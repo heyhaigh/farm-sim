@@ -75,10 +75,18 @@ const structSprites = {
 const coopSprite = makeCoop();
 const barnSprite = makeBarn();
 const troughSprite = makeTrough();
-const treeSprites = [makeTree(0), makeTree(1)];
 const stumpSprite = makeStump();
 const wheatSprite = makeWildWheat();
 const flowerSprite = makeWildFlowers();
+
+// trees vary by species AND season; pre-render + cache each combination
+const TREE_SPECIES = ['oak', 'pine', 'birch', 'oak', 'bush', 'birch'];
+const treeCache = new Map();
+function treeSprite(species, season) {
+    const k = `${species}:${season}`;
+    if (!treeCache.has(k)) treeCache.set(k, makeTree(species, season));
+    return treeCache.get(k);
+}
 const lilyPadSprites = [makeLilyPad(false), makeLilyPad(true)];
 const producerSprites = {
     fish: [makeFish(0), makeFish(1)],
@@ -201,7 +209,7 @@ function redrawTerrain() {
             const cxp = TERRAIN_OX + isoX(i, j);
             const baseY = isoY(i, j) + TILE_H;
             let spr;
-            if (t === T.TREE) spr = treeSprites[(i * 5 + j * 3) % 2];
+            if (t === T.TREE) spr = treeSprite(TREE_SPECIES[(i * 7 + j * 5) % TREE_SPECIES.length], season.name);
             else if (t === T.STUMP) spr = stumpSprite;
             else if (t === T.WHEAT) spr = wheatSprite;
             else spr = flowerSprite;
