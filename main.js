@@ -361,12 +361,15 @@ function drawSmoke(hx, hy, dispW, dispH, seed = 0) {
     const row = seed % 3;
     const sx = frame * 48;
     const sy = row * 16;
-    const w = Math.round(dispW * 0.28);
+    const w = Math.round(dispW * 0.26);
     const h = Math.round(w / 3);
-    const x = hx + Math.round(dispW * 0.34);
-    const y = hy + Math.round(dispH * 0.15) - Math.round(Math.sin(performance.now() / 450 + seed) * 1);
+    // Chimney mouth (measured from exterior.png crop): center 26.6% across, top 7.2% down.
+    // Smoke puff within its 48x16 cell is off-center: puff center at 38.5% across, base at 97% down.
+    const bob = Math.round(Math.sin(performance.now() / 450 + seed) * 1);
+    const x = hx + Math.round(dispW * 0.266 - w * 0.385);   // align puff center to the mouth
+    const y = hy + Math.round(dispH * 0.072 - h * 0.97) - bob; // sit the puff base on the mouth, rising up
     ctx.imageSmoothingEnabled = false;
-    ctx.globalAlpha = 0.75;
+    ctx.globalAlpha = 0.85;
     ctx.drawImage(smokeSheet, sx, sy, 48, 16, x, y, w, h);
     ctx.globalAlpha = 1;
 }
