@@ -832,10 +832,13 @@ function collectDrawables() {
     // fences: trace the outline of each plot's cell set (works for any shape, incl.
     // L-shapes). The topology is cached per plot.rev so we don't recompute it each frame.
     for (const plot of world.plots) {
-        if (!plot.built.fence) continue;   // no fence until the settler raises one
+        // fence is raised post-by-post: draw only the built fraction while under construction
+        const prog = plot.built.fence ? 1 : (plot.fenceTarget ? Math.min(1, plot.fencePosts / plot.fenceTarget) : 0);
+        if (prog <= 0) continue;
         const o = plotOutline(plot);
-        for (let k = 0; k < o.posts.length; k += 2) list.push(post(o.posts[k], o.posts[k + 1]));
-        for (let k = 0; k < o.rails.length; k += 4) list.push(rail(o.rails[k], o.rails[k + 1], o.rails[k + 2], o.rails[k + 3]));
+        const nPosts = Math.round((o.posts.length / 2) * prog), nRails = Math.round((o.rails.length / 4) * prog);
+        for (let k = 0; k < nPosts * 2; k += 2) list.push(post(o.posts[k], o.posts[k + 1]));
+        for (let k = 0; k < nRails * 4; k += 4) list.push(rail(o.rails[k], o.rails[k + 1], o.rails[k + 2], o.rails[k + 3]));
     }
     function post(i, j) {
         const sx = cam.x + isoX(i, j), sy = cam.y + isoY(i, j);

@@ -111,7 +111,7 @@ const FACILITY_DEFS = {
 const AWAKE_DRAIN = 0.0022;
 const SLEEP_RESTORE = 0.03;
 const REST_RESTORE = 0.022;
-const ACTION_ENERGY = { till: 0.05, plant: 0.03, water: 0.03, harvest: 0.045, clear: 0.035, build: 0.05, collect: 0.04, tend: 0.03 };
+const ACTION_ENERGY = { till: 0.09, plant: 0.05, water: 0.05, harvest: 0.08, clear: 0.07, build: 0.09, collect: 0.07, tend: 0.05 };
 
 export function d20(rand, modifier) {
     const roll = 1 + Math.floor(rand() * 20);
@@ -496,6 +496,7 @@ export class World {
             // level-1 tipi and slowly upgrade it (L1 tipi -> L2 yurt -> L3 cottage) over a year+.
             // level 0 = homeless. Until level>=1 no house renders and they sleep in the open.
             built: { fence: false, level: 0 },
+            fencePosts: 0, fenceTarget: 0,   // fence is raised post-by-post, not instantly
         };
         for (let j = slot.j; j < slot.j + B; j++) for (let i = slot.i; i < slot.i + B; i++) plot.cells.add(pkey(i, j));
         this.#rebuildFields(plot);   // (plot is NOT auto-cleared; the house tiles are NOT placed yet)
@@ -655,11 +656,34 @@ export class World {
         }
         return true;
     }
-    raiseFence(farmer) {
+    // How many posts a plot's fence takes (roughly its perimeter, clamped) — the fence is
+    // built one post at a time, so this is a real chunk of work.
+    fencePostTarget(plot) {
+        let edges = 0;
+        for (const key of plot.cells) {
+            const c = key.indexOf(','), i = +key.slice(0, c), j = +key.slice(c + 1);
+            if (!plot.cells.has(pkey(i, j - 1))) edges++;
+            if (!plot.cells.has(pkey(i + 1, j))) edges++;
+            if (!plot.cells.has(pkey(i, j + 1))) edges++;
+            if (!plot.cells.has(pkey(i - 1, j))) edges++;
+        }
+        return Math.max(8, Math.min(edges, 30));
+    }
+    // A border tile to stand at while raising post #idx (just for visible movement around the plot).
+    fencePostSpot(plot, idx) {
+        const border = [];
+        for (const key of plot.cells) {
+            const c = key.indexOf(','), i = +key.slice(0, c), j = +key.slice(c + 1);
+            if (!plot.cells.has(pkey(i, j - 1)) || !plot.cells.has(pkey(i + 1, j)) || !plot.cells.has(pkey(i, j + 1)) || !plot.cells.has(pkey(i - 1, j))) border.push({ i, j });
+        }
+        if (!border.length) return { i: plot.house.i, j: plot.house.j + 2 };
+        return border[idx % border.length];
+    }
+    completeFence(farmer) {
         farmer.plot.built.fence = true;
-        farmer.plot.rev++;              // renderer starts tracing the fence outline
+        farmer.plot.rev++;
         this._tilesChanged = true;
-        this.addLog(`${farmer.sheet.name} fenced in their homestead.`, '#7dd069');
+        this.addLog(`${farmer.sheet.name} finished fencing their homestead.`, '#7dd069');
     }
     // True if the farmer can afford the given tier (wood + ore spent, lifetime harvest as a gate).
     canBuild(farmer, level) {
@@ -1125,16 +1149,17 @@ export class World {
             }
             if (f.workedLate) f.sleepDebt += 1.5; else f.sleepDebt = Math.max(0, f.sleepDebt - 1);
             f.workedLate = false;
-            const risky = f.energy < 0.35 || f.sleepDebt >= 3;
+            const risky = f.energy < 0.35 || f.sleepDebt >= 3 || f.strain >= 4;
             if (risky) {
-                const dc = 10 + Math.floor(f.sleepDebt) + (f.energy < 0.2 ? 3 : 0);
+                const dc = 10 + Math.floor(f.sleepDebt) + (f.energy < 0.2 ? 3 : 0) + Math.floor(f.strain / 3);
                 const save = d20(this.rand, mod(f.sheet.stats.con));
                 if (save.total < dc && !save.crit) {
-                    f.health = 'sick'; f.sickDays = 2 + Math.floor(this.rand() * 3); f.energy = Math.min(f.energy, 0.3);
+                    f.health = 'sick'; f.sickDays = 2 + Math.floor(this.rand() * 3) + (f.strain >= 8 ? 2 : 0); f.energy = Math.min(f.energy, 0.3);
                     this.addLog(`${f.sheet.name} fell ill from overwork! (CON ${save.total} vs DC ${dc})`, '#c05840');
                     f.say('I... dont feel well', '#c05840');
-                } else if (f.sleepDebt >= 2) this.addLog(`${f.sheet.name} looks worn out but powers through (CON ${save.total} vs ${dc})`, '#e0a03c');
+                } else if (f.sleepDebt >= 2 || f.strain >= 5) this.addLog(`${f.sheet.name} looks worn out but powers through (CON ${save.total} vs ${dc})`, '#e0a03c');
             }
+            f.strain = Math.max(0, f.strain - 4);   // a night's rest works off most of the strain
         }
     }
 
@@ -1223,6 +1248,7 @@ export class Farmer {
 
         this.energy = 0.8 + this.rand() * 0.2;
         this.sleepDebt = 0;
+        this.strain = 0;   // accumulates when laboring while exhausted -> sickness risk
         this.health = 'healthy';
         this.sickDays = 0;
         this.workedLate = false;
@@ -1401,12 +1427,20 @@ export class Farmer {
         const w = this.world, p = this.plot;
         if (p.built.level >= 1 || w.isNight()) return false;
         const c = HOUSE_TIERS[1];
-        // 1) fence the claim first
+        // 1) fence the claim first — one post at a time (a real chunk of work)
         if (!p.built.fence) {
-            if (this.wood >= FENCE_WOOD) { this.wood -= FENCE_WOOD; w.raiseFence(this); this.say('FENCED!', '#7dd069'); this.sparkle = 1.5; return true; }
-            this.think(this.wood > 0 ? 'MORE WOOD FOR THE FENCE' : 'GATHERING WOOD TO FENCE MY LAND');
-            if (this.#goChop()) return true;
-            this.#backoff(); return true;   // no reachable wood — wait rather than spin
+            if (!p.fenceTarget) p.fenceTarget = w.fencePostTarget(p);
+            const needWood = (p.fencePosts % 2 === 0);   // ~1 wood per 2 posts
+            if (needWood && this.wood < 1) {
+                this.think(this.wood > 0 ? 'MORE WOOD FOR THE FENCE' : 'GATHERING WOOD TO FENCE MY LAND');
+                if (this.#goChop()) return true;
+                this.#backoff(); return true;
+            }
+            const spot = w.fencePostSpot(p, p.fencePosts);
+            this.pendingFence = { needWood };
+            this.think(`RAISING FENCE POST ${p.fencePosts + 1}/${p.fenceTarget}`);
+            if (this.#goTo(spot.i + 0.5, spot.j + 0.5, 'fencepost')) return true;
+            this.#backoff(); return true;
         }
         // 2) clear the whole building site of trees/rocks/brush
         if (!w.houseSiteClear(p)) {
@@ -1483,7 +1517,20 @@ export class Farmer {
         const w = this.world, s = this.sheet;
 
         if (this.health === 'sick') { this.think('NEED TO REST AND GET WELL'); this.#goHome('sick'); return; }
-        if (!w.isNight() && this.energy < 0.14) { this.think('IM SPENT. NEED A QUICK REST.'); this.#goHome('rest'); return; }
+        // exhaustion: worn down and still grinding -> pushed to rest; pushing through deep
+        // strain can make you collapse and fall ill on the spot.
+        if (!w.isNight() && this.energy < 0.16) {
+            if (this.strain >= 8) {
+                const save = d20(this.rand, mod(s.stats.con));
+                if (save.total < 12 && !save.crit) {
+                    this.health = 'sick'; this.sickDays = 3 + Math.floor(this.rand() * 3); this.strain = 0;
+                    w.addLog(`${s.name} collapsed from exhaustion and took ill! (CON ${save.total} vs 12)`, '#c05840');
+                    this.say('I overdid it...', '#c05840'); this.#goHome('sick'); return;
+                }
+            }
+            this.think(this.strain >= 5 ? 'IM BURNT OUT. I HAVE TO STOP.' : 'IM SPENT. NEED TO REST.');
+            this.#goHome('rest'); return;
+        }
         if (w.isNight()) {
             if (this.#shouldSleepNow()) { this.think(this.p.diligence > 0.6 ? 'ONE MORE THING... OK, BED.' : 'TIME TO SLEEP'); this.#goHome('sleepwalk'); return; }
             this.awakeAtNight = true;
@@ -1751,7 +1798,7 @@ export class Farmer {
         const w = this.world, s = this.sheet;
         const { task, plot, helping } = this.action;
         this.action = null;
-        this.energy = Math.max(0, this.energy - (ACTION_ENERGY[task.act] || 0.03));
+        this.#spendEnergy(ACTION_ENERGY[task.act] || 0.05);
         const owner = helping ? this.helpTask?.requester : this;
         if (this.targetProd) { this.targetProd.busy = false; }
 
@@ -1849,7 +1896,7 @@ export class Farmer {
     #completeForage() {
         const w = this.world, s = this.sheet, tgt = this.forageTarget;
         this.forageTarget = null;
-        this.energy = Math.max(0, this.energy - 0.03);
+        this.#spendEnergy(0.06);
         const t = tgt && w.get(tgt.i, tgt.j);
         if (t === T.WHEAT || t === T.FLOWER) {
             w.set(tgt.i, tgt.j, T.GRASS);
@@ -1868,7 +1915,7 @@ export class Farmer {
     #completeChop() {
         const w = this.world, tgt = this.woodTarget;
         this.woodTarget = null;
-        this.energy = Math.max(0, this.energy - 0.05);
+        this.#spendEnergy(0.10);
         if (tgt) {
             const t = w.get(tgt.i, tgt.j);
             if (t === T.TREE) {
@@ -1885,10 +1932,30 @@ export class Farmer {
         this.state = 'decide';
     }
 
+    // Spend energy on a labor action; working while already exhausted builds STRAIN, which
+    // raises the odds of falling ill (see #dailyHealthCheck + the exhaustion nudge in #decide).
+    #spendEnergy(cost) {
+        this.energy = Math.max(0, this.energy - cost);
+        if (this.energy < 0.22) this.strain = (this.strain || 0) + (0.24 - this.energy) * 3 + 0.25;
+        else this.strain = Math.max(0, (this.strain || 0) - 0.05);
+    }
+
+    #completeFencePost() {
+        const p = this.plot;
+        if (this.pendingFence && this.pendingFence.needWood && this.wood > 0) this.wood -= 1;
+        this.pendingFence = null;
+        this.#spendEnergy(0.07);
+        this.gainXP(1);
+        p.fencePosts++;
+        if (p.fencePosts >= p.fenceTarget) { this.world.completeFence(this); this.say('FENCED!', '#7dd069'); this.sparkle = 1.5; }
+        else if (p.fencePosts % 4 === 0) this.say(`${Math.round(100 * p.fencePosts / p.fenceTarget)}%`, '#c8a060');
+        this.state = 'decide';
+    }
+
     #completeMine() {
         const w = this.world, tgt = this.mineTarget;
         this.mineTarget = null;
-        this.energy = Math.max(0, this.energy - 0.06);
+        this.#spendEnergy(0.12);
         if (tgt && w.get(tgt.i, tgt.j) === T.ROCK) {
             w.set(tgt.i, tgt.j, T.GRASS);
             this.ore += ORE_ROCK;
@@ -1930,6 +1997,7 @@ export class Farmer {
                     else if (then === 'chop' || then === 'break') { this.chopTimer = (then === 'chop' ? 4.0 : 2.4) / (this.workSpeed() * (1 + Math.max(0, mod(this.sheet.stats.str)) * 0.12)); this.state = then; }
                     else if (then === 'mine') { this.chopTimer = 3.6 / (this.workSpeed() * (1 + Math.max(0, mod(this.sheet.stats.str)) * 0.14)); this.state = 'mine'; }
                     else if (then === 'forage') { this.forageTimer = 2.0 / this.workSpeed(); this.state = 'forage'; }
+                    else if (then === 'fencepost') { this.fenceTimer = 1.8 / this.workSpeed(); this.state = 'fencepost'; }
                     else if (then === 'fetchwater' || then === 'fetchwater-help') {
                         this.carryWater = this.maxWater; this.say('splash');
                         // resume the original watering task
@@ -1972,6 +2040,7 @@ export class Farmer {
             case 'chop': case 'break': this.chopTimer -= dt; if (this.chopTimer <= 0) this.#completeChop(); break;
             case 'mine': this.chopTimer -= dt; if (this.chopTimer <= 0) this.#completeMine(); break;
             case 'forage': this.forageTimer -= dt; if (this.forageTimer <= 0) this.#completeForage(); break;
+            case 'fencepost': this.fenceTimer -= dt; if (this.fenceTimer <= 0) this.#completeFencePost(); break;
 
             case 'build': {
                 const pr = this.world.project;
