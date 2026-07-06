@@ -130,14 +130,12 @@ const BUSH_SETS = {
     _fern: ['Fern1_1', 'Fern1_2', 'Fern2_1', 'Fern2_2'],   // for wild-wheat/grass forage
 };
 const FERN_NAMES = ['Fern1_1', 'Fern1_2', 'Fern2_1', 'Fern2_2'];
+// Real cut-down stumps (Broken_tree, plain-shadow) so felled trees transition naturally.
+const STUMP_ART_BASE = './assets/craftpix-net-385863-free-top-down-trees-pixel-art/PNG/Assets_separately/Trees_shadow/';
+const STUMP_NAMES = ['Broken_tree1', 'Broken_tree2', 'Broken_tree5'];
 const ROCK_ART_BASE = './assets/craftpix-net-974061-free-rocks-and-stones-top-down-pixel-art/PNG/Objects_separately/';
-const ROCK_NAMES = [
-    'Rock1_grass_shadow1', 'Rock1_grass_shadow2', 'Rock1_grass_shadow3', 'Rock1_grass_shadow4', 'Rock1_grass_shadow5',
-    'Rock2_grass_shadow1', 'Rock2_grass_shadow2', 'Rock2_grass_shadow3', 'Rock2_grass_shadow4', 'Rock2_grass_shadow5',
-    'Rock4_grass_shadow1', 'Rock4_grass_shadow2', 'Rock4_grass_shadow3', 'Rock4_grass_shadow4', 'Rock4_grass_shadow5',
-    'Rock5_grass_shadow1', 'Rock5_grass_shadow2', 'Rock5_grass_shadow3', 'Rock5_grass_shadow4', 'Rock5_grass_shadow5',
-    'Rock6_grass_shadow1', 'Rock6_grass_shadow2', 'Rock6_grass_shadow3', 'Rock6_grass_shadow4', 'Rock6_grass_shadow5',
-];
+// Only the Rock4 variants, plain-shadow versions (no grass_shadow / no_shadow).
+const ROCK_NAMES = ['Rock4_1', 'Rock4_2', 'Rock4_3', 'Rock4_4', 'Rock4_5'];
 
 // Shared async image-set loader: fills `store` and flips `readyFlag` (+ redraws
 // terrain) once every image in the sets has loaded. Falls back to procedural
@@ -145,6 +143,7 @@ const ROCK_NAMES = [
 const treeImg = {}; let treeArtReady = false;
 const bushImg = {}; let bushArtReady = false;
 const rockImg = {}; let rockArtReady = false;
+const stumpImg = {}; let stumpArtReady = false;
 function loadImageSet(base, sets, store, onReady) {
     const names = new Set();
     for (const s of Object.values(sets)) s.forEach(n => names.add(n));
@@ -259,6 +258,7 @@ function loadAssetArt() {
     loadImageSet(TREE_ART_BASE, TREE_SETS, treeImg, () => { treeArtReady = true; });
     loadImageSet(BUSH_ART_BASE, BUSH_SETS, bushImg, () => { bushArtReady = true; });
     loadImageSet(ROCK_ART_BASE, { ROCKS: ROCK_NAMES }, rockImg, () => { rockArtReady = true; });
+    loadImageSet(STUMP_ART_BASE, { STUMPS: STUMP_NAMES }, stumpImg, () => { stumpArtReady = true; });
     loadAnimalArt();
     homeSheet.onload = () => { homeReady = true; };
     homeSheet.onerror = () => {};
@@ -490,6 +490,8 @@ function wildSpec(i, j, t, season) {
         return { img: wheatSprite, w: wheatSprite.width, h: wheatSprite.height, anchor: 1, nudgeY: 2, depth: -1 };
     }
     if (t === T.STUMP) {
+        const img = pickLoadedImage(stumpImg, STUMP_NAMES, i, j, 26);
+        if (img) { const { w, h } = wildDims(img); return { img, w, h, anchor: 0.9, nudgeY: 2, depth: -0.5 }; }
         return { img: stumpSprite, w: stumpSprite.width, h: stumpSprite.height, anchor: 1, nudgeY: 2, depth: -0.5 };
     }
     if (t === T.ROCK) {
