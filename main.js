@@ -4,7 +4,7 @@ import { fetchMemories, mod, fmtMod, STAT_NAMES, TRAIT_NAMES, TRAIT_LABELS, hash
 import { World, GRID, CENTER, T, DAY_LENGTH, NIGHT_LENGTH } from './farm.js';
 import {
     TILE_W, TILE_H, makeCanvas, drawText, textWidth,
-    makeFarmerSprites, makeCropSprites, makeHouse, makeWell, makeSign, makeBoard, makeFencePost,
+    makeFarmerSprites, makeCropSprites, makeHouse, makeWell, makeBoard, makeFencePost,
     makeScaffold, makeToolshed, makeWindmill, makeTower, makeLantern,
     makeLilyPad, makeFish, makeChicken, makeCow, makePig, makeGoat, makeCoop, makeBarn, makeTrough,
     makeTree, makeStump, makeWildWheat, makeWildFlowers,
@@ -91,7 +91,6 @@ const mouse = { x: -1, y: -1, downX: 0, downY: 0, dragging: false, panStart: nul
 const spriteCache = new Map();   // farmer -> frames
 const houseCache = new Map();    // roofColor -> canvas
 const wellSprite = makeWell();
-const signSprite = makeSign();
 const boardSprite = makeBoard();
 const fencePost = makeFencePost();
 const scaffoldSprite = makeScaffold();
@@ -386,7 +385,8 @@ function characterSprites(f) {
     if (charCache.has(f)) return charCache.get(f);
     if (!charBox) computeCharBox();
     const bx = charBox;
-    const hue = (hashString((f.sheet.memory && f.sheet.memory.id) || f.sheet.name) % 300) + 30;
+    const hueSeed = f.sheet.seed != null ? f.sheet.seed : hashString((f.sheet.memory && f.sheet.memory.id) || f.sheet.name);
+    const hue = (hueSeed % 300) + 30;
     const dw = Math.max(1, Math.round(bx.w * ASSET_SCALE)), dh = Math.max(1, Math.round(bx.h * ASSET_SCALE));
     const frameFor = (col) => {
         const cell = tintedCharCell(col, hue);
@@ -1384,7 +1384,6 @@ function drawUI() {
     if (!blink) drawText(ctx, wl, hx, 7, wcol);
     hx += textWidth(wl) + 8;
 
-    hx += drawText(ctx, `CROPS ${world.harvestTotal}`, hx, 7, '#e8c860') + 8;
     hx += drawText(ctx, `MEM ${memories.length}`, hx, 7, '#9aa0b4') + 8;
 
     // night indicator

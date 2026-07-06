@@ -686,7 +686,7 @@ export class World {
     // Solid obstacles farmers must walk AROUND (buildings, wells, rocks, the board).
     pathBlocked(i, j) {
         const t = this.get(i, j);
-        if (t === T.HOUSE || t === T.WELL || t === T.STRUCT || t === T.COOP || t === T.BARN || t === T.ROCK) return true;
+        if (t === T.HOUSE || t === T.WELL || t === T.STRUCT || t === T.COOP || t === T.BARN || t === T.ROCK || t === T.WATER) return true;
         if (this.board && this.board.i === i && this.board.j === j) return true;
         return false;
     }
@@ -716,7 +716,7 @@ export class World {
             for (const [di, dj] of dirs) {
                 const ni = cur.i + di, nj = cur.j + dj;
                 if (ni < 0 || nj < 0 || ni >= GRID || nj >= GRID || !okTile(ni, nj)) continue;
-                if (di && dj && this.pathBlocked(cur.i + di, cur.j) && this.pathBlocked(cur.i, cur.j + dj)) continue; // no corner-cut
+                if (di && dj && (this.pathBlocked(cur.i + di, cur.j) || this.pathBlocked(cur.i, cur.j + dj))) continue; // no corner-cut past an obstacle edge
                 const ng = cur.g + (di && dj ? 1.4 : 1), kk = key(ni, nj);
                 if (best.has(kk) && best.get(kk) <= ng) continue;
                 best.set(kk, ng);
@@ -1724,7 +1724,16 @@ export class Farmer {
                     else { this.state = 'idle'; this.wanderTimer = 1 + this.rand() * 2.5; }
                 } else {
                     const step = Math.min((this.speed * dt) / dist, 1);
-                    this.pos.i += dx * step; this.pos.j += dy * step;
+                    let ni = this.pos.i + dx * step, nj = this.pos.j + dy * step;
+                    // never clip into a solid tile, even when A* failed and we're straight-lining
+                    const gi = Math.floor(P.i), gj = Math.floor(P.j);
+                    const solid = (ti, tj) => !(Math.floor(ti) === gi && Math.floor(tj) === gj) && this.world.pathBlocked(Math.floor(ti), Math.floor(tj));
+                    if (solid(ni, nj)) {
+                        if (!solid(ni, this.pos.j)) nj = this.pos.j;         // slide along i
+                        else if (!solid(this.pos.i, nj)) ni = this.pos.i;    // slide along j
+                        else { this.state = 'decide'; break; }               // boxed in -> pick a new task
+                    }
+                    this.pos.i = ni; this.pos.j = nj;
                     const sx = dx - dy; if (Math.abs(sx) > 0.05) this.facing = sx > 0 ? 1 : -1;
                 }
                 break;
