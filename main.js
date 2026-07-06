@@ -1611,10 +1611,25 @@ function drawSheet(f) {
     y += 3;
     if (f.illnesses > 0) {
         y = sectionBand(IX, y, IW, 'LESSONS LEARNED');
-        const lesson = f.caution >= 3 ? `Fell ill ${f.illnesses}x — now paces carefully, won't overwork.`
-            : f.caution >= 1 ? `Fell ill ${f.illnesses}x — learning to rest before burning out.`
+        const lesson = f.caution >= 3 ? `Fell ill ${f.illnesses}x - now paces carefully, won't overwork.`
+            : f.caution >= 1 ? `Fell ill ${f.illnesses}x - learning to rest before burning out.`
             : `Fell ill ${f.illnesses}x.`;
         for (const line of wrapText(lesson, 32).slice(0, 3)) { drawText(ctx, line, IX + 2, y, '#c9a45a'); y += 7; }
+        y += 3;
+    }
+    const friend = f.topRegard(1), grudge = f.topRegard(-1);
+    if ((friend && friend.v > 0.15) || (grudge && grudge.v < -0.15)) {
+        y = sectionBand(IX, y, IW, 'TOWN TIES');
+        if (friend && friend.v > 0.15) {
+            drawText(ctx, `Trusts ${friend.who.sheet.name.split(' ')[0]}`, IX + 2, y, '#7dd069'); y += 7;
+            const r = f.opinionReasons && f.opinionReasons.get(friend.who.sheet.seed);
+            if (r) for (const line of wrapText(`- ${r}`, 30).slice(0, 1)) { drawText(ctx, line, IX + 6, y, SHEET_LABEL); y += 7; }
+        }
+        if (grudge && grudge.v < -0.15) {
+            drawText(ctx, `Wary of ${grudge.who.sheet.name.split(' ')[0]}`, IX + 2, y, '#c05840'); y += 7;
+            const r = f.opinionReasons && f.opinionReasons.get(grudge.who.sheet.seed);
+            if (r) for (const line of wrapText(`- ${r}`, 30).slice(0, 1)) { drawText(ctx, line, IX + 6, y, SHEET_LABEL); y += 7; }
+        }
         y += 3;
     }
     drawText(ctx, 'FROM MEMORY', IX, y, SHEET_LABEL); y += 7;

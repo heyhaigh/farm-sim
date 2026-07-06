@@ -1169,10 +1169,14 @@ export class World {
         for (let i = 0; i < this.helpBoard.length; i++) {
             const req = this.helpBoard[i];
             if (req.farmer === helper) continue;
-            if (req.farmer.reputation < 0.3 && this.rand() > hp.collaboration) continue;   // shun bad reputations
-            const altruist = hp.collaboration > 0.7 || (helper.sheet.stats.cha >= 15 && hp.honesty > 0.5);
+            const op = helper.opinionOf(req.farmer);          // how the helper feels about the poster
+            if (op <= -0.35 && hp.collaboration < 0.85) continue;   // won't lift a finger for someone they resent
+            if (req.farmer.reputation < 0.3 && op < 0.2 && this.rand() > hp.collaboration) continue;   // shun bad names (unless a personal friend)
+            const friend = op >= 0.4;
+            const altruist = friend || hp.collaboration > 0.7 || (helper.sheet.stats.cha >= 15 && hp.honesty > 0.5);
             const offered = req.reward ? req.reward.offer : 0;
-            const ask = Math.max(1, Math.round(req.difficulty * (0.5 + hp.competitiveness * 0.5 - hp.collaboration * 0.3)));
+            // relationships move the price: friends work for less, the barely-tolerated cost more
+            const ask = Math.max(1, Math.round(req.difficulty * (0.5 + hp.competitiveness * 0.5 - hp.collaboration * 0.3 - op * 0.4)));
             if (altruist || offered >= ask || !req.reward) {
                 this.helpBoard.splice(i, 1);
                 return { req, agreed: req.reward ? { good: req.reward.good, amount: offered } : null };
@@ -1336,6 +1340,8 @@ export class World {
                 } else if (f.sleepDebt >= 2 || f.strain >= 5) this.addLog(`${f.sheet.name} looks worn out but powers through (CON ${save.total} vs ${dc})`, '#e0a03c');
             }
             f.strain = Math.max(0, f.strain - 4);   // a night's rest works off most of the strain
+            // opinions fade toward neutral over time — old grudges soften, gratitude cools
+            for (const [k, v] of f.opinions) { const nv = v * 0.9; if (Math.abs(nv) < 0.03) f.opinions.delete(k); else f.opinions.set(k, nv); }
         }
     }
 
@@ -1437,6 +1443,29 @@ export class Farmer {
         this.reputation = 0.55;
         this.poachCooldown = 6 + this.rand() * 10;
         this.visitedSick = new Set();
+        // social memory: a DIRECTIONAL opinion of each neighbour (seed -> -1..1), built from
+        // real events (help, pay, welching, poaching, soup). Grudges + gratitude are personal
+        // and decay toward neutral over time. Drives who they help / trade with (see takeHelp).
+        this.opinions = new Map();
+    }
+
+    opinionOf(other) { return other ? (this.opinions.get(other.sheet.seed) || 0) : 0; }
+    adjustOpinion(other, d, reason) {
+        if (!other || other === this) return;
+        const k = other.sheet.seed;
+        const v = Math.max(-1, Math.min(1, (this.opinions.get(k) || 0) + d));
+        this.opinions.set(k, v);
+        if (reason) this.opinionReasons = this.opinionReasons || new Map(), this.opinionReasons.set(k, reason);
+    }
+    // Warmest ally / worst grudge, for the sheet's social readout.
+    topRegard(sign) {
+        let best = null, bestV = 0;
+        for (const [seed, v] of this.opinions) {
+            if (sign > 0 ? v > bestV : v < bestV) { bestV = v; best = seed; }
+        }
+        if (!best) return null;
+        const who = this.world.farmers.find(f => f.sheet.seed === best);
+        return who ? { who, v: bestV } : null;
     }
 
     get tired() { return this.energy < 0.35; }
@@ -1860,8 +1889,10 @@ export class Farmer {
                 this.say('...you tricked me', '#e0a03c');
                 this.world.addLog(`${this.sheet.name} realized ${other.sheet.name}'s plea was a ruse`, '#e0a03c');
                 other.adjustReputation(-0.12); this.adjustReputation(0.02);
+                this.adjustOpinion(other, -0.35, 'tricked me into a fake job');   // personal grudge
             } else {
                 this.world.addBond(this, other);
+                other.adjustOpinion(this, 0.28, 'lent me a hand');   // the requester is grateful
                 // pay the agreed reward from the requester's stores
                 if (task.reward && task.reward.amount > 0) {
                     const owed = task.reward.amount;
@@ -1870,14 +1901,19 @@ export class Farmer {
                         this.say(`+${n} ${task.reward.good}`, '#e8c860');
                         this.world.addLog(`${other.sheet.name} paid ${this.sheet.name} ${n} ${this.world.goodLabel(task.reward.good)}`, '#e8c860');
                         other.adjustReputation(0.03);   // paying in full builds a good name
+                        this.adjustOpinion(other, 0.2, 'pays fair and square');
                     } else if (n > 0) {
                         this.say(`only +${n} of ${owed}`, '#e0a03c');
                         this.world.addLog(`${other.sheet.name} short-paid ${this.sheet.name} (${n}/${owed} ${this.world.goodLabel(task.reward.good)})`, '#e0a03c');
                         other.adjustReputation(-0.05);  // couldn't cover the deal
+                        this.adjustOpinion(other, -0.15, 'short-changed me');
                     } else {
                         this.say("...they couldn't pay", '#e0a03c');
                         other.adjustReputation(-0.08);  // welched entirely
+                        this.adjustOpinion(other, -0.28, 'welched on our deal');
                     }
+                } else {
+                    this.adjustOpinion(other, 0.08);   // helped for nothing — mild goodwill
                 }
                 this.world.addLog(`${this.sheet.name} finished helping ${other.sheet.name} (+bond)`, '#7dd069');
                 other.say('THANKS FRIEND!', '#7dd069'); other.helpCooldown = 20;
@@ -2075,20 +2111,22 @@ export class Farmer {
         const w = this.world, s = this.sheet;
         const loot = this.poachLoot; this.poachLoot = null;
         if (this.targetProd) this.targetProd.busy = false;
-        let name = 'crop', pos;
+        let name = 'crop', pos, victim = null;
         if (loot.crop) {
             const c = w.cropAt(loot.crop.i, loot.crop.j);
-            if (c && c.stage === 3 && !c.withered) { name = c.type; this.carryCrop = { type: c.type, t: 2.2 }; w.crops.delete(`${loot.crop.i},${loot.crop.j}`); s.harvested += 1; w.harvestTotal += 1; pos = loot.crop; }
+            if (c && c.stage === 3 && !c.withered) { name = c.type; victim = c.owner; this.carryCrop = { type: c.type, t: 2.2 }; w.crops.delete(`${loot.crop.i},${loot.crop.j}`); s.harvested += 1; w.harvestTotal += 1; pos = loot.crop; }
         } else if (loot.prod && loot.prod.ready) {
             name = FACILITY_YIELD_NAME[loot.prod.kind] || 'produce'; loot.prod.ready = false; loot.prod.prod = 0; s.harvested += 1; w.harvestTotal += 1;
+            victim = w.farmers.find(f => f.plot === loot.plot);
             pos = { i: Math.round(loot.prod.fx), j: Math.round(loot.prod.fy) };
         }
         this.targetProd = null;
         if (pos) {
             this.adjustReputation(-0.06);
+            if (victim && victim !== this) victim.adjustOpinion(this, -0.32, 'stole from my farm');   // the wronged never forget
             const witness = w.farmers.find(o => o !== this && o.health !== 'sick' && o.p.honesty > 0.55 &&
                 Math.abs(o.pos.i - pos.i) + Math.abs(o.pos.j - pos.j) < 6);
-            if (witness) { witness.say('HEY! THIEF!', '#c05840'); this.say('uh oh', '#e0a03c'); this.adjustReputation(-0.12); w.addBond(this, witness, -1); w.addLog(`${witness.sheet.name} caught ${s.name} stealing ${name}!`, '#c05840'); }
+            if (witness) { witness.say('HEY! THIEF!', '#c05840'); this.say('uh oh', '#e0a03c'); this.adjustReputation(-0.12); w.addBond(this, witness, -1); witness.adjustOpinion(this, -0.25, 'caught them thieving'); w.addLog(`${witness.sheet.name} caught ${s.name} stealing ${name}!`, '#c05840'); }
             else w.addLog(`${s.name} quietly made off with a ${name}`, '#e0a03c');
         }
         this.poachCooldown = 20 + this.rand() * 25;
@@ -2265,6 +2303,7 @@ export class Farmer {
                         sick.sickDays = Math.max(1, sick.sickDays - 1); sick.energy = Math.min(1, sick.energy + 0.15);
                         sick.say('THANK YOU...', '#7dd069'); this.say('REST UP, FRIEND', '#7dd069');
                         this.world.addBond(this, sick); this.adjustReputation(0.06);
+                        sick.adjustOpinion(this, 0.35, 'nursed me when I was ill');   // kindness is remembered
                         this.world.addLog(`${this.sheet.name} brought soup to ${sick.sheet.name}`, '#7dd069');
                     }
                     this.careTarget = null; this.state = 'decide';
