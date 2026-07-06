@@ -214,6 +214,10 @@ const BOARD_EMPTY_SRC = { x: 0, y: 156, w: 41, h: 62 };
 const BOARD_FULL_SRC = { x: 48, y: 156, w: 41, h: 62 };
 const CHEST_CLOSED_SRC = { x: 248, y: 357, w: 20, h: 20 };   // treasure chest (same guild-hall sheet)
 const CHEST_OPEN_SRC = { x: 276, y: 358, w: 23, h: 20 };
+// stacked wooden crates — the "under construction" marker for town projects (board/toolshed/…)
+const crateSheet = new Image(); let crateReady = false; crateSheet.onload = () => { crateReady = true; }; crateSheet.onerror = () => {};
+crateSheet.src = './assets/craftpix-net-654184-main-characters-home-free-top-down-pixel-art-asset/Tiled_files/Interior.png';
+const CRATES_SRC = { x: 69, y: 60, w: 33, h: 29 };
 const WELL_SRC = { x: 48, y: 498, w: 38, h: 38 };    // grass-base stone well in exterior.png
 const SMOKE_ENABLED = false;   // chimney smoke off until per-house (sheet-row) alignment is nailed
 const smokeSheet = new Image();
@@ -1023,7 +1027,13 @@ function collectDrawables() {
         const sx = cam.x + isoX(pr.site.i, pr.site.j), sy = cam.y + isoY(pr.site.i, pr.site.j);
         list.push({
             y: sy + TILE_H, draw: () => {
-                ctx.drawImage(scaffoldSprite, Math.floor(sx - 12), Math.floor(sy + TILE_H - 22));
+                if (crateReady && imageLoaded(crateSheet)) {
+                    ctx.imageSmoothingEnabled = false;
+                    const dw = Math.round(CRATES_SRC.w * ASSET_SCALE), dh = Math.round(CRATES_SRC.h * ASSET_SCALE);
+                    ctx.drawImage(crateSheet, CRATES_SRC.x, CRATES_SRC.y, CRATES_SRC.w, CRATES_SRC.h, Math.floor(sx - dw / 2), Math.floor(sy + TILE_H - dh), dw, dh);
+                } else {
+                    ctx.drawImage(scaffoldSprite, Math.floor(sx - 12), Math.floor(sy + TILE_H - 22));
+                }
                 const p = Math.min(pr.points / pr.needed, 1);
                 ctx.fillStyle = '#20222c';
                 ctx.fillRect(Math.floor(sx - 13), Math.floor(sy - 14), 26, 4);
