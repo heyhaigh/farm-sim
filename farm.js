@@ -69,13 +69,16 @@ export const SEASONS = [
 export const SEASON_LENGTH = 15;
 
 // producer tuning per kind
+// Producers yield roughly ONCE PER DAY (a hen lays ~1 egg/day) — rate ~0.0037 fills the
+// 0..1 meter over a day of production. This keeps collection a daily rhythm, not a treadmill.
+// feedDecay is slow to match (animals want feeding ~once a day). Day = DAY_LENGTH+NIGHT_LENGTH.
 export const PROD = {
-    pad:     { rate: 0.020, feedDecay: 0.006, yieldLo: 1, yieldHi: 2, collectT: 2.2, feedT: 1.8, wander: false },
-    fish:    { rate: 0.016, feedDecay: 0.008, yieldLo: 1, yieldHi: 3, collectT: 2.4, feedT: 1.6, wander: true, aquatic: true },
-    chicken: { rate: 0.030, feedDecay: 0.013, yieldLo: 1, yieldHi: 2, collectT: 1.8, feedT: 1.4, wander: true },
-    cow:     { rate: 0.020, feedDecay: 0.010, yieldLo: 2, yieldHi: 3, collectT: 2.6, feedT: 2.0, wander: true },
-    pig:     { rate: 0.024, feedDecay: 0.011, yieldLo: 1, yieldHi: 3, collectT: 2.2, feedT: 1.8, wander: true },
-    goat:    { rate: 0.026, feedDecay: 0.011, yieldLo: 1, yieldHi: 2, collectT: 2.0, feedT: 1.6, wander: true },
+    pad:     { rate: 0.0038, feedDecay: 0.0035, yieldLo: 1, yieldHi: 2, collectT: 2.2, feedT: 1.8, wander: false },
+    fish:    { rate: 0.0036, feedDecay: 0.0035, yieldLo: 1, yieldHi: 3, collectT: 2.4, feedT: 1.6, wander: true, aquatic: true },
+    chicken: { rate: 0.0037, feedDecay: 0.0040, yieldLo: 1, yieldHi: 1, collectT: 1.8, feedT: 1.4, wander: true },
+    cow:     { rate: 0.0037, feedDecay: 0.0035, yieldLo: 1, yieldHi: 2, collectT: 2.6, feedT: 2.0, wander: true },
+    pig:     { rate: 0.0038, feedDecay: 0.0038, yieldLo: 1, yieldHi: 2, collectT: 2.2, feedT: 1.8, wander: true },
+    goat:    { rate: 0.0038, feedDecay: 0.0038, yieldLo: 1, yieldHi: 2, collectT: 2.0, feedT: 1.6, wander: true },
     // the rooster produces nothing but attitude — rate 0 means never collectable; he
     // struts the coop, wants the odd feeding, and crows at dawn (see audio.js)
     rooster: { rate: 0, feedDecay: 0.004, yieldLo: 0, yieldHi: 0, collectT: 1.8, feedT: 1.4, wander: true },
@@ -119,7 +122,7 @@ const REST_RESTORE = 0.03;
 // Tending crops and animals is free — tilling a patch, sowing, watering, harvesting, collecting
 // eggs/milk, feeding. Only heavy construction (build) drains here; the rest is 0. Chopping,
 // mining, breaking stumps, fencing and raising scarecrows drain via the LABOR table below.
-const ACTION_ENERGY = { till: 0, plant: 0, water: 0.015, harvest: 0, clear: 0, build: 0.055, collect: 0, tend: 0 };
+const ACTION_ENERGY = { till: 0, plant: 0, water: 0.008, harvest: 0, clear: 0, build: 0.055, collect: 0, tend: 0 };
 // Clearing/building labor by effort: a shrub is quick and light, a tree is a long hard fell,
 // a stump is grubbing work, a rock is the heaviest, a fence post is medium. { time, energy }.
 // Costs kept modest so a settler can clear + fence + build without collapsing every day.
