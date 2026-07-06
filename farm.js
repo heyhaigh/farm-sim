@@ -860,6 +860,7 @@ export class World {
     }
     raiseBuilding(farmer, level) {
         const p = farmer.plot, h = p.house, c = HOUSE_TIERS[level];
+        if (!p.built.fence) return false;   // a home is never raised until the fence is fully up
         farmer.wood -= c.wood; farmer.ore -= c.ore;
         for (let di = 0; di < 2; di++) for (let dj = 0; dj < 2; dj++) this.set(h.i + di, h.j + dj, T.HOUSE);
         p.built.level = level;
@@ -1334,15 +1335,23 @@ export class World {
             }
             if (f.workedLate) f.sleepDebt += 1.5; else f.sleepDebt = Math.max(0, f.sleepDebt - 1);
             f.workedLate = false;
-            const risky = f.energy < 0.35 || f.sleepDebt >= 3 || f.strain >= 4;
+            // sleeping rough with no roof is a health hazard that WORSENS the longer they go
+            // without a home: a fresh settler gets a night or two, then exposure bites hard —
+            // strong pressure to raise a tipi fast, without an instant town-wide sick-out.
+            const homeless = f.plot.built.level === 0;
+            f.nightsExposed = homeless ? f.nightsExposed + 1 : 0;
+            const exposure = homeless ? Math.min(9, (f.nightsExposed - 1) * 3) : 0;   // night 1 free, then +3/+6/+9
+            const risky = (homeless && f.nightsExposed >= 2) || f.energy < 0.35 || f.sleepDebt >= 3 || f.strain >= 4;
             if (risky) {
-                const dc = 10 + Math.floor(f.sleepDebt) + (f.energy < 0.2 ? 3 : 0) + Math.floor(f.strain / 3);
+                const dc = 10 + Math.floor(f.sleepDebt) + (f.energy < 0.2 ? 3 : 0) + Math.floor(f.strain / 3) + exposure;
                 const save = d20(this.rand, mod(f.sheet.stats.con));
+                const exposed = exposure > 0;
                 if (save.total < dc && !save.crit) {
-                    f.fallIll(2 + Math.floor(this.rand() * 3) + (f.strain >= 8 ? 2 : 0));
-                    this.addLog(`${f.sheet.name} fell ill from overwork! (CON ${save.total} vs DC ${dc})`, '#c05840');
-                    f.say('I... dont feel well', '#c05840');
-                } else if (f.sleepDebt >= 2 || f.strain >= 5) this.addLog(`${f.sheet.name} looks worn out but powers through (CON ${save.total} vs ${dc})`, '#e0a03c');
+                    f.fallIll(2 + Math.floor(this.rand() * 3) + (f.strain >= 8 ? 2 : 0) + (exposed ? 1 : 0));
+                    this.addLog(exposed ? `${f.sheet.name} took ill from sleeping out in the cold! (CON ${save.total} vs DC ${dc})` : `${f.sheet.name} fell ill from overwork! (CON ${save.total} vs DC ${dc})`, '#c05840');
+                    f.say(exposed ? 'I need a roof...' : 'I... dont feel well', '#c05840');
+                } else if (exposed) this.addLog(`${f.sheet.name} shivered through another roofless night (CON ${save.total} vs ${dc})`, '#e0a03c');
+                else if (f.sleepDebt >= 2 || f.strain >= 5) this.addLog(`${f.sheet.name} looks worn out but powers through (CON ${save.total} vs ${dc})`, '#e0a03c');
             }
             f.strain = Math.max(0, f.strain - 4);   // a night's rest works off most of the strain
             // opinions fade toward neutral over time — old grudges soften, gratitude cools
@@ -1446,6 +1455,7 @@ export class Farmer {
         // learned experience: bots adapt to their own history rather than repeating mistakes.
         this.caution = 0;    // grows each time they fall ill -> they pace themselves harder
         this.illnesses = 0;  // lifetime count (shown on their sheet)
+        this.nightsExposed = 0;   // consecutive nights slept rough (no roof) -> escalating illness risk
         this.reputation = 0.55;
         this.poachCooldown = 6 + this.rand() * 10;
         this.visitedSick = new Set();
