@@ -22,6 +22,14 @@ Any static file server works. The page fetches memories from the live
 `https://heyhaigh.ai/api/knowledge-graph` endpoint (open CORS); if that's
 unreachable it falls back to a small embedded crew so it always runs.
 
+### Optional LLM conversations
+
+If the app is deployed with the serverless route in `api/ry-farms-chat.js`, set
+`OPENAI_API_KEY` on the server to let farmers generate contextual two-line
+conversations from their goals, memories, relationships, weather, and town
+state. `RY_FARMS_LLM_MODEL` can override the model. Local static servers that do
+not run `/api/ry-farms-chat` automatically fall back to procedural dialogue.
+
 ## How a farmer is made
 
 Every farmer is **deterministic**: the same memory always grows the same farmer

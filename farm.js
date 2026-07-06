@@ -126,10 +126,40 @@ const LABOR = {
 };
 const SCARECROW_WOOD = 3;   // timber cost of a scarecrow
 const SCARECROW_LOSSES = 2; // crow raids a farmer will tolerate before building one
+const CHAT_LINE_MAX = 34;   // speech bubbles do not wrap; keep generated lines tight
+const CHAT_MEMORY_MAX = 110;
+const LLM_CHAT_ENDPOINT = '/api/ry-farms-chat';
+const LLM_CHAT_TIMEOUT_MS = 6500;
+const LLM_CHAT_REQUEST_COOLDOWN = 16;
+const LLM_CHAT_FAIL_COOLDOWN = 180;
 
 export function d20(rand, modifier) {
     const roll = 1 + Math.floor(rand() * 20);
     return { roll, mod: modifier, total: roll + modifier, crit: roll === 20, fumble: roll === 1 };
+}
+
+function cleanChatText(text, max = CHAT_LINE_MAX) {
+    let s = String(text || '')
+        .replace(/[\u2018\u2019]/g, "'")
+        .replace(/[\u201c\u201d]/g, '"')
+        .replace(/[\u2013\u2014]/g, '-')
+        .replace(/\u2026/g, '...')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toUpperCase();
+    s = s.replace(/[^A-Z0-9 .,!?'"():+\-\/<>*&=#_]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!s) return '...';
+    if (s.length <= max) return s;
+    const clipped = s.slice(0, Math.max(1, max - 2)).trimEnd();
+    return `${clipped}..`;
+}
+
+function shortName(farmer) {
+    return farmer?.sheet?.name?.split(' ')[0] || 'Friend';
+}
+
+function clamp(n, lo, hi) {
+    return Math.max(lo, Math.min(hi, n));
 }
 
 // ---------------------------------------------------------------------------
@@ -145,6 +175,7 @@ export class World {
         this.plots = [];
         this.farmers = [];
         this.log = [];
+        this.time = 0;
         this.day = 1;
         this.clock = 0;
         this.harvestTotal = 0;
@@ -171,6 +202,7 @@ export class World {
         this.growthMult = 1;
         this.lightningMult = 1;
         this.leader = null;
+        this.llmChat = this.#initLlmChat();
 
         this.well = { i: CENTER, j: CENTER, ready: true };
         this.sign = null;                                 // (RY sign removed)
@@ -644,6 +676,206 @@ export class World {
     addLog(text, color = '#c8ccd8') {
         this.log.push({ text, color, t: performance.now() });
         if (this.log.length > 80) this.log.shift();
+    }
+
+    #initLlmChat() {
+        if (typeof window === 'undefined' || typeof fetch !== 'function') return { enabled: false };
+        let endpoint = LLM_CHAT_ENDPOINT;
+        try {
+            endpoint = window.RYFARMS_CHAT_ENDPOINT || window.localStorage?.getItem('ryFarmsChatEndpoint') || endpoint;
+        } catch {
+            endpoint = LLM_CHAT_ENDPOINT;
+        }
+        if (!endpoint || endpoint === 'off' || endpoint === 'false') return { enabled: false };
+        return { enabled: true, endpoint, inflight: 0, lastAt: -999, disabledUntil: 0, failures: 0 };
+    }
+
+    #journalBrief(farmer, other = null, limit = 7) {
+        const rows = [];
+        for (let k = farmer.journal.length - 1; k >= 0 && rows.length < limit; k--) {
+            const m = farmer.journal[k];
+            if (other && m.who !== other.sheet.seed && m.kind !== 'lesson') continue;
+            const who = this.farmers.find(f => f.sheet.seed === m.who);
+            rows.push({
+                day: m.day,
+                kind: m.kind,
+                text: String(m.text || '').slice(0, 140),
+                about: who ? who.sheet.name : null,
+                strength: Math.round(m.strength * 100) / 100,
+            });
+        }
+        return rows;
+    }
+
+    #chatProfile(farmer, other) {
+        const s = farmer.sheet;
+        return {
+            name: s.name,
+            archetype: s.personality.label,
+            creed: s.personality.creed,
+            goal: farmer.goal || 'finding their way',
+            health: farmer.health,
+            energy: Math.round(farmer.energy * 100) / 100,
+            state: farmer.state,
+            thought: farmer.thought || '',
+            harvests: s.harvested,
+            cropsOnHand: farmer.sheet.produce || 0,
+            wood: farmer.wood,
+            ore: farmer.ore,
+            opinionOfOther: Math.round(farmer.opinionOf(other) * 100) / 100,
+            strongestSharedMemories: this.#journalBrief(farmer, other, 5),
+            recentMemories: this.#journalBrief(farmer, null, 5),
+        };
+    }
+
+    #chatPayload(speaker, listener, ctx = {}) {
+        const pr = this.project;
+        return {
+            day: this.day,
+            season: this.seasonName,
+            weather: WEATHER_STATES[this.weather]?.label || this.weather,
+            leader: this.leader?.sheet?.name || null,
+            harvestTotal: this.harvestTotal,
+            boardBuilt: !!this.board,
+            townProject: pr ? {
+                label: pr.label,
+                points: Math.round(pr.points || 0),
+                needed: pr.needed,
+                builders: [...(pr.builders || [])].map(f => f.sheet.name),
+            } : null,
+            recentTownLog: this.log.slice(-8).map(l => String(l.text || '').slice(0, 150)),
+            relationship: {
+                speakerToListener: Math.round((ctx.op ?? speaker.opinionOf(listener)) * 100) / 100,
+                listenerToSpeaker: Math.round((ctx.rop ?? listener.opinionOf(speaker)) * 100) / 100,
+                vividMemory: ctx.vivid ? {
+                    day: ctx.vivid.day,
+                    kind: ctx.vivid.kind,
+                    text: String(ctx.vivid.text || '').slice(0, 140),
+                    strength: Math.round(ctx.vivid.strength * 100) / 100,
+                } : null,
+                gossipTarget: ctx.grudge?.who ? {
+                    name: ctx.grudge.who.sheet.name,
+                    regard: Math.round(ctx.grudge.v * 100) / 100,
+                } : null,
+            },
+            speaker: this.#chatProfile(speaker, listener),
+            listener: this.#chatProfile(listener, speaker),
+            fallback: ctx.fallback ? {
+                speakerLine: ctx.fallback.speakerLine,
+                listenerLine: ctx.fallback.listenerLine,
+            } : null,
+        };
+    }
+
+    tryLlmChat(speaker, listener, ctx = {}) {
+        const cfg = this.llmChat;
+        if (!cfg?.enabled || typeof fetch !== 'function') return false;
+        if (cfg.inflight >= 1 || this.time < cfg.disabledUntil) return false;
+        if (this.time - cfg.lastAt < LLM_CHAT_REQUEST_COOLDOWN) return false;
+        if (this.rand() > 0.82) return false;
+
+        cfg.inflight++;
+        cfg.lastAt = this.time;
+        speaker.say('LISTEN...', '#8a9ade');
+        listener.say('...', '#8a9ade');
+        speaker.facing = (listener.pos.i - listener.pos.j) >= (speaker.pos.i - speaker.pos.j) ? 1 : -1;
+        listener.facing = (speaker.pos.i - speaker.pos.j) >= (listener.pos.i - listener.pos.j) ? 1 : -1;
+        this.#runLlmChat(speaker, listener, ctx);
+        return true;
+    }
+
+    async #runLlmChat(speaker, listener, ctx) {
+        const cfg = this.llmChat;
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), LLM_CHAT_TIMEOUT_MS);
+        try {
+            const res = await fetch(cfg.endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ context: this.#chatPayload(speaker, listener, ctx) }),
+                signal: controller.signal,
+            });
+            if (!res.ok) {
+                const err = new Error(`chat endpoint ${res.status}`);
+                err.status = res.status;
+                throw err;
+            }
+            const data = await res.json();
+            if (data?.fallback) {
+                const err = new Error(data.error || 'chat endpoint requested fallback');
+                err.status = data.status || 503;
+                throw err;
+            }
+            if (!this.#applyGeneratedChat(speaker, listener, data)) throw new Error('empty generated chat');
+            cfg.failures = 0;
+        } catch (err) {
+            cfg.failures++;
+            if (err?.name !== 'AbortError' && ([401, 403, 404, 405, 501, 503].includes(err?.status) || cfg.failures >= 2)) {
+                cfg.disabledUntil = this.time + LLM_CHAT_FAIL_COOLDOWN;
+            }
+            if (ctx?.fallback) this.applyChatLines(speaker, listener, ctx.fallback, { weight: ctx.fallback.weight ?? 0.45 });
+        } finally {
+            clearTimeout(timeout);
+            cfg.inflight = Math.max(0, cfg.inflight - 1);
+        }
+    }
+
+    #applyGeneratedChat(speaker, listener, data) {
+        const lines = data?.lines || data?.conversation?.lines || null;
+        const first = Array.isArray(lines) ? lines[0] : null;
+        const second = Array.isArray(lines) ? lines[1] : null;
+        const chat = {
+            speakerLine: data?.speakerLine || data?.speaker_line || first?.text || data?.speaker?.text,
+            listenerLine: data?.listenerLine || data?.listener_line || second?.text || data?.listener?.text,
+            speakerColor: this.#toneColor(data?.speakerTone || first?.tone || data?.tone),
+            listenerColor: this.#toneColor(data?.listenerTone || second?.tone || data?.tone),
+            memory: data?.memory || data?.summary,
+            relationshipDelta: Number(data?.relationshipDelta ?? data?.relationship_delta ?? 0) || 0,
+            reason: data?.relationshipReason || data?.relationship_reason || 'opened up in conversation',
+            weight: 0.9,
+        };
+        if (!chat.speakerLine || !chat.listenerLine) return false;
+        this.applyChatLines(speaker, listener, chat, { weight: 0.9 });
+        return true;
+    }
+
+    #toneColor(tone) {
+        const t = String(tone || '').toLowerCase();
+        if (/warm|kind|hope|friend|grateful/.test(t)) return '#7dd069';
+        if (/hurt|tense|angry|fear|sour|warn/.test(t)) return '#c05840';
+        if (/deal|work|trade|proud|bold/.test(t)) return '#e8c860';
+        if (/reflect|quiet|sad|dream|honest/.test(t)) return '#8a9ade';
+        return '#c8ccd8';
+    }
+
+    applyChatLines(speaker, listener, chat, opts = {}) {
+        const speakerLine = cleanChatText(chat.speakerLine || chat.line || chat.speaker || '...');
+        const listenerLine = cleanChatText(chat.listenerLine || chat.reply || chat.listener || '...');
+        const speakerColor = chat.speakerColor || chat.color || '#c8ccd8';
+        const listenerColor = chat.listenerColor || chat.replyColor || '#c8ccd8';
+        speaker.say(speakerLine, speakerColor);
+        listener.say(listenerLine, listenerColor);
+        speaker.facing = (listener.pos.i - listener.pos.j) >= (speaker.pos.i - speaker.pos.j) ? 1 : -1;
+        listener.facing = (speaker.pos.i - speaker.pos.j) >= (listener.pos.i - listener.pos.j) ? 1 : -1;
+
+        const delta = clamp(Number(chat.relationshipDelta || 0), -0.08, 0.08);
+        if (Math.abs(delta) >= 0.015) {
+            speaker.adjustOpinion(listener, delta, chat.reason || 'opened up in conversation');
+            listener.adjustOpinion(speaker, delta * 0.85, chat.reason || 'opened up in conversation');
+            if (delta > 0.03) this.addBond(speaker, listener);
+        }
+
+        if (opts.journal !== false) {
+            const weight = opts.weight ?? chat.weight ?? 0.45;
+            const memory = chat.memory ? cleanChatText(chat.memory, CHAT_MEMORY_MAX) : null;
+            if (memory) {
+                speaker.remember('chat', memory, listener, weight);
+                listener.remember('chat', memory, speaker, weight);
+            } else {
+                speaker.remember('chat', `Told ${shortName(listener)}: "${speakerLine}"`, listener, weight);
+                listener.remember('chat', `${shortName(speaker)} said: "${speakerLine}"`, speaker, Math.max(0.35, weight - 0.05));
+            }
+        }
     }
 
     nearestWell(pos) {   // access-blind; kept for world-level checks (prefer nearestUsableWell for farmers)
@@ -1613,7 +1845,12 @@ export class World {
 
     cropAt(i, j) { return this.crops.get(`${i},${j}`); }
     plantCrop(i, j, type, owner) {
-        this.crops.set(`${i},${j}`, { i, j, type, owner, stage: 0, growth: 0, water: 0.7, withered: false, dryTime: 0 });
+        this.crops.set(`${i},${j}`, {
+            i, j, type, owner, stage: 0, growth: 0, water: 0.7, withered: false, dryTime: 0,
+            wateredAt: this.time,
+            waterDecayMul: 0.88 + tileRand(i, j, this.seed + 501) * 0.24,
+            rainAbsorbMul: 0.85 + tileRand(i, j, this.seed + 502) * 0.3,
+        });
     }
 
     #tickCrops(dt) {
@@ -1621,11 +1858,17 @@ export class World {
         const season = this.seasonDef;
         const waterDecay = { sun: 0.014, cloud: 0.007, rain: 0, storm: 0, drought: 0.045 }[this.weather] * season.waterMul;
         const night = this.isNight();
+        const raining = this.weather === 'rain' || this.weather === 'storm';
         for (const crop of this.crops.values()) {
             if (crop.withered) continue;
-            if (this.weather === 'rain' || this.weather === 'storm') crop.water = 1;
-            crop.water = Math.max(0, crop.water - waterDecay * dt);
-            if (crop.water <= 0.02) {
+            if (raining) {
+                const rainGain = (this.weather === 'storm' ? 0.055 : 0.032) * (crop.rainAbsorbMul || 1);
+                crop.water = Math.min(1, crop.water + rainGain * dt);
+                crop.dryTime = 0;
+            } else {
+                crop.water = Math.max(0, crop.water - waterDecay * (crop.waterDecayMul || 1) * dt);
+            }
+            if (!raining && crop.water <= 0.02) {
                 crop.dryTime += dt;
                 if (crop.dryTime > 14 && this.rand() < dt * 0.05) {
                     crop.withered = true;
@@ -1755,6 +1998,7 @@ export class World {
     // ---- main tick ---------------------------------------------------------------
 
     tick(dt) {
+        this.time += dt;
         this.clock += dt;
         if (this.clock >= DAY_LENGTH + NIGHT_LENGTH) {
             this.clock = 0; this.day++;
@@ -2218,6 +2462,102 @@ export class Farmer {
     }
     #backoff() { this.state = 'idle'; this.wanderTimer = 1.5 + this.rand() * 2; }
     #pickLine(arr) { return arr[Math.floor(this.rand() * arr.length)]; }
+
+    #scriptedChat(other, op, rop, grudge, vivid) {
+        const w = this.world;
+        let speakerLine = null;
+        let speakerColor = '#c8ccd8';
+        let weight = 0.45;
+
+        if (op >= 0.4) {
+            speakerLine = this.#pickLine([
+                'GOOD TO SEE YOU, FRIEND!',
+                'WE MAKE A FINE TEAM.',
+                'YOUR HELP STUCK WITH ME.',
+                'THIS PLACE FEELS LESS LONELY.',
+            ]);
+            speakerColor = '#7dd069';
+            weight = 0.62;
+        } else if (op <= -0.35) {
+            speakerLine = this.#pickLine([
+                "I HAVEN'T FORGOTTEN.",
+                'WATCH YOURSELF.',
+                'WE ARE NOT SQUARE.',
+                'KEEP TO YOUR OWN ROWS.',
+            ]);
+            speakerColor = '#c05840';
+            weight = 0.72;
+        } else if (other === w.leader && this.p.competitiveness > 0.6) {
+            speakerLine = this.#pickLine(["I'LL PASS YOU YET.", 'ENJOY THE LEAD... FOR NOW.', 'YOUR LEAD HAS A SHADOW.']);
+            speakerColor = '#e0a03c';
+        } else if (this === w.leader) {
+            speakerLine = this.#pickLine(['KEEP AT IT!', 'FINE DAY FOR FARMING.', 'THE TOWN RISES WITH US.']);
+        } else if (vivid && this.rand() < 0.62) {
+            const sour = /welch|trick|thiev|stole|toll|turned|behind|owe/i.test(vivid.text);
+            if (vivid.kind === 'job') {
+                speakerLine = sour ? "WE'RE NOT SQUARE YET." : 'GOOD WORK STICKS AROUND.';
+                speakerColor = sour ? '#c05840' : '#e8c860';
+            } else if (vivid.kind === 'event') {
+                speakerLine = this.#pickLine(['WE BUILT MORE THAN WOOD.', 'THAT DAY STILL HOLDS ME UP.', 'THE TOWN REMEMBERS WORK.']);
+                speakerColor = '#8fc7e8';
+            } else {
+                speakerLine = sour ? `DAY ${vivid.day} STILL STINGS.` : `DAY ${vivid.day} STILL WARMS ME.`;
+                speakerColor = sour ? '#c05840' : '#7dd069';
+            }
+            weight = sour ? 0.72 : 0.62;
+        } else if (w.project && this.rand() < 0.45) {
+            const left = Math.max(0, Math.ceil(w.project.needed - w.project.points));
+            speakerLine = left > 0 ? `${w.project.label} NEEDS ${left} MORE.` : `${w.project.label} IS NEAR DONE.`;
+            speakerColor = '#e8c860';
+        } else if (!w.board && this.rand() < 0.35) {
+            speakerLine = 'WE NEED A BOARD FOR JOBS.';
+            speakerColor = '#e8c860';
+        } else if (this.goal && this.rand() < 0.42) {
+            const goalLines = {
+                'good neighbor': ['A FARM IS A PROMISE.', 'HELP GIVEN RETURNS HOME.'],
+                'lone wolf': ['QUIET ROWS SUIT ME.', 'I TRUST WORK MORE THAN TALK.'],
+                'harvest king': ['EVERY ROW IS A SCORECARD.', 'THE HARVEST WILL KNOW ME.'],
+                'sharp trader': ['FAIR TERMS KEEP FRIENDS.', 'A DEAL TELLS THE TRUTH.'],
+                'master farmer': ['I AM LEARNING THE LAND.', 'THE SOIL ANSWERS PATIENCE.'],
+            };
+            speakerLine = this.#pickLine(goalLines[this.goal] || ['WE KEEP LEARNING HERE.']);
+            speakerColor = '#8a9ade';
+        } else if (grudge && grudge.v < -0.3 && grudge.who !== other && this.rand() < 0.4) {
+            speakerLine = `DON'T TRUST ${shortName(grudge.who).toUpperCase()}...`;
+            speakerColor = '#c9a45a';
+        } else if (w.weather === 'storm') {
+            speakerLine = this.#pickLine(['SKY SOUNDS ANGRY TODAY.', 'COUNT YOUR ROOF BEAMS.']);
+            speakerColor = '#8a9ade';
+        } else if (w.weather === 'rain') {
+            speakerLine = this.#pickLine(['RAIN DOES HALF OUR WORK.', 'THE FIELDS ARE DRINKING.']);
+            speakerColor = '#8fc7e8';
+        } else if (w.weather === 'drought') {
+            speakerLine = this.#pickLine(['THE DIRT IS ASKING LOUDLY.', 'EVERY DROP COUNTS TODAY.']);
+            speakerColor = '#e0a03c';
+        } else {
+            speakerLine = this.#pickLine(['MORNING!', 'HOW GOES THE HARVEST?', 'WHAT DID THE SOIL TELL YOU?', 'STILL HERE. STILL TRYING.']);
+        }
+
+        let listenerLine;
+        let listenerColor = rop <= -0.35 ? '#c05840' : '#c8ccd8';
+        if (rop >= 0.4) {
+            listenerLine = this.#pickLine(['ALWAYS, FRIEND.', 'I REMEMBER TOO.', 'WE KEEP EACH OTHER STANDING.']);
+            listenerColor = '#7dd069';
+        } else if (rop <= -0.35) {
+            listenerLine = this.#pickLine(['...', 'MIND YOUR OWN ROWS.', 'NOT TODAY.']);
+        } else if (w.project && /NEEDS|DONE|BOARD|JOBS/.test(speakerLine)) {
+            listenerLine = this.#pickLine(['I CAN SPARE A HAND.', 'POST IT WHERE ALL CAN SEE.', 'THAT WOULD HELP US ALL.']);
+            listenerColor = '#e8c860';
+        } else if (w.weather === 'rain' || w.weather === 'storm') {
+            listenerLine = this.#pickLine(['WEATHER HAS A TEMPER.', 'THE ROOF WILL TELL.']);
+            listenerColor = '#8a9ade';
+        } else {
+            listenerLine = this.#pickLine(['LIKEWISE.', "CAN'T COMPLAIN.", 'AYE.', 'WELL ENOUGH.', 'ONE ROW AT A TIME.']);
+        }
+
+        return { speakerLine, listenerLine, speakerColor, listenerColor, weight };
+    }
+
     // A neighbourly exchange whose tone is set by their standing with each other (and sometimes
     // a bit of gossip about a third party they distrust). Both bots speak; returns true if a
     // conversation happened.
@@ -2234,30 +2574,11 @@ export class Farmer {
         // the most vivid non-smalltalk memory involving this neighbor — history colors the greeting
         let vivid = null;
         for (const m of this.journal) if (m.who === other.sheet.seed && m.kind !== 'chat' && m.strength > 0.5 && (!vivid || m.strength > vivid.strength)) vivid = m;
-        let line, col = '#c8ccd8';
-        if (op >= 0.4) { line = this.#pickLine(['GOOD TO SEE YOU, FRIEND!', 'WE MAKE A FINE TEAM.', 'THANKS AGAIN, TRULY.']); col = '#7dd069'; }
-        else if (op <= -0.35) { line = this.#pickLine(["I HAVEN'T FORGOTTEN.", 'HMPH.', 'WATCH YOURSELF.', 'NOTHING TO SAY TO YOU.']); col = '#c05840'; }
-        else if (other === w.leader && this.p.competitiveness > 0.6) { line = this.#pickLine(["I'LL PASS YOU YET.", 'ENJOY THE LEAD... FOR NOW.']); col = '#e0a03c'; }
-        else if (this === w.leader) { line = this.#pickLine(['KEEP AT IT!', 'FINE DAY FOR FARMING.']); }
-        else if (vivid && this.rand() < 0.55) {
-            // quote lived history instead of small talk
-            const sour = /welch|trick|thiev|stole|toll|turned|behind|owe/i.test(vivid.text);
-            if (vivid.kind === 'job') { line = sour ? "WE'RE NOT SQUARE YET, YOU AND I." : 'GOOD DOING BUSINESS WITH YOU.'; col = '#e8c860'; }
-            else if (vivid.kind === 'event') { line = this.#pickLine(['THAT WELL WAS WORTH EVERY PLANK.', 'STILL GLAD WE BUILT TOGETHER.']); col = '#8fc7e8'; }
-            else { line = sour ? `I STILL REMEMBER DAY ${vivid.day}.` : `I OWE YOU FROM DAY ${vivid.day} YET.`; col = sour ? '#c05840' : '#7dd069'; }
-        }
-        else if (grudge && grudge.v < -0.3 && grudge.who !== other && this.rand() < 0.4) { line = `DON'T TRUST ${grudge.who.sheet.name.split(' ')[0].toUpperCase()}...`; col = '#c9a45a'; }
-        else { line = this.#pickLine(['MORNING!', 'HOW GOES THE HARVEST?', 'HOW ARE THINGS?', 'LOVELY DAY... MOSTLY.']); }
-        this.say(line, col);
-        this.facing = (other.pos.i - other.pos.j) >= (this.pos.i - this.pos.j) ? 1 : -1;   // turn toward them
         // the neighbour answers, tone set by THEIR regard for us
         const rop = other.opinionOf(this);
-        other.say(rop >= 0.4 ? 'ALWAYS, FRIEND!' : rop <= -0.35 ? '...' : this.#pickLine(['LIKEWISE!', "CAN'T COMPLAIN.", 'AYE.', 'WELL ENOUGH!']), rop <= -0.35 ? '#c05840' : '#c8ccd8');
-        other.facing = (this.pos.i - this.pos.j) >= (other.pos.i - other.pos.j) ? 1 : -1;
-        // both sides journal the exchange (small talk fades fast; frosty ones sting longer)
-        const frosty = op <= -0.35 || rop <= -0.35;
-        this.remember('chat', `Told ${other.sheet.name.split(' ')[0]}: "${line}"`, other, frosty ? 0.7 : 0.45);
-        other.remember('chat', `${this.sheet.name.split(' ')[0]} said: "${line}"`, this, frosty ? 0.7 : 0.4);
+        const fallback = this.#scriptedChat(other, op, rop, grudge, vivid);
+        if (w.tryLlmChat(this, other, { op, rop, grudge, vivid, fallback })) return true;
+        w.applyChatLines(this, other, fallback, { weight: fallback.weight });
         return true;
     }
     // Save toward the next dwelling tier; upgrade when affordable. Low priority (runs after
@@ -2423,10 +2744,17 @@ export class Farmer {
         // 1c2. the crows have taken enough: raise a scarecrow over the fields
         if (!w.isNight() && this.birdLosses >= SCARECROW_LOSSES && this.#pursueScarecrow()) return;
 
-        // 1d. fill work: sow seeds, till new ground
+        // 1d. town project: shared infrastructure beats low-priority fill work
+        if (w.project && this.p.collaboration > 0.35 && this.energy > 0.3) {
+            this.think(`RAISING THE ${w.project.label}!`);
+            const site = w.project.site; const off = (this.sheet.seed % 3) - 1;
+            this.#goTo(site.i + 0.5 + off, site.j + 1.6, 'build'); return;
+        }
+
+        // 1e. fill work: sow seeds, till new ground
         const fill = this.#nextTaskOnPlot(this.plot, thirstThreshold, false);
 
-        // 1e. clear brush/trees/rocks ON my own plot to open more farmland. Interleaves with
+        // 1f. clear brush/trees/rocks ON my own plot to open more farmland. Interleaves with
         //     tilling (diligent bots clear more eagerly) so plots don't stay cluttered.
         if (!w.isNight()) {
             const ob = this.#nearestPlotObstacle();
@@ -2451,13 +2779,6 @@ export class Farmer {
         if (this.p.honesty < 0.32 && this.poachCooldown <= 0 && !w.isNight()) {
             const steal = this.#nearestNeighborLoot();
             if (steal) { this.think('NOBODYS WATCHING THAT ONE...'); this.#pursuePoach(steal); return; }
-        }
-
-        // 4. town project
-        if (w.project && this.p.collaboration > 0.35 && this.energy > 0.3) {
-            this.think(`RAISING THE ${w.project.label}!`);
-            const site = w.project.site; const off = (this.sheet.seed % 3) - 1;
-            this.#goTo(site.i + 0.5 + off, site.j + 1.6, 'build'); return;
         }
 
         // 5. competitive & behind: grind — but a bot that's been burned by overwork needs more in
@@ -2671,7 +2992,10 @@ export class Farmer {
         }
         this.scarecrowTarget = spot;
         this.think('THESE CROWS HAVE HAD THEIR LAST FREE MEAL');
-        return this.#goTo(spot.i + 0.5, spot.j + 0.5, 'scarecrow');
+        // stand BESIDE the spot, not on it — the finished scarecrow tile turns solid,
+        // and building from on top would entomb the builder
+        if (this.#goTo(spot.i + 0.5, spot.j + 1.5, 'scarecrow')) return true;
+        return this.#goTo(spot.i + 0.5, spot.j - 0.5, 'scarecrow');
     }
 
     #completeScarecrow() {
@@ -2680,6 +3004,7 @@ export class Farmer {
         this.#laborDrain('scarecrow');
         if (t && this.wood >= SCARECROW_WOOD && !w.scarecrowOnPlot(this.plot)) {
             this.wood -= SCARECROW_WOOD;
+            w.set(t.i, t.j, T.STRUCT);
             w.scarecrows.push({ i: t.i, j: t.j, ownerSeed: this.sheet.seed });
             this.birdLosses = 0;
             this.say('SCAT, CROWS!', '#f0d060'); this.sparkle = 2; this.gainXP(3);
@@ -2769,7 +3094,14 @@ export class Farmer {
         switch (task.act) {
             case 'till': w.set(task.field.i, task.field.j, T.TILLED); this.gainXP(1); break;
             case 'plant': w.plantCrop(task.field.i, task.field.j, s.crop, owner || this); this.gainXP(1); break;
-            case 'water': { const c = w.cropAt(task.crop.i, task.crop.j); if (c) { c.water = 1; this.carryWater = Math.max(0, this.carryWater - 1); this.gainXP(1); } break; }
+            case 'water': {
+                const c = w.cropAt(task.crop.i, task.crop.j);
+                if (c) {
+                    c.water = 1; c.wateredAt = w.time; c.dryTime = 0;
+                    this.carryWater = Math.max(0, this.carryWater - 1); this.gainXP(1);
+                }
+                break;
+            }
             case 'clear': w.crops.delete(`${task.crop.i},${task.crop.j}`); w.set(task.crop.i, task.crop.j, T.TILLED); break;
             case 'tend': { const p = task.prod; if (p) p.fed = 1; this.gainXP(1); break; }
             case 'collect': this.#doCollect(task.prod, owner, helping); break;
@@ -3005,9 +3337,12 @@ export class Farmer {
                 } else {
                     const step = Math.min((this.speed * dt) / dist, 1);
                     let ni = this.pos.i + dx * step, nj = this.pos.j + dy * step;
-                    // never clip into a solid tile, even when A* failed and we're straight-lining
+                    // never clip into a solid tile, even when A* failed and we're straight-lining.
+                    // Exception: if we're STANDING on a solid tile (something got built underfoot),
+                    // movement is always allowed — otherwise the bot is entombed forever.
                     const gi = Math.floor(P.i), gj = Math.floor(P.j);
-                    const solid = (ti, tj) => !(Math.floor(ti) === gi && Math.floor(tj) === gj) && this.world.pathBlocked(Math.floor(ti), Math.floor(tj));
+                    const standingSolid = this.world.pathBlocked(Math.floor(this.pos.i), Math.floor(this.pos.j));
+                    const solid = (ti, tj) => !standingSolid && !(Math.floor(ti) === gi && Math.floor(tj) === gj) && this.world.pathBlocked(Math.floor(ti), Math.floor(tj));
                     if (solid(ni, nj)) {
                         if (!solid(ni, this.pos.j)) nj = this.pos.j;         // slide along i
                         else if (!solid(this.pos.i, nj)) ni = this.pos.i;    // slide along j
