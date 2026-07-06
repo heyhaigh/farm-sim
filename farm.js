@@ -1681,17 +1681,25 @@ export class Farmer {
         // 1) fence the claim first — one post at a time (a real chunk of work)
         if (!p.built.fence) {
             if (!p.fenceTarget) p.fenceTarget = w.fencePostTarget(p);
+            const spot = w.fencePostSpot(p, p.fencePosts);
+            // the fence line may run through a rock/tree/brush — CLEAR it before planting the post
+            const st = w.get(spot.i, spot.j);
+            if (st === T.ROCK || st === T.TREE || st === T.STUMP || st === T.FLOWER || st === T.WHEAT) {
+                const kind = st === T.ROCK ? 'rock' : st === T.TREE ? 'tree' : st === T.STUMP ? 'stump' : 'forage';
+                this.think('CLEARING THE FENCE LINE');
+                if (this.#clearObstacle({ i: spot.i, j: spot.j, kind, tile: st })) return true;
+                p.fencePosts++; this.#backoff(); return true;   // can't reach it — skip past this spot
+            }
             const needWood = (p.fencePosts % 2 === 0);   // ~1 wood per 2 posts
             if (needWood && this.wood < 1) {
                 this.think(this.wood > 0 ? 'MORE WOOD FOR THE FENCE' : 'GATHERING WOOD TO FENCE MY LAND');
                 if (this.#goChop()) return true;
                 this.#backoff(); return true;
             }
-            const spot = w.fencePostSpot(p, p.fencePosts);
             this.pendingFence = { needWood };
             this.think(`RAISING FENCE POST ${p.fencePosts + 1}/${p.fenceTarget}`);
             if (this.#goTo(spot.i + 0.5, spot.j + 0.5, 'fencepost')) return true;
-            this.#backoff(); return true;
+            p.fencePosts++; this.#backoff(); return true;   // spot unreachable — skip it, don't loop
         }
         // 2) clear the whole building site of trees/rocks/brush
         if (!w.houseSiteClear(p)) {
@@ -1771,10 +1779,11 @@ export class Farmer {
         }
         return best;
     }
+    // Returns true if the bot could reach the obstacle to start clearing it, false if unreachable.
     #clearObstacle(ob) {
-        if (ob.kind === 'rock') { this.think('CLEARING THIS ROCK FOR MORE FIELD'); this.mineTarget = ob; this.#goTo(ob.i + 0.5, ob.j + 0.5, 'mine'); }
-        else if (ob.kind === 'forage') { this.think('CLEARING BRUSH FOR MORE FIELD'); this.forageTarget = { i: ob.i, j: ob.j, tile: ob.tile }; this.#goTo(ob.i + 0.5, ob.j + 0.5, 'forage'); }
-        else { this.think('CLEARING TIMBER FOR MORE FIELD'); this.woodTarget = ob; this.#goTo(ob.i + 0.5, ob.j + 0.5, ob.kind === 'stump' ? 'break' : 'chop'); }
+        if (ob.kind === 'rock') { this.think('CLEARING THIS ROCK FOR MORE FIELD'); this.mineTarget = ob; return this.#goTo(ob.i + 0.5, ob.j + 0.5, 'mine'); }
+        if (ob.kind === 'forage') { this.think('CLEARING BRUSH FOR MORE FIELD'); this.forageTarget = { i: ob.i, j: ob.j, tile: ob.tile }; return this.#goTo(ob.i + 0.5, ob.j + 0.5, 'forage'); }
+        this.think('CLEARING TIMBER FOR MORE FIELD'); this.woodTarget = ob; return this.#goTo(ob.i + 0.5, ob.j + 0.5, ob.kind === 'stump' ? 'break' : 'chop');
     }
     #nearestSiteBlocker() {
         const w = this.world, h = this.plot.house, S = World.SITE;

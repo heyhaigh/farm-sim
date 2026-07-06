@@ -1228,9 +1228,12 @@ function drawFarmer(f, sx, sy) {
         ctx.fillRect(px + 2, py - 4, Math.floor(12 * p), 2);
     }
 
-    // status icon: sick (+) or worn out (~) while out and about, unless a bubble shows
+    // status icon: sleeping outside (animated Z), sick (+) or worn out (~), unless a bubble shows
     if (!f.bubble) {
-        if (f.health === 'sick') {
+        if (f.state === 'sleep' || f.state === 'rest') {
+            const zt = Math.floor(f.animTime * 2) % 3;   // Z rising + fading, like the roof sleepers
+            drawText(ctx, 'Z', px + 6, py - 8 - zt * 3, `rgba(200,210,255,${1 - zt * 0.25})`);
+        } else if (f.health === 'sick') {
             const bob = Math.floor(Math.sin(performance.now() / 400) * 1);
             drawText(ctx, '+', px + 6, py - 8 + bob, '#c05840');
         } else if (f.tired) {
