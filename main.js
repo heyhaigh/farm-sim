@@ -217,7 +217,7 @@ const CHEST_OPEN_SRC = { x: 276, y: 358, w: 23, h: 20 };
 // stacked wooden crates — the "under construction" marker for town projects (board/toolshed/…)
 const crateSheet = new Image(); let crateReady = false; crateSheet.onload = () => { crateReady = true; }; crateSheet.onerror = () => {};
 crateSheet.src = './assets/craftpix-net-654184-main-characters-home-free-top-down-pixel-art-asset/Tiled_files/Interior.png';
-const CRATES_SRC = { x: 69, y: 60, w: 33, h: 29 };
+const CRATES_SRC = { x: 69, y: 60, w: 26, h: 29 };   // just the two crates — stop before the next sprite
 const WELL_SRC = { x: 48, y: 498, w: 38, h: 38 };    // grass-base stone well in exterior.png
 const SMOKE_ENABLED = false;   // chimney smoke off until per-house (sheet-row) alignment is nailed
 const smokeSheet = new Image();
