@@ -176,7 +176,8 @@ const ANIMAL_SHEETS = {
     cow:     { file: 'Bull_animation_without_shadow', fw: 64, fh: 64 },
     pig:     { file: 'Piglet_animation_without_shadow', fw: 32, fh: 32 },
     goat:    { file: 'Sheep_animation_without_shadow', fw: 32, fh: 32 },
-    chicken: { file: 'Rooster_animation_without_shadow', fw: 32, fh: 32 },
+    chicken: { file: 'Chick_animation_without_shadow', fw: 32, fh: 32 },
+    rooster: { file: 'Rooster_animation_without_shadow', fw: 32, fh: 32 },
 };
 const ANIMAL_COLS = 6;
 let ANIMAL_SIDE_ROW = 5;   // side-profile (right-facing) row; tuned by eye
@@ -352,7 +353,7 @@ const producerSprites = {
     goat: [makeGoat(0), makeGoat(1)],
 };
 // bobbing "ready to collect" product icon colors
-const PRODUCT_ICON = { pad: '#e880a8', fish: '#e08040', chicken: '#f4f0e8', cow: '#ffffff', pig: '#d8b088', goat: '#ffffff' };
+const PRODUCT_ICON = { pad: '#e880a8', fish: '#e08040', chicken: '#f4f0e8', cow: '#ffffff', pig: '#d8b088', goat: '#ffffff', rooster: '#e05840' };
 
 // ---- Real character sprites (CraftPix swordsman: body + head layers, sword skipped) -------
 // Every farmer is the same character, differentiated by hue-shifting the non-skin pixels
@@ -1194,7 +1195,7 @@ function drawProducer(p, px, py) {
         }
         return;
     }
-    const frame = Math.floor(p.anim * (p.kind === 'chicken' ? 6 : 3)) % 2;
+    const frame = Math.floor(p.anim * (p.kind === 'chicken' || p.kind === 'rooster' ? 6 : 3)) % 2;
     const sprSet = producerSprites[p.kind];
     if (!sprSet) return;
     const spr = sprSet[frame];
@@ -1931,7 +1932,7 @@ out.addEventListener('pointerdown', (e) => {
     const onUI = !rosterOpen && (inRect(p, MINIMAP) || (selected && inRect(p, SHEET_RECT)) || (boardOpen && inRect(p, BOARD_RECT)));
     mouse.panStart = (rosterOpen || onUI) ? null : { x: p.x, y: p.y, camX: cam.x, camY: cam.y };
     mouse.dragging = false;
-    out.setPointerCapture(e.pointerId);
+    try { out.setPointerCapture(e.pointerId); } catch { /* stale/synthetic pointer id — capture is best-effort */ }
 });
 
 out.addEventListener('pointermove', (e) => {
@@ -2091,8 +2092,9 @@ function frame(now) {
     let steps = 0;
     while (simAccumulator >= FIXED_DT && steps < 800) { world.tick(FIXED_DT); simAccumulator -= FIXED_DT; steps++; }
 
-    // soundtrack follows the sim: theme by day, crickets at night, rain/thunder by weather
-    audio.update({ isNight: world.isNight(), weather: world.weather, flash: world.lightningFlash });
+    // soundtrack follows the sim: seasonal theme by day, crickets/owls at night,
+    // rain/thunder by weather, and a rooster crow at dawn once the town has one
+    audio.update({ isNight: world.isNight(), weather: world.weather, flash: world.lightningFlash, season: world.season, hasRooster: world.hasRooster() });
     // at extreme speeds keep a bounded backlog (spread over coming frames) rather than dropping
     // all the leftover time, but cap it so we never spiral.
     if (steps >= 800) simAccumulator = Math.min(simAccumulator, 800 * FIXED_DT);

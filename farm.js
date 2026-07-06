@@ -76,6 +76,9 @@ export const PROD = {
     cow:     { rate: 0.020, feedDecay: 0.010, yieldLo: 2, yieldHi: 3, collectT: 2.6, feedT: 2.0, wander: true },
     pig:     { rate: 0.024, feedDecay: 0.011, yieldLo: 1, yieldHi: 3, collectT: 2.2, feedT: 1.8, wander: true },
     goat:    { rate: 0.026, feedDecay: 0.011, yieldLo: 1, yieldHi: 2, collectT: 2.0, feedT: 1.6, wander: true },
+    // the rooster produces nothing but attitude — rate 0 means never collectable; he
+    // struts the coop, wants the odd feeding, and crows at dawn (see audio.js)
+    rooster: { rate: 0, feedDecay: 0.004, yieldLo: 0, yieldHi: 0, collectT: 1.8, feedT: 1.4, wander: true },
 };
 
 // plot cell-set key (plots are tile-sets so they can grow into non-rectangular shapes)
@@ -220,6 +223,32 @@ export class World {
         this.birds = [];
         this.#spawnBirds(4 + Math.floor(this.rand() * 3));
         this.treasure = null;   // a rare treasure chest; the finder is richly rewarded
+    }
+
+    // A settled flock of 2+ hens may hatch (or attract) a rooster — one per coop. He
+    // yields nothing; he's a strutting alarm clock (audio crows at dawn when one exists).
+    #maybeHatchRooster() {
+        for (const plot of this.plots) {
+            for (const fac of plot.facilities) {
+                if (fac.type !== 'coop') continue;
+                if (fac.producers.some(pr => pr.kind === 'rooster')) continue;
+                const hens = fac.producers.filter(pr => pr.kind === 'chicken').length;
+                if (hens < 2 || this.rand() > 0.15) continue;
+                const r = fac.producers[0].region;
+                fac.producers.push(this.#makeProducer('rooster', r.x + r.w / 2, r.y + r.h / 2, r));
+                const owner = this.farmers.find(f => f.plot === plot);
+                if (owner) {
+                    this.addLog(`A rooster has joined ${owner.sheet.name}'s flock!`, '#f0d060');
+                    owner.remember('event', 'A rooster joined my flock - dawn will never be quiet again', null, 1.0);
+                    owner.say('a rooster!', '#f0d060');
+                }
+            }
+        }
+    }
+    hasRooster() {
+        for (const plot of this.plots) for (const fac of plot.facilities)
+            if (fac.producers.some(pr => pr.kind === 'rooster')) return true;
+        return false;
     }
 
     // ---- crows: perch in trees, hop tree-to-tree, and raid unguarded crops -------
@@ -1911,10 +1940,10 @@ export class World {
                         if (p.wanderT <= 0) {
                             p.wanderT = 0.6 + this.rand() * 1.8;
                             const ang = this.rand() * Math.PI * 2;
-                            const spd = (p.kind === 'chicken' ? 0.5 : p.kind === 'fish' ? 0.35 : 0.28);
+                            const spd = (p.kind === 'chicken' || p.kind === 'rooster' ? 0.5 : p.kind === 'fish' ? 0.35 : 0.28);
                             p.vx = Math.cos(ang) * spd; p.vy = Math.sin(ang) * spd;
                             if (Math.abs(p.vx) > 0.02) p.flip = p.vx > 0 ? 1 : -1;
-                            if (p.kind === 'chicken') p.hop = 0.35;
+                            if (p.kind === 'chicken' || p.kind === 'rooster') p.hop = 0.35;
                         }
                         p.fx += p.vx * dt; p.fy += p.vy * dt;
                         const r = p.region, pad = 0.35;
@@ -2008,6 +2037,7 @@ export class World {
             this.#encroach();
             this.#maybeSpawnTreasure();
             this.#tickCoops();
+            this.#maybeHatchRooster();
             this.addLog(`Day ${this.day} begins on Ry Farms`, '#f0d060');
             if (this.rand() < 0.5) this.#rollWeather();
         }
