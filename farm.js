@@ -1182,13 +1182,13 @@ export class World {
             const altruist = friend || hp.collaboration > 0.7 || (helper.sheet.stats.cha >= 15 && hp.honesty > 0.5);
             const good = req.reward ? req.reward.good : 'crops';
             const gv = helper.goodValue(good);                 // a good the helper NEEDS is worth more per unit
-            // a good they're already drowning in isn't worth working for at any price the poster
-            // could pay — only pure goodwill (altruist/friend) moves them.
-            if (req.reward && gv < 0.8 && !altruist) continue;
             const offered = req.reward ? req.reward.offer : 0;
             // what the helper wants to be paid, in WORTH: shaped by personality + how they feel
-            // about the poster (friends work for less, the barely-tolerated cost more).
-            const askWorth = req.difficulty * (0.5 + hp.competitiveness * 0.5 - hp.collaboration * 0.3 - op * 0.4);
+            // about the poster (friends work for less, the barely-tolerated cost more). A good the
+            // helper is already flush in drives a HARDER bargain (not an outright refusal) — a
+            // generous enough offer can still tempt them.
+            let askWorth = req.difficulty * (0.5 + hp.competitiveness * 0.5 - hp.collaboration * 0.3 - op * 0.4);
+            if (gv < 0.8 && !altruist) askWorth *= 1.7;
             if (altruist || offered * gv >= askWorth || !req.reward) {
                 this.helpBoard.splice(i, 1);
                 return { req, agreed: req.reward ? { good, amount: offered } : null };
@@ -1689,7 +1689,7 @@ export class Farmer {
         // desperation escape: exposed for many nights and still no way to build a proper home
         // (can't stockpile the timber) -> throw up a bare free lean-to so they don't die of
         // exposure in an unwinnable spot. Rare — only when wood is effectively unavailable.
-        if (this.nightsExposed >= 6 && this.wood < c.wood) {
+        if (this.nightsExposed >= 6 && this.wood < c.wood && !w.nearestWood(this.pos)) {
             p.built.fence = true; p.fenceTarget = Math.max(1, p.fenceTarget || 1); p.fencePosts = p.fenceTarget; p.rev++;
             w.raiseBuilding(this, 1, true);
             this.say('shelter, at last', '#e0a03c'); this.sparkle = 1; this.nightsExposed = 0;
@@ -1704,7 +1704,10 @@ export class Farmer {
             if (blocker) {
                 this.think('CLEARING THE FENCE LINE');
                 if (this.#clearObstacle(blocker)) return true;
-                this.#backoff(); return true;   // can't reach it right now — try again shortly
+                // genuinely unreachable (e.g. a rock walled in by water) — give up on it so the
+                // fence can still finish instead of retrying the same tile forever.
+                (p.fenceSkip || (p.fenceSkip = new Set())).add(pkey(blocker.i, blocker.j));
+                this.#backoff(); return true;
             }
             const needWood = (p.fencePosts % 2 === 0);   // ~1 wood per 2 posts
             if (needWood && this.wood < 1) {
@@ -1800,7 +1803,9 @@ export class Farmer {
     #nearestFenceLineObstacle(p) {
         const w = this.world;
         let best = null, bestD = 1e9;
+        const skip = p.fenceSkip;
         const consider = (i, j) => {
+            if (skip && skip.has(pkey(i, j))) return;   // gave up on this unreachable one
             const t = w.get(i, j);
             let kind = null;
             if (t === T.TREE) kind = 'tree'; else if (t === T.STUMP) kind = 'stump';

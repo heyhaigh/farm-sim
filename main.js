@@ -1930,7 +1930,9 @@ function frame(now) {
     simAccumulator += dt * (world._speedMult || 1);
     let steps = 0;
     while (simAccumulator >= FIXED_DT && steps < 800) { world.tick(FIXED_DT); simAccumulator -= FIXED_DT; steps++; }
-    if (steps >= 800) simAccumulator = 0;   // clamp at extreme speeds; don't spiral
+    // at extreme speeds keep a bounded backlog (spread over coming frames) rather than dropping
+    // all the leftover time, but cap it so we never spiral.
+    if (steps >= 800) simAccumulator = Math.min(simAccumulator, 800 * FIXED_DT);
 
     // background
     ctx.fillStyle = '#2a3438';
