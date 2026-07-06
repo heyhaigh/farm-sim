@@ -54,8 +54,30 @@ let rosterOpen = false;
 let rosterScroll = 0;
 let sheetScroll = 0;              // scroll offset for the selected-farmer detail card
 let sheetContentH = 0;           // measured content height (for clamping the scroll)
+let maxSheetScroll = 0;          // clamp bound, set each draw
+
+// Reusable RPG-menu panel (wood frame + dark interior + corner rivets), styled after the
+// craftpix basic-UI kit, so cards read as framed panels instead of floating text.
+function uiPanel(x, y, w, h) {
+    ctx.fillStyle = 'rgba(0,0,0,0.4)'; ctx.fillRect(x + 2, y + 3, w, h);   // drop shadow
+    ctx.fillStyle = '#231a10'; ctx.fillRect(x, y, w, h);                    // outer edge
+    ctx.fillStyle = '#6d5334'; ctx.fillRect(x + 1, y + 1, w - 2, h - 2);    // wood frame
+    ctx.fillStyle = '#8a6b44'; ctx.fillRect(x + 1, y + 1, w - 2, 1);        // top highlight
+    ctx.fillStyle = '#4a3824'; ctx.fillRect(x + 1, y + h - 2, w - 2, 1);    // bottom shade
+    ctx.fillStyle = '#191410'; ctx.fillRect(x + 4, y + 4, w - 8, h - 8);    // interior
+    ctx.fillStyle = '#c9a45a';
+    for (const [rx, ry] of [[x + 2, y + 2], [x + w - 4, y + 2], [x + 2, y + h - 4], [x + w - 4, y + h - 4]]) ctx.fillRect(rx, ry, 2, 2);
+}
+function sectionBand(x, y, w, title) {
+    ctx.fillStyle = '#2b2016'; ctx.fillRect(x, y, w, 9);
+    ctx.fillStyle = '#4a3824'; ctx.fillRect(x, y + 9, w, 1);
+    drawText(ctx, title, x + 3, y + 2, '#c9a45a');
+    return y + 12;
+}
 const ROSTER_BTN = { x: 0, y: 3, w: 44, h: 12 };   // positioned in drawUI
 const MINIMAP = { x: 0, y: 0, w: 46, h: 46 };      // bottom-right legend, positioned in drawMinimap
+const SHEET_RECT = { x: 0, y: 0, w: 0, h: 0 };     // detail-card bounds, set in drawSheet (for hit-testing)
+const SHEET_CLOSE = { x: 0, y: 0, w: 0, h: 0 };    // card close (X) button, set in drawSheet
 
 const cam = { x: 0, y: 0 };
 const mouse = { x: -1, y: -1, downX: 0, downY: 0, dragging: false, panStart: null };
@@ -1187,7 +1209,7 @@ function drawUI() {
     });
 
     if (rosterOpen) drawRoster();
-    else { if (selected) drawSheet(selected); drawMinimap(); }
+    else { drawMinimap(); if (selected) drawSheet(selected); }   // card draws over the minimap
 }
 
 function wrapText(str, maxChars) {
@@ -1217,89 +1239,97 @@ function barFill(x, y, w, frac, color, bg = '#20242f') {
     ctx.fillRect(x, y, Math.max(0, Math.floor(w * Math.min(frac, 1))), 3);
 }
 
+const SHEET_LABEL = '#8f8570', SHEET_VAL = '#e8e0cc', SHEET_GOLD = '#c9a45a';
 function drawSheet(f) {
-    const s = f.sheet;
-    const p = s.personality;
-    const PW = 142, PX = GW - PW - 4, PY = 22;
-    const memLines = wrapText(s.memory.title, 33).slice(0, 3);
-    const thinkLines = wrapText(f.thought, 33).slice(0, 2);
-    const creedLines = wrapText(p.creed, 33).slice(0, 2);
-    const PH = 230 + (memLines.length + thinkLines.length + creedLines.length) * 7;
-
-    ctx.fillStyle = 'rgba(12,14,24,0.95)';
-    ctx.fillRect(PX, PY, PW, PH);
-    const border = f.health === 'sick' ? '#c05840' : '#7dd069';
-    ctx.fillStyle = border;
-    ctx.fillRect(PX, PY, PW, 1);
-    ctx.fillRect(PX, PY + PH - 1, PW, 1);
-    ctx.fillRect(PX, PY, 1, PH);
-    ctx.fillRect(PX + PW - 1, PY, 1, PH);
-
-    let y = PY + 5;
-    drawText(ctx, s.name, PX + 5, y, '#fff', 1); y += 8;
-    drawText(ctx, `${p.label.toUpperCase()} - ${s.archetype} LV${s.level}`, PX + 5, y, '#7dd069'); y += 7;
-    for (const line of creedLines) { drawText(ctx, `"${line}"`, PX + 5, y, '#9aa0b4'); y += 7; }
-
-    // xp bar
-    barFill(PX + 5, y, PW - 10, Math.min(s.xp / (s.level * 12), 1), '#5a8ac8'); y += 7;
-
-    // energy + health line
+    const s = f.sheet, p = s.personality;
+    const PW = 154, PX = GW - PW - 4, PY = 22;
+    const PH = GH - 22 - PY - 3;   // full height, down to just above the bottom log bar
+    SHEET_RECT.x = PX; SHEET_RECT.y = PY; SHEET_RECT.w = PW; SHEET_RECT.h = PH;
+    uiPanel(PX, PY, PW, PH);
+    const IX = PX + 7, IW = PW - 14;
     const eCol = f.health === 'sick' ? '#c05840' : f.tired ? '#e0a03c' : '#7dd069';
-    drawText(ctx, 'ENERGY', PX + 5, y, '#9aa0b4');
-    barFill(PX + 42, y, PW - 82, f.energy, eCol);
+
+    // --- close (X) button, top-right corner ---
+    SHEET_CLOSE.x = PX + PW - 13; SHEET_CLOSE.y = PY + 3; SHEET_CLOSE.w = 10; SHEET_CLOSE.h = 10;
+    ctx.fillStyle = '#3a2c1e'; ctx.fillRect(SHEET_CLOSE.x, SHEET_CLOSE.y, SHEET_CLOSE.w, SHEET_CLOSE.h);
+    ctx.fillStyle = '#5a4632'; ctx.fillRect(SHEET_CLOSE.x, SHEET_CLOSE.y, SHEET_CLOSE.w, 1);
+    drawText(ctx, 'X', SHEET_CLOSE.x + 3, SHEET_CLOSE.y + 3, '#e8c8a0');
+
+    // --- fixed title band (name + archetype/level + health) ---
+    ctx.fillStyle = '#2b2016'; ctx.fillRect(IX - 2, PY + 16, IW + 4, 21);
+    ctx.fillStyle = SHEET_GOLD; ctx.fillRect(IX - 2, PY + 16, IW + 4, 1); ctx.fillRect(IX - 2, PY + 36, IW + 4, 1);
+    drawText(ctx, s.name, IX, PY + 19, '#ffffff', 1);
+    drawText(ctx, `${s.archetype.toUpperCase()} LV${s.level}`, IX, PY + 28, SHEET_GOLD);
     const hStr = f.health === 'sick' ? 'SICK' : f.tired ? 'TIRED' : 'WELL';
-    drawText(ctx, hStr, PX + PW - 32, y, eCol);
-    y += 9;
+    drawText(ctx, hStr, IX + IW - textWidth(hStr), PY + 28, eCol);
 
-    // personality trait bars
-    TRAIT_NAMES.forEach((tn) => {
-        drawText(ctx, TRAIT_LABELS[tn], PX + 5, y, '#9aa0b4');
-        barFill(PX + 58, y, PW - 66, p[tn], TRAIT_COLORS[tn]);
-        y += 7;
-    });
-    y += 3;
+    // --- scrollable body ---
+    const bodyY = PY + 41, bodyH = PH - 41 - 5;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(IX - 3, bodyY, IW + 6, bodyH); ctx.clip();
+    let y = bodyY - sheetScroll;
 
-    // stats, two columns
-    const cols = [PX + 5, PX + 74];
+    for (const line of wrapText(p.creed, 32).slice(0, 2)) { drawText(ctx, `"${line}"`, IX, y, SHEET_LABEL); y += 7; }
+    y += 2;
+    drawText(ctx, 'ENERGY', IX, y, SHEET_LABEL); barFill(IX + 42, y, IW - 42, f.energy, eCol); y += 6;
+    drawText(ctx, 'XP', IX, y, SHEET_LABEL); barFill(IX + 42, y, IW - 42, Math.min(s.xp / (s.level * 12), 1), '#5a8ac8'); y += 10;
+
+    y = sectionBand(IX, y, IW, 'PERSONALITY');
+    TRAIT_NAMES.forEach((tn) => { drawText(ctx, TRAIT_LABELS[tn], IX, y, SHEET_LABEL); barFill(IX + 58, y, IW - 58, p[tn], TRAIT_COLORS[tn]); y += 7; });
+    y += 4;
+
+    y = sectionBand(IX, y, IW, 'ABILITIES');
+    const cols = [IX, IX + 74];
     STAT_NAMES.forEach((st, i) => {
-        const cx = cols[i % 2];
-        const cy = y + Math.floor(i / 2) * 8;
-        drawText(ctx, st.toUpperCase(), cx, cy, '#9aa0b4');
-        drawText(ctx, String(s.stats[st]).padStart(2), cx + 17, cy, '#fff');
-        drawText(ctx, fmtMod(s.stats[st]), cx + 29, cy, mod(s.stats[st]) >= 0 ? '#7dd069' : '#e05840');
+        const cxp = cols[i % 2], cyp = y + Math.floor(i / 2) * 8;
+        drawText(ctx, st.toUpperCase(), cxp, cyp, SHEET_LABEL);
+        drawText(ctx, String(s.stats[st]).padStart(2), cxp + 20, cyp, SHEET_VAL);
+        drawText(ctx, fmtMod(s.stats[st]), cxp + 33, cyp, mod(s.stats[st]) >= 0 ? '#7dd069' : '#e05840');
     });
-    y += 26;
+    y += 28;
 
-    drawText(ctx, `CROP:${s.crop} FARM ${f.plot.w}X${f.plot.h}`, PX + 5, y, '#e8c860'); y += 8;
-    // facilities the farm has diversified into
+    y = sectionBand(IX, y, IW, 'FARM');
+    const kv = (lx, label, val, vcol = SHEET_VAL) => { drawText(ctx, label, lx, y, SHEET_LABEL); drawText(ctx, String(val), lx + 32, y, vcol); };
+    kv(IX, 'CROP', s.crop); y += 7;
     const facs = ['crops', ...f.plot.facilities.map(fc => FAC_SHORT[fc.type] || fc.type)];
-    drawText(ctx, `HAS: ${facs.join(' + ')}`.slice(0, 34), PX + 5, y, '#7dd0c0'); y += 8;
-    const rep = Math.round(f.reputation * 100);
-    drawText(ctx, `YIELD:${s.harvested} WOOD:${f.wood} REP:${rep}`, PX + 5, y, '#e8c860'); y += 8;
-    drawText(ctx, `BONDS:${world.bondCount(f)}${f.wantExpand ? '  (WANTS LAND)' : f.wantFacility ? '  (WANTS TO BUILD)' : ''}`, PX + 5, y, '#e8c860'); y += 8;
+    drawText(ctx, 'HAS', IX, y, SHEET_LABEL); drawText(ctx, facs.join(', ').slice(0, 26), IX + 32, y, SHEET_VAL); y += 7;
+    kv(IX, 'LAND', `${f.plot.cells.size}t`); drawText(ctx, 'YIELD', IX + 76, y, SHEET_LABEL); drawText(ctx, String(s.harvested), IX + 108, y, SHEET_VAL); y += 7;
+    kv(IX, 'WOOD', f.wood); drawText(ctx, 'REP', IX + 76, y, SHEET_LABEL); drawText(ctx, String(Math.round(f.reputation * 100)), IX + 108, y, SHEET_VAL); y += 7;
+    kv(IX, 'BONDS', world.bondCount(f)); y += 8;
+    if (f.wantExpand || f.wantFacility) { drawText(ctx, f.wantExpand ? '> wants more land' : '> wants to build', IX, y, SHEET_GOLD); y += 8; }
+    y += 2;
+
+    y = sectionBand(IX, y, IW, 'ACTIVITY');
     const helping = f.helpTask ? ` ${f.helpTask.requester.sheet.name.split(' ')[0]}` : '';
     const actWord = f.action ? (ACT_WORD[f.action.task?.act] || f.action.task?.act || 'working') : '';
     const doing = f.state === 'work' ? actWord + helping
-        : f.state === 'chop' ? 'chopping wood'
-        : f.state === 'break' ? 'clearing a stump'
-        : f.state === 'forage' ? 'foraging wheat'
-        : f.state === 'poach' ? 'sneaking'
-        : f.state === 'build' ? 'building'
-        : f.state === 'care' ? 'tending sick'
-        : f.state === 'sick' ? 'recovering'
-        : f.state === 'rest' ? 'napping'
+        : f.state === 'chop' ? 'chopping wood' : f.state === 'break' ? 'clearing a stump'
+        : f.state === 'forage' ? 'foraging wheat' : f.state === 'poach' ? 'sneaking'
+        : f.state === 'build' ? 'building' : f.state === 'care' ? 'tending sick'
+        : f.state === 'sick' ? 'recovering' : f.state === 'rest' ? 'napping'
         : f.state === 'decide-help' || (f.state === 'walk' && f.helpTask) ? 'helping' + helping
-        : f.state === 'sleep' ? 'sleeping'
-        : f.state === 'shelter' ? 'sheltering'
+        : f.state === 'sleep' ? 'sleeping' : f.state === 'shelter' ? 'sheltering'
         : f.state === 'walk' ? 'walking' : 'thinking';
-    drawText(ctx, `NOW: ${doing}`, PX + 5, y, '#c8ccd8'); y += 10;
-
-    drawText(ctx, 'THINKS:', PX + 5, y, '#9aa0b4'); y += 7;
-    for (const line of thinkLines) { drawText(ctx, `"${line}"`, PX + 5, y, '#c8ccd8'); y += 7; }
+    drawText(ctx, 'NOW', IX, y, SHEET_LABEL); drawText(ctx, doing, IX + 32, y, SHEET_VAL); y += 9;
+    drawText(ctx, 'THINKING', IX, y, SHEET_LABEL); y += 7;
+    for (const line of wrapText(f.thought, 32).slice(0, 2)) { drawText(ctx, `"${line}"`, IX + 2, y, '#c8ccd8'); y += 7; }
     y += 3;
+    drawText(ctx, 'FROM MEMORY', IX, y, SHEET_LABEL); y += 7;
+    for (const line of wrapText(s.memory.title, 32).slice(0, 3)) { drawText(ctx, line, IX + 2, y, '#8a9ade'); y += 7; }
+    y += 5;
 
-    drawText(ctx, 'GROWN FROM MEMORY:', PX + 5, y, '#9aa0b4'); y += 7;
-    for (const line of memLines) { drawText(ctx, line, PX + 5, y, '#8a9ade'); y += 7; }
+    ctx.restore();
+    sheetContentH = (y + sheetScroll) - bodyY;
+    maxSheetScroll = Math.max(0, sheetContentH - bodyH);
+    if (sheetScroll > maxSheetScroll) sheetScroll = maxSheetScroll;
+
+    // scrollbar thumb
+    if (maxSheetScroll > 0) {
+        const thumbH = Math.max(12, bodyH * bodyH / sheetContentH);
+        const thumbY = bodyY + (sheetScroll / maxSheetScroll) * (bodyH - thumbH);
+        ctx.fillStyle = 'rgba(201,164,90,0.55)';
+        ctx.fillRect(PX + PW - 5, Math.floor(thumbY), 2, Math.floor(thumbH));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1409,9 +1439,9 @@ function gamePoint(e) {
 out.addEventListener('pointerdown', (e) => {
     const p = gamePoint(e);
     mouse.downX = p.x; mouse.downY = p.y;
-    // don't world-pan when the gesture starts on the minimap
-    const onMap = !rosterOpen && inRect(p, MINIMAP);
-    mouse.panStart = (rosterOpen || onMap) ? null : { x: p.x, y: p.y, camX: cam.x, camY: cam.y };
+    // don't world-pan when the gesture starts on the minimap or the open detail card
+    const onUI = !rosterOpen && (inRect(p, MINIMAP) || (selected && inRect(p, SHEET_RECT)));
+    mouse.panStart = (rosterOpen || onUI) ? null : { x: p.x, y: p.y, camX: cam.x, camY: cam.y };
     mouse.dragging = false;
     out.setPointerCapture(e.pointerId);
 });
@@ -1454,7 +1484,7 @@ out.addEventListener('pointerup', (e) => {
             // row click -> select that farmer, keep roster open for browsing
             for (const row of rosterRows) {
                 if (p.y >= row.y0 && p.y <= row.y1 && p.x > rv.x && p.x < rv.x + rv.w) {
-                    selected = row.farmer;
+                    selected = row.farmer; sheetScroll = 0;
                     rosterOpen = false;   // jump to their detail sheet
                     return;
                 }
@@ -1475,6 +1505,10 @@ out.addEventListener('pointerup', (e) => {
     // spawn button
     if (inRect(p, BTN)) { spawnFarmer(); return; }
 
+    // detail card: X closes it; clicking elsewhere inside it keeps the selection
+    if (selected && inRect(p, SHEET_CLOSE)) { selected = null; return; }
+    if (selected && inRect(p, SHEET_RECT)) return;
+
     // farmer?
     let best = null, bestD = 1.6;
     const tile = screenToTile(p.x, p.y);
@@ -1482,14 +1516,14 @@ out.addEventListener('pointerup', (e) => {
         const d = Math.hypot(f.pos.i - tile.i + 0.0, f.pos.j - tile.j);
         if (d < bestD) { bestD = d; best = f; }
     }
+    if (best !== selected) sheetScroll = 0;
     selected = best;
 });
 
-// wheel scrolls the roster
+// wheel scrolls whichever panel is open (roster or the detail card)
 out.addEventListener('wheel', (e) => {
-    if (!rosterOpen) return;
-    e.preventDefault();
-    rosterScroll += e.deltaY * 0.5;
+    if (rosterOpen) { e.preventDefault(); rosterScroll += e.deltaY * 0.5; return; }
+    if (selected) { e.preventDefault(); sheetScroll = Math.max(0, Math.min(maxSheetScroll, sheetScroll + e.deltaY * 0.5)); }
 }, { passive: false });
 
 // ---------------------------------------------------------------------------
