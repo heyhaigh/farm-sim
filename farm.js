@@ -36,6 +36,7 @@ const HOUSE_TIERS = [
     { wood: 70, ore: 28, harvested: 220, name: 'cottage' },  // L3 — the ultimate home
 ];
 const START_WOOD = 4;
+const MAX_FARMERS = 8;   // the original map maxes out at the first ring's 8 homesteads
 
 // Longer days so the world breathes slowly while the (now faster) farmers bustle.
 export const DAY_LENGTH = 300;
@@ -159,6 +160,7 @@ export class World {
         this.project = null;
         this.projectIndex = 0;
         this.coops = [];      // farmer-proposed neighborhood projects (shared wells) — need-driven, sited where the members live
+        this.waterDeals = new Map();   // negotiated drawing rights at private wells: farmer@well -> { ownerSeed, per, count }
         this.structures = [];
         this.bonds = new Map();
         this.workMult = 1;
@@ -166,7 +168,7 @@ export class World {
         this.lightningMult = 1;
         this.leader = null;
 
-        this.well = { i: CENTER, j: CENTER };
+        this.well = { i: CENTER, j: CENTER, ready: true };
         this.sign = null;                                 // (RY sign removed)
         this.board = null;    // no bulletin board until the town builds one together (first communal project)
         this.wells = [this.well];
@@ -287,6 +289,7 @@ export class World {
         const g = goods[Math.floor(this.rand() * goods.length)];
         s.goods = s.goods || {}; s.goods[g] = (s.goods[g] || 0) + (2 + Math.floor(this.rand() * 3));
         farmer.gainXP(8); farmer.sparkle = 3; farmer.say('TREASURE!', '#f0d060');
+        farmer.remember('event', `Found a treasure chest! ${crops} crops plus timber, ore and goods`, null, 1.2);
         this.addLog(`${s.name} found a TREASURE CHEST! A haul of ${crops} crops, timber, ore and goods!`, '#f0d060');
     }
     #tickTreasure(dt) {
@@ -634,7 +637,7 @@ export class World {
         if (this.log.length > 80) this.log.shift();
     }
 
-    nearestWell(pos) {
+    nearestWell(pos) {   // access-blind; kept for world-level checks (prefer nearestUsableWell for farmers)
         let best = this.wells[0], bestD = 1e9;
         for (const w of this.wells) {
             const d = Math.abs(w.i - pos.i) + Math.abs(w.j - pos.j);
@@ -670,15 +673,17 @@ export class World {
 
     // ---- farmers -----------------------------------------------------------------
 
-    // Same authority as addFarmer for whether a spawn is possible (a fitting slot exists, or
-    // ring 2 can still open) — so the +RY button doesn't disable while ring 2 could yet open.
+    // Same authority as addFarmer for whether a spawn is possible (under the population cap
+    // and a fitting slot exists, or ring 2 can still open) — so the +RY button disables in sync.
     canAddFarmer() {
+        if (this.farmers.length >= MAX_FARMERS) return false;
         const B = World.BASE_PLOT;
         if (this.slots.some(s => !s.used && this.#candidateBlockers(null, s.i, s.j, B, B) !== null)) return true;
         return this.ringCount === 1;
     }
 
     addFarmer(memory, mutation = 0) {
+        if (this.farmers.length >= MAX_FARMERS) return null;
         const B = World.BASE_PLOT;
         // only accept a slot whose plot rect (+buffer) clears every existing farm / the
         // commons / the map edge — ring geometry alone doesn't guarantee this once the
@@ -1147,7 +1152,7 @@ export class World {
             if (type === 'toolshed') this.workMult *= 1.12;
             else if (type === 'windmill') this.growthMult *= 1.15;
             else if (type === 'tower') this.lightningMult = 0.5;
-            else if (type === 'well2') this.wells.push({ i: site.i, j: site.j });
+            else if (type === 'well2') this.wells.push({ i: site.i, j: site.j, ready: true });
         }
         this.addLog(`The ${label} is finished! ${perk}`, '#f0d060');
         for (const f of pr.builders) {
@@ -1162,11 +1167,88 @@ export class World {
     // long water haul — proposing a well near THEIR cluster, and recruiting the
     // neighbors who share it. Members gather the materials and dig together.
 
-    // how far this farmer's home is from the nearest well (the daily pain)
+    // how far this farmer's home is from the nearest well THEY MAY DRAW FROM (the daily
+    // pain) — a private well next door they have no rights to doesn't ease anything
     waterHaul(farmer) {
         const h = farmer.plot.house;
-        const wl = this.nearestWell(h);
-        return Math.abs(wl.i - h.i) + Math.abs(wl.j - h.j);
+        return this.nearestUsableWell(farmer, h).dist;
+    }
+
+    // ---- well rights: private wells, negotiated access, tolls ---------------------
+
+    wellKey(farmer, well) { return `${farmer.sheet.seed}@${well.i},${well.j}`; }
+    canDraw(farmer, well) {
+        if (!well.ready) return false;                          // an unfinished dig gives no water
+        if (!well.owners) return true;                          // town wells are free
+        if (well.owners.has(farmer.sheet.seed)) return true;    // part-owner
+        return this.waterDeals.has(this.wellKey(farmer, well)); // or bought the rights
+    }
+    nearestUsableWell(farmer, from = null) {
+        const pos = from || farmer.pos;
+        let well = null, dist = 1e9;
+        for (const wl of this.wells) {
+            if (!this.canDraw(farmer, wl)) continue;
+            const d = Math.abs(wl.i - pos.i) + Math.abs(wl.j - pos.j);
+            if (d < dist) { dist = d; well = wl; }
+        }
+        return { well, dist };   // the free town well always qualifies, so well is never null
+    }
+    nearestClosedWell(farmer, from = null) {
+        const pos = from || farmer.pos;
+        let well = null, dist = 1e9;
+        for (const wl of this.wells) {
+            if (this.canDraw(farmer, wl)) continue;
+            const d = Math.abs(wl.i - pos.i) + Math.abs(wl.j - pos.j);
+            if (d < dist) { dist = d; well = wl; }
+        }
+        return well ? { well, dist } : null;
+    }
+
+    // A farmer eyeing a closer PRIVATE well asks its owners for drawing rights. The
+    // answer comes from the owner's memories/opinion of the asker and their own course:
+    // friends drink free, most owners set a crop-per-draws toll, sharp traders charge
+    // more, and a lone wolf shares with no one.
+    negotiateWellAccess(farmer, well) {
+        const owner = this.farmers.find(f => well.owners.has(f.sheet.seed));
+        if (!owner) return false;
+        const op = owner.opinionOf(farmer);
+        const key = this.wellKey(farmer, well);
+        if (owner.goal === 'lone wolf' || op <= -0.2) {
+            this.addLog(`${owner.sheet.name} turned ${farmer.sheet.name} away from their well`, '#c05840');
+            farmer.adjustOpinion(owner, -0.15, 'turned me away from their well');
+            farmer.say('fine. the long way, then', '#e0a03c');
+            return false;
+        }
+        if (op >= 0.4) {
+            this.waterDeals.set(key, { ownerSeed: owner.sheet.seed, per: 0, count: 0 });
+            this.addLog(`${owner.sheet.name} lets ${farmer.sheet.name} draw freely from their well`, '#7dd069');
+            farmer.adjustOpinion(owner, 0.2, 'shares their well with me freely');
+            farmer.remember('event', `${owner.sheet.name.split(' ')[0]} lets me draw from their well for nothing`, owner, 0.9);
+            return true;
+        }
+        const per = (owner.goal === 'sharp trader' || owner.sheet.personality.collaboration < 0.4) ? 5 : 8;
+        this.waterDeals.set(key, { ownerSeed: owner.sheet.seed, per, count: 0 });
+        this.addLog(`${owner.sheet.name} charges ${farmer.sheet.name} 1 crop per ${per} draws at their well`, '#e8c860');
+        farmer.remember('job', `Pay ${owner.sheet.name.split(' ')[0]} 1 crop per ${per} draws for well rights`, owner, 0.9);
+        owner.remember('job', `${farmer.sheet.name.split(' ')[0]} pays me 1 crop per ${per} draws at my well`, farmer, 0.9);
+        return true;
+    }
+
+    // called on every draw from a well the farmer doesn't own — collects the agreed toll
+    payWellToll(farmer, well) {
+        if (!well.owners || well.owners.has(farmer.sheet.seed)) return;
+        const deal = this.waterDeals.get(this.wellKey(farmer, well));
+        if (!deal || deal.per <= 0) return;
+        if (++deal.count < deal.per) return;
+        deal.count = 0;
+        const owner = this.farmers.find(f => f.sheet.seed === deal.ownerSeed);
+        if (!owner) return;
+        if (this.transferGood(farmer, owner, 'crops', 1) > 0) {
+            farmer.say('-1 crop toll', '#e8c860');
+        } else {
+            owner.adjustOpinion(farmer, -0.1, "couldn't pay the well toll");
+            farmer.remember('job', `Couldn't pay ${owner.sheet.name.split(' ')[0]}'s well toll - owe them`, owner, 0.7);
+        }
     }
 
     farmerCoop(farmer) { return this.coops.find(c => c.members.has(farmer)); }
@@ -1272,11 +1354,14 @@ export class World {
         const { site } = coop;
         this.structures.push({ type: 'well2', i: site.i, j: site.j });
         this.set(site.i, site.j, T.STRUCT);
-        this.wells.push({ i: site.i, j: site.j });
-        this.addLog(`The neighbors' shared well is finished - shorter hauls for ${coop.members.size} farms!`, '#f0d060');
         const crew = new Set([...coop.members, ...coop.builders]);
+        // the crew OWNS this well — outsiders must negotiate drawing rights (see negotiateWellAccess).
+        // ready is set ONLY here, at completion: an in-progress dig is never a water source.
+        this.wells.push({ i: site.i, j: site.j, ready: true, owners: new Set([...crew].map(f => f.sheet.seed)) });
+        this.addLog(`The neighbors' shared well is finished - shorter hauls for ${coop.members.size} farms!`, '#f0d060');
         for (const f of crew) {
             f.gainXP(8); f.say('OUR WELL!', '#f0d060'); f.sparkle = 3;
+            f.remember('event', 'We dug our own well - no more long hauls to the plaza', null, 1.1);
             for (const g of crew) if (g !== f && this.rand() < 0.75) { this.addBond(f, g); f.adjustOpinion(g, 0.2, 'dug our well together'); }
         }
     }
@@ -1322,8 +1407,25 @@ export class World {
         const pick = pools.find(pl => pl.have > 0);
         if (!pick) return null;
         const fair = difficulty * 0.7;
-        const offer = Math.max(1, Math.min(pick.have, Math.round(fair * (0.5 + p.collaboration * 0.4 + p.honesty * 0.3))));
-        const max = Math.max(offer, Math.min(pick.have, Math.round(fair * (0.9 + p.honesty * 0.5))));
+        // learned strategy: a poster whose jobs keep getting haggled or passed over learns
+        // to open closer to fair; one whose offers are always snapped up learns they can
+        // shade a little lower. Needs a few data points before any adjustment.
+        const st = farmer.jobStats;
+        const outcomes = st.accepted + st.haggled + st.declined;
+        let learned = 0;
+        if (outcomes >= 3) {
+            const friction = (st.haggled + st.declined * 1.5) / outcomes;
+            if (friction > 0.5) {
+                learned = 0.25;
+                if (!st.wisedUp) { st.wisedUp = true; farmer.remember('lesson', 'My lowball offers keep getting haggled or ignored - opening fair gets help faster', null, 1.1); }
+            } else if (friction < 0.15 && st.accepted >= 3) {
+                learned = -0.08;
+                if (!st.shrewd) { st.shrewd = true; farmer.remember('lesson', 'Every offer I post gets snapped up - I can afford to offer a touch less', null, 1.0); }
+            }
+        }
+        if (farmer.goal === 'sharp trader') learned -= 0.06;   // squeezes every deal on principle
+        const offer = Math.max(1, Math.min(pick.have, Math.round(fair * (0.5 + learned + p.collaboration * 0.4 + p.honesty * 0.3))));
+        const max = Math.max(offer, Math.min(pick.have, Math.round(fair * (0.9 + Math.max(0, learned) + p.honesty * 0.5))));
         return { good: pick.good, offer, max };
     }
     transferGood(from, to, good, amount) {
@@ -1354,14 +1456,18 @@ export class World {
     // regardless), else haggle up to the poster's ceiling, else decline. Returns {req, agreed}.
     takeHelp(helper) {
         const hp = helper.sheet.personality;
-        for (let i = 0; i < this.helpBoard.length; i++) {
-            const req = this.helpBoard[i];
+        // consider warm names first: a helper's memories of past dealings decide whose
+        // posting gets looked at — so some bonds deepen while others never form
+        const order = [...this.helpBoard].sort((a, b) => helper.opinionOf(b.farmer) - helper.opinionOf(a.farmer));
+        for (const req of order) {
             if (req.farmer === helper) continue;
+            // a lone wolf works no one's land but a proven friend's
+            if (helper.goal === 'lone wolf' && helper.opinionOf(req.farmer) < 0.4) continue;
             const op = helper.opinionOf(req.farmer);          // how the helper feels about the poster
             if (op <= -0.35 && hp.collaboration < 0.85) continue;   // won't lift a finger for someone they resent
             if (req.farmer.reputation < 0.3 && op < 0.2 && this.rand() > hp.collaboration) continue;   // shun bad names (unless a personal friend)
             const friend = op >= 0.4;
-            const altruist = friend || hp.collaboration > 0.7 || (helper.sheet.stats.cha >= 15 && hp.honesty > 0.5);
+            const altruist = friend || hp.collaboration > 0.7 || helper.goal === 'good neighbor' || (helper.sheet.stats.cha >= 15 && hp.honesty > 0.5);
             const good = req.reward ? req.reward.good : 'crops';
             const gv = helper.goodValue(good);                 // a good the helper NEEDS is worth more per unit
             const offered = req.reward ? req.reward.offer : 0;
@@ -1371,17 +1477,31 @@ export class World {
             // generous enough offer can still tempt them.
             let askWorth = req.difficulty * (0.5 + hp.competitiveness * 0.5 - hp.collaboration * 0.3 - op * 0.4);
             if (gv < 0.8 && !altruist) askWorth *= 1.7;
+            if (helper.goal === 'sharp trader') askWorth *= 1.2;   // their labor is never cheap
             if (altruist || offered * gv >= askWorth || !req.reward) {
-                this.helpBoard.splice(i, 1);
+                this.helpBoard.splice(this.helpBoard.indexOf(req), 1);
+                // the poster learns their opening offer was good enough
+                req.farmer.jobStats.accepted++;
+                if (req.reward) {
+                    req.farmer.remember('job', `${helper.sheet.name.split(' ')[0]} took my job at ${offered} ${this.goodLabel(good)}`, helper, 0.55);
+                    helper.remember('job', `Worked ${req.farmer.sheet.name.split(' ')[0]}'s farm for ${offered} ${this.goodLabel(good)}`, req.farmer, 0.5);
+                }
                 return { req, agreed: req.reward ? { good, amount: offered } : null };
             }
             const askUnits = Math.max(1, Math.ceil(askWorth / gv));   // enough units of THIS good to be worth it
             if (askUnits <= req.reward.max) {   // counteroffer within the poster's ceiling
                 this.addLog(`${helper.sheet.name} haggled ${req.farmer.sheet.name} up to ${askUnits} ${this.goodLabel(good)}`, '#c9a45a');
-                this.helpBoard.splice(i, 1);
+                this.helpBoard.splice(this.helpBoard.indexOf(req), 1);
+                // the poster learns lowballing got them haggled; the haggler learns it worked
+                req.farmer.jobStats.haggled++;
+                req.farmer.remember('job', `${helper.sheet.name.split(' ')[0]} haggled me up to ${askUnits} ${this.goodLabel(good)}`, helper, 0.65);
+                helper.remember('job', `Haggled ${req.farmer.sheet.name.split(' ')[0]} up to ${askUnits} ${this.goodLabel(good)} - it worked`, req.farmer, 0.6);
                 return { req, agreed: { good, amount: askUnits } };
             }
-            // reward not worth it for a good they don't need — decline and consider the next
+            // reward not worth it for a good they don't need — decline and consider the next.
+            // Count the pass ONCE per helper per posting so the poster can learn from it.
+            req.passed = req.passed || new Set();
+            if (!req.passed.has(helper)) { req.passed.add(helper); req.farmer.jobStats.declined++; }
         }
         return null;
     }
@@ -1537,7 +1657,7 @@ export class World {
                 const save = d20(this.rand, mod(f.sheet.stats.con));
                 const exposed = exposure > 0;
                 if (save.total < dc && !save.crit) {
-                    f.fallIll(2 + Math.floor(this.rand() * 3) + (f.strain >= 8 ? 2 : 0) + (exposed ? 1 : 0));
+                    f.fallIll(2 + Math.floor(this.rand() * 3) + (f.strain >= 8 ? 2 : 0) + (exposed ? 1 : 0), exposed ? 'sleeping out in the cold' : 'overworking');
                     this.addLog(exposed ? `${f.sheet.name} took ill from sleeping out in the cold! (CON ${save.total} vs DC ${dc})` : `${f.sheet.name} fell ill from overwork! (CON ${save.total} vs DC ${dc})`, '#c05840');
                     f.say(exposed ? 'I need a roof...' : 'I... dont feel well', '#c05840');
                 } else if (exposed) this.addLog(`${f.sheet.name} shivered through another roofless night (CON ${save.total} vs ${dc})`, '#e0a03c');
@@ -1546,6 +1666,9 @@ export class World {
             f.strain = Math.max(0, f.strain - 4);   // a night's rest works off most of the strain
             // opinions fade toward neutral over time — old grudges soften, gratitude cools
             for (const [k, v] of f.opinions) { const nv = v * 0.9; if (Math.abs(nv) < 0.03) { f.opinions.delete(k); f.opinionReasons && f.opinionReasons.delete(k); } else f.opinions.set(k, nv); }
+            // journal decay: each memory fades at its kind's rate; the faint are forgotten
+            f.journal = f.journal.filter(m => (m.strength *= (JOURNAL_DECAY[m.kind] || 0.96)) > JOURNAL_FORGET);
+            f.reflect();   // a new day: reread the journal, maybe set a new course
         }
     }
 
@@ -1584,6 +1707,21 @@ const MIN_WELL_DIST = 20;
 const COOP_WELL = { needWood: 10, needOre: 4, needed: 40 };
 const COOP_RALLY_DAYS = 2;
 const COOP_STALL_DAYS = 8;
+
+// episodic-journal tuning: cap per bot, and nightly decay per memory kind — hard
+// lessons stick for a season+, relationship/job episodes for weeks, small talk for days
+const JOURNAL_MAX = 160;
+const JOURNAL_DECAY = { lesson: 0.995, person: 0.97, job: 0.96, event: 0.975, chat: 0.90 };
+const JOURNAL_FORGET = 0.12;   // below this strength a memory is gone for good
+
+// courses a bot can set for itself after reflecting on its journal (see Farmer.reflect)
+const GOAL_CREEDS = {
+    'lone wolf': "I'LL RELY ON NO ONE.",
+    'good neighbor': 'THIS TOWN LOOKS AFTER ITS OWN.',
+    'harvest king': 'NO ONE OUTGROWS ME.',
+    'sharp trader': 'EVERYTHING HAS A PRICE.',
+    'master farmer': 'THE CRAFT IS THE REWARD.',
+};
 
 const PROJECT_DEFS = [
     { type: 'board', label: 'BULLETIN BOARD', at: 8, needed: 22, perk: 'FARMERS CAN POST JOBS' },
@@ -1636,7 +1774,18 @@ export class Farmer {
         this.thoughtBubbleTimer = 4 + this.rand() * 8;
         this.helpTask = null;
         this.helpCooldown = 0;
-        this.coopCooldown = 0;   // gates how often the shared-well idea can strike
+        this.coopCooldown = 0;    // gates how often the shared-well idea can strike
+        this.wellAskCooldown = 0; // gates asking a neighbor for well rights
+        this.fetchWellRef = null; // the well this water run is drawing from (for tolls)
+
+        // episodic memory: a day-stamped journal of what happened to THIS bot — who helped,
+        // who burned them, illnesses, deals, chats. Entries decay in strength over the days
+        // (lessons fade slowest, small talk fastest) and are forgotten once too faint.
+        this.journal = [];
+        // outcomes of the jobs this bot has POSTED — the raw material for learning what
+        // offers work (see chooseReward: friction teaches a lowballer to open fairer)
+        this.jobStats = { accepted: 0, haggled: 0, declined: 0 };
+        this.goal = null;   // a self-set course chosen in reflect(), from lived experience
         this.nextExpand = 8 + (sheet.seed % 5);      // jitter so farms don't grow in lockstep
         this.nextFacility = 12 + (sheet.seed % 6);
         this.targetProd = null;
@@ -1673,7 +1822,33 @@ export class Farmer {
         const k = other.sheet.seed;
         const v = Math.max(-1, Math.min(1, (this.opinions.get(k) || 0) + d));
         this.opinions.set(k, v);
-        if (reason) this.opinionReasons = this.opinionReasons || new Map(), this.opinionReasons.set(k, reason);
+        if (reason) {
+            this.opinionReasons = this.opinionReasons || new Map(), this.opinionReasons.set(k, reason);
+            // every opinion shift is an episode worth journaling; stronger shifts stick longer
+            this.remember('person', `${other.sheet.name.split(' ')[0]} - ${reason}`, other, 0.6 + Math.min(0.6, Math.abs(d) * 1.5));
+        }
+    }
+
+    // Record an episode in this bot's journal. kind: 'person' | 'chat' | 'job' | 'lesson' | 'event'.
+    // weight sets the starting strength (how long it survives decay before being forgotten).
+    remember(kind, text, other = null, weight = 0.8) {
+        this.journal.push({
+            day: this.world.day, kind, text,
+            who: other ? other.sheet.seed : null,
+            strength: Math.min(1.5, weight),
+        });
+        if (this.journal.length > JOURNAL_MAX) {
+            // forget the FAINTEST old memory, not simply the oldest — vivid ones survive
+            let wi = 0;
+            const keepRecent = this.journal.length - 30;   // the last 30 are always safe
+            for (let k = 1; k < keepRecent; k++) if (this.journal[k].strength < this.journal[wi].strength) wi = k;
+            this.journal.splice(wi, 1);
+        }
+    }
+    // memories of a specific neighbor, newest first (for the sheet + future reasoning)
+    memoriesAbout(other) {
+        const seed = other.sheet.seed;
+        return this.journal.filter(m => m.who === seed).reverse();
     }
     // How much THIS bot wants more of a good right now (~0.6 surplus .. ~1.8 badly needed).
     // Drives what they offer (give away what they can spare) and what they'll accept (a good
@@ -1844,7 +2019,7 @@ export class Farmer {
 
     // Falling ill is a lesson: the bot grows more cautious so it stops repeating the overwork
     // that put it here. Caution counterweights a competitive/driven personality without erasing it.
-    fallIll(days) {
+    fallIll(days, cause = 'overworking') {
         this.health = 'sick';
         this.sickDays = days;
         this.energy = Math.min(this.energy, 0.3);
@@ -1852,6 +2027,9 @@ export class Farmer {
         this.illnesses++;
         this.caution = Math.min(4, this.caution + 1);
         this.think(this.illnesses > 1 ? 'SICK AGAIN — I HAVE TO PACE MYSELF.' : 'I OVERDID IT. TIME TO WORK SMARTER.');
+        this.remember('lesson', this.illnesses > 1
+            ? `Sick AGAIN from ${cause} (${this.illnesses}x now) - I keep making this mistake`
+            : `Fell ill from ${cause} - ${days} days lost. Must pace myself`, null, 1.2);
     }
 
     #shouldSleepNow() {
@@ -1864,8 +2042,33 @@ export class Farmer {
         return np > Math.min(Math.max(threshold, 0.15), 0.85);
     }
 
+    // Reflection: once a day the bot rereads its own journal and can set (or change) its
+    // own course. Goals aren't scripted per archetype — they emerge from what actually
+    // happened to THIS bot, and they bend the standard rules elsewhere (takeHelp,
+    // chooseReward, sick visits, the grind, the co-op).
+    reflect() {
+        const j = this.journal, p = this.p;
+        const burned = j.filter(m => m.kind === 'person' && /welch|trick|thiev|stole|short/i.test(m.text)).length;
+        const warm = j.filter(m => (m.kind === 'person' || m.kind === 'event') && /hand|soup|paid|dug|nursed/i.test(m.text)).length;
+        const deals = this.jobStats.accepted + this.jobStats.haggled;
+        let goal = this.goal;
+        if (burned >= 2 && p.collaboration < 0.75) goal = 'lone wolf';           // burned too often — go it alone
+        else if (warm >= 4 && p.collaboration > 0.45) goal = 'good neighbor';    // kindness has kept paying off
+        else if (this.world.leader === this && p.competitiveness > 0.55) goal = 'harvest king';
+        else if (deals >= 6 && p.honesty < 0.5) goal = 'sharp trader';           // the deals ARE the game
+        else if (!goal && p.diligence > 0.7) goal = 'master farmer';
+        if (goal !== this.goal) {
+            this.goal = goal;
+            const creed = GOAL_CREEDS[goal];
+            this.think(creed);
+            this.remember('lesson', `Set my own course: ${goal} - ${creed.toLowerCase()}`, null, 1.3);
+            this.world.addLog(`${this.sheet.name} has set their own course: ${goal.toUpperCase()}`, '#d08cc8');
+        }
+    }
+
     #maybeAskForHelp() {
         if (this.helpCooldown > 0) return;
+        if (this.goal === 'lone wolf') return;   // asks nobody for anything
         const pending = this.#countPending(this.plot);
         const weak = mod(this.sheet.stats.str) <= 0 || mod(this.sheet.stats.dex) <= 0;
         let genuine = true, ask = false;
@@ -1959,6 +2162,10 @@ export class Farmer {
         const rop = other.opinionOf(this);
         other.say(rop >= 0.4 ? 'ALWAYS, FRIEND!' : rop <= -0.35 ? '...' : this.#pickLine(['LIKEWISE!', "CAN'T COMPLAIN.", 'AYE.', 'WELL ENOUGH!']), rop <= -0.35 ? '#c05840' : '#c8ccd8');
         other.facing = (this.pos.i - this.pos.j) >= (other.pos.i - other.pos.j) ? 1 : -1;
+        // both sides journal the exchange (small talk fades fast; frosty ones sting longer)
+        const frosty = op <= -0.35 || rop <= -0.35;
+        this.remember('chat', `Told ${other.sheet.name.split(' ')[0]}: "${line}"`, other, frosty ? 0.7 : 0.45);
+        other.remember('chat', `${this.sheet.name.split(' ')[0]} said: "${line}"`, this, frosty ? 0.7 : 0.4);
         return true;
     }
     // Save toward the next dwelling tier; upgrade when affordable. Low priority (runs after
@@ -2058,7 +2265,7 @@ export class Farmer {
             if (this.strain >= 8) {
                 const save = d20(this.rand, mod(s.stats.con));
                 if (save.total < 12 && !save.crit) {
-                    this.fallIll(3 + Math.floor(this.rand() * 3));
+                    this.fallIll(3 + Math.floor(this.rand() * 3), 'collapsing mid-shift');
                     w.addLog(`${s.name} collapsed from exhaustion and took ill! (CON ${save.total} vs 12)`, '#c05840');
                     this.say('I overdid it...', '#c05840'); this.#goHome('sick'); return;
                 }
@@ -2095,7 +2302,7 @@ export class Farmer {
         if (this.p.collaboration > 0.55 && !w.isNight()) {
             const sick = w.farmers.find(o => o !== this && o.health === 'sick' && !this.visitedSick.has(o.sheet.seed) &&
                 Math.abs(o.pos.i - this.pos.i) + Math.abs(o.pos.j - this.pos.j) < 16);
-            if (sick && this.rand() < 0.5) {
+            if (sick && this.rand() < (this.goal === 'good neighbor' ? 0.8 : 0.5)) {
                 this.visitedSick.add(sick.sheet.seed); this.careTarget = sick;
                 this.think(`${sick.sheet.name.split(' ')[0].toUpperCase()} IS SICK. I'LL LOOK IN.`);
                 this.#goTo(sick.plot.house.i + 0.5, sick.plot.house.j + 2.5, 'care'); return;
@@ -2104,7 +2311,8 @@ export class Farmer {
 
         this.#maybeAskForHelp();
 
-        const thirstThreshold = w.weather === 'drought' && mod(s.stats.wis) > 0 ? 0.55 : 0.32;
+        let thirstThreshold = w.weather === 'drought' && mod(s.stats.wis) > 0 ? 0.55 : 0.32;
+        if (this.goal === 'master farmer') thirstThreshold += 0.08;   // waters before the crop even asks
 
         // 1. urgent farm chores (collect/harvest/water/tend — not filler tilling)
         const urgent = this.#nextTaskOnPlot(this.plot, thirstThreshold, true);
@@ -2159,7 +2367,7 @@ export class Farmer {
 
         // 5. competitive & behind: grind — but a bot that's been burned by overwork needs more in
         //    the tank before it pushes (learned restraint scales with how often it's fallen ill).
-        if (this.isBehindLeader() && this.p.competitiveness > 0.55 && this.energy > 0.4 + this.caution * 0.1) {
+        if ((this.isBehindLeader() && this.p.competitiveness > 0.55 || this.goal === 'harvest king') && this.energy > 0.4 + this.caution * 0.1) {
             const anyField = this.#findField(f => w.get(f.i, f.j) === T.GRASS) || this.#findField(f => w.get(f.i, f.j) === T.TILLED && !w.cropAt(f.i, f.j));
             if (anyField) { this.think(this.caution >= 2 ? "I'LL CATCH UP — BUT NOT AT ANY COST" : 'I WILL NOT FALL BEHIND'); this.#pursue({ act: w.get(anyField.i, anyField.j) === T.GRASS ? 'till' : 'plant', field: anyField }, this.plot, false); return; }
         }
@@ -2295,6 +2503,7 @@ export class Farmer {
     // dig together. Returns true when it started an action (walk/chop/mine/build).
     #pursueCoop() {
         const w = this.world;
+        if (this.goal === 'lone wolf') return false;   // digs alone or not at all
         let coop = w.farmerCoop(this);
         if (!coop) {
             if (w.coops.length) {
@@ -2369,7 +2578,17 @@ export class Farmer {
     // route a task into a walk + work, handling water fetch and producer targeting
     #pursue(task, plot, helping) {
         if (task.act === 'water' && this.carryWater <= 0) {
-            const well = this.world.nearestWell(this.pos);
+            const w = this.world;
+            let { well, dist } = w.nearestUsableWell(this);
+            // a private well meaningfully closer than my best option? ask for drawing rights
+            if (this.wellAskCooldown <= 0) {
+                const closed = w.nearestClosedWell(this);
+                if (closed && closed.dist + 8 < dist) {
+                    this.wellAskCooldown = 90;   // rebuffed or not, don't pester every trip
+                    if (w.negotiateWellAccess(this, closed.well)) { well = closed.well; dist = closed.dist; }
+                }
+            }
+            this.fetchWellRef = well;
             this.pendingAfterWater = { helping };
             this.#goTo(well.i - 0.5, well.j + 1.5, helping ? 'fetchwater-help' : 'fetchwater');
             return;
@@ -2584,6 +2803,7 @@ export class Farmer {
         this.helpCooldown = Math.max(0, this.helpCooldown - dt);
         this.poachCooldown = Math.max(0, this.poachCooldown - dt);
         this.coopCooldown = Math.max(0, this.coopCooldown - dt);
+        this.wellAskCooldown = Math.max(0, this.wellAskCooldown - dt);
         this.thoughtBubbleTimer -= dt;
         if (this.chatCooldown > 0) this.chatCooldown -= dt;
         // opportunistic small talk as bots pass each other (doesn't interrupt what they're doing)
@@ -2617,7 +2837,12 @@ export class Farmer {
                     else if (then === 'forage') { this.forageTimer = this.#laborTime('forage'); this.state = 'forage'; }
                     else if (then === 'fencepost') { this.fenceTimer = this.#laborTime('fencepost'); this.state = 'fencepost'; }
                     else if (then === 'fetchwater' || then === 'fetchwater-help') {
+                        // hard guard: only a finished, listed well yields water — never a build site
+                        if (this.fetchWellRef && !this.world.wells.includes(this.fetchWellRef)) {
+                            this.fetchWellRef = null; this.state = 'decide'; break;
+                        }
                         this.carryWater = this.maxWater; this.say('splash');
+                        if (this.fetchWellRef) { this.world.payWellToll(this, this.fetchWellRef); this.fetchWellRef = null; }
                         // resume the original watering task
                         this.state = then === 'fetchwater-help' ? 'decide-help' : 'decide';
                     }

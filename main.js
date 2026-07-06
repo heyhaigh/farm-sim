@@ -78,6 +78,11 @@ const ROSTER_BTN = { x: 0, y: 3, w: 44, h: 12 };   // positioned in drawUI
 const MINIMAP = { x: 0, y: 0, w: 46, h: 46 };      // bottom-right legend, positioned in drawMinimap
 const SHEET_RECT = { x: 0, y: 0, w: 0, h: 0 };     // detail-card bounds, set in drawSheet (for hit-testing)
 const SHEET_CLOSE = { x: 0, y: 0, w: 0, h: 0 };    // card close (X) button, set in drawSheet
+const MEM_PREV = { x: 0, y: 0, w: 0, h: 0 };       // memories pager arrows, set in drawSheet
+const MEM_NEXT = { x: 0, y: 0, w: 0, h: 0 };
+let sheetMemPage = 0;                              // current MEMORIES page (0 = newest)
+let sheetLastSel = null;                           // reset pager when the selection changes
+const MEM_KIND_COLORS = { lesson: '#c9a45a', chat: '#8a9ade', job: '#e8c860', person: '#d08cc8', event: '#7dd069' };
 let boardOpen = false;                             // town bulletin board panel
 let boardScroll = 0, boardMaxScroll = 0;
 const boardScreen = { x: 0, y: 0, w: 0, h: 0 };    // board sprite screen rect (click to open)
@@ -1660,7 +1665,9 @@ function drawSheet(f) {
     ctx.beginPath(); ctx.rect(IX - 3, bodyY, IW + 6, bodyH); ctx.clip();
     let y = bodyY - sheetScroll;
 
+    if (sheetLastSel !== f) { sheetLastSel = f; sheetMemPage = 0; }
     for (const line of wrapText(p.creed, 32).slice(0, 2)) { drawText(ctx, `"${line}"`, IX, y, SHEET_LABEL); y += 7; }
+    if (f.goal) { drawText(ctx, `> course: ${f.goal.toUpperCase()}`, IX, y, '#d08cc8'); y += 7; }
     y += 2;
     drawText(ctx, 'ENERGY', IX, y, SHEET_LABEL); barFill(IX + 42, y, IW - 42, f.energy, eCol); y += 6;
     drawText(ctx, 'XP', IX, y, SHEET_LABEL); barFill(IX + 42, y, IW - 42, Math.min(s.xp / (s.level * 12), 1), '#5a8ac8'); y += 10;
@@ -1735,6 +1742,39 @@ function drawSheet(f) {
         }
         y += 3;
     }
+    // --- Memories: the bot's episodic journal, newest first, paginated. Entry text
+    //     fades with the memory's decayed strength — old faint memories literally dim.
+    MEM_PREV.w = 0; MEM_NEXT.w = 0;
+    if (f.journal.length) {
+        const perPage = 6;
+        const pages = Math.ceil(f.journal.length / perPage);
+        if (sheetMemPage >= pages) sheetMemPage = pages - 1;
+        y = sectionBand(IX, y, IW, `MEMORIES (${f.journal.length})`);
+        const entries = [...f.journal].reverse().slice(sheetMemPage * perPage, (sheetMemPage + 1) * perPage);
+        for (const m of entries) {
+            const col = m.strength > 0.8 ? '#c8ccd8' : m.strength > 0.45 ? '#8a8fa0' : '#5a5f6e';
+            drawText(ctx, `d${m.day}`, IX, y, MEM_KIND_COLORS[m.kind] || SHEET_LABEL);
+            for (const line of wrapText(m.text, 27).slice(0, 2)) { drawText(ctx, line, IX + 17, y, col); y += 7; }
+            y += 1;
+        }
+        if (pages > 1) {
+            const rowY = y;
+            const lbl = `PAGE ${sheetMemPage + 1}/${pages}`;
+            drawText(ctx, lbl, IX + Math.floor((IW - textWidth(lbl)) / 2), rowY, SHEET_LABEL);
+            const visible = rowY >= bodyY - 2 && rowY <= bodyY + bodyH - 6;
+            if (sheetMemPage > 0) {
+                drawText(ctx, '<<', IX + 2, rowY, SHEET_GOLD);
+                if (visible) { MEM_PREV.x = IX - 2; MEM_PREV.y = rowY - 3; MEM_PREV.w = 16; MEM_PREV.h = 11; }
+            }
+            if (sheetMemPage < pages - 1) {
+                drawText(ctx, '>>', IX + IW - 10, rowY, SHEET_GOLD);
+                if (visible) { MEM_NEXT.x = IX + IW - 14; MEM_NEXT.y = rowY - 3; MEM_NEXT.w = 16; MEM_NEXT.h = 11; }
+            }
+            y += 8;
+        }
+        y += 3;
+    }
+
     drawText(ctx, 'FROM MEMORY', IX, y, SHEET_LABEL); y += 7;
     for (const line of wrapText(s.memory.title, 32).slice(0, 3)) { drawText(ctx, line, IX + 2, y, '#8a9ade'); y += 7; }
     y += 5;
@@ -1923,6 +1963,8 @@ out.addEventListener('pointerup', (e) => {
     // detail card: X closes it; clicks anywhere inside it are consumed. Checked BEFORE the
     // minimap because the full-height card is drawn OVER it (Codex: don't click through).
     if (selected && inRect(p, SHEET_CLOSE)) { selected = null; return; }
+    if (selected && MEM_PREV.w && inRect(p, MEM_PREV)) { sheetMemPage = Math.max(0, sheetMemPage - 1); return; }
+    if (selected && MEM_NEXT.w && inRect(p, MEM_NEXT)) { sheetMemPage++; return; }
     if (selected && inRect(p, SHEET_RECT)) return;
 
     // minimap: jump the camera (only interactive when visible — hidden under the card)
@@ -2104,7 +2146,7 @@ function drawBootScreen(t) {
     const origSet = world.set.bind(world);
     world.set = (i, j, t) => { origSet(i, j, t); world._tilesChanged = true; };
 
-    for (let i = 0; i < 5; i++) spawnFarmer();
+    for (let i = 0; i < 8; i++) spawnFarmer();   // start with the full founding eight
     selected = null;
 
     // center camera on the well
