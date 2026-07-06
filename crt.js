@@ -11,8 +11,10 @@ void main() {
 }
 `;
 
-// Game Boy COLOR look: full color, crisp pixels, a faint LCD grid + soft
-// vignette. No monochrome quantization — the vibrant palette shows through.
+// CRT look: vibrant full color (no palette quantization), FLAT (no barrel/TV frame — the
+// user wants immersive fullscreen), with the classic tube character back on top: horizontal
+// scanlines, an RGB aperture-grille mask, edge chromatic aberration and a soft vignette (no flicker).
+// Everything drawn to the source canvas — world AND the top/bottom UI bars — gets the effect.
 const FRAG = `
 precision mediump float;
 uniform sampler2D uTex;
@@ -25,25 +27,35 @@ void main() {
     vec2 uv = vUv;
     vec2 c = uv - 0.5;
 
-    vec3 col = texture2D(uTex, uv).rgb;
+    // chromatic aberration: split the channels, the offset grows toward the edges so the
+    // text/GUI at the top and bottom fringes visibly like an old tube.
+    float ca = 0.0012 + 0.0045 * dot(c, c);
+    vec3 col;
+    col.r = texture2D(uTex, uv + vec2(ca, 0.0)).r;
+    col.g = texture2D(uTex, uv).g;
+    col.b = texture2D(uTex, uv - vec2(ca, 0.0)).b;
 
-    // gentle contrast + saturation lift for that punchy GBC screen
+    // gentle contrast + saturation lift for that punchy screen
     col = (col - 0.5) * 1.08 + 0.5;
     float lum = dot(col, vec3(0.30, 0.59, 0.11));
-    col = clamp(mix(vec3(lum), col, 1.22), 0.0, 1.0);
+    col = clamp(mix(vec3(lum), col, 1.20), 0.0, 1.0);
 
-    // faint LCD pixel grid keyed to the game's own pixels
-    vec2 texel = uv * uTexRes;
-    vec2 g = abs(fract(texel) - 0.5);
-    float grid = 1.0 - 0.10 * smoothstep(0.35, 0.5, max(g.x, g.y));
-    col *= grid;
+    // horizontal scanlines keyed to output rows
+    float scan = 0.5 + 0.5 * sin(uv.y * uRes.y * 3.14159 / 1.5);
+    col *= mix(0.86, 1.0, scan);
+
+    // RGB aperture-grille mask on output columns (subtle vertical stripes)
+    float m = mod(gl_FragCoord.x, 3.0);
+    vec3 mask = m < 1.0 ? vec3(1.0, 0.92, 0.92) : m < 2.0 ? vec3(0.92, 1.0, 0.92) : vec3(0.92, 0.92, 1.0);
+    col *= mask;
+    col *= 1.06;   // brighten back up for the mask+scanline dimming
 
     // soft corner vignette
     float r2 = dot(c, c);
     float vig = clamp(1.0 - 0.85 * pow(r2, 1.8), 0.0, 1.0);
     col *= mix(0.82, 1.0, vig);
 
-    gl_FragColor = vec4(col, 1.0);
+    gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
 }
 `;
 
