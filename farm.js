@@ -2804,16 +2804,19 @@ export class Farmer {
             if (ob && this.rand() < 0.85) { this.#clearObstacle(ob); return; }
         }
 
-        // 1b2. facility collection/tending (eggs/milk/lily/fish — ready produce keeps, so it
-        //      waits behind clearing but ahead of expansion and fill work)
-        const urgentFac = this.#nextTaskOnPlot(this.plot, thirstThreshold, true, false);
-        if (urgentFac) { this.#thinkTask(urgentFac); this.#pursue(urgentFac, this.plot, false); return; }
-
-        // 1c. grow the homestead: gather wood, clear land, fence/build
+        // 1c. grow the homestead: gather wood, clear land, fence/build. This is a FINITE goal
+        //     (expand once, then wantExpand clears until the next harvest milestone), so it must
+        //     sit ABOVE the endless facility-collection treadmill or it never gets a turn —
+        //     ready produce keeps, so a farmer gathering wood to expand collects the backlog after.
         if ((this.wantExpand || this.wantFacility) && !w.isNight()) {
             const grew = this.#pursueGrowth();
             if (grew) return;
         }
+
+        // 1d. facility collection/tending (eggs/milk/lily/fish — ready produce keeps, so it
+        //     waits behind crop care, clearing, and the finite expansion goal)
+        const urgentFac = this.#nextTaskOnPlot(this.plot, thirstThreshold, true, false);
+        if (urgentFac) { this.#thinkTask(urgentFac); this.#pursue(urgentFac, this.plot, false); return; }
 
         // 1c. neighborhood co-op: digging a shared well beats another long haul to the
         //     plaza — propose/join happens in passing; members pitch in ahead of fill work
