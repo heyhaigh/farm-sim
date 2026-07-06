@@ -326,20 +326,21 @@ charBody.onload = () => { charBodyReady = true; }; charBody.onerror = () => {};
 charHead.onload = () => { charHeadReady = true; }; charHead.onerror = () => {};
 charBody.src = CHAR_BASE + 'Swordsman_lvl1_Walk_body.png';
 charHead.src = CHAR_BASE + 'Swordsman_lvl1_Walk_head.png';
-const CHAR_FW = 64, CHAR_ROW = 2, CHAR_NCOLS = 6;
-let charBox = null;   // shared content bbox across the row (keeps frames aligned)
+const CHAR_FW = 64, CHAR_NCOLS = 6;
+const CHAR_DIRS = { down: 0, side: 2, up: 3 };   // sheet rows by facing (row0 front, row3 back, row2 3/4-side)
+let charBox = null;   // shared content bbox across ALL rows (keeps every direction aligned)
 function charReady() { return charBodyReady && charHeadReady && charBody.naturalWidth > 0; }
-function composeCharCell(col) {
+function composeCharCell(col, row) {
     const [cv, cx] = makeCanvas(CHAR_FW, CHAR_FW);
     cx.imageSmoothingEnabled = false;
-    cx.drawImage(charBody, col * CHAR_FW, CHAR_ROW * CHAR_FW, CHAR_FW, CHAR_FW, 0, 0, CHAR_FW, CHAR_FW);
-    cx.drawImage(charHead, col * CHAR_FW, CHAR_ROW * CHAR_FW, CHAR_FW, CHAR_FW, 0, 0, CHAR_FW, CHAR_FW);
+    cx.drawImage(charBody, col * CHAR_FW, row * CHAR_FW, CHAR_FW, CHAR_FW, 0, 0, CHAR_FW, CHAR_FW);
+    cx.drawImage(charHead, col * CHAR_FW, row * CHAR_FW, CHAR_FW, CHAR_FW, 0, 0, CHAR_FW, CHAR_FW);
     return [cv, cx];
 }
 function computeCharBox() {
     let x0 = 99, x1 = -1, y0 = 99, y1 = -1;
-    for (let col = 0; col < CHAR_NCOLS; col++) {
-        const [, cx] = composeCharCell(col);
+    for (const row of Object.values(CHAR_DIRS)) for (let col = 0; col < CHAR_NCOLS; col++) {
+        const [, cx] = composeCharCell(col, row);
         const d = cx.getImageData(0, 0, CHAR_FW, CHAR_FW).data;
         for (let y = 0; y < CHAR_FW; y++) for (let x = 0; x < CHAR_FW; x++)
             if (d[(y * CHAR_FW + x) * 4 + 3] > 16) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
@@ -368,35 +369,38 @@ function tintPixels(cx, w, h, hueDeg, hairOnly) {
     }
     cx.putImageData(img, 0, 0);
 }
-// Compose one frame: body (clothing) fully recolored, head with only its hair recolored.
-function tintedCharCell(col, hue) {
+// Compose one frame at (col,row): body (clothing) fully recolored, head with only hair recolored.
+function tintedCharCell(col, row, hue) {
     const [bc, bcx] = makeCanvas(CHAR_FW, CHAR_FW); bcx.imageSmoothingEnabled = false;
-    bcx.drawImage(charBody, col * CHAR_FW, CHAR_ROW * CHAR_FW, CHAR_FW, CHAR_FW, 0, 0, CHAR_FW, CHAR_FW);
+    bcx.drawImage(charBody, col * CHAR_FW, row * CHAR_FW, CHAR_FW, CHAR_FW, 0, 0, CHAR_FW, CHAR_FW);
     tintPixels(bcx, CHAR_FW, CHAR_FW, hue, false);
     const [hc, hcx] = makeCanvas(CHAR_FW, CHAR_FW); hcx.imageSmoothingEnabled = false;
-    hcx.drawImage(charHead, col * CHAR_FW, CHAR_ROW * CHAR_FW, CHAR_FW, CHAR_FW, 0, 0, CHAR_FW, CHAR_FW);
+    hcx.drawImage(charHead, col * CHAR_FW, row * CHAR_FW, CHAR_FW, CHAR_FW, 0, 0, CHAR_FW, CHAR_FW);
     tintPixels(hcx, CHAR_FW, CHAR_FW, hue, true);
     const [out, ox] = makeCanvas(CHAR_FW, CHAR_FW); ox.imageSmoothingEnabled = false;
     ox.drawImage(bc, 0, 0); ox.drawImage(hc, 0, 0);
     return out;
 }
-const charCache = new Map();
-function characterSprites(f) {
-    if (charCache.has(f)) return charCache.get(f);
+const charCache = new Map();   // farmer -> { down, side, up } each a frame set
+function buildCharSets(f) {
     if (!charBox) computeCharBox();
     const bx = charBox;
     const hueSeed = f.sheet.seed != null ? f.sheet.seed : hashString((f.sheet.memory && f.sheet.memory.id) || f.sheet.name);
     const hue = (hueSeed % 300) + 30;
     const dw = Math.max(1, Math.round(bx.w * ASSET_SCALE)), dh = Math.max(1, Math.round(bx.h * ASSET_SCALE));
-    const frameFor = (col) => {
-        const cell = tintedCharCell(col, hue);
+    const frameFor = (col, row) => {
+        const cell = tintedCharCell(col, row, hue);
         const [out, ox] = makeCanvas(dw, dh); ox.imageSmoothingEnabled = false;
         ox.drawImage(cell, bx.x, bx.y, bx.w, bx.h, 0, 0, dw, dh);
         return out;
     };
-    const set = { idle: frameFor(0), walk1: frameFor(1), walk2: frameFor(4), work: frameFor(2), sleep: frameFor(0) };
-    charCache.set(f, set);
-    return set;
+    const setForRow = (row) => ({ idle: frameFor(0, row), walk1: frameFor(1, row), walk2: frameFor(4, row), work: frameFor(2, row), sleep: frameFor(0, row) });
+    return { down: setForRow(CHAR_DIRS.down), side: setForRow(CHAR_DIRS.side), up: setForRow(CHAR_DIRS.up) };
+}
+function characterSprites(f) {
+    let sets = charCache.get(f);
+    if (!sets) { sets = buildCharSets(f); charCache.set(f, sets); }
+    return sets[f.moveDir] || sets.down;   // pick the row matching current facing
 }
 
 function farmerSprites(f) {
@@ -1097,7 +1101,8 @@ function drawFarmer(f, sx, sy) {
     ctx.fillStyle = 'rgba(10,14,10,0.35)';
     ctx.fillRect(px + 4, footY, fw - 8, 2);
 
-    if (f.facing < 0) {
+    // flip for left/right only on the side view (front/back rows shouldn't mirror)
+    if (f.facing < 0 && (!charReady() || f.moveDir === 'side')) {
         ctx.save();
         ctx.translate(px + fw, py);
         ctx.scale(-1, 1);

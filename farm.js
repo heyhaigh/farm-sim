@@ -1100,6 +1100,7 @@ export class Farmer {
         this.action = null;
         this.path = null;
         this.facing = 1;
+        this.moveDir = 'down';   // which sheet row (down/side/up) the 4-way sprite faces
         this.carryWater = 0;
         this.carryCrop = null;     // { type, t } — produce held up briefly after a harvest
         this.bubble = null;
@@ -1735,6 +1736,9 @@ export class Farmer {
                     }
                     this.pos.i = ni; this.pos.j = nj;
                     const sx = dx - dy; if (Math.abs(sx) > 0.05) this.facing = sx > 0 ? 1 : -1;
+                    // facing row for the 4-way sprite: vertical when screen-Y dominates, else side
+                    if (Math.abs(dx) + Math.abs(dy) > 0.02)
+                        this.moveDir = Math.abs(dx + dy) > Math.abs(dx - dy) * 2 ? ((dx + dy) < 0 ? 'up' : 'down') : 'side';
                 }
                 break;
             }
