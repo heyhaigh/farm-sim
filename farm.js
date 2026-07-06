@@ -280,9 +280,10 @@ export class World {
     // Trees stay clear of a border so they never clip the map edge.
     #growForest() {
         const groves = [];
-        for (let g = 0; g < 22; g++) {
+        for (let g = 0; g < 30; g++) {
             const a = tileRand(g, 0, this.seed + 90) * Math.PI * 2;
-            const r = 16 + tileRand(g, 1, this.seed + 91) * 23;
+            // reach groves further out (toward the map edges) so there's plenty of edge woodland
+            const r = 16 + tileRand(g, 1, this.seed + 91) * 32;
             groves.push({
                 i: CENTER + Math.cos(a) * r + (tileRand(g, 2, this.seed + 92) - 0.5) * 5,
                 j: CENTER + Math.sin(a) * r + (tileRand(g, 3, this.seed + 93) - 0.5) * 5,
@@ -336,8 +337,8 @@ export class World {
                     tileNoise(i + 11, j - 5, 12, this.seed + 101) * 0.44 +
                     tileNoise(i - 37, j + 19, 27, this.seed + 102) * 0.34 +
                     tileRand(i, j, this.seed + 103) * 0.22;
-                const score = grove * 0.78 + edge * 0.18 + texture * 0.30;
-                const threshold = r > 25 ? 0.43 : r > 17 ? 0.52 : 0.68;
+                const score = grove * 0.78 + edge * 0.42 + texture * 0.30;   // stronger edge bias
+                const threshold = r > 25 ? 0.38 : r > 17 ? 0.5 : 0.68;
                 if (score > threshold) {
                     candidates.push({
                         i, j,
@@ -348,7 +349,7 @@ export class World {
         }
 
         candidates.sort((a, b) => b.score - a.score);
-        const targetTrees = 58 + Math.floor(tileRand(0, 0, this.seed + 105) * 14);
+        const targetTrees = 96 + Math.floor(tileRand(0, 0, this.seed + 105) * 24);
         let planted = 0;
         for (const c of candidates) {
             if (planted >= targetTrees) break;
