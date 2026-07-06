@@ -112,6 +112,15 @@ const AWAKE_DRAIN = 0.0022;
 const SLEEP_RESTORE = 0.03;
 const REST_RESTORE = 0.022;
 const ACTION_ENERGY = { till: 0.09, plant: 0.05, water: 0.05, harvest: 0.08, clear: 0.07, build: 0.09, collect: 0.07, tend: 0.05 };
+// Clearing/building labor by effort: a shrub is quick and light, a tree is a long hard fell,
+// a stump is grubbing work, a rock is the heaviest, a fence post is medium. { time, energy }.
+const LABOR = {
+    forage: { time: 1.6, energy: 0.05 },    // clear a shrub / brush
+    fencepost: { time: 1.8, energy: 0.07 }, // set a fence post
+    break: { time: 2.8, energy: 0.09 },     // grub out a stump
+    chop: { time: 4.6, energy: 0.13 },      // fell a tree
+    mine: { time: 4.2, energy: 0.16 },      // smash a rock
+};
 
 export function d20(rand, modifier) {
     const roll = 1 + Math.floor(rand() * 20);
@@ -1896,7 +1905,7 @@ export class Farmer {
     #completeForage() {
         const w = this.world, s = this.sheet, tgt = this.forageTarget;
         this.forageTarget = null;
-        this.#spendEnergy(0.06);
+        this.#laborDrain('forage');
         const t = tgt && w.get(tgt.i, tgt.j);
         if (t === T.WHEAT || t === T.FLOWER) {
             w.set(tgt.i, tgt.j, T.GRASS);
@@ -1915,19 +1924,20 @@ export class Farmer {
     #completeChop() {
         const w = this.world, tgt = this.woodTarget;
         this.woodTarget = null;
-        this.#spendEnergy(0.10);
         if (tgt) {
             const t = w.get(tgt.i, tgt.j);
             if (t === T.TREE) {
+                this.#laborDrain('chop');           // felling a tree is heavy work
                 w.set(tgt.i, tgt.j, T.STUMP);
                 this.wood += WOOD_TREE;
                 this.say(`+${WOOD_TREE} wood`, '#c8a060');
                 this.gainXP(1);
             } else if (t === T.STUMP) {
+                this.#laborDrain('break');          // grubbing the stump is a bit lighter
                 w.set(tgt.i, tgt.j, T.GRASS);
                 this.wood += WOOD_STUMP;
                 this.say(`+${WOOD_STUMP} wood`, '#c8a060');
-            }
+            } else this.#laborDrain('break');
         }
         this.state = 'decide';
     }
@@ -1939,12 +1949,15 @@ export class Farmer {
         if (this.energy < 0.22) this.strain = (this.strain || 0) + (0.24 - this.energy) * 3 + 0.25;
         else this.strain = Math.max(0, (this.strain || 0) - 0.05);
     }
+    // Labor duration + energy scale with STR (strong bots swing faster and tire a touch less).
+    #laborTime(act) { return LABOR[act].time / (this.workSpeed() * (1 + Math.max(0, mod(this.sheet.stats.str)) * 0.12)); }
+    #laborDrain(act) { this.#spendEnergy(LABOR[act].energy * (1 - Math.max(0, mod(this.sheet.stats.str)) * 0.05)); }
 
     #completeFencePost() {
         const p = this.plot;
         if (this.pendingFence && this.pendingFence.needWood && this.wood > 0) this.wood -= 1;
         this.pendingFence = null;
-        this.#spendEnergy(0.07);
+        this.#laborDrain('fencepost');
         this.gainXP(1);
         p.fencePosts++;
         if (p.fencePosts >= p.fenceTarget) { this.world.completeFence(this); this.say('FENCED!', '#7dd069'); this.sparkle = 1.5; }
@@ -1955,7 +1968,7 @@ export class Farmer {
     #completeMine() {
         const w = this.world, tgt = this.mineTarget;
         this.mineTarget = null;
-        this.#spendEnergy(0.12);
+        this.#laborDrain('mine');
         if (tgt && w.get(tgt.i, tgt.j) === T.ROCK) {
             w.set(tgt.i, tgt.j, T.GRASS);
             this.ore += ORE_ROCK;
@@ -1994,10 +2007,10 @@ export class Farmer {
                     const then = P.then; this.path = null;
                     if (then === 'work') this.#startWork();
                     else if (then === 'poach') this.#startPoachAction();
-                    else if (then === 'chop' || then === 'break') { this.chopTimer = (then === 'chop' ? 4.0 : 2.4) / (this.workSpeed() * (1 + Math.max(0, mod(this.sheet.stats.str)) * 0.12)); this.state = then; }
-                    else if (then === 'mine') { this.chopTimer = 3.6 / (this.workSpeed() * (1 + Math.max(0, mod(this.sheet.stats.str)) * 0.14)); this.state = 'mine'; }
-                    else if (then === 'forage') { this.forageTimer = 2.0 / this.workSpeed(); this.state = 'forage'; }
-                    else if (then === 'fencepost') { this.fenceTimer = 1.8 / this.workSpeed(); this.state = 'fencepost'; }
+                    else if (then === 'chop' || then === 'break') { this.chopTimer = this.#laborTime(then); this.state = then; }
+                    else if (then === 'mine') { this.chopTimer = this.#laborTime('mine'); this.state = 'mine'; }
+                    else if (then === 'forage') { this.forageTimer = this.#laborTime('forage'); this.state = 'forage'; }
+                    else if (then === 'fencepost') { this.fenceTimer = this.#laborTime('fencepost'); this.state = 'fencepost'; }
                     else if (then === 'fetchwater' || then === 'fetchwater-help') {
                         this.carryWater = this.maxWater; this.say('splash');
                         // resume the original watering task
