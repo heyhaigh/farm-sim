@@ -219,6 +219,8 @@ const smokeSheet = new Image();
 let smokeReady = false;
 const birdJumpSheet = new Image();
 let birdJumpReady = false;
+const birdFlySheet = new Image();
+let birdFlyReady = false;
 
 // grass/dirt detail decals scattered on the ground for texture
 const grassDetailsImg = new Image();
@@ -269,6 +271,9 @@ function loadAssetArt() {
     birdJumpSheet.onload = () => { birdJumpReady = true; };
     birdJumpSheet.onerror = () => {};
     birdJumpSheet.src = HOME_BASE + 'bird_jump_animation.png';
+    birdFlySheet.onload = () => { birdFlyReady = true; };
+    birdFlySheet.onerror = () => {};
+    birdFlySheet.src = HOME_BASE + 'bird_fly_animation.png';
     grassDetailsImg.onload = () => { grassDetailsReady = true; terrainDirty = true; };
     grassDetailsImg.onerror = () => {};
     grassDetailsImg.src = HOME_BASE + 'ground_grass_details.png';
@@ -569,27 +574,39 @@ function drawSmoke(hx, hy, dispW, dispH, seed = 0) {
 function addBirds(list) {
     if (!birdJumpReady || !imageLoaded(birdJumpSheet)) return;
     const t = performance.now() / 1000;
-    for (let k = 0; k < 4; k++) {
-        const phase = t * 0.55 + k * 1.7;
-        const active = (phase % 9) < 3.6;
-        if (!active) continue;
-        const a = k * 1.9 + Math.floor(phase / 9) * 0.7;
-        const ri = CENTER + Math.cos(a) * (18 + k * 3);
-        const rj = CENTER + Math.sin(a * 0.9 + 0.6) * (14 + k * 2);
-        const sx = cam.x + isoX(ri, rj);
-        const sy = cam.y + isoY(ri, rj) - 38 - Math.sin((phase % 3.6) / 3.6 * Math.PI) * 12;
-        if (sx < -30 || sx > GW + 30 || sy < 18 || sy > GH - 32) continue;
-        const frame = Math.floor((phase % 3.6) / 0.15) % 24;
-        const tileId = frame < 12 ? frame * 2 : 20 + (frame - 12) * 2;
-        const srcX = (tileId % 40) * 16;
-        const srcY = Math.floor(tileId / 40) * 16;
+    const CENTER_X = TILE_W / 2 - 10;   // align iso tile centering used elsewhere
+    for (const b of world.birds) {
+        const baseSx = cam.x + isoX(b.i, b.j) + CENTER_X;
+        const baseSy = cam.y + isoY(b.i, b.j);
+        const flying = b.state === 'fly';
+        // elevation: perched up in the canopy, arcing while in flight, low while pecking
+        let elev = 2;
+        if (flying) elev = 14 + Math.sin(b.hopT * Math.PI) * 16;
+        else if (b.state === 'perch') elev = 20;
+        const sx = Math.floor(baseSx), sy = Math.floor(baseSy - elev);
+        if (sx < -40 || sx > GW + 40 || sy < -30 || sy > GH + 30) continue;
+        const flip = b.facing < 0;
         list.push({
-            y: sy + 10,
-            layer: 4,
-            x: sx,
+            y: baseSy + 8, layer: 4, x: sx,
             draw: () => {
                 ctx.imageSmoothingEnabled = false;
-                ctx.drawImage(birdJumpSheet, srcX, srcY, 32, 16, Math.floor(sx - 10), Math.floor(sy), 20, 10);
+                ctx.save();
+                ctx.translate(sx, sy);
+                if (flip) ctx.scale(-1, 1);
+                if (flying && birdFlyReady && imageLoaded(birdFlySheet)) {
+                    // fly sheet: 144x64 cells, 3 cols. Rows 6-7 hold the big wing-spread frames;
+                    // alternate them to flap. Crop the full bird so nothing clips.
+                    const col = b.seed % 3;
+                    const row = (Math.floor(t * 7 + b.seed) % 2) ? 6 : 7;
+                    ctx.drawImage(birdFlySheet, col * 144, row * 64, 100, 62, -15, -13, 30, 19);
+                } else {
+                    // jump sheet: 32x32 cells, 20 cols x 3 rows — draw the WHOLE cell so no hop
+                    // frame gets cut off.
+                    const row = b.seed % 3;
+                    const col = b.state === 'peck' ? (Math.floor(t * 8) % 20) : (Math.floor(t * 4 + b.seed) % 20);
+                    ctx.drawImage(birdJumpSheet, col * 32, row * 32, 32, 32, -13, -18, 26, 26);
+                }
+                ctx.restore();
             },
         });
     }

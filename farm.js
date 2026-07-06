@@ -175,6 +175,103 @@ export class World {
         this.#addRing(26, 8, 0.42);
 
         this.#growForest();
+
+        this.scarecrows = [];   // (placeholder — scarecrows will keep birds off nearby crops)
+        this.birds = [];
+        this.#spawnBirds(4 + Math.floor(this.rand() * 3));
+    }
+
+    // ---- crows: perch in trees, hop tree-to-tree, and raid unguarded crops -------
+    #allTrees() {
+        const out = [];
+        for (let j = FOREST_BORDER; j < GRID - FOREST_BORDER; j++)
+            for (let i = FOREST_BORDER; i < GRID - FOREST_BORDER; i++)
+                if (this.get(i, j) === T.TREE) out.push({ i, j });
+        return out;
+    }
+    #spawnBirds(n) {
+        const trees = this.#allTrees();
+        if (!trees.length) return;
+        for (let k = 0; k < n; k++) {
+            const tree = trees[Math.floor(this.rand() * trees.length)];
+            this.birds.push({ i: tree.i, j: tree.j, state: 'perch', timer: 2 + this.rand() * 6, from: null, to: null, hopT: 0, dur: 1, mode: null, target: null, facing: this.rand() < 0.5 ? 1 : -1, seed: Math.floor(this.rand() * 1000) });
+        }
+    }
+    #treesNear(i, j, maxD) {
+        const out = [];
+        const ci = Math.round(i), cj = Math.round(j);
+        for (let dj = -maxD; dj <= maxD; dj++) for (let di = -maxD; di <= maxD; di++) {
+            if (!di && !dj) continue;
+            const ni = ci + di, nj = cj + dj;
+            if (this.get(ni, nj) === T.TREE) out.push({ i: ni, j: nj });
+        }
+        return out;
+    }
+    #birdTargetTree(i, j) {
+        const near = this.#treesNear(i, j, 12);
+        if (near.length) return near[Math.floor(this.rand() * near.length)];   // a nearby tree = short hop
+        const all = this.#allTrees();                                          // else the nearest tree anywhere
+        let best = null, bestD = 1e18;
+        for (const t of all) { const d = (t.i - i) ** 2 + (t.j - j) ** 2; if (d < bestD) { bestD = d; best = t; } }
+        return best;
+    }
+    #scarecrowNear(i, j) { return this.scarecrows.some(s => Math.abs(s.i - i) + Math.abs(s.j - j) <= 6); }
+    #birdCropTarget(i, j, maxD) {
+        let best = null, bestD = maxD * maxD + 1;
+        for (const c of this.crops.values()) {
+            if (c.withered || c.stage < 1) continue;
+            if (this.#scarecrowNear(c.i, c.j)) continue;
+            const d = (c.i - i) ** 2 + (c.j - j) ** 2;
+            if (d < bestD) { bestD = d; best = c; }
+        }
+        return best;
+    }
+    #birdFlyTo(b, to, mode) {
+        b.from = { i: b.i, j: b.j }; b.to = { i: to.i, j: to.j }; b.mode = mode; b.hopT = 0;
+        const dist = Math.hypot(to.i - b.i, to.j - b.j);
+        b.dur = Math.max(0.45, dist / 9);
+        b.facing = (to.i - to.j) >= (b.i - b.j) ? 1 : -1;
+        b.state = 'fly';
+    }
+    #birdDecide(b) {
+        if (this.rand() < 0.45) {
+            const crop = this.#birdCropTarget(b.i, b.j, 22);
+            if (crop) { b.target = crop; this.#birdFlyTo(b, crop, 'toCrop'); return; }
+        }
+        const t = this.#birdTargetTree(b.i, b.j);
+        if (t) { this.#birdFlyTo(b, t, 'toTree'); return; }
+        b.timer = 2 + this.rand() * 4;
+    }
+    #birdEat(b) {
+        const c = b.target; b.target = null;
+        if (c && !c.withered) {
+            const key = `${c.i},${c.j}`, live = this.crops.get(key);
+            if (live && live === c) {
+                if (c.stage <= 1) { this.crops.delete(key); this.set(c.i, c.j, T.TILLED); }
+                else c.stage -= 1;
+                if (this.rand() < 0.5 && c.owner) this.addLog(`A crow raided ${c.owner.sheet.name}'s ${c.type}!`, '#c05840');
+            }
+        }
+        const t = this.#birdTargetTree(b.i, b.j);
+        if (t) this.#birdFlyTo(b, t, 'toTree');
+        else { b.state = 'perch'; b.timer = 2 + this.rand() * 4; }
+    }
+    #tickBirds(dt) {
+        for (const b of this.birds) {
+            if (b.state === 'perch') { b.timer -= dt; if (b.timer <= 0) this.#birdDecide(b); }
+            else if (b.state === 'peck') { b.timer -= dt; if (b.timer <= 0) this.#birdEat(b); }
+            else if (b.state === 'fly') {
+                b.hopT += dt / b.dur;
+                if (b.hopT >= 1) {
+                    b.i = b.to.i; b.j = b.to.j; b.hopT = 0;
+                    if (b.mode === 'toCrop') { b.state = 'peck'; b.timer = 1.4 + this.rand() * 1.6; }
+                    else { b.state = 'perch'; b.timer = 2.5 + this.rand() * 6; }
+                } else {
+                    b.i = b.from.i + (b.to.i - b.from.i) * b.hopT;
+                    b.j = b.from.j + (b.to.j - b.from.j) * b.hopT;
+                }
+            }
+        }
     }
 
     // Wild lands on the town's outskirts: forest that grows in CLUSTERS (dense
@@ -1259,6 +1356,7 @@ export class World {
         this.#tickCrops(dt);
         this.#tickProducers(dt);
         this.#tickLightning(dt);
+        this.#tickBirds(dt);
         this.#maybeStartProject();
         this.updateLeader();
         for (const f of this.farmers) f.tick(dt);
