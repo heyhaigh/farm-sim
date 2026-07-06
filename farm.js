@@ -1799,17 +1799,28 @@ export class Farmer {
     #nearestFenceLineObstacle(p) {
         const w = this.world;
         let best = null, bestD = 1e9;
-        for (const key of p.cells) {
-            const c = key.indexOf(','), i = +key.slice(0, c), j = +key.slice(c + 1);
-            // only border cells (a fence rail runs along an edge with no plot neighbour)
-            if (p.cells.has(pkey(i, j - 1)) && p.cells.has(pkey(i + 1, j)) && p.cells.has(pkey(i, j + 1)) && p.cells.has(pkey(i - 1, j))) continue;
+        const consider = (i, j) => {
             const t = w.get(i, j);
             let kind = null;
             if (t === T.TREE) kind = 'tree'; else if (t === T.STUMP) kind = 'stump';
             else if (t === T.ROCK) kind = 'rock'; else if (t === T.FLOWER || t === T.WHEAT) kind = 'forage';
-            if (!kind) continue;
+            if (!kind) return;
             const d = Math.abs(i - this.pos.i) + Math.abs(j - this.pos.j);
             if (d < bestD) { bestD = d; best = { i, j, kind, tile: t }; }
+        };
+        for (const key of p.cells) {
+            const c = key.indexOf(','), i = +key.slice(0, c), j = +key.slice(c + 1);
+            const mT = !p.cells.has(pkey(i, j - 1)), mR = !p.cells.has(pkey(i + 1, j)), mB = !p.cells.has(pkey(i, j + 1)), mL = !p.cells.has(pkey(i - 1, j));
+            if (!(mT || mR || mB || mL)) continue;   // interior cell — no fence here
+            consider(i, j);                           // the border cell itself
+            // clear the OUTSIDE tiles along each fenced edge too — a rock/tree there is a small
+            // tile but a big sprite, so it overlaps the rail unless cleared (out to the sprite reach).
+            for (let d = 1; d <= 2; d++) {
+                if (mT) consider(i, j - d);
+                if (mR) consider(i + d, j);
+                if (mB) consider(i, j + d);
+                if (mL) consider(i - d, j);
+            }
         }
         return best;
     }
