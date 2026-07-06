@@ -941,22 +941,24 @@ function collectDrawables() {
                 } else ctx.drawImage(wellSprite, Math.floor(sx - 10 + TILE_W / 2 - 10), Math.floor(sy - 14));
             }
         });
-        const b = world.board;
-        const bx = cam.x + isoX(b.i, b.j), by = cam.y + isoY(b.i, b.j);
-        if (boardReady) {
-            const src = world.helpBoard.some(r => r.genuine) ? BOARD_FULL_SRC : BOARD_EMPTY_SRC;
-            const dispW = Math.round(src.w * ASSET_SCALE), dispH = Math.round(src.h * ASSET_SCALE);
-            boardScreen.x = bx + TILE_W / 2 - dispW / 2; boardScreen.y = by + TILE_H - dispH; boardScreen.w = dispW; boardScreen.h = dispH;
-            list.push({
-                y: by + TILE_H, draw: () => {
-                    ctx.imageSmoothingEnabled = false;
-                    ctx.drawImage(boardSheet, src.x, src.y, src.w, src.h, Math.floor(boardScreen.x), Math.floor(boardScreen.y), dispW, dispH);
-                }
-            });
-        } else {
-            boardScreen.x = bx + TILE_W / 2 - 13; boardScreen.y = by - 14; boardScreen.w = 26; boardScreen.h = 26;
-            list.push({ y: by + TILE_H, draw: () => ctx.drawImage(boardSprite, Math.floor(boardScreen.x), Math.floor(boardScreen.y)) });
-        }
+        if (world.board) {   // only once the town has built the bulletin board
+            const b = world.board;
+            const bx = cam.x + isoX(b.i, b.j), by = cam.y + isoY(b.i, b.j);
+            if (boardReady) {
+                const src = world.helpBoard.some(r => r.genuine) ? BOARD_FULL_SRC : BOARD_EMPTY_SRC;
+                const dispW = Math.round(src.w * ASSET_SCALE), dispH = Math.round(src.h * ASSET_SCALE);
+                boardScreen.x = bx + TILE_W / 2 - dispW / 2; boardScreen.y = by + TILE_H - dispH; boardScreen.w = dispW; boardScreen.h = dispH;
+                list.push({
+                    y: by + TILE_H, draw: () => {
+                        ctx.imageSmoothingEnabled = false;
+                        ctx.drawImage(boardSheet, src.x, src.y, src.w, src.h, Math.floor(boardScreen.x), Math.floor(boardScreen.y), dispW, dispH);
+                    }
+                });
+            } else {
+                boardScreen.x = bx + TILE_W / 2 - 13; boardScreen.y = by - 14; boardScreen.w = 26; boardScreen.h = 26;
+                list.push({ y: by + TILE_H, draw: () => ctx.drawImage(boardSprite, Math.floor(boardScreen.x), Math.floor(boardScreen.y)) });
+            }
+        } else { boardScreen.w = 0; boardScreen.h = 0; }   // no board -> nothing to click
     }
 
     // completed structures

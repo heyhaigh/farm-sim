@@ -166,7 +166,7 @@ export class World {
 
         this.well = { i: CENTER, j: CENTER };
         this.sign = null;                                 // (RY sign removed)
-        this.board = { i: CENTER - 4, j: CENTER + 3 };    // town bulletin board, clear of the well
+        this.board = null;    // no bulletin board until the town builds one together (first communal project)
         this.wells = [this.well];
         this.set(this.well.i, this.well.j, T.WELL);
 
@@ -932,12 +932,18 @@ export class World {
         const pr = this.project;
         this.project = null;
         const { type, site, label, perk } = pr;
-        this.structures.push({ type, i: site.i, j: site.j });
-        this.set(site.i, site.j, T.STRUCT);
-        if (type === 'toolshed') this.workMult *= 1.12;
-        else if (type === 'windmill') this.growthMult *= 1.15;
-        else if (type === 'tower') this.lightningMult = 0.5;
-        else if (type === 'well2') this.wells.push({ i: site.i, j: site.j });
+        if (type === 'board') {
+            // the bulletin board is its own thing (rendered from world.board, an obstacle) —
+            // not a buffed structure. Once it's up, farmers can post jobs.
+            this.board = { i: site.i, j: site.j };
+        } else {
+            this.structures.push({ type, i: site.i, j: site.j });
+            this.set(site.i, site.j, T.STRUCT);
+            if (type === 'toolshed') this.workMult *= 1.12;
+            else if (type === 'windmill') this.growthMult *= 1.15;
+            else if (type === 'tower') this.lightningMult = 0.5;
+            else if (type === 'well2') this.wells.push({ i: site.i, j: site.j });
+        }
         this.addLog(`The ${label} is finished! ${perk}`, '#f0d060');
         for (const f of pr.builders) {
             f.gainXP(6); f.say('HOORAY!', '#f0d060'); f.sparkle = 3;
@@ -987,6 +993,7 @@ export class World {
     }
 
     postHelp(farmer, genuine = true) {
+        if (!this.board) return;   // no jobs until the town builds the bulletin board
         if (this.helpBoard.some(r => r.farmer === farmer)) return;
         const difficulty = this.jobDifficulty(farmer);
         const reward = this.chooseReward(farmer, difficulty);
@@ -1196,6 +1203,7 @@ export class World {
 }
 
 const PROJECT_DEFS = [
+    { type: 'board', label: 'BULLETIN BOARD', at: 8, needed: 22, perk: 'FARMERS CAN POST JOBS' },
     { type: 'toolshed', label: 'TOOLSHED', at: 20, needed: 30, perk: 'ALL WORK +12% FASTER' },
     { type: 'windmill', label: 'WINDMILL', at: 55, needed: 45, perk: 'CROPS GROW +15% FASTER' },
     { type: 'tower', label: 'STORM TOWER', at: 100, needed: 55, perk: 'LIGHTNING HALVED' },
