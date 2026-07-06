@@ -375,6 +375,68 @@ export class World {
         }
     }
 
+    // A tile the farm is actively using resists being reclaimed by the wild.
+    #onActiveField(i, j) { const t = this.get(i, j); return t === T.TILLED || !!this.cropAt(i, j); }
+    #vegNeighbors(i, j) {
+        let n = 0;
+        for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const t = this.get(i + di, j + dj); if (t === T.TREE || t === T.FLOWER || t === T.STUMP) n++; }
+        return n;
+    }
+    #inAnyHouseFootprint(i, j) { for (const p of this.plots) if (this.#inHouse(p, i, j)) return true; return false; }
+    #cellInAnyPlot(i, j) { const key = pkey(i, j); return this.plots.some(p => p.cells.has(key)); }
+    #protectedTile(i, j) {
+        if (this.#inAnyHouseFootprint(i, j)) return true;
+        if (this.board && this.board.i === i && this.board.j === j) return true;
+        for (const w of this.wells) if (w.i === i && w.j === j) return true;
+        for (const s of this.structures) if (s.i === i && s.j === j) return true;
+        const ps = this.project && this.project.site;
+        if (ps && ps.i === i && ps.j === j) return true;
+        return false;
+    }
+
+    // Untended land slowly reverts: standing brush/trees SPREAD into adjacent untended grass,
+    // and brush ages into trees. Growth concentrates at the vegetation boundary, so it creeps
+    // INTO farms (pressuring bots to keep clearing — see #nearestPlotObstacle) and onto expansion
+    // frontiers (trees there block annexation). A neglected farm gets reclaimed by the wild.
+    #encroach() {
+        const sprouts = [], matures = [];
+        for (let j = FOREST_BORDER; j < GRID - FOREST_BORDER; j++) {
+            for (let i = FOREST_BORDER; i < GRID - FOREST_BORDER; i++) {
+                const t = this.get(i, j);
+                if (t !== T.TREE && t !== T.FLOWER) continue;
+                if (t === T.FLOWER && !this.#onActiveField(i, j) && !this.#protectedTile(i, j) && this.#treeFits(i, j, 48, 28)) matures.push({ i, j });
+                for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+                    const gi = i + di, gj = j + dj;
+                    if (this.get(gi, gj) === T.GRASS && !this.#onActiveField(gi, gj) && !this.#protectedTile(gi, gj)) sprouts.push({ i: gi, j: gj });
+                }
+            }
+        }
+        let sprouted = 0, matured = 0, ontoFarm = false;
+        for (const s of matures) if (this.rand() < 0.05) { this.set(s.i, s.j, T.TREE); matured++; }
+        const seen = new Set(); const CAP = 22;   // gradual — a fringe, not a takeover
+        for (const s of sprouts) {
+            if (sprouted >= CAP) break;
+            const key = pkey(s.i, s.j);
+            if (seen.has(key) || this.get(s.i, s.j) !== T.GRASS) continue;
+            seen.add(key);
+            if (this.rand() < 0.10) { this.set(s.i, s.j, T.FLOWER); sprouted++; if (this.#cellInAnyPlot(s.i, s.j)) ontoFarm = true; }
+        }
+        // weeds: idle grass on an established farm sprouts brush directly — a neglected plot
+        // (grass left untilled) gets reclaimed, so farms need active upkeep, not just edge-clearing.
+        for (const p of this.plots) {
+            if (p.built.level < 1) continue;
+            const grass = [];
+            for (const key of p.cells) { const c = key.indexOf(','), i = +key.slice(0, c), j = +key.slice(c + 1); if (this.get(i, j) === T.GRASS && !this.#onActiveField(i, j) && !this.#protectedTile(i, j)) grass.push({ i, j }); }
+            let weeds = Math.min(grass.length, 1 + Math.floor(grass.length * 0.05));
+            for (let n = 0; n < weeds && grass.length; n++) {
+                const g = grass.splice(Math.floor(this.rand() * grass.length), 1)[0];
+                if (this.rand() < 0.5) { this.set(g.i, g.j, T.FLOWER); sprouted++; ontoFarm = true; }
+            }
+        }
+        if (sprouted || matured) { this._tilesChanged = true; for (const p of this.plots) this.#rebuildFields(p); }
+        if (ontoFarm && this.rand() < 0.6) this.addLog('Wild brush is creeping into the farms — clear it before it takes root.', '#8a9a5a');
+    }
+
     // house occupies a 2x2 footprint; keep crops/facilities off it and its door
     // Reserve the house's VISUAL footprint (the sprite is ~5 tiles wide / taller than its
     // 2x3 tile base), so crops and facilities never get placed under the house sprite.
@@ -1188,6 +1250,7 @@ export class World {
             this.#dailyHealthCheck();
             this.#advanceSeason();
             this.#regrowWild();
+            this.#encroach();
             this.addLog(`Day ${this.day} begins on Ry Farms`, '#f0d060');
             if (this.rand() < 0.5) this.#rollWeather();
         }
