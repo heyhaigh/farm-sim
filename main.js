@@ -226,6 +226,7 @@ const crateSheet = new Image(); let crateReady = false; crateSheet.onload = () =
 crateSheet.src = './assets/craftpix-net-654184-main-characters-home-free-top-down-pixel-art-asset/Tiled_files/Interior.png';
 const CRATES_SRC = { x: 69, y: 60, w: 26, h: 29 };   // just the two crates — stop before the next sprite
 const WELL_SRC = { x: 48, y: 498, w: 38, h: 38 };    // grass-base stone well in exterior.png
+const SCARECROW_SRC = { x: 4, y: 547, w: 52, h: 53 };   // scarecrow in exterior.png
 const SMOKE_ENABLED = false;   // chimney smoke off until per-house (sheet-row) alignment is nailed
 const smokeSheet = new Image();
 let smokeReady = false;
@@ -1015,6 +1016,21 @@ function collectDrawables() {
                 if (!tr.opened && Math.floor(t * 3) % 2) drawText(ctx, '*', Math.floor(sx + 4), Math.floor(sy + TILE_H - dh - 5), '#fff4c0');
             }
         });
+    }
+
+    // scarecrows (raid-driven farm builds; the 6-tile scare radius lives in farm.js)
+    if (homeReady && imageLoaded(homeSheet)) {
+        for (const sc of world.scarecrows) {
+            const sx = cam.x + isoX(sc.i, sc.j), sy = cam.y + isoY(sc.i, sc.j);
+            const dw = Math.round(SCARECROW_SRC.w * ASSET_SCALE), dh = Math.round(SCARECROW_SRC.h * ASSET_SCALE);
+            list.push({
+                y: sy + TILE_H, draw: () => {
+                    ctx.imageSmoothingEnabled = false;
+                    ctx.drawImage(homeSheet, SCARECROW_SRC.x, SCARECROW_SRC.y, SCARECROW_SRC.w, SCARECROW_SRC.h,
+                        Math.floor(sx + TILE_W / 2 - dw / 2 - 10), Math.floor(sy + TILE_H - dh + 2), dw, dh);
+                }
+            });
+        }
     }
 
     // completed structures

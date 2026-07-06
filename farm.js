@@ -122,7 +122,10 @@ const LABOR = {
     break: { time: 2.8, energy: 0.055 },    // grub out a stump
     chop: { time: 4.6, energy: 0.08 },      // fell a tree
     mine: { time: 4.2, energy: 0.10 },      // smash a rock
+    scarecrow: { time: 3.5, energy: 0.06 }, // raise a scarecrow
 };
+const SCARECROW_WOOD = 3;   // timber cost of a scarecrow
+const SCARECROW_LOSSES = 2; // crow raids a farmer will tolerate before building one
 
 export function d20(rand, modifier) {
     const roll = 1 + Math.floor(rand() * 20);
@@ -161,6 +164,7 @@ export class World {
         this.projectIndex = 0;
         this.coops = [];      // farmer-proposed neighborhood projects (shared wells) — need-driven, sited where the members live
         this.waterDeals = new Map();   // negotiated drawing rights at private wells: farmer@well -> { ownerSeed, per, count }
+        this.shareDeals = [];          // harvest-share promises (join my dig for a cut): { payerSeed, payeeSeed, per, count, untilDay }
         this.structures = [];
         this.bonds = new Map();
         this.workMult = 1;
@@ -221,6 +225,7 @@ export class World {
         return best;
     }
     #scarecrowNear(i, j) { return this.scarecrows.some(s => Math.abs(s.i - i) + Math.abs(s.j - j) <= 6); }
+    scarecrowOnPlot(plot) { return this.scarecrows.some(s => plot.cells.has(pkey(s.i, s.j))); }
     #birdCropTarget(i, j, maxD) {
         let best = null, bestD = maxD * maxD + 1;
         for (const c of this.crops.values()) {
@@ -255,6 +260,10 @@ export class World {
                 if (c.stage <= 1) { this.crops.delete(key); this.set(c.i, c.j, T.TILLED); }
                 else c.stage -= 1;
                 if (this.rand() < 0.5 && c.owner) this.addLog(`A crow raided ${c.owner.sheet.name}'s ${c.type}!`, '#c05840');
+                if (c.owner) {   // the victim remembers — enough raids and they'll raise a scarecrow
+                    c.owner.birdLosses = (c.owner.birdLosses || 0) + 1;
+                    c.owner.remember('event', `A crow ate my ${c.type} - a scarecrow would put a stop to this`, null, 0.9);
+                }
             }
         }
         const t = this.#birdTargetTree(b.i, b.j);
@@ -1287,9 +1296,14 @@ export class World {
 
     proposeCoop(farmer) {
         if (this.coops.length) return null;                    // one neighborhood plan at a time
+        // prefer neighbors who share the pain; an odd-man-out with watered neighbors can
+        // still pitch a plan — recruitment (#coopRecruit) will sweeten someone into it
         const mates = this.#coopNeighbors(farmer);
-        if (!mates.length) return null;                        // nobody shares the pain — no co-op
-        const site = this.#findCoopWellSite(farmer, mates);
+        const h = farmer.plot.house;
+        const anchors = mates.length ? mates : this.farmers.filter(o => o !== farmer &&
+            Math.abs(o.plot.house.i - h.i) + Math.abs(o.plot.house.j - h.j) <= 34);   // ring homesteads sit ~28 apart
+        if (!anchors.length) return null;                      // truly alone out there
+        const site = this.#findCoopWellSite(farmer, anchors);
         if (!site) return null;
         const coop = {
             type: 'well', label: 'SHARED WELL', site, proposer: farmer,
@@ -1366,11 +1380,69 @@ export class World {
         }
     }
 
-    // a rally that never drew a second pair of hands fizzles after a couple of days;
-    // a dig that can't finish (materials nowhere to be found) is abandoned after a
-    // while so it doesn't block the next neighborhood plan forever
+    // A rally nobody joined out of shared need gets one last shot: the proposer SWEETENS
+    // the deal, recruiting a neighbor who has no water pain of their own by promising a
+    // cut of future harvests (a real transfer, tracked in shareDeals). Friends and good
+    // neighbors dig for free; sharp traders and the ambitious want the bigger cut.
+    #coopRecruit(coop) {
+        const prop = coop.proposer;
+        const near = this.farmers
+            .filter(o => !coop.members.has(o) &&
+                Math.abs(o.plot.house.i - coop.site.i) + Math.abs(o.plot.house.j - coop.site.j) <= 34)
+            .sort((a, b) => (Math.abs(a.plot.house.i - coop.site.i) + Math.abs(a.plot.house.j - coop.site.j)) -
+                (Math.abs(b.plot.house.i - coop.site.i) + Math.abs(b.plot.house.j - coop.site.j)));
+        for (const o of near) {
+            const p = o.sheet.personality;
+            if (o.goal === 'lone wolf' || o.opinionOf(prop) <= -0.2 || p.collaboration < 0.2) continue;
+            const gratis = o.goal === 'good neighbor' || o.opinionOf(prop) >= 0.4;
+            const per = gratis ? 0 : (o.goal === 'sharp trader' || p.competitiveness > 0.6) ? 3 : 5;
+            coop.members.add(o);
+            if (per > 0) {
+                this.shareDeals.push({ payerSeed: prop.sheet.seed, payeeSeed: o.sheet.seed, per, count: 0, untilDay: this.day + SEASON_LENGTH * 2 });
+                this.addLog(`${prop.sheet.name} sweetened the deal: ${o.sheet.name} joins the dig for 1 crop per ${per} harvests`, '#e8c860');
+                prop.remember('job', `Promised ${o.sheet.name.split(' ')[0]} 1 crop per ${per} harvests to help dig my well`, o, 1.0);
+                o.remember('job', `Digging ${prop.sheet.name.split(' ')[0]}'s well for a cut: 1 crop per ${per} harvests`, prop, 1.0);
+                o.say('for a cut? sure', '#e8c860');
+            } else {
+                this.addLog(`${o.sheet.name} joins ${prop.sheet.name}'s dig - no charge between neighbors`, '#7dd069');
+                o.say('happy to help', '#7dd069');
+                prop.adjustOpinion(o, 0.2, 'helped dig my well for nothing');
+            }
+            if (coop.members.size >= 2) {
+                coop.stage = 'gather';
+                this.addLog('The shared well has enough hands - the digging begins!', '#f0d060');
+            }
+            return true;
+        }
+        return false;
+    }
+
+    // pay out standing harvest-share promises from this grower's take
+    payHarvestShares(farmer, yieldN) {
+        if (yieldN <= 0) return;
+        for (const d of this.shareDeals) {
+            if (d.payerSeed !== farmer.sheet.seed) continue;
+            d.count += yieldN;
+            while (d.count >= d.per) {
+                d.count -= d.per;
+                const payee = this.farmers.find(f => f.sheet.seed === d.payeeSeed);
+                if (!payee) break;
+                if (this.transferGood(farmer, payee, 'crops', 1) > 0) {
+                    farmer.say('-1 crop share', '#e8c860'); payee.say('+1 crop share', '#e8c860');
+                } else {
+                    payee.adjustOpinion(farmer, -0.08, 'behind on our harvest share');
+                    break;
+                }
+            }
+        }
+    }
+
+    // a rally that never drew a second pair of hands first tries a sweetened recruit,
+    // then fizzles; a dig that can't finish (materials nowhere to be found) is abandoned
+    // after a while so it doesn't block the next neighborhood plan forever
     #tickCoops() {
         this.coops = this.coops.filter(c => {
+            if (c.stage === 'rally' && this.day - c.bornDay >= 1 && c.members.size < 2 && this.#coopRecruit(c)) return true;
             if (c.stage === 'rally' && this.day - c.bornDay >= COOP_RALLY_DAYS) {
                 this.addLog(`${c.proposer.sheet.name}'s well plan fizzled - nobody else signed on`, '#8a8fa0');
                 return false;
@@ -1380,6 +1452,14 @@ export class World {
                 return false;
             }
             return true;
+        });
+        // share promises run their course after two seasons
+        this.shareDeals = this.shareDeals.filter(d => {
+            if (this.day <= d.untilDay) return true;
+            const payer = this.farmers.find(f => f.sheet.seed === d.payerSeed);
+            const payee = this.farmers.find(f => f.sheet.seed === d.payeeSeed);
+            if (payer && payee) this.addLog(`${payer.sheet.name}'s harvest-share promise to ${payee.sheet.name} has run its course`, '#8a8fa0');
+            return false;
         });
     }
 
@@ -1777,6 +1857,8 @@ export class Farmer {
         this.coopCooldown = 0;    // gates how often the shared-well idea can strike
         this.wellAskCooldown = 0; // gates asking a neighbor for well rights
         this.fetchWellRef = null; // the well this water run is drawing from (for tolls)
+        this.birdLosses = 0;      // crops lost to crows — enough and a scarecrow goes up
+        this.scarecrowTarget = null;
 
         // episodic memory: a day-stamped journal of what happened to THIS bot — who helped,
         // who burned them, illnesses, deals, chats. Entries decay in strength over the days
@@ -2149,11 +2231,21 @@ export class Farmer {
         other.chatCooldown = Math.max(other.chatCooldown, 6 + this.rand() * 6);
         const op = this.opinionOf(other);
         const grudge = this.topRegard(-1);
+        // the most vivid non-smalltalk memory involving this neighbor — history colors the greeting
+        let vivid = null;
+        for (const m of this.journal) if (m.who === other.sheet.seed && m.kind !== 'chat' && m.strength > 0.5 && (!vivid || m.strength > vivid.strength)) vivid = m;
         let line, col = '#c8ccd8';
         if (op >= 0.4) { line = this.#pickLine(['GOOD TO SEE YOU, FRIEND!', 'WE MAKE A FINE TEAM.', 'THANKS AGAIN, TRULY.']); col = '#7dd069'; }
         else if (op <= -0.35) { line = this.#pickLine(["I HAVEN'T FORGOTTEN.", 'HMPH.', 'WATCH YOURSELF.', 'NOTHING TO SAY TO YOU.']); col = '#c05840'; }
         else if (other === w.leader && this.p.competitiveness > 0.6) { line = this.#pickLine(["I'LL PASS YOU YET.", 'ENJOY THE LEAD... FOR NOW.']); col = '#e0a03c'; }
         else if (this === w.leader) { line = this.#pickLine(['KEEP AT IT!', 'FINE DAY FOR FARMING.']); }
+        else if (vivid && this.rand() < 0.55) {
+            // quote lived history instead of small talk
+            const sour = /welch|trick|thiev|stole|toll|turned|behind|owe/i.test(vivid.text);
+            if (vivid.kind === 'job') { line = sour ? "WE'RE NOT SQUARE YET, YOU AND I." : 'GOOD DOING BUSINESS WITH YOU.'; col = '#e8c860'; }
+            else if (vivid.kind === 'event') { line = this.#pickLine(['THAT WELL WAS WORTH EVERY PLANK.', 'STILL GLAD WE BUILT TOGETHER.']); col = '#8fc7e8'; }
+            else { line = sour ? `I STILL REMEMBER DAY ${vivid.day}.` : `I OWE YOU FROM DAY ${vivid.day} YET.`; col = sour ? '#c05840' : '#7dd069'; }
+        }
         else if (grudge && grudge.v < -0.3 && grudge.who !== other && this.rand() < 0.4) { line = `DON'T TRUST ${grudge.who.sheet.name.split(' ')[0].toUpperCase()}...`; col = '#c9a45a'; }
         else { line = this.#pickLine(['MORNING!', 'HOW GOES THE HARVEST?', 'HOW ARE THINGS?', 'LOVELY DAY... MOSTLY.']); }
         this.say(line, col);
@@ -2327,6 +2419,9 @@ export class Farmer {
         // 1c. neighborhood co-op: digging a shared well beats another long haul to the
         //     plaza — propose/join happens in passing; members pitch in ahead of fill work
         if (!w.isNight() && this.energy > 0.3 && this.#pursueCoop()) return;
+
+        // 1c2. the crows have taken enough: raise a scarecrow over the fields
+        if (!w.isNight() && this.birdLosses >= SCARECROW_LOSSES && this.#pursueScarecrow()) return;
 
         // 1d. fill work: sow seeds, till new ground
         const fill = this.#nextTaskOnPlot(this.plot, thirstThreshold, false);
@@ -2550,6 +2645,50 @@ export class Farmer {
         return this.#goToWood(src);
     }
 
+    // The crows have cost this farmer enough crops — put up a scarecrow (any season;
+    // it's the LOSSES that drive it). Gathers timber first if short.
+    #pursueScarecrow() {
+        const w = this.world, p = this.plot;
+        if (w.scarecrowOnPlot(p)) { this.birdLosses = 0; return false; }   // already guarded
+        if (this.wood < SCARECROW_WOOD) {
+            const src = w.nearestWood(this.pos);
+            if (!src) return false;
+            this.think('TIMBER FOR A SCARECROW');
+            return this.#goToWood(src);
+        }
+        // plant it mid-field: the interior field tile closest to the plot's field centroid,
+        // on open ground (its 6-tile scare radius covers the crops around it)
+        let ci = 0, cj = 0;
+        const fields = p.fields.filter(f => { const t = w.get(f.i, f.j); return t === T.GRASS || t === T.TILLED; });
+        if (!fields.length) return false;
+        for (const f of fields) { ci += f.i; cj += f.j; }
+        ci /= fields.length; cj /= fields.length;
+        let spot = fields[0], bd = 1e9;
+        for (const f of fields) {
+            if (w.cropAt(f.i, f.j)) continue;
+            const d = Math.abs(f.i - ci) + Math.abs(f.j - cj);
+            if (d < bd) { bd = d; spot = f; }
+        }
+        this.scarecrowTarget = spot;
+        this.think('THESE CROWS HAVE HAD THEIR LAST FREE MEAL');
+        return this.#goTo(spot.i + 0.5, spot.j + 0.5, 'scarecrow');
+    }
+
+    #completeScarecrow() {
+        const w = this.world, t = this.scarecrowTarget;
+        this.scarecrowTarget = null;
+        this.#laborDrain('scarecrow');
+        if (t && this.wood >= SCARECROW_WOOD && !w.scarecrowOnPlot(this.plot)) {
+            this.wood -= SCARECROW_WOOD;
+            w.scarecrows.push({ i: t.i, j: t.j, ownerSeed: this.sheet.seed });
+            this.birdLosses = 0;
+            this.say('SCAT, CROWS!', '#f0d060'); this.sparkle = 2; this.gainXP(3);
+            this.remember('event', "Raised a scarecrow - my crops are off the crows' menu", null, 1.0);
+            w.addLog(`${this.sheet.name} raised a scarecrow over their fields`, '#7dd069');
+        }
+        this.state = 'decide';
+    }
+
     #goToWood(src) {
         this.woodTarget = src;
         return this.#goTo(src.i + 0.5, src.j + 0.5, src.kind === 'stump' ? 'break' : 'chop');
@@ -2655,6 +2794,7 @@ export class Farmer {
         const ownerSheet = (helping && owner) ? owner.sheet : s;
         ownerSheet.harvested += yieldN; w.harvestTotal += yieldN;
         ownerSheet.produce = (ownerSheet.produce || 0) + yieldN;   // spendable stockpile (harvested is lifetime-only)
+        w.payHarvestShares(helping && owner ? owner : this, yieldN);
         if (yieldN > 0 && !check.crit) this.say(`+${yieldN} ${name}`);
         p.ready = false; p.prod = 0;
         this.gainXP(2 + yieldN);
@@ -2674,6 +2814,7 @@ export class Farmer {
         const ownerSheet = (helping && owner) ? owner.sheet : s;
         ownerSheet.harvested += yieldN; w.harvestTotal += yieldN;
         ownerSheet.produce = (ownerSheet.produce || 0) + yieldN;   // spendable stockpile (harvested is lifetime-only)
+        w.payHarvestShares(helping && owner ? owner : this, yieldN);
         if (yieldN > 0 && !check.crit) this.say(`+${yieldN} ${c.type}`);
         if (yieldN > 0) this.carryCrop = { type: c.type, t: 2.2 };   // hold the picked produce up
         w.crops.delete(`${crop.i},${crop.j}`);
@@ -2836,6 +2977,7 @@ export class Farmer {
                     else if (then === 'mine') { this.chopTimer = this.#laborTime('mine'); this.state = 'mine'; }
                     else if (then === 'forage') { this.forageTimer = this.#laborTime('forage'); this.state = 'forage'; }
                     else if (then === 'fencepost') { this.fenceTimer = this.#laborTime('fencepost'); this.state = 'fencepost'; }
+                    else if (then === 'scarecrow') { this.chopTimer = this.#laborTime('scarecrow'); this.state = 'scarecrow'; }
                     else if (then === 'fetchwater' || then === 'fetchwater-help') {
                         // hard guard: only a finished, listed well yields water — never a build site
                         if (this.fetchWellRef && !this.world.wells.includes(this.fetchWellRef)) {
@@ -2891,6 +3033,7 @@ export class Farmer {
             case 'mine': this.chopTimer -= dt; if (this.chopTimer <= 0) this.#completeMine(); break;
             case 'forage': this.forageTimer -= dt; if (this.forageTimer <= 0) this.#completeForage(); break;
             case 'fencepost': this.fenceTimer -= dt; if (this.fenceTimer <= 0) this.#completeFencePost(); break;
+            case 'scarecrow': this.chopTimer -= dt; if (this.chopTimer <= 0) this.#completeScarecrow(); break;
 
             case 'build': {
                 const pr = this.world.project;
