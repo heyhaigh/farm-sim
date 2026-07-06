@@ -24,6 +24,7 @@ export const FORAGE_NAME = { [T.WHEAT]: 'wild wheat', [T.FLOWER]: 'wildflowers' 
 // wood economy
 const WOOD_TREE = 3;       // wood from felling a tree
 const WOOD_STUMP = 1;      // wood from grubbing out the stump
+const ORE_ROCK = 2;        // iron ore from breaking a rock
 const FACILITY_WOOD = 6;   // wood to raise a facility
 const START_WOOD = 4;
 
@@ -669,6 +670,17 @@ export class World {
         return best;
     }
 
+    // nearest breakable rock within reach (for ore)
+    nearestRock(pos, maxD = 10) {
+        let best = null, bestD = maxD + 1;
+        for (let j = 0; j < GRID; j++) for (let i = 0; i < GRID; i++) {
+            if (this.get(i, j) !== T.ROCK) continue;
+            const d = Math.abs(i - pos.i) + Math.abs(j - pos.j);
+            if (d < bestD) { bestD = d; best = { i, j }; }
+        }
+        return best;
+    }
+
     // nearest patch of wild forage (wheat or flowers) within reach
     nearestForage(pos, maxD = 15) {
         let best = null, bestD = maxD;
@@ -1058,8 +1070,9 @@ export class Farmer {
         this.nextFacility = 12 + (sheet.seed % 6);
         this.targetProd = null;
 
-        // wood economy
+        // resource inventory (tradeable): wood from trees, ore from rocks, plus sheet.goods forage
         this.wood = START_WOOD;
+        this.ore = 0;
         this.wantExpand = false;
         this.wantFacility = false;
         this.woodTarget = null;
@@ -1318,6 +1331,12 @@ export class Farmer {
         if (!w.isNight() && this.energy > 0.3) {
             const wild = w.nearestForage(this.pos, 15);
             if (wild) { this.think(wild.tile === T.FLOWER ? 'WILDFLOWERS! WORTH GATHERING.' : 'WILD WHEAT! A FREE FORAGE.'); this.forageTarget = wild; this.#goTo(wild.i + 0.5, wild.j + 0.5, 'forage'); return; }
+        }
+
+        // 5c. mine a nearby rock for ore — diligent/strong bots do this on downtime
+        if (!w.isNight() && this.energy > 0.35 && this.rand() < 0.3 + this.p.diligence * 0.4 + Math.max(0, mod(s.stats.str)) * 0.05) {
+            const rock = w.nearestRock(this.pos, 9);
+            if (rock) { this.think('GOOD STONE HERE — ORE FOR BUILDING.'); this.mineTarget = rock; this.#goTo(rock.i + 0.5, rock.j + 0.5, 'mine'); return; }
         }
 
         // 6. wander + muse
@@ -1592,6 +1611,19 @@ export class Farmer {
         this.state = 'decide';
     }
 
+    #completeMine() {
+        const w = this.world, tgt = this.mineTarget;
+        this.mineTarget = null;
+        this.energy = Math.max(0, this.energy - 0.06);
+        if (tgt && w.get(tgt.i, tgt.j) === T.ROCK) {
+            w.set(tgt.i, tgt.j, T.GRASS);
+            this.ore += ORE_ROCK;
+            this.say(`+${ORE_ROCK} ore`, '#a8b0c0');
+            this.gainXP(1);
+        }
+        this.state = 'decide';
+    }
+
     tick(dt) {
         this.animTime += dt;
         this.helpCooldown = Math.max(0, this.helpCooldown - dt);
@@ -1618,6 +1650,7 @@ export class Farmer {
                     if (then === 'work') this.#startWork();
                     else if (then === 'poach') this.#startPoachAction();
                     else if (then === 'chop' || then === 'break') { this.chopTimer = (then === 'chop' ? 4.0 : 2.4) / (this.workSpeed() * (1 + Math.max(0, mod(this.sheet.stats.str)) * 0.12)); this.state = then; }
+                    else if (then === 'mine') { this.chopTimer = 3.6 / (this.workSpeed() * (1 + Math.max(0, mod(this.sheet.stats.str)) * 0.14)); this.state = 'mine'; }
                     else if (then === 'forage') { this.forageTimer = 2.0 / this.workSpeed(); this.state = 'forage'; }
                     else if (then === 'fetchwater' || then === 'fetchwater-help') {
                         this.carryWater = this.maxWater; this.say('splash');
@@ -1642,6 +1675,7 @@ export class Farmer {
             case 'work': this.action.timer -= dt; if (this.action.timer <= 0) this.#completeWork(); break;
             case 'poach': this.poachTimer -= dt; if (this.poachTimer <= 0) this.#completePoach(); break;
             case 'chop': case 'break': this.chopTimer -= dt; if (this.chopTimer <= 0) this.#completeChop(); break;
+            case 'mine': this.chopTimer -= dt; if (this.chopTimer <= 0) this.#completeMine(); break;
             case 'forage': this.forageTimer -= dt; if (this.forageTimer <= 0) this.#completeForage(); break;
 
             case 'build': {

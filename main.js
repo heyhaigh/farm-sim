@@ -1380,9 +1380,16 @@ function drawSheet(f) {
     const facs = ['crops', ...f.plot.facilities.map(fc => FAC_SHORT[fc.type] || fc.type)];
     drawText(ctx, 'HAS', IX, y, SHEET_LABEL); drawText(ctx, facs.join(', ').slice(0, 26), IX + 32, y, SHEET_VAL); y += 7;
     kv(IX, 'LAND', `${f.plot.cells.size}t`); drawText(ctx, 'YIELD', IX + 76, y, SHEET_LABEL); drawText(ctx, String(s.harvested), IX + 108, y, SHEET_VAL); y += 7;
-    kv(IX, 'WOOD', f.wood); drawText(ctx, 'REP', IX + 76, y, SHEET_LABEL); drawText(ctx, String(Math.round(f.reputation * 100)), IX + 108, y, SHEET_VAL); y += 7;
-    kv(IX, 'BONDS', world.bondCount(f)); y += 8;
+    kv(IX, 'REP', Math.round(f.reputation * 100)); drawText(ctx, 'BONDS', IX + 76, y, SHEET_LABEL); drawText(ctx, String(world.bondCount(f)), IX + 108, y, SHEET_VAL); y += 8;
     if (f.wantExpand || f.wantFacility) { drawText(ctx, f.wantExpand ? '> wants more land' : '> wants to build', IX, y, SHEET_GOLD); y += 8; }
+    y += 2;
+
+    y = sectionBand(IX, y, IW, 'INVENTORY');
+    drawText(ctx, 'WOOD', IX, y, SHEET_LABEL); drawText(ctx, String(f.wood), IX + 34, y, SHEET_VAL);
+    drawText(ctx, 'ORE', IX + 76, y, SHEET_LABEL); drawText(ctx, String(f.ore || 0), IX + 108, y, SHEET_VAL); y += 7;
+    const goods = Object.entries(s.goods || {}).filter(([, n]) => n > 0);
+    if (goods.length) { for (const [g, n] of goods) { drawText(ctx, g.slice(0, 20), IX, y, SHEET_LABEL); drawText(ctx, String(n), IX + 118, y, SHEET_VAL); y += 7; } }
+    else { drawText(ctx, 'no goods stored yet', IX, y, SHEET_LABEL); y += 7; }
     y += 2;
 
     y = sectionBand(IX, y, IW, 'ACTIVITY');
