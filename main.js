@@ -195,6 +195,7 @@ const HOME_BASE = './assets/craftpix-net-654184-main-characters-home-free-top-do
 const homeSheet = new Image();
 let homeReady = false;
 const HOUSE_SRC = { x: 2, y: 5, w: 137, h: 125 };   // house within exterior.png (trimmed of the stone-wall row below)
+const WELL_SRC = { x: 48, y: 498, w: 38, h: 38 };    // grass-base stone well in exterior.png
 const SMOKE_ENABLED = false;   // chimney smoke off until per-house (sheet-row) alignment is nailed
 const smokeSheet = new Image();
 let smokeReady = false;
@@ -811,11 +812,17 @@ function collectDrawables() {
     // well + sign
     {
         const w = world.well;
-        const sx = cam.x + isoX(w.i, w.j) , sy = cam.y + isoY(w.i, w.j);
-        list.push({ y: sy + TILE_H, draw: () => ctx.drawImage(wellSprite, Math.floor(sx - 10 + TILE_W / 2 - 10), Math.floor(sy - 14)) });
-        const s = world.sign;
-        const sx2 = cam.x + isoX(s.i, s.j), sy2 = cam.y + isoY(s.i, s.j);
-        list.push({ y: sy2 + TILE_H, draw: () => ctx.drawImage(signSprite, Math.floor(sx2 + TILE_W / 2 - 9 - 10), Math.floor(sy2 - 8)) });
+        const sx = cam.x + isoX(w.i, w.j), sy = cam.y + isoY(w.i, w.j);
+        const wdw = Math.round(WELL_SRC.w * ASSET_SCALE), wdh = Math.round(WELL_SRC.h * ASSET_SCALE);
+        list.push({
+            y: sy + TILE_H, draw: () => {
+                if (homeReady && imageLoaded(homeSheet)) {
+                    ctx.imageSmoothingEnabled = false;
+                    ctx.drawImage(homeSheet, WELL_SRC.x, WELL_SRC.y, WELL_SRC.w, WELL_SRC.h,
+                        Math.floor(sx + TILE_W / 2 - wdw / 2 - 10), Math.floor(sy + TILE_H - wdh + 2), wdw, wdh);
+                } else ctx.drawImage(wellSprite, Math.floor(sx - 10 + TILE_W / 2 - 10), Math.floor(sy - 14));
+            }
+        });
         const b = world.board;
         const bx = cam.x + isoX(b.i, b.j), by = cam.y + isoY(b.i, b.j);
         boardScreen.x = bx + TILE_W / 2 - 13; boardScreen.y = by - 14; boardScreen.w = 26; boardScreen.h = 26;
@@ -1132,9 +1139,9 @@ function drawMinimap() {
         }
         for (const [ci, cj] of p._miniCells) { const [px, py] = t2m(ci, cj); ctx.fillRect(Math.floor(px), Math.floor(py), 1, 1); }
     }
-    // wells + sign = 1 low-contrast dot each
+    // wells + board = 1 low-contrast dot each
     for (const wl of world.wells) dot(wl.i, wl.j, 'rgba(120,170,210,0.7)', 1);
-    dot(world.sign.i, world.sign.j, 'rgba(180,150,110,0.7)', 1);
+    if (world.board) dot(world.board.i, world.board.j, 'rgba(180,150,110,0.7)', 1);
     // communal structures = 2px low-contrast
     for (const s of world.structures) dot(s.i, s.j, 'rgba(160,160,180,0.7)', 2);
     // facilities (coop/barn) low-contrast
@@ -1224,7 +1231,7 @@ function drawBoard() {
     y = sectionBand(IX, y, IW, `HELP WANTED (${reqs.length})`);
     if (reqs.length) {
         for (const r of reqs) {
-            const nm = r.farmer.sheet.name.split(' ')[0];
+            const nm = r.farmer.sheet.name;
             drawText(ctx, '-', IX, y, '#e0a03c');
             drawText(ctx, nm, IX + 7, y, SHEET_VAL);
             const stat = r.farmer.state === 'sleep' ? 'asleep' : r.farmer.tired ? 'worn out' : 'swamped';
@@ -1240,10 +1247,10 @@ function drawBoard() {
     y = sectionBand(IX, y, IW, `AMBITIONS (${ambitions.length})`);
     if (ambitions.length) {
         for (const f of ambitions) {
-            const nm = f.sheet.name.split(' ')[0];
             const what = f.wantExpand ? 'wants more land' : 'wants to build';
             drawText(ctx, '-', IX, y, '#c9a45a');
-            drawText(ctx, `${nm} ${what}`, IX + 6, y, SHEET_VAL); y += 7;
+            drawText(ctx, f.sheet.name, IX + 7, y, SHEET_VAL); y += 7;
+            drawText(ctx, what, IX + 7, y, SHEET_LABEL); y += 8;
         }
     } else { drawText(ctx, 'everyone is content', IX, y, SHEET_LABEL); y += 7; }
     y += 6;
@@ -1465,7 +1472,7 @@ function rosterSorted() {
 }
 
 function drawRoster() {
-    const PW = Math.min(GW - 24, 300);
+    const PW = Math.min(GW - 12, 372);
     const PH = GH - 40;
     const PX = Math.floor((GW - PW) / 2);
     const PY = 22;
@@ -1491,10 +1498,11 @@ function drawRoster() {
     // column header
     const hy = PY + 16;
     const colName = PX + 6;
-    const colStats = PX + 78;
-    const statW = (PW - 78 - 30) / 6;
+    const colLv = PX + 86;
+    const colStats = PX + 106;
+    const statW = (PW - 106 - 26) / 6;
     drawText(ctx, 'NAME', colName, hy, '#6a6f7c');
-    drawText(ctx, 'LV', PX + 60, hy, '#6a6f7c');
+    drawText(ctx, 'LV', colLv, hy, '#6a6f7c');
     ['ST', 'DE', 'CO', 'IN', 'WI', 'CH'].forEach((c, i) =>
         drawText(ctx, c, Math.floor(colStats + i * statW), hy, '#6a6f7c'));
     drawText(ctx, 'YLD', PX + PW - 22, hy, '#6a6f7c');
@@ -1523,9 +1531,9 @@ function drawRoster() {
         if (selected === f) { ctx.fillStyle = 'rgba(125,208,105,0.16)'; ctx.fillRect(PX + 2, ry - 1, PW - 4, rowH); }
         // health-tinted name; leader gets a star
         const nameCol = f.health === 'sick' ? '#e07868' : f.tired ? '#e0a03c' : '#e8ecf5';
-        const nm = (isLeader ? '*' : '') + s.name.replace(' Ry', '');
-        drawText(ctx, nm.slice(0, 14), colName, ry + 1, nameCol);
-        drawText(ctx, String(s.level), PX + 60, ry + 1, '#7dd069');
+        const nm = (isLeader ? '*' : '') + s.name;
+        drawText(ctx, nm.slice(0, 16), colName, ry + 1, nameCol);
+        drawText(ctx, String(s.level), colLv, ry + 1, '#7dd069');
         STAT_NAMES.forEach((st, i) => {
             drawText(ctx, String(s.stats[st]).padStart(2), Math.floor(colStats + i * statW), ry + 1, '#c8ccd8');
         });

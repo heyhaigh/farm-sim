@@ -147,11 +147,10 @@ export class World {
         this.leader = null;
 
         this.well = { i: CENTER, j: CENTER };
-        this.sign = { i: CENTER + 2, j: CENTER + 1 };
-        this.board = { i: CENTER - 2, j: CENTER + 1 };   // town bulletin board, in the plaza
+        this.sign = null;                                 // (RY sign removed)
+        this.board = { i: CENTER - 4, j: CENTER + 3 };    // town bulletin board, clear of the well
         this.wells = [this.well];
         this.set(this.well.i, this.well.j, T.WELL);
-        this.set(this.sign.i, this.sign.j, T.SIGN);
 
         this.slots = [];
         this.ringCount = 0;
