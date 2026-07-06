@@ -317,7 +317,90 @@ const producerSprites = {
 // bobbing "ready to collect" product icon colors
 const PRODUCT_ICON = { pad: '#e880a8', fish: '#e08040', chicken: '#f4f0e8', cow: '#ffffff', pig: '#d8b088', goat: '#ffffff' };
 
+// ---- Real character sprites (CraftPix swordsman: body + head layers, sword skipped) -------
+// Every farmer is the same character, differentiated by hue-shifting the non-skin pixels
+// (hair + clothing) per farmer, seeded from their memory.
+const CHAR_BASE = './assets/craftpix-net-180537-free-swordsman-1-3-level-pixel-top-down-sprite-character/PNG/Swordsman_lvl1/Parts/';
+const charBody = new Image(), charHead = new Image();
+let charBodyReady = false, charHeadReady = false;
+charBody.onload = () => { charBodyReady = true; }; charBody.onerror = () => {};
+charHead.onload = () => { charHeadReady = true; }; charHead.onerror = () => {};
+charBody.src = CHAR_BASE + 'Swordsman_lvl1_Walk_body.png';
+charHead.src = CHAR_BASE + 'Swordsman_lvl1_Walk_head.png';
+const CHAR_FW = 64, CHAR_ROW = 2, CHAR_NCOLS = 6;
+let charBox = null;   // shared content bbox across the row (keeps frames aligned)
+function charReady() { return charBodyReady && charHeadReady && charBody.naturalWidth > 0; }
+function composeCharCell(col) {
+    const [cv, cx] = makeCanvas(CHAR_FW, CHAR_FW);
+    cx.imageSmoothingEnabled = false;
+    cx.drawImage(charBody, col * CHAR_FW, CHAR_ROW * CHAR_FW, CHAR_FW, CHAR_FW, 0, 0, CHAR_FW, CHAR_FW);
+    cx.drawImage(charHead, col * CHAR_FW, CHAR_ROW * CHAR_FW, CHAR_FW, CHAR_FW, 0, 0, CHAR_FW, CHAR_FW);
+    return [cv, cx];
+}
+function computeCharBox() {
+    let x0 = 99, x1 = -1, y0 = 99, y1 = -1;
+    for (let col = 0; col < CHAR_NCOLS; col++) {
+        const [, cx] = composeCharCell(col);
+        const d = cx.getImageData(0, 0, CHAR_FW, CHAR_FW).data;
+        for (let y = 0; y < CHAR_FW; y++) for (let x = 0; x < CHAR_FW; x++)
+            if (d[(y * CHAR_FW + x) * 4 + 3] > 16) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    }
+    charBox = { x: x0, y: y0, w: Math.max(1, x1 - x0 + 1), h: Math.max(1, y1 - y0 + 1) };
+}
+function hslToRgb(h, s, l) {
+    if (s === 0) { const v = Math.round(l * 255); return [v, v, v]; }
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s, p = 2 * l - q;
+    const hk = (t) => { if (t < 0) t += 1; if (t > 1) t -= 1; if (t < 1 / 6) return p + (q - p) * 6 * t; if (t < 1 / 2) return q; if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6; return p; };
+    return [Math.round(hk(h + 1 / 3) * 255), Math.round(hk(h) * 255), Math.round(hk(h - 1 / 3) * 255)];
+}
+// Hue-rotate opaque pixels. hairOnly=true (head layer) leaves lighter skin/face pixels alone
+// and shifts only the dark hair, so faces never recolor.
+function tintPixels(cx, w, h, hueDeg, hairOnly) {
+    const img = cx.getImageData(0, 0, w, h), d = img.data;
+    for (let i = 0; i < d.length; i += 4) {
+        if (d[i + 3] < 8) continue;
+        const r = d[i] / 255, g = d[i + 1] / 255, b = d[i + 2] / 255;
+        const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2;
+        if (hairOnly && l > 0.4) continue;   // skin/face — leave it
+        let s = 0, hh = 0;
+        if (mx !== mn) { const dd = mx - mn; s = l > 0.5 ? dd / (2 - mx - mn) : dd / (mx + mn); if (mx === r) hh = (g - b) / dd + (g < b ? 6 : 0); else if (mx === g) hh = (b - r) / dd + 2; else hh = (r - g) / dd + 4; hh /= 6; }
+        let nh = (hh + hueDeg / 360) % 1; if (nh < 0) nh += 1;
+        const [nr, ng, nb] = hslToRgb(nh, s, l); d[i] = nr; d[i + 1] = ng; d[i + 2] = nb;
+    }
+    cx.putImageData(img, 0, 0);
+}
+// Compose one frame: body (clothing) fully recolored, head with only its hair recolored.
+function tintedCharCell(col, hue) {
+    const [bc, bcx] = makeCanvas(CHAR_FW, CHAR_FW); bcx.imageSmoothingEnabled = false;
+    bcx.drawImage(charBody, col * CHAR_FW, CHAR_ROW * CHAR_FW, CHAR_FW, CHAR_FW, 0, 0, CHAR_FW, CHAR_FW);
+    tintPixels(bcx, CHAR_FW, CHAR_FW, hue, false);
+    const [hc, hcx] = makeCanvas(CHAR_FW, CHAR_FW); hcx.imageSmoothingEnabled = false;
+    hcx.drawImage(charHead, col * CHAR_FW, CHAR_ROW * CHAR_FW, CHAR_FW, CHAR_FW, 0, 0, CHAR_FW, CHAR_FW);
+    tintPixels(hcx, CHAR_FW, CHAR_FW, hue, true);
+    const [out, ox] = makeCanvas(CHAR_FW, CHAR_FW); ox.imageSmoothingEnabled = false;
+    ox.drawImage(bc, 0, 0); ox.drawImage(hc, 0, 0);
+    return out;
+}
+const charCache = new Map();
+function characterSprites(f) {
+    if (charCache.has(f)) return charCache.get(f);
+    if (!charBox) computeCharBox();
+    const bx = charBox;
+    const hue = (hashString((f.sheet.memory && f.sheet.memory.id) || f.sheet.name) % 300) + 30;
+    const dw = Math.max(1, Math.round(bx.w * ASSET_SCALE)), dh = Math.max(1, Math.round(bx.h * ASSET_SCALE));
+    const frameFor = (col) => {
+        const cell = tintedCharCell(col, hue);
+        const [out, ox] = makeCanvas(dw, dh); ox.imageSmoothingEnabled = false;
+        ox.drawImage(cell, bx.x, bx.y, bx.w, bx.h, 0, 0, dw, dh);
+        return out;
+    };
+    const set = { idle: frameFor(0), walk1: frameFor(1), walk2: frameFor(4), work: frameFor(2), sleep: frameFor(0) };
+    charCache.set(f, set);
+    return set;
+}
+
 function farmerSprites(f) {
+    if (charReady()) return characterSprites(f);
     if (!spriteCache.has(f)) spriteCache.set(f, makeFarmerSprites(f.sheet));
     return spriteCache.get(f);
 }
