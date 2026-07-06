@@ -644,12 +644,14 @@ export class World {
         return true;
     }
 
-    // Is the future house footprint clear of trees/rocks (so the house can be raised)?
+    // The building sprites are far wider than the 2x2 tile footprint, so the clear zone spans
+    // the whole visual area — nothing (tree/rock/brush/water) may overlap where a dwelling sits.
+    static SITE = { di0: -2, di1: 3, dj0: -2, dj1: 4 };
     houseSiteClear(plot) {
-        const h = plot.house;
-        for (let dj = -1; dj <= 3; dj++) for (let di = -1; di <= 2; di++) {
+        const h = plot.house, S = World.SITE;
+        for (let dj = S.dj0; dj <= S.dj1; dj++) for (let di = S.di0; di <= S.di1; di++) {
             const t = this.get(h.i + di, h.j + dj);
-            if (t === T.TREE || t === T.STUMP || t === T.ROCK || t === T.WATER) return false;
+            if (t === T.TREE || t === T.STUMP || t === T.ROCK || t === T.WATER || t === T.FLOWER || t === T.WHEAT) return false;
         }
         return true;
     }
@@ -1403,15 +1405,10 @@ export class Farmer {
             this.think(this.wood > 0 ? 'MORE WOOD FOR THE FENCE' : 'GATHERING WOOD TO FENCE MY LAND');
             this.#goChop(); return true;
         }
-        // 2) clear the house site of any trees/rocks
+        // 2) clear the whole building site of trees/rocks/brush
         if (!w.houseSiteClear(p)) {
             const b = this.#nearestSiteBlocker();
-            if (b) {
-                this.think('CLEARING GROUND FOR MY HOME');
-                if (b.kind === 'rock') { this.mineTarget = b; this.#goTo(b.i + 0.5, b.j + 0.5, 'mine'); }
-                else { this.woodTarget = b; this.#goTo(b.i + 0.5, b.j + 0.5, b.kind === 'stump' ? 'break' : 'chop'); }
-                return true;
-            }
+            if (b) { this.think('CLEARING GROUND FOR MY HOME'); this.#clearObstacle(b); return true; }
         }
         // 3) pitch the level-1 tipi once timber + stone are stockpiled
         if (this.wood >= c.wood && this.ore >= c.ore) { w.raiseBuilding(this, 1); this.say('A ROOF!', '#f0d060'); this.sparkle = 2.5; return true; }
@@ -1426,25 +1423,51 @@ export class Farmer {
     // Save toward the next dwelling tier; upgrade when affordable. Low priority (runs after
     // normal farm work), so L2/L3 accrete slowly from surplus timber/stone over many days.
     #maybeUpgradeHome() {
-        const p = this.plot;
-        if (p.built.level < 1 || p.built.level >= 3 || this.world.isNight()) return false;
+        const w = this.world, p = this.plot;
+        if (p.built.level < 1 || p.built.level >= 3 || w.isNight()) return false;
         const next = p.built.level + 1;
-        if (this.world.houseSiteClear(p) && this.world.canBuild(this, next)) {
-            this.world.raiseBuilding(this, next);
-            this.say(next >= 3 ? 'A REAL HOME!' : 'A BIGGER HOME!', '#f0d060'); this.sparkle = 2.5;
-            return true;
+        if (!w.canBuild(this, next)) return false;   // can't afford yet — keep farming and saving
+        // afford it: clear the site of any encroaching trees/rocks/brush BEFORE raising it
+        if (!w.houseSiteClear(p)) {
+            const b = this.#nearestSiteBlocker();
+            if (b) { this.think('CLEARING SPACE TO UPGRADE MY HOME'); this.#clearObstacle(b); return true; }
         }
-        return false;
+        w.raiseBuilding(this, next);
+        this.say(next >= 3 ? 'A REAL HOME!' : 'A BIGGER HOME!', '#f0d060'); this.sparkle = 2.5;
+        return true;
+    }
+    // Nearest tree/stump/rock/brush sitting ON my own plot cells (clutter to clear for farmland).
+    #nearestPlotObstacle() {
+        const w = this.world, p = this.plot;
+        let best = null, bestD = 1e9;
+        for (const key of p.cells) {
+            const ci = key.indexOf(','), i = +key.slice(0, ci), j = +key.slice(ci + 1);
+            const t = w.get(i, j);
+            let kind = null;
+            if (t === T.TREE) kind = 'tree'; else if (t === T.STUMP) kind = 'stump';
+            else if (t === T.ROCK) kind = 'rock'; else if (t === T.FLOWER || t === T.WHEAT) kind = 'forage';
+            if (!kind) continue;
+            const d = Math.abs(i - this.pos.i) + Math.abs(j - this.pos.j);
+            if (d < bestD) { bestD = d; best = { i, j, kind, tile: t }; }
+        }
+        return best;
+    }
+    #clearObstacle(ob) {
+        if (ob.kind === 'rock') { this.think('CLEARING THIS ROCK FOR MORE FIELD'); this.mineTarget = ob; this.#goTo(ob.i + 0.5, ob.j + 0.5, 'mine'); }
+        else if (ob.kind === 'forage') { this.think('CLEARING BRUSH FOR MORE FIELD'); this.forageTarget = { i: ob.i, j: ob.j, tile: ob.tile }; this.#goTo(ob.i + 0.5, ob.j + 0.5, 'forage'); }
+        else { this.think('CLEARING TIMBER FOR MORE FIELD'); this.woodTarget = ob; this.#goTo(ob.i + 0.5, ob.j + 0.5, ob.kind === 'stump' ? 'break' : 'chop'); }
     }
     #nearestSiteBlocker() {
-        const w = this.world, h = this.plot.house;
+        const w = this.world, h = this.plot.house, S = World.SITE;
         let best = null, bestD = 1e9;
-        for (let dj = -1; dj <= 3; dj++) for (let di = -1; di <= 2; di++) {
+        for (let dj = S.dj0; dj <= S.dj1; dj++) for (let di = S.di0; di <= S.di1; di++) {
             const i = h.i + di, j = h.j + dj, t = w.get(i, j);
-            if (t === T.TREE || t === T.STUMP || t === T.ROCK) {
-                const d = Math.abs(i - this.pos.i) + Math.abs(j - this.pos.j);
-                if (d < bestD) { bestD = d; best = { i, j, kind: t === T.ROCK ? 'rock' : t === T.STUMP ? 'stump' : 'tree' }; }
-            }
+            let kind = null;
+            if (t === T.TREE) kind = 'tree'; else if (t === T.STUMP) kind = 'stump';
+            else if (t === T.ROCK) kind = 'rock'; else if (t === T.FLOWER || t === T.WHEAT) kind = 'forage';
+            if (!kind) continue;
+            const d = Math.abs(i - this.pos.i) + Math.abs(j - this.pos.j);
+            if (d < bestD) { bestD = d; best = { i, j, kind, tile: t }; }
         }
         return best;
     }
@@ -1498,6 +1521,14 @@ export class Farmer {
 
         // 1c. fill work: sow seeds, till new ground
         const fill = this.#nextTaskOnPlot(this.plot, thirstThreshold, false);
+
+        // 1d. clear brush/trees/rocks ON my own plot to open more farmland. Interleaves with
+        //     tilling (diligent bots clear more eagerly) so plots don't stay cluttered.
+        if (!w.isNight()) {
+            const ob = this.#nearestPlotObstacle();
+            if (ob && (!fill || this.rand() < 0.35 + this.p.diligence * 0.35)) { this.#clearObstacle(ob); return; }
+        }
+
         if (fill) { this.#thinkTask(fill); this.#pursue(fill, this.plot, false); return; }
 
         // 2. help a neighbor (for an agreed reward)
