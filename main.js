@@ -813,6 +813,7 @@ function collectDrawables() {
     // fences: trace the outline of each plot's cell set (works for any shape, incl.
     // L-shapes). The topology is cached per plot.rev so we don't recompute it each frame.
     for (const plot of world.plots) {
+        if (!plot.built.fence) continue;   // no fence until the settler raises one
         const o = plotOutline(plot);
         for (let k = 0; k < o.posts.length; k += 2) list.push(post(o.posts[k], o.posts[k + 1]));
         for (let k = 0; k < o.rails.length; k += 4) list.push(rail(o.rails[k], o.rails[k + 1], o.rails[k + 2], o.rails[k + 3]));
@@ -842,6 +843,7 @@ function collectDrawables() {
 
     // houses
     for (const f of world.farmers) {
+        if (!f.plot.built.house) continue;   // not built yet
         const h = f.plot.house;
         const sx = cam.x + isoX(h.i + 1, h.j + 1);
         const sy = cam.y + isoY(h.i + 1, h.j + 1);
@@ -1066,7 +1068,9 @@ function drawProducer(p, px, py) {
 }
 
 // Is this farmer tucked inside their house (asleep / resting / ill / sheltering)?
+// Homeless settlers have no house yet, so they're always shown out in the open.
 function isIndoors(f) {
+    if (!f.plot.built.house) return false;
     return f.state === 'sleep' || f.state === 'rest' || f.state === 'sick' || f.state === 'shelter';
 }
 
@@ -1248,7 +1252,7 @@ function drawMinimap() {
     for (const p of world.plots) for (const fac of p.facilities) if (fac.struct) dot(fac.struct.i, fac.struct.j, 'rgba(150,120,90,0.7)', 2);
     // homes = a 4-dot (2x2) low-contrast grey cluster
     ctx.fillStyle = 'rgba(150,156,168,0.75)';
-    for (const p of world.plots) { const [px, py] = t2m(p.house.i, p.house.j); ctx.fillRect(Math.floor(px), Math.floor(py), 2, 2); }
+    for (const p of world.plots) { if (!p.built.house) continue; const [px, py] = t2m(p.house.i, p.house.j); ctx.fillRect(Math.floor(px), Math.floor(py), 2, 2); }
 
     // current viewport (the on-screen diamond)
     const corners = [screenToTile(0, 18), screenToTile(GW, 18), screenToTile(GW, GH - 22), screenToTile(0, GH - 22)];

@@ -26,6 +26,9 @@ const WOOD_TREE = 3;       // wood from felling a tree
 const WOOD_STUMP = 1;      // wood from grubbing out the stump
 const ORE_ROCK = 2;        // iron ore from breaking a rock
 const FACILITY_WOOD = 6;   // wood to raise a facility
+const FENCE_WOOD = 8;      // wood to fence the new homestead
+const HOUSE_WOOD = 14;     // wood to raise the house
+const HOUSE_ORE = 4;       // + stone (ore) for its walls
 const START_WOOD = 4;
 
 // Longer days so the world breathes slowly while the (now faster) farmers bustle.
@@ -483,12 +486,12 @@ export class World {
             // plot area is a SET of tiles (starts as the base square) so it can later grow
             // into L-shapes; `rev` bumps whenever `cells` changes so the renderer re-traces fences.
             cells: new Set(), rev: 0,
+            // settlers arrive to raw land: they must clear it and gather wood to raise a fence,
+            // then a house. Until then no fence/house renders and they sleep in the open.
+            built: { fence: false, house: false },
         };
         for (let j = slot.j; j < slot.j + B; j++) for (let i = slot.i; i < slot.i + B; i++) plot.cells.add(pkey(i, j));
-        // Clear a small canopy buffer so homesteads read as deliberate clearings.
-        this.#clearPlotWildBuffer(plot, 2);
-        for (let di = 0; di < 2; di++) for (let dj = 0; dj < 2; dj++) this.set(plot.house.i + di, plot.house.j + dj, T.HOUSE);
-        this.#rebuildFields(plot);
+        this.#rebuildFields(plot);   // (plot is NOT auto-cleared; the house tiles are NOT placed yet)
 
         const farmer = new Farmer(sheet, plot, this);
         farmer.pos = { i: plot.x + plot.w / 2, j: plot.y + plot.h };
@@ -632,6 +635,30 @@ export class World {
         this._tilesChanged = true;
         this.addLog(`${farmer.sheet.name} fenced in new land!`, '#7dd069');
         return true;
+    }
+
+    // Is the future house footprint clear of trees/rocks (so the house can be raised)?
+    houseSiteClear(plot) {
+        const h = plot.house;
+        for (let dj = -1; dj <= 3; dj++) for (let di = -1; di <= 2; di++) {
+            const t = this.get(h.i + di, h.j + dj);
+            if (t === T.TREE || t === T.STUMP || t === T.ROCK || t === T.WATER) return false;
+        }
+        return true;
+    }
+    raiseFence(farmer) {
+        farmer.plot.built.fence = true;
+        farmer.plot.rev++;              // renderer starts tracing the fence outline
+        this._tilesChanged = true;
+        this.addLog(`${farmer.sheet.name} fenced in their homestead.`, '#7dd069');
+    }
+    raiseHouse(farmer) {
+        const p = farmer.plot, h = p.house;
+        for (let di = 0; di < 2; di++) for (let dj = 0; dj < 2; dj++) this.set(h.i + di, h.j + dj, T.HOUSE);
+        p.built.house = true;
+        this._tilesChanged = true;
+        this.#rebuildFields(p);
+        this.addLog(`${farmer.sheet.name} raised their house! A home at last.`, '#f0d060');
     }
 
     // Place the farmer's next preferred facility if there's room (no auto-expand;
@@ -1350,6 +1377,50 @@ export class Farmer {
         if (ask) { this.world.postHelp(this, genuine); this.helpCooldown = 30; if (genuine) this.think('SO MUCH TO DO... I COULD USE A HAND'); }
     }
 
+    // A raw settler clears their land, fences it, then raises a house — before normal farming.
+    // Returns true if it took an action this tick.
+    #pursueHomestead() {
+        const w = this.world, p = this.plot;
+        if (p.built.house || w.isNight()) return false;
+        // 1) fence the claim first
+        if (!p.built.fence) {
+            if (this.wood >= FENCE_WOOD) { this.wood -= FENCE_WOOD; w.raiseFence(this); this.say('FENCED!', '#7dd069'); this.sparkle = 1.5; return true; }
+            this.think(this.wood > 0 ? 'MORE WOOD FOR THE FENCE' : 'GATHERING WOOD TO FENCE MY LAND');
+            this.#goChop(); return true;
+        }
+        // 2) clear the house site of any trees/rocks
+        if (!w.houseSiteClear(p)) {
+            const b = this.#nearestSiteBlocker();
+            if (b) {
+                this.think('CLEARING GROUND FOR MY HOUSE');
+                if (b.kind === 'rock') { this.mineTarget = b; this.#goTo(b.i + 0.5, b.j + 0.5, 'mine'); }
+                else { this.woodTarget = b; this.#goTo(b.i + 0.5, b.j + 0.5, b.kind === 'stump' ? 'break' : 'chop'); }
+                return true;
+            }
+        }
+        // 3) raise the house once timber + stone are stockpiled
+        if (this.wood >= HOUSE_WOOD && this.ore >= HOUSE_ORE) { this.wood -= HOUSE_WOOD; this.ore -= HOUSE_ORE; w.raiseHouse(this); this.say('HOME AT LAST!', '#f0d060'); this.sparkle = 2.5; return true; }
+        // 4) gather what's still missing (stone, then timber)
+        if (this.ore < HOUSE_ORE) {
+            const rock = w.nearestRock(this.pos, 40);
+            if (rock) { this.think('MINING STONE FOR THE WALLS'); this.mineTarget = rock; this.#goTo(rock.i + 0.5, rock.j + 0.5, 'mine'); return true; }
+        }
+        this.think(this.wood > 0 ? 'MORE TIMBER FOR THE HOUSE' : 'FELLING TIMBER FOR MY HOUSE');
+        this.#goChop(); return true;
+    }
+    #nearestSiteBlocker() {
+        const w = this.world, h = this.plot.house;
+        let best = null, bestD = 1e9;
+        for (let dj = -1; dj <= 3; dj++) for (let di = -1; di <= 2; di++) {
+            const i = h.i + di, j = h.j + dj, t = w.get(i, j);
+            if (t === T.TREE || t === T.STUMP || t === T.ROCK) {
+                const d = Math.abs(i - this.pos.i) + Math.abs(j - this.pos.j);
+                if (d < bestD) { bestD = d; best = { i, j, kind: t === T.ROCK ? 'rock' : t === T.STUMP ? 'stump' : 'tree' }; }
+            }
+        }
+        return best;
+    }
+
     // ---- deciding ---------------------------------------------------------------
 
     #decide() {
@@ -1368,6 +1439,9 @@ export class Farmer {
             if (ripe && s.stats.wis >= 13) { this.think("STORM'S HERE. SAVE THE CROPS!"); this.#pursue({ act: 'harvest', crop: ripe }, this.plot, false); return; }
             if (s.stats.con < 13) { this.think('I HATE THUNDER. HIDING.'); this.#goHome('shelter'); return; }
         }
+
+        // a new settler must clear their land, fence it, then build a house before farming
+        if (!this.plot.built.house && this.#pursueHomestead()) return;
 
         if (this.p.collaboration > 0.55 && !w.isNight()) {
             const sick = w.farmers.find(o => o !== this && o.health === 'sick' && !this.visitedSick.has(o.sheet.seed) &&
