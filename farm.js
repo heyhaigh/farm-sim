@@ -111,15 +111,16 @@ const FACILITY_DEFS = {
 const AWAKE_DRAIN = 0.0022;
 const SLEEP_RESTORE = 0.03;
 const REST_RESTORE = 0.022;
-const ACTION_ENERGY = { till: 0.09, plant: 0.05, water: 0.05, harvest: 0.08, clear: 0.07, build: 0.09, collect: 0.07, tend: 0.05 };
+const ACTION_ENERGY = { till: 0.055, plant: 0.03, water: 0.03, harvest: 0.05, clear: 0.045, build: 0.055, collect: 0.045, tend: 0.03 };
 // Clearing/building labor by effort: a shrub is quick and light, a tree is a long hard fell,
 // a stump is grubbing work, a rock is the heaviest, a fence post is medium. { time, energy }.
+// Costs kept modest so a settler can clear + fence + build without collapsing every day.
 const LABOR = {
-    forage: { time: 1.6, energy: 0.05 },    // clear a shrub / brush
-    fencepost: { time: 1.8, energy: 0.07 }, // set a fence post
-    break: { time: 2.8, energy: 0.09 },     // grub out a stump
-    chop: { time: 4.6, energy: 0.13 },      // fell a tree
-    mine: { time: 4.2, energy: 0.16 },      // smash a rock
+    forage: { time: 1.6, energy: 0.03 },    // clear a shrub / brush
+    fencepost: { time: 1.8, energy: 0.04 }, // set a fence post
+    break: { time: 2.8, energy: 0.055 },    // grub out a stump
+    chop: { time: 4.6, energy: 0.08 },      // fell a tree
+    mine: { time: 4.2, energy: 0.10 },      // smash a rock
 };
 
 export function d20(rand, modifier) {
@@ -1696,14 +1697,13 @@ export class Farmer {
         // 1) fence the claim first — one post at a time (a real chunk of work)
         if (!p.built.fence) {
             if (!p.fenceTarget) p.fenceTarget = w.fencePostTarget(p);
-            const spot = w.fencePostSpot(p, p.fencePosts);
-            // the fence line may run through a rock/tree/brush — CLEAR it before planting the post
-            const st = w.get(spot.i, spot.j);
-            if (st === T.ROCK || st === T.TREE || st === T.STUMP || st === T.FLOWER || st === T.WHEAT) {
-                const kind = st === T.ROCK ? 'rock' : st === T.TREE ? 'tree' : st === T.STUMP ? 'stump' : 'forage';
+            // the whole fence line must be clear first — no post goes up while a rock/tree/brush
+            // still sits on ANY border tile. Clear the nearest such obstacle, then raise posts.
+            const blocker = this.#nearestFenceLineObstacle(p);
+            if (blocker) {
                 this.think('CLEARING THE FENCE LINE');
-                if (this.#clearObstacle({ i: spot.i, j: spot.j, kind, tile: st })) return true;
-                p.fencePosts++; this.#backoff(); return true;   // can't reach it — skip past this spot
+                if (this.#clearObstacle(blocker)) return true;
+                this.#backoff(); return true;   // can't reach it right now — try again shortly
             }
             const needWood = (p.fencePosts % 2 === 0);   // ~1 wood per 2 posts
             if (needWood && this.wood < 1) {
@@ -1711,6 +1711,7 @@ export class Farmer {
                 if (this.#goChop()) return true;
                 this.#backoff(); return true;
             }
+            const spot = w.fencePostSpot(p, p.fencePosts);   // fence line is clear now — pick a post spot
             this.pendingFence = { needWood };
             this.think(`RAISING FENCE POST ${p.fencePosts + 1}/${p.fenceTarget}`);
             if (this.#goTo(spot.i + 0.5, spot.j + 0.5, 'fencepost')) return true;
@@ -1784,6 +1785,24 @@ export class Farmer {
         let best = null, bestD = 1e9;
         for (const key of p.cells) {
             const ci = key.indexOf(','), i = +key.slice(0, ci), j = +key.slice(ci + 1);
+            const t = w.get(i, j);
+            let kind = null;
+            if (t === T.TREE) kind = 'tree'; else if (t === T.STUMP) kind = 'stump';
+            else if (t === T.ROCK) kind = 'rock'; else if (t === T.FLOWER || t === T.WHEAT) kind = 'forage';
+            if (!kind) continue;
+            const d = Math.abs(i - this.pos.i) + Math.abs(j - this.pos.j);
+            if (d < bestD) { bestD = d; best = { i, j, kind, tile: t }; }
+        }
+        return best;
+    }
+    // Nearest tree/rock/stump/brush sitting on a BORDER cell of the plot (i.e. on the fence line).
+    #nearestFenceLineObstacle(p) {
+        const w = this.world;
+        let best = null, bestD = 1e9;
+        for (const key of p.cells) {
+            const c = key.indexOf(','), i = +key.slice(0, c), j = +key.slice(c + 1);
+            // only border cells (a fence rail runs along an edge with no plot neighbour)
+            if (p.cells.has(pkey(i, j - 1)) && p.cells.has(pkey(i + 1, j)) && p.cells.has(pkey(i, j + 1)) && p.cells.has(pkey(i - 1, j))) continue;
             const t = w.get(i, j);
             let kind = null;
             if (t === T.TREE) kind = 'tree'; else if (t === T.STUMP) kind = 'stump';
@@ -2257,8 +2276,10 @@ export class Farmer {
     // raises the odds of falling ill (see #dailyHealthCheck + the exhaustion nudge in #decide).
     #spendEnergy(cost) {
         this.energy = Math.max(0, this.energy - cost);
-        if (this.energy < 0.22) this.strain = (this.strain || 0) + (0.24 - this.energy) * 3 + 0.25;
-        else this.strain = Math.max(0, (this.strain || 0) - 0.05);
+        // strain only builds when running on fumes, and more gently than before, so bots don't
+        // fall ill from a normal day's clearing/fencing.
+        if (this.energy < 0.18) this.strain = (this.strain || 0) + (0.2 - this.energy) * 2 + 0.12;
+        else this.strain = Math.max(0, (this.strain || 0) - 0.08);
     }
     // Labor duration + energy scale with STR (strong bots swing faster and tire a touch less).
     #laborTime(act) { return LABOR[act].time / (this.workSpeed() * (1 + Math.max(0, mod(this.sheet.stats.str)) * 0.12)); }
