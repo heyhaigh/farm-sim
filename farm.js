@@ -858,16 +858,18 @@ export class World {
         const c = HOUSE_TIERS[level];
         return c && farmer.wood >= c.wood && farmer.ore >= c.ore && farmer.sheet.harvested >= c.harvested;
     }
-    raiseBuilding(farmer, level) {
+    raiseBuilding(farmer, level, free = false) {
         const p = farmer.plot, h = p.house, c = HOUSE_TIERS[level];
         if (!p.built.fence) return false;   // a home is never raised until the fence is fully up
-        farmer.wood -= c.wood; farmer.ore -= c.ore;
+        if (!free) { farmer.wood -= c.wood; farmer.ore -= c.ore; }
         for (let di = 0; di < 2; di++) for (let dj = 0; dj < 2; dj++) this.set(h.i + di, h.j + dj, T.HOUSE);
         p.built.level = level;
         this._tilesChanged = true;
         this.#rebuildFields(p);
-        if (level === 1) this.addLog(`${farmer.sheet.name} pitched a tipi — a first home!`, '#f0d060');
+        if (free) this.addLog(`${farmer.sheet.name} cobbled together a rough lean-to just to survive.`, '#e0a03c');
+        else if (level === 1) this.addLog(`${farmer.sheet.name} pitched a tipi — a first home!`, '#f0d060');
         else this.addLog(`${farmer.sheet.name} upgraded to a ${c.name}!`, '#f0d060');
+        return true;
     }
 
     // Place the farmer's next preferred facility if there's room (no auto-expand;
@@ -1178,6 +1180,9 @@ export class World {
             const altruist = friend || hp.collaboration > 0.7 || (helper.sheet.stats.cha >= 15 && hp.honesty > 0.5);
             const good = req.reward ? req.reward.good : 'crops';
             const gv = helper.goodValue(good);                 // a good the helper NEEDS is worth more per unit
+            // a good they're already drowning in isn't worth working for at any price the poster
+            // could pay — only pure goodwill (altruist/friend) moves them.
+            if (req.reward && gv < 0.8 && !altruist) continue;
             const offered = req.reward ? req.reward.offer : 0;
             // what the helper wants to be paid, in WORTH: shaped by personality + how they feel
             // about the poster (friends work for less, the barely-tolerated cost more).
@@ -1326,6 +1331,7 @@ export class World {
         for (const f of this.farmers) {
             if (f.health === 'sick') {
                 f.sickDays -= 1;
+                f.nightsExposed = Math.max(0, f.nightsExposed - 1);   // recovering eases the exposure count
                 if (f.sickDays <= 0) {
                     f.health = 'healthy'; f.energy = Math.max(f.energy, 0.5);
                     this.addLog(`${f.sheet.name} recovered and is back on their feet.`, '#7dd069');
@@ -1355,7 +1361,7 @@ export class World {
             }
             f.strain = Math.max(0, f.strain - 4);   // a night's rest works off most of the strain
             // opinions fade toward neutral over time — old grudges soften, gratitude cools
-            for (const [k, v] of f.opinions) { const nv = v * 0.9; if (Math.abs(nv) < 0.03) f.opinions.delete(k); else f.opinions.set(k, nv); }
+            for (const [k, v] of f.opinions) { const nv = v * 0.9; if (Math.abs(nv) < 0.03) { f.opinions.delete(k); f.opinionReasons && f.opinionReasons.delete(k); } else f.opinions.set(k, nv); }
         }
     }
 
@@ -1678,6 +1684,15 @@ export class Farmer {
         const w = this.world, p = this.plot;
         if (p.built.level >= 1 || w.isNight()) return false;
         const c = HOUSE_TIERS[1];
+        // desperation escape: exposed for many nights and still no way to build a proper home
+        // (can't stockpile the timber) -> throw up a bare free lean-to so they don't die of
+        // exposure in an unwinnable spot. Rare — only when wood is effectively unavailable.
+        if (this.nightsExposed >= 6 && this.wood < c.wood) {
+            p.built.fence = true; p.fenceTarget = Math.max(1, p.fenceTarget || 1); p.fencePosts = p.fenceTarget; p.rev++;
+            w.raiseBuilding(this, 1, true);
+            this.say('shelter, at last', '#e0a03c'); this.sparkle = 1; this.nightsExposed = 0;
+            return true;
+        }
         // 1) fence the claim first — one post at a time (a real chunk of work)
         if (!p.built.fence) {
             if (!p.fenceTarget) p.fenceTarget = w.fencePostTarget(p);
@@ -1724,8 +1739,8 @@ export class Farmer {
     // conversation happened.
     #maybeChat() {
         const w = this.world;
-        if (this.chatCooldown > 0) return false;
-        const busy = o => o.state === 'sleep' || o.state === 'rest' || o.state === 'sick' || o.state === 'shelter';
+        if (this.chatCooldown > 0 || this.health !== 'healthy') return false;
+        const busy = o => o.health !== 'healthy' || o.state === 'sleep' || o.state === 'rest' || o.state === 'sick' || o.state === 'shelter';
         const other = w.farmers.find(o => o !== this && !busy(o) && Math.abs(o.pos.i - this.pos.i) + Math.abs(o.pos.j - this.pos.j) < 3.2);
         if (!other) return false;
         this.chatCooldown = 12 + this.rand() * 12;

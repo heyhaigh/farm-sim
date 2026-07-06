@@ -1900,6 +1900,11 @@ function spawnFarmer() {
 // ---------------------------------------------------------------------------
 
 let last = performance.now();
+// Fixed-step sim clock: the simulation advances in uniform FIXED_DT increments regardless of
+// the frame schedule, so its evolution is deterministic (same seed + same number of steps ->
+// identical state). Real frame time only decides HOW MANY steps to run this frame.
+const FIXED_DT = 1 / 30;
+let simAccumulator = 0;
 
 function frame(now) {
     requestAnimationFrame(frame);
@@ -1913,7 +1918,10 @@ function frame(now) {
         return;
     }
 
-    world.tick(dt * (world._speedMult || 1));
+    simAccumulator += dt * (world._speedMult || 1);
+    let steps = 0;
+    while (simAccumulator >= FIXED_DT && steps < 800) { world.tick(FIXED_DT); simAccumulator -= FIXED_DT; steps++; }
+    if (steps >= 800) simAccumulator = 0;   // clamp at extreme speeds; don't spiral
 
     // background
     ctx.fillStyle = '#2a3438';
@@ -2014,5 +2022,8 @@ function drawBootScreen(t) {
         select: (i) => { selected = world.farmers[i] || null; },
         speed: (mult) => { world._speedMult = mult; },
         animalRow: (n) => { ANIMAL_SIDE_ROW = n; },
+        // deterministic stepping for reproducibility tests: N uniform FIXED_DT sim ticks
+        runSteps: (n) => { for (let k = 0; k < n; k++) world.tick(FIXED_DT); },
+        FIXED_DT,
     };
 })();
