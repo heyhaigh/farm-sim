@@ -1375,7 +1375,9 @@ function drawFarmer(f, sx, sy) {
 // UI
 // ---------------------------------------------------------------------------
 
-const BTN = { x: GW - 34, y: 3, w: 30, h: 12 };
+const FWD_BTN = { x: 0, y: 3, w: 0, h: 12 };      // 2x speed
+const FF_BTN = { x: 0, y: 3, w: 0, h: 12 };       // 10x speed
+const SPEED1_BTN = { x: 0, y: 3, w: 0, h: 12 };   // revert to 1x (visible while sped up)
 
 // Minimap legend (bottom-right): faint land/buildings, bright farmer dots, a viewport box.
 // Click it to jump the camera. Buildings are low-contrast; a home = 4 dots, a well = 1.
@@ -1550,7 +1552,6 @@ function drawBoard() {
 }
 
 function drawUI() {
-    BTN.x = GW - 34;
     // top bar
     ctx.fillStyle = 'rgba(12,14,22,0.92)';
     ctx.fillRect(0, 0, GW, 18);
@@ -1587,34 +1588,34 @@ function drawUI() {
 
     // (help requests now surface on the Town Board, not the top bar)
 
-    // roster nav button (left of +RY)
-    ROSTER_BTN.x = BTN.x - ROSTER_BTN.w - 6;
-    ctx.fillStyle = rosterOpen ? '#7dd069' : 'rgba(255,255,255,0.08)';
-    ctx.fillRect(ROSTER_BTN.x, ROSTER_BTN.y, ROSTER_BTN.w, ROSTER_BTN.h);
-    drawText(ctx, 'ROSTER', ROSTER_BTN.x + 5, ROSTER_BTN.y + 4, rosterOpen ? '#10240c' : '#c8ccd8');
+    // top-right button strip, laid out right-to-left with uniform inner padding
+    const BPAD = 5, BGAP = 6;
+    let bx = GW - 4;
+    const barBtn = (rect, label, active, activeBg, activeFg) => {
+        rect.w = textWidth(label) + BPAD * 2; rect.h = 12; rect.y = 3;
+        bx -= rect.w; rect.x = bx; bx -= BGAP;
+        ctx.fillStyle = active ? activeBg : 'rgba(255,255,255,0.08)';
+        ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+        drawText(ctx, label, rect.x + BPAD, rect.y + 4, active ? activeFg : '#c8ccd8');
+    };
 
-    // board nav button (left of ROSTER) — only exists once the town has built the board
-    BOARD_BTN.x = ROSTER_BTN.x - BOARD_BTN.w - 6;
-    BOARD_BTN.hidden = !world.board;
+    // speed controls in the corner: > = 2x, >> = 10x; a 1X revert appears while sped up
+    const spd = world._speedMult || 1;
+    barBtn(FF_BTN, '>>', spd === 10, '#e0a03c', '#221a0e');
+    barBtn(FWD_BTN, '>', spd === 2, '#e0a03c', '#221a0e');
+    SPEED1_BTN.w = 0;
+    if (spd !== 1) barBtn(SPEED1_BTN, '1X', true, '#c05840', '#ffffff');
+
+    barBtn(ROSTER_BTN, 'ROSTER', rosterOpen, '#7dd069', '#10240c');
+
+    BOARD_BTN.hidden = !world.board;   // only exists once the town has built the board
     if (!BOARD_BTN.hidden) {
         const postCount = world.helpBoard.filter(r => r.genuine).length + (world.project ? 1 : 0);
-        ctx.fillStyle = boardOpen ? '#c9a45a' : 'rgba(255,255,255,0.08)';
-        ctx.fillRect(BOARD_BTN.x, BOARD_BTN.y, BOARD_BTN.w, BOARD_BTN.h);
-        drawText(ctx, 'BOARD', BOARD_BTN.x + 5, BOARD_BTN.y + 4, boardOpen ? '#221a0e' : '#c8ccd8');
+        barBtn(BOARD_BTN, 'BOARD', boardOpen, '#c9a45a', '#221a0e');
         if (postCount > 0 && !boardOpen) { ctx.fillStyle = '#e0a03c'; ctx.fillRect(BOARD_BTN.x + BOARD_BTN.w - 4, BOARD_BTN.y - 1, 4, 4); }
     }
 
-    // sound toggle (left of BOARD/ROSTER)
-    SND_BTN.x = (BOARD_BTN.hidden ? ROSTER_BTN.x : BOARD_BTN.x) - SND_BTN.w - 6;
-    ctx.fillStyle = audio.enabled ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.04)';
-    ctx.fillRect(SND_BTN.x, SND_BTN.y, SND_BTN.w, SND_BTN.h);
-    drawText(ctx, audio.enabled ? 'SND' : 'MUTE', SND_BTN.x + (audio.enabled ? 7 : 4), SND_BTN.y + 4, audio.enabled ? '#c8ccd8' : '#6a6f7c');
-
-    // spawn button
-    const full = !world.canAddFarmer();
-    ctx.fillStyle = full ? '#3a3f4c' : '#7dd069';
-    ctx.fillRect(BTN.x, BTN.y, BTN.w, BTN.h);
-    drawText(ctx, '+RY', BTN.x + 9, BTN.y + 4, full ? '#6a6f7c' : '#10240c');
+    barBtn(SND_BTN, audio.enabled ? 'SND' : 'MUTE', !audio.enabled, 'rgba(255,255,255,0.04)', '#6a6f7c');
 
     // bottom log
     ctx.fillStyle = 'rgba(12,14,22,0.92)';
@@ -1969,7 +1970,9 @@ out.addEventListener('pointerup', (e) => {
     }
 
     // spawn button (top-right)
-    if (inRect(p, BTN)) { spawnFarmer(); return; }
+    if (inRect(p, FWD_BTN)) { world._speedMult = world._speedMult === 2 ? 1 : 2; return; }
+    if (inRect(p, FF_BTN)) { world._speedMult = world._speedMult === 10 ? 1 : 10; return; }
+    if (SPEED1_BTN.w && inRect(p, SPEED1_BTN)) { world._speedMult = 1; return; }
 
     // roster overlay (modal) — handle before any world/minimap clicks
     if (rosterOpen) {
