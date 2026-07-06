@@ -280,10 +280,10 @@ export class World {
     // Trees stay clear of a border so they never clip the map edge.
     #growForest() {
         const groves = [];
-        for (let g = 0; g < 30; g++) {
+        for (let g = 0; g < 42; g++) {
             const a = tileRand(g, 0, this.seed + 90) * Math.PI * 2;
             // reach groves further out (toward the map edges) so there's plenty of edge woodland
-            const r = 16 + tileRand(g, 1, this.seed + 91) * 32;
+            const r = 16 + tileRand(g, 1, this.seed + 91) * 34;
             groves.push({
                 i: CENTER + Math.cos(a) * r + (tileRand(g, 2, this.seed + 92) - 0.5) * 5,
                 j: CENTER + Math.sin(a) * r + (tileRand(g, 3, this.seed + 93) - 0.5) * 5,
@@ -349,7 +349,7 @@ export class World {
         }
 
         candidates.sort((a, b) => b.score - a.score);
-        const targetTrees = 96 + Math.floor(tileRand(0, 0, this.seed + 105) * 24);
+        const targetTrees = 150 + Math.floor(tileRand(0, 0, this.seed + 105) * 40);
         let planted = 0;
         for (const c of candidates) {
             if (planted >= targetTrees) break;
