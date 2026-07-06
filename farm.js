@@ -147,6 +147,7 @@ export class World {
 
         this.well = { i: CENTER, j: CENTER };
         this.sign = { i: CENTER + 2, j: CENTER + 1 };
+        this.board = { i: CENTER - 2, j: CENTER + 1 };   // town bulletin board, in the plaza
         this.wells = [this.well];
         this.set(this.well.i, this.well.j, T.WELL);
         this.set(this.sign.i, this.sign.j, T.SIGN);
@@ -539,7 +540,7 @@ export class World {
             if (nx < other.x + other.w + 1 && nx + nw > other.x - 1 &&
                 ny < other.y + other.h + 1 && ny + nh > other.y - 1) return null;
         }
-        const blockers = [...this.wells, this.sign, ...this.structures, this.project?.site].filter(Boolean);
+        const blockers = [...this.wells, this.sign, this.board, ...this.structures, this.project?.site].filter(Boolean);
         for (const b of blockers) if (b.i >= nx - 1 && b.i <= nx + nw && b.j >= ny - 1 && b.j <= ny + nh) return null;
         const tiles = [];
         for (let j = ny; j < ny + nh; j++) for (let i = nx; i < nx + nw; i++) {
@@ -562,7 +563,7 @@ export class World {
             for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++)
                 if (other.cells.has(pkey(i + di, j + dj))) return 'blocked';   // 1-tile gap between farms
         }
-        const blockers = [...this.wells, this.sign, ...this.structures, this.project?.site].filter(Boolean);
+        const blockers = [...this.wells, this.sign, this.board, ...this.structures, this.project?.site].filter(Boolean);
         for (const b of blockers) if (Math.abs(b.i - i) <= 1 && Math.abs(b.j - j) <= 1) return 'blocked';
         const t = this.get(i, j);
         if (t === T.TREE || t === T.STUMP) return 'tree';

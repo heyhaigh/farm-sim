@@ -4,7 +4,7 @@ import { fetchMemories, mod, fmtMod, STAT_NAMES, TRAIT_NAMES, TRAIT_LABELS, hash
 import { World, GRID, CENTER, T, DAY_LENGTH, NIGHT_LENGTH } from './farm.js';
 import {
     TILE_W, TILE_H, makeCanvas, drawText, textWidth,
-    makeFarmerSprites, makeCropSprites, makeHouse, makeWell, makeSign, makeFencePost,
+    makeFarmerSprites, makeCropSprites, makeHouse, makeWell, makeSign, makeBoard, makeFencePost,
     makeScaffold, makeToolshed, makeWindmill, makeTower, makeLantern,
     makeLilyPad, makeFish, makeChicken, makeCow, makePig, makeGoat, makeCoop, makeBarn, makeTrough,
     makeTree, makeStump, makeWildWheat, makeWildFlowers,
@@ -78,6 +78,12 @@ const ROSTER_BTN = { x: 0, y: 3, w: 44, h: 12 };   // positioned in drawUI
 const MINIMAP = { x: 0, y: 0, w: 46, h: 46 };      // bottom-right legend, positioned in drawMinimap
 const SHEET_RECT = { x: 0, y: 0, w: 0, h: 0 };     // detail-card bounds, set in drawSheet (for hit-testing)
 const SHEET_CLOSE = { x: 0, y: 0, w: 0, h: 0 };    // card close (X) button, set in drawSheet
+let boardOpen = false;                             // town bulletin board panel
+let boardScroll = 0, boardMaxScroll = 0;
+const boardScreen = { x: 0, y: 0, w: 0, h: 0 };    // board sprite screen rect (click to open)
+const BOARD_BTN = { x: 0, y: 3, w: 40, h: 12 };    // top-bar button, positioned in drawUI
+const BOARD_CLOSE = { x: 0, y: 0, w: 0, h: 0 };
+const BOARD_RECT = { x: 0, y: 0, w: 0, h: 0 };
 
 const cam = { x: 0, y: 0 };
 const mouse = { x: -1, y: -1, downX: 0, downY: 0, dragging: false, panStart: null };
@@ -86,6 +92,7 @@ const spriteCache = new Map();   // farmer -> frames
 const houseCache = new Map();    // roofColor -> canvas
 const wellSprite = makeWell();
 const signSprite = makeSign();
+const boardSprite = makeBoard();
 const fencePost = makeFencePost();
 const scaffoldSprite = makeScaffold();
 const lanternSprite = makeLantern();
@@ -809,6 +816,10 @@ function collectDrawables() {
         const s = world.sign;
         const sx2 = cam.x + isoX(s.i, s.j), sy2 = cam.y + isoY(s.i, s.j);
         list.push({ y: sy2 + TILE_H, draw: () => ctx.drawImage(signSprite, Math.floor(sx2 + TILE_W / 2 - 9 - 10), Math.floor(sy2 - 8)) });
+        const b = world.board;
+        const bx = cam.x + isoX(b.i, b.j), by = cam.y + isoY(b.i, b.j);
+        boardScreen.x = bx + TILE_W / 2 - 13; boardScreen.y = by - 14; boardScreen.w = 26; boardScreen.h = 26;
+        list.push({ y: by + TILE_H, draw: () => ctx.drawImage(boardSprite, Math.floor(boardScreen.x), Math.floor(boardScreen.y)) });
     }
 
     // completed structures
@@ -823,7 +834,7 @@ function collectDrawables() {
     }
 
     // active build site: scaffold + progress bar + label
-    if (world.project) {
+    if (world.project && world.project.site) {
         const pr = world.project;
         const sx = cam.x + isoX(pr.site.i, pr.site.j), sy = cam.y + isoY(pr.site.i, pr.site.j);
         list.push({
@@ -1148,6 +1159,75 @@ function drawMinimap() {
     ctx.restore();
 }
 
+// Town bulletin board: what the bots have posted — the communal project, help requests,
+// and build ambitions. A left-side scrollable kit panel.
+function drawBoard() {
+    const PW = 188, PX = 6, PY = 22, PH = GH - 22 - PY - 3;
+    BOARD_RECT.x = PX; BOARD_RECT.y = PY; BOARD_RECT.w = PW; BOARD_RECT.h = PH;
+    uiPanel(PX, PY, PW, PH);
+    const IX = PX + 7, IW = PW - 14;
+
+    BOARD_CLOSE.x = PX + PW - 13; BOARD_CLOSE.y = PY + 3; BOARD_CLOSE.w = 10; BOARD_CLOSE.h = 10;
+    ctx.fillStyle = '#3a2c1e'; ctx.fillRect(BOARD_CLOSE.x, BOARD_CLOSE.y, 10, 10);
+    ctx.fillStyle = '#5a4632'; ctx.fillRect(BOARD_CLOSE.x, BOARD_CLOSE.y, 10, 1);
+    drawText(ctx, 'X', BOARD_CLOSE.x + 3, BOARD_CLOSE.y + 3, '#e8c8a0');
+
+    ctx.fillStyle = '#2b2016'; ctx.fillRect(IX - 2, PY + 16, IW + 4, 12);
+    ctx.fillStyle = SHEET_GOLD; ctx.fillRect(IX - 2, PY + 16, IW + 4, 1); ctx.fillRect(IX - 2, PY + 27, IW + 4, 1);
+    drawText(ctx, 'TOWN BOARD', IX, PY + 19, '#ffffff', 1);
+
+    const bodyY = PY + 32, bodyH = PH - 32 - 5;
+    ctx.save(); ctx.beginPath(); ctx.rect(IX - 3, bodyY, IW + 6, bodyH); ctx.clip();
+    let y = bodyY - boardScroll;
+    const wrap = (t, col, ind = 0) => { for (const ln of wrapText(t, 30 - ind)) { drawText(ctx, ln, IX + ind, y, col); y += 7; } };
+
+    // --- Town project ---
+    y = sectionBand(IX, y, IW, 'TOWN PROJECT');
+    if (world.project) {
+        const pr = world.project;
+        drawText(ctx, pr.label, IX, y, SHEET_VAL); y += 7;
+        barFill(IX, y, IW, Math.min(pr.points / pr.needed, 1), '#7dd069');
+        drawText(ctx, `${Math.floor(pr.points)}/${pr.needed}`, IX + IW - 26, y - 1, SHEET_LABEL); y += 7;
+        wrap(pr.perk, SHEET_LABEL);
+    } else { drawText(ctx, 'no project underway', IX, y, SHEET_LABEL); y += 7; }
+    y += 4;
+
+    // --- Help wanted ---
+    const reqs = world.helpBoard.filter(r => r.genuine);
+    y = sectionBand(IX, y, IW, `HELP WANTED (${reqs.length})`);
+    if (reqs.length) {
+        for (const r of reqs) {
+            const nm = r.farmer.sheet.name.split(' ')[0];
+            drawText(ctx, '•', IX, y, '#e0a03c');
+            drawText(ctx, `${nm} needs a hand`, IX + 6, y, SHEET_VAL); y += 7;
+        }
+    } else { drawText(ctx, 'nobody needs help right now', IX, y, SHEET_LABEL); y += 7; }
+    y += 4;
+
+    // --- Ambitions ---
+    const ambitions = world.farmers.filter(f => f.wantExpand || f.wantFacility);
+    y = sectionBand(IX, y, IW, `AMBITIONS (${ambitions.length})`);
+    if (ambitions.length) {
+        for (const f of ambitions) {
+            const nm = f.sheet.name.split(' ')[0];
+            const what = f.wantExpand ? 'wants more land' : 'wants to build';
+            drawText(ctx, '•', IX, y, '#c9a45a');
+            drawText(ctx, `${nm} ${what}`, IX + 6, y, SHEET_VAL); y += 7;
+        }
+    } else { drawText(ctx, 'everyone is content', IX, y, SHEET_LABEL); y += 7; }
+    y += 6;
+
+    ctx.restore();
+    const contentH = (y + boardScroll) - bodyY;
+    boardMaxScroll = Math.max(0, contentH - bodyH);
+    if (boardScroll > boardMaxScroll) boardScroll = boardMaxScroll;
+    if (boardMaxScroll > 0) {
+        const thumbH = Math.max(12, bodyH * bodyH / contentH);
+        const thumbY = bodyY + (boardScroll / boardMaxScroll) * (bodyH - thumbH);
+        ctx.fillStyle = 'rgba(201,164,90,0.55)'; ctx.fillRect(PX + PW - 5, Math.floor(thumbY), 2, Math.floor(thumbH));
+    }
+}
+
 function drawUI() {
     BTN.x = GW - 34;
     // top bar
@@ -1186,9 +1266,15 @@ function drawUI() {
     ROSTER_BTN.x = BTN.x - ROSTER_BTN.w - 6;
     ctx.fillStyle = rosterOpen ? '#7dd069' : 'rgba(255,255,255,0.08)';
     ctx.fillRect(ROSTER_BTN.x, ROSTER_BTN.y, ROSTER_BTN.w, ROSTER_BTN.h);
-    ctx.fillStyle = rosterOpen ? '#7dd069' : 'rgba(255,255,255,0.2)';
-    if (!rosterOpen) { ctx.strokeStyle = 'rgba(255,255,255,0.2)'; }
     drawText(ctx, 'ROSTER', ROSTER_BTN.x + 5, ROSTER_BTN.y + 4, rosterOpen ? '#10240c' : '#c8ccd8');
+
+    // board nav button (left of ROSTER); shows a count of open postings
+    BOARD_BTN.x = ROSTER_BTN.x - BOARD_BTN.w - 6;
+    const postCount = world.helpBoard.filter(r => r.genuine).length + (world.project ? 1 : 0);
+    ctx.fillStyle = boardOpen ? '#c9a45a' : 'rgba(255,255,255,0.08)';
+    ctx.fillRect(BOARD_BTN.x, BOARD_BTN.y, BOARD_BTN.w, BOARD_BTN.h);
+    drawText(ctx, 'BOARD', BOARD_BTN.x + 5, BOARD_BTN.y + 4, boardOpen ? '#221a0e' : '#c8ccd8');
+    if (postCount > 0 && !boardOpen) { ctx.fillStyle = '#e0a03c'; ctx.fillRect(BOARD_BTN.x + BOARD_BTN.w - 4, BOARD_BTN.y - 1, 4, 4); }
 
     // spawn button
     const full = !world.slots.some(s => !s.used);
@@ -1209,7 +1295,7 @@ function drawUI() {
     });
 
     if (rosterOpen) drawRoster();
-    else { drawMinimap(); if (selected) drawSheet(selected); }   // card draws over the minimap
+    else { drawMinimap(); if (boardOpen) drawBoard(); else if (selected) drawSheet(selected); }
 }
 
 function wrapText(str, maxChars) {
@@ -1439,8 +1525,8 @@ function gamePoint(e) {
 out.addEventListener('pointerdown', (e) => {
     const p = gamePoint(e);
     mouse.downX = p.x; mouse.downY = p.y;
-    // don't world-pan when the gesture starts on the minimap or the open detail card
-    const onUI = !rosterOpen && (inRect(p, MINIMAP) || (selected && inRect(p, SHEET_RECT)));
+    // don't world-pan when the gesture starts on the minimap, the detail card, or the board
+    const onUI = !rosterOpen && (inRect(p, MINIMAP) || (selected && inRect(p, SHEET_RECT)) || (boardOpen && inRect(p, BOARD_RECT)));
     mouse.panStart = (rosterOpen || onUI) ? null : { x: p.x, y: p.y, camX: cam.x, camY: cam.y };
     mouse.dragging = false;
     out.setPointerCapture(e.pointerId);
@@ -1469,7 +1555,19 @@ out.addEventListener('pointerup', (e) => {
     const p = gamePoint(e);
 
     // roster toggle button
-    if (inRect(p, ROSTER_BTN)) { rosterOpen = !rosterOpen; return; }
+    if (inRect(p, ROSTER_BTN)) { rosterOpen = !rosterOpen; if (rosterOpen) boardOpen = false; return; }
+
+    // board toggle button
+    if (inRect(p, BOARD_BTN)) { boardOpen = !boardOpen; if (boardOpen) { selected = null; rosterOpen = false; boardScroll = 0; } return; }
+
+    // board panel interactions (X or click-outside closes; clicks inside are consumed)
+    if (boardOpen) {
+        if (inRect(p, BOARD_CLOSE) || !inRect(p, BOARD_RECT)) boardOpen = false;
+        return;
+    }
+
+    // clicking the bulletin-board structure opens the board
+    if (inRect(p, boardScreen)) { boardOpen = true; selected = null; boardScroll = 0; return; }
 
     // roster overlay interactions
     if (rosterOpen) {
@@ -1523,6 +1621,7 @@ out.addEventListener('pointerup', (e) => {
 // wheel scrolls whichever panel is open (roster or the detail card)
 out.addEventListener('wheel', (e) => {
     if (rosterOpen) { e.preventDefault(); rosterScroll += e.deltaY * 0.5; return; }
+    if (boardOpen) { e.preventDefault(); boardScroll = Math.max(0, Math.min(boardMaxScroll, boardScroll + e.deltaY * 0.5)); return; }
     if (selected) { e.preventDefault(); sheetScroll = Math.max(0, Math.min(maxSheetScroll, sheetScroll + e.deltaY * 0.5)); }
 }, { passive: false });
 

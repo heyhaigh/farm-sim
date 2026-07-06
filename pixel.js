@@ -540,6 +540,22 @@ export function makeSign() {
     return c;
 }
 
+export function makeBoard() {
+    const [c, ctx] = makeCanvas(26, 22);
+    // posts
+    ctx.fillStyle = '#6b4f30'; ctx.fillRect(3, 12, 2, 10); ctx.fillRect(21, 12, 2, 10);
+    // board frame + cork
+    ctx.fillStyle = '#7a5a38'; ctx.fillRect(1, 1, 24, 14);
+    ctx.fillStyle = '#5a4228'; ctx.fillRect(1, 1, 24, 1); ctx.fillRect(1, 14, 24, 1);
+    ctx.fillStyle = '#b89a6c'; ctx.fillRect(3, 3, 20, 10);
+    // little roof
+    ctx.fillStyle = '#8a5a3a'; ctx.fillRect(0, 0, 26, 2);
+    // pinned notes with red tacks
+    const notes = [[4, 4], [12, 4], [18, 5], [5, 9], [13, 9]];
+    for (const [nx, ny] of notes) { ctx.fillStyle = '#efe7d2'; ctx.fillRect(nx, ny, 4, 3); ctx.fillStyle = '#c05840'; ctx.fillRect(nx + 1, ny, 1, 1); }
+    return c;
+}
+
 export function makeScaffold() {
     const [c, ctx] = makeCanvas(24, 22);
     ctx.fillStyle = '#a8875c';
