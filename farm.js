@@ -929,7 +929,7 @@ export class World {
     // pay closer to fair; low-honesty bots lowball. Picks the good they can most spare.
     chooseReward(farmer, difficulty) {
         const s = farmer.sheet, p = s.personality;
-        const pools = [{ good: 'wood', have: farmer.wood }, { good: 'ore', have: farmer.ore }, { good: 'crops', have: s.harvested }];
+        const pools = [{ good: 'wood', have: farmer.wood }, { good: 'ore', have: farmer.ore }, { good: 'crops', have: s.produce || 0 }];
         for (const [g, n] of Object.entries(s.goods || {})) pools.push({ good: g, have: n });
         pools.sort((a, b) => b.have - a.have);
         const pick = pools.find(pl => pl.have > 0);
@@ -942,12 +942,13 @@ export class World {
     transferGood(from, to, good, amount) {
         let avail;
         if (good === 'wood') avail = from.wood; else if (good === 'ore') avail = from.ore;
-        else if (good === 'crops') avail = from.sheet.harvested; else avail = (from.sheet.goods && from.sheet.goods[good]) || 0;
+        else if (good === 'crops') avail = from.sheet.produce || 0; else avail = (from.sheet.goods && from.sheet.goods[good]) || 0;
         const n = Math.min(amount, avail);
         if (n <= 0) return 0;
         if (good === 'wood') { from.wood -= n; to.wood += n; }
         else if (good === 'ore') { from.ore -= n; to.ore += n; }
-        else if (good === 'crops') { from.sheet.harvested -= n; to.sheet.harvested += n; }
+        // crops move a spendable produce balance, NOT lifetime `harvested` (which gates leveling/upgrades)
+        else if (good === 'crops') { from.sheet.produce -= n; to.sheet.produce = (to.sheet.produce || 0) + n; }
         else { from.sheet.goods[good] -= n; to.sheet.goods = to.sheet.goods || {}; to.sheet.goods[good] = (to.sheet.goods[good] || 0) + n; }
         return n;
     }
@@ -1197,6 +1198,7 @@ export class Farmer {
         this.path = null;
         this.facing = 1;
         this.moveDir = 'down';   // which sheet row (down/side/up) the 4-way sprite faces
+        this.stuckTimer = 0; this.lastGoalDist = Infinity;   // walk-stuck safety net
         this.carryWater = 0;
         this.carryCrop = null;     // { type, t } — produce held up briefly after a harvest
         this.bubble = null;
@@ -1403,7 +1405,8 @@ export class Farmer {
         if (!p.built.fence) {
             if (this.wood >= FENCE_WOOD) { this.wood -= FENCE_WOOD; w.raiseFence(this); this.say('FENCED!', '#7dd069'); this.sparkle = 1.5; return true; }
             this.think(this.wood > 0 ? 'MORE WOOD FOR THE FENCE' : 'GATHERING WOOD TO FENCE MY LAND');
-            this.#goChop(); return true;
+            if (this.#goChop()) return true;
+            this.#backoff(); return true;   // no reachable wood — wait rather than spin
         }
         // 2) clear the whole building site of trees/rocks/brush
         if (!w.houseSiteClear(p)) {
@@ -1415,11 +1418,13 @@ export class Farmer {
         // 4) gather what's still missing (stone, then timber)
         if (this.ore < c.ore) {
             const rock = w.nearestRock(this.pos, 40);
-            if (rock) { this.think('MINING STONE FOR MY HOME'); this.mineTarget = rock; this.#goTo(rock.i + 0.5, rock.j + 0.5, 'mine'); return true; }
+            if (rock) { this.mineTarget = rock; if (this.#goTo(rock.i + 0.5, rock.j + 0.5, 'mine')) { this.think('MINING STONE FOR MY HOME'); return true; } }
         }
         this.think(this.wood > 0 ? 'MORE TIMBER FOR MY HOME' : 'FELLING TIMBER FOR MY HOME');
-        this.#goChop(); return true;
+        if (this.#goChop()) return true;
+        this.#backoff(); return true;
     }
+    #backoff() { this.state = 'idle'; this.wanderTimer = 1.5 + this.rand() * 2; }
     // Save toward the next dwelling tier; upgrade when affordable. Low priority (runs after
     // normal farm work), so L2/L3 accrete slowly from surplus timber/stone over many days.
     #maybeUpgradeHome() {
@@ -1615,14 +1620,19 @@ export class Farmer {
                 this.world.addBond(this, other);
                 // pay the agreed reward from the requester's stores
                 if (task.reward && task.reward.amount > 0) {
-                    const n = this.world.transferGood(other, this, task.reward.good, task.reward.amount);
-                    if (n > 0) {
+                    const owed = task.reward.amount;
+                    const n = this.world.transferGood(other, this, task.reward.good, owed);
+                    if (n >= owed) {
                         this.say(`+${n} ${task.reward.good}`, '#e8c860');
                         this.world.addLog(`${other.sheet.name} paid ${this.sheet.name} ${n} ${this.world.goodLabel(task.reward.good)}`, '#e8c860');
-                        other.adjustReputation(0.03);   // paying up builds a good name
+                        other.adjustReputation(0.03);   // paying in full builds a good name
+                    } else if (n > 0) {
+                        this.say(`only +${n} of ${owed}`, '#e0a03c');
+                        this.world.addLog(`${other.sheet.name} short-paid ${this.sheet.name} (${n}/${owed} ${this.world.goodLabel(task.reward.good)})`, '#e0a03c');
+                        other.adjustReputation(-0.05);  // couldn't cover the deal
                     } else {
                         this.say("...they couldn't pay", '#e0a03c');
-                        other.adjustReputation(-0.08);  // welched on the deal
+                        other.adjustReputation(-0.08);  // welched entirely
                     }
                 }
                 this.world.addLog(`${this.sheet.name} finished helping ${other.sheet.name} (+bond)`, '#7dd069');
@@ -1678,27 +1688,33 @@ export class Farmer {
 
     #goChop() {
         const src = this.world.nearestWood(this.pos);
-        if (!src) { this.wantExpand = false; this.wantFacility = false; return; }
+        if (!src) { this.wantExpand = false; this.wantFacility = false; return false; }
         this.think(this.wood > 0 ? 'NEED MORE WOOD' : 'OFF TO CHOP SOME WOOD');
-        this.#goToWood(src);
+        return this.#goToWood(src);
     }
 
     #goToWood(src) {
         this.woodTarget = src;
-        this.#goTo(src.i + 0.5, src.j + 0.5, src.kind === 'stump' ? 'break' : 'chop');
+        return this.#goTo(src.i + 0.5, src.j + 0.5, src.kind === 'stump' ? 'break' : 'chop');
     }
 
     // ---- movement & task routing -------------------------------------------------
 
+    // Returns true if a walk was started, false if the target is unreachable (caller should
+    // pick something else — we do NOT straight-line at an unreachable goal, which would slide
+    // against a wall forever).
     #goTo(i, j, then) {
         const tiles = this.world.findPath(this.pos, { i, j });
+        if (tiles === null) { this.path = null; this.state = 'decide'; return false; }
         let waypoints = null;
-        if (tiles && tiles.length) {
+        if (tiles.length) {
             waypoints = tiles.map(t => ({ i: t.i + 0.5, j: t.j + 0.5 }));
             waypoints[waypoints.length - 1] = { i, j };   // exact final target
         }
         this.path = { i, j, then, waypoints, wi: 0 };
+        this.stuckTimer = 0; this.lastGoalDist = Infinity;
         this.state = 'walk';
+        return true;
     }
     #goHome(then) { this.#goTo(this.plot.house.i - 1 + 0.5, this.plot.house.j + 2.5, then); }
 
@@ -1766,6 +1782,7 @@ export class Farmer {
         else if (check.total >= 10) yieldN = cfg.yieldHi;
         const ownerSheet = (helping && owner) ? owner.sheet : s;
         ownerSheet.harvested += yieldN; w.harvestTotal += yieldN;
+        ownerSheet.produce = (ownerSheet.produce || 0) + yieldN;   // spendable stockpile (harvested is lifetime-only)
         if (yieldN > 0 && !check.crit) this.say(`+${yieldN} ${name}`);
         p.ready = false; p.prod = 0;
         this.gainXP(2 + yieldN);
@@ -1784,6 +1801,7 @@ export class Farmer {
         else if (check.total >= 10) yieldN = 2;
         const ownerSheet = (helping && owner) ? owner.sheet : s;
         ownerSheet.harvested += yieldN; w.harvestTotal += yieldN;
+        ownerSheet.produce = (ownerSheet.produce || 0) + yieldN;   // spendable stockpile (harvested is lifetime-only)
         if (yieldN > 0 && !check.crit) this.say(`+${yieldN} ${c.type}`);
         if (yieldN > 0) this.carryCrop = { type: c.type, t: 2.2 };   // hold the picked produce up
         w.crops.delete(`${crop.i},${crop.j}`);
@@ -1940,6 +1958,11 @@ export class Farmer {
                     // facing row for the 4-way sprite: vertical when screen-Y dominates, else side
                     if (Math.abs(dx) + Math.abs(dy) > 0.02)
                         this.moveDir = Math.abs(dx + dy) > Math.abs(dx - dy) * 2 ? ((dx + dy) < 0 ? 'up' : 'down') : 'side';
+                    // stuck safety net: if not getting closer to the FINAL target, give up and redecide
+                    // (catches sliding along a wall, or a path invalidated by a mid-walk tile change)
+                    const goalDist = Math.abs(P.i - this.pos.i) + Math.abs(P.j - this.pos.j);
+                    if (goalDist < this.lastGoalDist - 0.03) { this.lastGoalDist = goalDist; this.stuckTimer = 0; }
+                    else { this.stuckTimer += dt; if (this.stuckTimer > 2.5) { this.path = null; this.state = 'decide'; } }
                 }
                 break;
             }
