@@ -1130,7 +1130,8 @@ export class World {
         const s = farmer.sheet, p = s.personality;
         const pools = [{ good: 'wood', have: farmer.wood }, { good: 'ore', have: farmer.ore }, { good: 'crops', have: s.produce || 0 }];
         for (const [g, n] of Object.entries(s.goods || {})) pools.push({ good: g, have: n });
-        pools.sort((a, b) => b.have - a.have);
+        // offer what they can most SPARE: lots on hand + low personal need for it
+        pools.sort((a, b) => (b.have / farmer.goodValue(b.good)) - (a.have / farmer.goodValue(a.good)));
         const pick = pools.find(pl => pl.have > 0);
         if (!pick) return null;
         const fair = difficulty * 0.7;
@@ -1174,19 +1175,23 @@ export class World {
             if (req.farmer.reputation < 0.3 && op < 0.2 && this.rand() > hp.collaboration) continue;   // shun bad names (unless a personal friend)
             const friend = op >= 0.4;
             const altruist = friend || hp.collaboration > 0.7 || (helper.sheet.stats.cha >= 15 && hp.honesty > 0.5);
+            const good = req.reward ? req.reward.good : 'crops';
+            const gv = helper.goodValue(good);                 // a good the helper NEEDS is worth more per unit
             const offered = req.reward ? req.reward.offer : 0;
-            // relationships move the price: friends work for less, the barely-tolerated cost more
-            const ask = Math.max(1, Math.round(req.difficulty * (0.5 + hp.competitiveness * 0.5 - hp.collaboration * 0.3 - op * 0.4)));
-            if (altruist || offered >= ask || !req.reward) {
+            // what the helper wants to be paid, in WORTH: shaped by personality + how they feel
+            // about the poster (friends work for less, the barely-tolerated cost more).
+            const askWorth = req.difficulty * (0.5 + hp.competitiveness * 0.5 - hp.collaboration * 0.3 - op * 0.4);
+            if (altruist || offered * gv >= askWorth || !req.reward) {
                 this.helpBoard.splice(i, 1);
-                return { req, agreed: req.reward ? { good: req.reward.good, amount: offered } : null };
+                return { req, agreed: req.reward ? { good, amount: offered } : null };
             }
-            if (ask <= req.reward.max) {   // counteroffer within the poster's ceiling
-                this.addLog(`${helper.sheet.name} haggled ${req.farmer.sheet.name} up to ${ask} ${this.goodLabel(req.reward.good)}`, '#c9a45a');
+            const askUnits = Math.max(1, Math.ceil(askWorth / gv));   // enough units of THIS good to be worth it
+            if (askUnits <= req.reward.max) {   // counteroffer within the poster's ceiling
+                this.addLog(`${helper.sheet.name} haggled ${req.farmer.sheet.name} up to ${askUnits} ${this.goodLabel(good)}`, '#c9a45a');
                 this.helpBoard.splice(i, 1);
-                return { req, agreed: { good: req.reward.good, amount: ask } };
+                return { req, agreed: { good, amount: askUnits } };
             }
-            // otherwise decline this posting and consider the next
+            // reward not worth it for a good they don't need — decline and consider the next
         }
         return null;
     }
@@ -1457,6 +1462,17 @@ export class Farmer {
         this.opinions.set(k, v);
         if (reason) this.opinionReasons = this.opinionReasons || new Map(), this.opinionReasons.set(k, reason);
     }
+    // How much THIS bot wants more of a good right now (~0.6 surplus .. ~1.8 badly needed).
+    // Drives what they offer (give away what they can spare) and what they'll accept (a good
+    // they need is worth more, so fewer units satisfy them).
+    goodValue(good) {
+        const lvl = this.plot.built.level;
+        if (good === 'wood') return this.wood < 8 ? 1.7 : this.wood < 20 ? 1.1 : 0.65;   // fences/houses/facilities burn wood
+        if (good === 'ore') return (lvl < 3 && this.ore < 8) ? 1.8 : this.ore < 4 ? 1.2 : 0.9;   // house upgrades need stone
+        if (good === 'crops') return 1.0;   // food, always somewhat wanted
+        return 0.7;   // forage goods = surplus to trade
+    }
+
     // Warmest ally / worst grudge, for the sheet's social readout.
     topRegard(sign) {
         let best = null, bestV = 0;
