@@ -29,7 +29,7 @@ void main() {
 
     // chromatic aberration: split the channels, the offset grows toward the edges so the
     // text/GUI at the top and bottom fringes visibly like an old tube.
-    float ca = 0.0012 + 0.0045 * dot(c, c);
+    float ca = 0.0006 + 0.00225 * dot(c, c);
     vec3 col;
     col.r = texture2D(uTex, uv + vec2(ca, 0.0)).r;
     col.g = texture2D(uTex, uv).g;

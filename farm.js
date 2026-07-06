@@ -1330,7 +1330,7 @@ export class World {
                 const dc = 10 + Math.floor(f.sleepDebt) + (f.energy < 0.2 ? 3 : 0) + Math.floor(f.strain / 3);
                 const save = d20(this.rand, mod(f.sheet.stats.con));
                 if (save.total < dc && !save.crit) {
-                    f.health = 'sick'; f.sickDays = 2 + Math.floor(this.rand() * 3) + (f.strain >= 8 ? 2 : 0); f.energy = Math.min(f.energy, 0.3);
+                    f.fallIll(2 + Math.floor(this.rand() * 3) + (f.strain >= 8 ? 2 : 0));
                     this.addLog(`${f.sheet.name} fell ill from overwork! (CON ${save.total} vs DC ${dc})`, '#c05840');
                     f.say('I... dont feel well', '#c05840');
                 } else if (f.sleepDebt >= 2 || f.strain >= 5) this.addLog(`${f.sheet.name} looks worn out but powers through (CON ${save.total} vs ${dc})`, '#e0a03c');
@@ -1431,6 +1431,9 @@ export class Farmer {
         this.health = 'healthy';
         this.sickDays = 0;
         this.workedLate = false;
+        // learned experience: bots adapt to their own history rather than repeating mistakes.
+        this.caution = 0;    // grows each time they fall ill -> they pace themselves harder
+        this.illnesses = 0;  // lifetime count (shown on their sheet)
         this.reputation = 0.55;
         this.poachCooldown = 6 + this.rand() * 10;
         this.visitedSick = new Set();
@@ -1581,13 +1584,26 @@ export class Farmer {
         return best;
     }
 
+    // Falling ill is a lesson: the bot grows more cautious so it stops repeating the overwork
+    // that put it here. Caution counterweights a competitive/driven personality without erasing it.
+    fallIll(days) {
+        this.health = 'sick';
+        this.sickDays = days;
+        this.energy = Math.min(this.energy, 0.3);
+        this.strain = 0;
+        this.illnesses++;
+        this.caution = Math.min(4, this.caution + 1);
+        this.think(this.illnesses > 1 ? 'SICK AGAIN — I HAVE TO PACE MYSELF.' : 'I OVERDID IT. TIME TO WORK SMARTER.');
+    }
+
     #shouldSleepNow() {
         if (this.health === 'sick') return true;
-        if (this.energy < 0.2) return true;
+        if (this.energy < 0.2 + this.caution * 0.05) return true;   // learned bots turn in sooner
         const np = this.world.nightProgress();
         let threshold = 0.1 + this.p.diligence * 0.55;
         if (this.isBehindLeader()) threshold += this.p.competitiveness * 0.3;
-        return np > Math.min(threshold, 0.85);
+        threshold -= this.caution * 0.09;   // and don't burn the midnight oil after past illnesses
+        return np > Math.min(Math.max(threshold, 0.15), 0.85);
     }
 
     #maybeAskForHelp() {
@@ -1697,12 +1713,13 @@ export class Farmer {
 
         if (this.health === 'sick') { this.think('NEED TO REST AND GET WELL'); this.#goHome('sick'); return; }
         // exhaustion: worn down and still grinding -> pushed to rest; pushing through deep
-        // strain can make you collapse and fall ill on the spot.
-        if (!w.isNight() && this.energy < 0.16) {
+        // strain can make you collapse and fall ill on the spot. Bots that have been sick before
+        // rest EARLIER (learned caution) so they stop repeating the collapse.
+        if (!w.isNight() && this.energy < 0.16 + this.caution * 0.05) {
             if (this.strain >= 8) {
                 const save = d20(this.rand, mod(s.stats.con));
                 if (save.total < 12 && !save.crit) {
-                    this.health = 'sick'; this.sickDays = 3 + Math.floor(this.rand() * 3); this.strain = 0;
+                    this.fallIll(3 + Math.floor(this.rand() * 3));
                     w.addLog(`${s.name} collapsed from exhaustion and took ill! (CON ${save.total} vs 12)`, '#c05840');
                     this.say('I overdid it...', '#c05840'); this.#goHome('sick'); return;
                 }
@@ -1787,10 +1804,11 @@ export class Farmer {
             this.#goTo(site.i + 0.5 + off, site.j + 1.6, 'build'); return;
         }
 
-        // 5. competitive & behind: grind
-        if (this.isBehindLeader() && this.p.competitiveness > 0.55 && this.energy > 0.4) {
+        // 5. competitive & behind: grind — but a bot that's been burned by overwork needs more in
+        //    the tank before it pushes (learned restraint scales with how often it's fallen ill).
+        if (this.isBehindLeader() && this.p.competitiveness > 0.55 && this.energy > 0.4 + this.caution * 0.1) {
             const anyField = this.#findField(f => w.get(f.i, f.j) === T.GRASS) || this.#findField(f => w.get(f.i, f.j) === T.TILLED && !w.cropAt(f.i, f.j));
-            if (anyField) { this.think('I WILL NOT FALL BEHIND'); this.#pursue({ act: w.get(anyField.i, anyField.j) === T.GRASS ? 'till' : 'plant', field: anyField }, this.plot, false); return; }
+            if (anyField) { this.think(this.caution >= 2 ? "I'LL CATCH UP — BUT NOT AT ANY COST" : 'I WILL NOT FALL BEHIND'); this.#pursue({ act: w.get(anyField.i, anyField.j) === T.GRASS ? 'till' : 'plant', field: anyField }, this.plot, false); return; }
         }
 
         // 5b. forage wild wheat / wildflowers growing nearby (free food + goods)

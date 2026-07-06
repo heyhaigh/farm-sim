@@ -1609,6 +1609,14 @@ function drawSheet(f) {
     drawText(ctx, 'THINKING', IX, y, SHEET_LABEL); y += 7;
     for (const line of wrapText(f.thought, 32).slice(0, 2)) { drawText(ctx, `"${line}"`, IX + 2, y, '#c8ccd8'); y += 7; }
     y += 3;
+    if (f.illnesses > 0) {
+        y = sectionBand(IX, y, IW, 'LESSONS LEARNED');
+        const lesson = f.caution >= 3 ? `Fell ill ${f.illnesses}x — now paces carefully, won't overwork.`
+            : f.caution >= 1 ? `Fell ill ${f.illnesses}x — learning to rest before burning out.`
+            : `Fell ill ${f.illnesses}x.`;
+        for (const line of wrapText(lesson, 32).slice(0, 3)) { drawText(ctx, line, IX + 2, y, '#c9a45a'); y += 7; }
+        y += 3;
+    }
     drawText(ctx, 'FROM MEMORY', IX, y, SHEET_LABEL); y += 7;
     for (const line of wrapText(s.memory.title, 32).slice(0, 3)) { drawText(ctx, line, IX + 2, y, '#8a9ade'); y += 7; }
     y += 5;
