@@ -1074,6 +1074,7 @@ export class World {
             for (const p of this.plots) if (i >= p.x - 1 && i <= p.x + p.w + 1 && j >= p.y - 1 && j <= p.y + p.h + 1) { clear = false; break; }
             for (const s of this.structures) if (Math.abs(s.i - i) + Math.abs(s.j - j) < 4) { clear = false; break; }
             if (Math.abs(this.well.i - i) + Math.abs(this.well.j - j) < 3) clear = false;
+            if (this.board && Math.abs(this.board.i - i) + Math.abs(this.board.j - j) < 4) clear = false;   // don't build on the bulletin board
             if (clear) return { i, j };
         }
         return null;
@@ -1952,17 +1953,22 @@ export class Farmer {
             return;
         }
         let ti, tj;
-        if (task.prod) { task.prod.busy = true; this.targetProd = task.prod; ti = task.prod.fx; tj = task.prod.fy; }
+        if (task.prod) { ti = task.prod.fx; tj = task.prod.fy; }
         else if (task.crop) { ti = task.crop.i + 0.5; tj = task.crop.j + 0.5; }
         else { ti = task.field.i + 0.5; tj = task.field.j + 0.5; }
+        // only claim the producer / queue the work once we know we can actually get there,
+        // else an unreachable target leaves it flagged busy forever.
+        if (!this.#goTo(ti, tj, 'work')) return;
+        if (task.prod) { task.prod.busy = true; this.targetProd = task.prod; }
         this.pendingWork = { task, plot, helping };
-        this.#goTo(ti, tj, 'work');
     }
 
     #pursuePoach(loot) {
+        const ti = loot.prod ? loot.prod.fx : loot.crop.i + 0.5;
+        const tj = loot.prod ? loot.prod.fy : loot.crop.j + 0.5;
+        if (!this.#goTo(ti, tj, 'poach')) return;   // unreachable — don't claim the loot
         this.poachLoot = loot;
-        if (loot.prod) { loot.prod.busy = true; this.targetProd = loot.prod; this.#goTo(loot.prod.fx, loot.prod.fy, 'poach'); }
-        else this.#goTo(loot.crop.i + 0.5, loot.crop.j + 0.5, 'poach');
+        if (loot.prod) { loot.prod.busy = true; this.targetProd = loot.prod; }
     }
 
     #startWork() {
@@ -1983,7 +1989,7 @@ export class Farmer {
         switch (task.act) {
             case 'till': w.set(task.field.i, task.field.j, T.TILLED); this.gainXP(1); break;
             case 'plant': w.plantCrop(task.field.i, task.field.j, s.crop, owner || this); this.gainXP(1); break;
-            case 'water': { const c = w.cropAt(task.crop.i, task.crop.j); if (c) c.water = 1; this.carryWater = Math.max(0, this.carryWater - 1); this.gainXP(1); break; }
+            case 'water': { const c = w.cropAt(task.crop.i, task.crop.j); if (c) { c.water = 1; this.carryWater = Math.max(0, this.carryWater - 1); this.gainXP(1); } break; }
             case 'clear': w.crops.delete(`${task.crop.i},${task.crop.j}`); w.set(task.crop.i, task.crop.j, T.TILLED); break;
             case 'tend': { const p = task.prod; if (p) p.fed = 1; this.gainXP(1); break; }
             case 'collect': this.#doCollect(task.prod, owner, helping); break;

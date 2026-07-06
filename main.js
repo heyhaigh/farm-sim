@@ -1467,13 +1467,16 @@ function drawUI() {
     ctx.fillRect(ROSTER_BTN.x, ROSTER_BTN.y, ROSTER_BTN.w, ROSTER_BTN.h);
     drawText(ctx, 'ROSTER', ROSTER_BTN.x + 5, ROSTER_BTN.y + 4, rosterOpen ? '#10240c' : '#c8ccd8');
 
-    // board nav button (left of ROSTER); shows a count of open postings
+    // board nav button (left of ROSTER) — only exists once the town has built the board
     BOARD_BTN.x = ROSTER_BTN.x - BOARD_BTN.w - 6;
-    const postCount = world.helpBoard.filter(r => r.genuine).length + (world.project ? 1 : 0);
-    ctx.fillStyle = boardOpen ? '#c9a45a' : 'rgba(255,255,255,0.08)';
-    ctx.fillRect(BOARD_BTN.x, BOARD_BTN.y, BOARD_BTN.w, BOARD_BTN.h);
-    drawText(ctx, 'BOARD', BOARD_BTN.x + 5, BOARD_BTN.y + 4, boardOpen ? '#221a0e' : '#c8ccd8');
-    if (postCount > 0 && !boardOpen) { ctx.fillStyle = '#e0a03c'; ctx.fillRect(BOARD_BTN.x + BOARD_BTN.w - 4, BOARD_BTN.y - 1, 4, 4); }
+    BOARD_BTN.hidden = !world.board;
+    if (!BOARD_BTN.hidden) {
+        const postCount = world.helpBoard.filter(r => r.genuine).length + (world.project ? 1 : 0);
+        ctx.fillStyle = boardOpen ? '#c9a45a' : 'rgba(255,255,255,0.08)';
+        ctx.fillRect(BOARD_BTN.x, BOARD_BTN.y, BOARD_BTN.w, BOARD_BTN.h);
+        drawText(ctx, 'BOARD', BOARD_BTN.x + 5, BOARD_BTN.y + 4, boardOpen ? '#221a0e' : '#c8ccd8');
+        if (postCount > 0 && !boardOpen) { ctx.fillStyle = '#e0a03c'; ctx.fillRect(BOARD_BTN.x + BOARD_BTN.w - 4, BOARD_BTN.y - 1, 4, 4); }
+    }
 
     // spawn button
     const full = !world.canAddFarmer();
@@ -1764,8 +1767,8 @@ out.addEventListener('pointerup', (e) => {
     // roster toggle button
     if (inRect(p, ROSTER_BTN)) { rosterOpen = !rosterOpen; if (rosterOpen) boardOpen = false; return; }
 
-    // board toggle button
-    if (inRect(p, BOARD_BTN)) { boardOpen = !boardOpen; if (boardOpen) { selected = null; rosterOpen = false; boardScroll = 0; } return; }
+    // board toggle button (only when the board has been built)
+    if (!BOARD_BTN.hidden && inRect(p, BOARD_BTN)) { boardOpen = !boardOpen; if (boardOpen) { selected = null; rosterOpen = false; boardScroll = 0; } return; }
 
     // board panel interactions (X or click-outside closes; clicks inside are consumed)
     if (boardOpen) {
