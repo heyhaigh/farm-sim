@@ -575,6 +575,7 @@ function drawSmoke(hx, hy, dispW, dispH, seed = 0) {
 
 function addBirds(list) {
     if (!birdJumpReady || !imageLoaded(birdJumpSheet)) return;
+    if (world.isNight()) return;   // crows aren't out at night
     const t = performance.now() / 1000;
     const CENTER_X = TILE_W / 2 - 10;   // align iso tile centering used elsewhere
     for (const b of world.birds) {

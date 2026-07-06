@@ -258,6 +258,7 @@ export class World {
         else { b.state = 'perch'; b.timer = 2 + this.rand() * 4; }
     }
     #tickBirds(dt) {
+        if (this.isNight()) return;   // crows roost at night — no flying, hopping, or crop raids
         for (const b of this.birds) {
             if (b.state === 'perch') { b.timer -= dt; if (b.timer <= 0) this.#birdDecide(b); }
             else if (b.state === 'peck') { b.timer -= dt; if (b.timer <= 0) this.#birdEat(b); }
@@ -1069,17 +1070,17 @@ export class World {
     }
 
     #findStructureSpot() {
-        for (let tries = 0; tries < 60; tries++) {
+        for (let tries = 0; tries < 80; tries++) {
             const a = this.rand() * Math.PI * 2;
-            const r = 4 + this.rand() * 4;
+            const r = 7 + this.rand() * 5;   // out on the plaza ring, clear of the central well
             const i = Math.round(CENTER + Math.cos(a) * r);
             const j = Math.round(CENTER + Math.sin(a) * r);
             if (this.get(i, j) !== T.GRASS) continue;
             let clear = true;
             for (const p of this.plots) if (i >= p.x - 1 && i <= p.x + p.w + 1 && j >= p.y - 1 && j <= p.y + p.h + 1) { clear = false; break; }
-            for (const s of this.structures) if (Math.abs(s.i - i) + Math.abs(s.j - j) < 4) { clear = false; break; }
-            if (Math.abs(this.well.i - i) + Math.abs(this.well.j - j) < 3) clear = false;
-            if (this.board && Math.abs(this.board.i - i) + Math.abs(this.board.j - j) < 4) clear = false;   // don't build on the bulletin board
+            for (const s of this.structures) if (Math.abs(s.i - i) + Math.abs(s.j - j) < 5) { clear = false; break; }
+            if (Math.abs(this.well.i - i) + Math.abs(this.well.j - j) < 6) clear = false;   // keep well clear (sprites are big)
+            if (this.board && Math.abs(this.board.i - i) + Math.abs(this.board.j - j) < 5) clear = false;
             if (clear) return { i, j };
         }
         return null;
