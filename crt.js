@@ -40,9 +40,9 @@ void main() {
     float lum = dot(col, vec3(0.30, 0.59, 0.11));
     col = clamp(mix(vec3(lum), col, 1.20), 0.0, 1.0);
 
-    // horizontal scanlines keyed to output rows
-    float scan = 0.5 + 0.5 * sin(uv.y * uRes.y * 3.14159 / 1.5);
-    col *= mix(0.86, 1.0, scan);
+    // horizontal scanlines — one per game-pixel row, clearly visible
+    float scan = 0.5 + 0.5 * sin(uv.y * uTexRes.y * 6.28318);
+    col *= mix(0.62, 1.0, scan);
 
     // RGB aperture-grille mask on output columns (subtle vertical stripes)
     float m = mod(gl_FragCoord.x, 3.0);
