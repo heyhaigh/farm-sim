@@ -1,6 +1,7 @@
 // main.js — Ry Farms: rendering, camera, input, UI, boot.
 
 import { fetchMemories, mod, fmtMod, STAT_NAMES, TRAIT_NAMES, TRAIT_LABELS, hashString } from './dna.js';
+import { audio } from './audio.js';
 import { World, GRID, CENTER, T, DAY_LENGTH, NIGHT_LENGTH } from './farm.js';
 import {
     TILE_W, TILE_H, makeCanvas, drawText, textWidth,
@@ -87,6 +88,7 @@ let boardOpen = false;                             // town bulletin board panel
 let boardScroll = 0, boardMaxScroll = 0;
 const boardScreen = { x: 0, y: 0, w: 0, h: 0 };    // board sprite screen rect (click to open)
 const BOARD_BTN = { x: 0, y: 3, w: 40, h: 12 };    // top-bar button, positioned in drawUI
+const SND_BTN = { x: 0, y: 3, w: 30, h: 12 };      // sound on/off toggle, positioned in drawUI
 const BOARD_CLOSE = { x: 0, y: 0, w: 0, h: 0 };
 const BOARD_RECT = { x: 0, y: 0, w: 0, h: 0 };
 
@@ -1586,6 +1588,12 @@ function drawUI() {
         if (postCount > 0 && !boardOpen) { ctx.fillStyle = '#e0a03c'; ctx.fillRect(BOARD_BTN.x + BOARD_BTN.w - 4, BOARD_BTN.y - 1, 4, 4); }
     }
 
+    // sound toggle (left of BOARD/ROSTER)
+    SND_BTN.x = (BOARD_BTN.hidden ? ROSTER_BTN.x : BOARD_BTN.x) - SND_BTN.w - 6;
+    ctx.fillStyle = audio.enabled ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.04)';
+    ctx.fillRect(SND_BTN.x, SND_BTN.y, SND_BTN.w, SND_BTN.h);
+    drawText(ctx, audio.enabled ? 'SND' : 'MUTE', SND_BTN.x + (audio.enabled ? 7 : 4), SND_BTN.y + 4, audio.enabled ? '#c8ccd8' : '#6a6f7c');
+
     // spawn button
     const full = !world.canAddFarmer();
     ctx.fillStyle = full ? '#3a3f4c' : '#7dd069';
@@ -1899,6 +1907,7 @@ function gamePoint(e) {
 }
 
 out.addEventListener('pointerdown', (e) => {
+    audio.ensure();   // browsers only allow audio to start on a user gesture
     const p = gamePoint(e);
     mouse.downX = p.x; mouse.downY = p.y;
     // don't world-pan when the gesture starts on the minimap, the detail card, or the board
@@ -1931,6 +1940,7 @@ out.addEventListener('pointerup', (e) => {
     const p = gamePoint(e);
 
     // roster toggle button
+    if (inRect(p, SND_BTN)) { audio.ensure(); audio.toggle(); return; }
     if (inRect(p, ROSTER_BTN)) { rosterOpen = !rosterOpen; if (rosterOpen) boardOpen = false; return; }
 
     // board toggle button (only when the board has been built)
@@ -2061,6 +2071,9 @@ function frame(now) {
     simAccumulator += dt * (world._speedMult || 1);
     let steps = 0;
     while (simAccumulator >= FIXED_DT && steps < 800) { world.tick(FIXED_DT); simAccumulator -= FIXED_DT; steps++; }
+
+    // soundtrack follows the sim: theme by day, crickets at night, rain/thunder by weather
+    audio.update({ isNight: world.isNight(), weather: world.weather, flash: world.lightningFlash });
     // at extreme speeds keep a bounded backlog (spread over coming frames) rather than dropping
     // all the leftover time, but cap it so we never spiral.
     if (steps >= 800) simAccumulator = Math.min(simAccumulator, 800 * FIXED_DT);
@@ -2160,7 +2173,7 @@ function drawBootScreen(t) {
     setTimeout(() => { booted = true; }, 1400);
 
     window.RYFARMS = {  // debug handle
-        world, cam,
+        world, cam, audio,
         select: (i) => { selected = world.farmers[i] || null; },
         speed: (mult) => { world._speedMult = mult; },
         animalRow: (n) => { ANIMAL_SIDE_ROW = n; },
