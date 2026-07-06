@@ -1448,6 +1448,19 @@ function drawUI() {
     let hx = 74;
     hx += drawText(ctx, `DAY ${world.day}`, hx, 7, '#c8ccd8') + 8;
 
+    // time of day — always shown (morning / afternoon / evening / night)
+    {
+        let tod, tcol;
+        if (world.isNight()) { tod = 'NIGHT'; tcol = '#8a9ade'; }
+        else {
+            const fr = Math.min(0.999, Math.max(0, world.clock / DAY_LENGTH));
+            if (fr < 0.34) { tod = 'MORNING'; tcol = '#e6c85a'; }
+            else if (fr < 0.67) { tod = 'AFTERNOON'; tcol = '#f0d060'; }
+            else { tod = 'EVENING'; tcol = '#e0956a'; }
+        }
+        hx += drawText(ctx, tod, hx, 7, tcol) + 8;
+    }
+
     // season (color-coded)
     const season = world.seasonDef;
     hx += drawText(ctx, season.name, hx, 7, season.accent) + 8;
@@ -1458,11 +1471,6 @@ function drawUI() {
     const wcol = { sun: '#f0d060', cloud: '#9aa0b4', rain: '#6a9ade', storm: '#e05840', drought: '#e0a03c' }[world.weather];
     if (!blink) drawText(ctx, wl, hx, 7, wcol);
     hx += textWidth(wl) + 8;
-
-    hx += drawText(ctx, `MEM ${memories.length}`, hx, 7, '#9aa0b4') + 8;
-
-    // night indicator
-    if (world.isNight()) hx += drawText(ctx, 'NIGHT', hx, 7, '#8a9ade') + 6;
 
     // (help requests now surface on the Town Board, not the top bar)
 
