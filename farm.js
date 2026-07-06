@@ -1419,6 +1419,7 @@ export class Farmer {
         this.bubble = null;
         this.sparkle = 0;
         this.wanderTimer = 0;
+        this.chatCooldown = 2 + this.rand() * 8;   // gates neighbourly small talk
         this.animTime = this.rand() * 10;
 
         this.thought = 'A NEW FARM. A NEW LIFE.';
@@ -1699,6 +1700,35 @@ export class Farmer {
         this.#backoff(); return true;
     }
     #backoff() { this.state = 'idle'; this.wanderTimer = 1.5 + this.rand() * 2; }
+    #pickLine(arr) { return arr[Math.floor(this.rand() * arr.length)]; }
+    // A neighbourly exchange whose tone is set by their standing with each other (and sometimes
+    // a bit of gossip about a third party they distrust). Both bots speak; returns true if a
+    // conversation happened.
+    #maybeChat() {
+        const w = this.world;
+        if (this.chatCooldown > 0) return false;
+        const busy = o => o.state === 'sleep' || o.state === 'rest' || o.state === 'sick' || o.state === 'shelter';
+        const other = w.farmers.find(o => o !== this && !busy(o) && Math.abs(o.pos.i - this.pos.i) + Math.abs(o.pos.j - this.pos.j) < 3.2);
+        if (!other) return false;
+        this.chatCooldown = 12 + this.rand() * 12;
+        other.chatCooldown = Math.max(other.chatCooldown, 6 + this.rand() * 6);
+        const op = this.opinionOf(other);
+        const grudge = this.topRegard(-1);
+        let line, col = '#c8ccd8';
+        if (op >= 0.4) { line = this.#pickLine(['GOOD TO SEE YOU, FRIEND!', 'WE MAKE A FINE TEAM.', 'THANKS AGAIN, TRULY.']); col = '#7dd069'; }
+        else if (op <= -0.35) { line = this.#pickLine(["I HAVEN'T FORGOTTEN.", 'HMPH.', 'WATCH YOURSELF.', 'NOTHING TO SAY TO YOU.']); col = '#c05840'; }
+        else if (other === w.leader && this.p.competitiveness > 0.6) { line = this.#pickLine(["I'LL PASS YOU YET.", 'ENJOY THE LEAD... FOR NOW.']); col = '#e0a03c'; }
+        else if (this === w.leader) { line = this.#pickLine(['KEEP AT IT!', 'FINE DAY FOR FARMING.']); }
+        else if (grudge && grudge.v < -0.3 && grudge.who !== other && this.rand() < 0.4) { line = `DON'T TRUST ${grudge.who.sheet.name.split(' ')[0].toUpperCase()}...`; col = '#c9a45a'; }
+        else { line = this.#pickLine(['MORNING!', 'HOW GOES THE HARVEST?', 'HOW ARE THINGS?', 'LOVELY DAY... MOSTLY.']); }
+        this.say(line, col);
+        this.facing = (other.pos.i - other.pos.j) >= (this.pos.i - this.pos.j) ? 1 : -1;   // turn toward them
+        // the neighbour answers, tone set by THEIR regard for us
+        const rop = other.opinionOf(this);
+        other.say(rop >= 0.4 ? 'ALWAYS, FRIEND!' : rop <= -0.35 ? '...' : this.#pickLine(['LIKEWISE!', "CAN'T COMPLAIN.", 'AYE.', 'WELL ENOUGH!']), rop <= -0.35 ? '#c05840' : '#c8ccd8');
+        other.facing = (this.pos.i - this.pos.j) >= (other.pos.i - other.pos.j) ? 1 : -1;
+        return true;
+    }
     // Save toward the next dwelling tier; upgrade when affordable. Low priority (runs after
     // normal farm work), so L2/L3 accrete slowly from surplus timber/stone over many days.
     #maybeUpgradeHome() {
@@ -2230,6 +2260,9 @@ export class Farmer {
         this.helpCooldown = Math.max(0, this.helpCooldown - dt);
         this.poachCooldown = Math.max(0, this.poachCooldown - dt);
         this.thoughtBubbleTimer -= dt;
+        if (this.chatCooldown > 0) this.chatCooldown -= dt;
+        // opportunistic small talk as bots pass each other (doesn't interrupt what they're doing)
+        else if (!this.world.isNight() && (this.state === 'walk' || this.state === 'idle')) this.#maybeChat();
         if (this.bubble) { this.bubble.t -= dt; if (this.bubble.t <= 0) this.bubble = null; }
         if (this.carryCrop) { this.carryCrop.t -= dt; if (this.carryCrop.t <= 0) this.carryCrop = null; }
         this.sparkle = Math.max(0, this.sparkle - dt);
