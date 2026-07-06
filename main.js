@@ -212,6 +212,8 @@ const boardSheet = new Image(); let boardReady = false; boardSheet.onload = () =
 boardSheet.src = './assets/craftpix-net-189780-free-top-down-pixel-art-guild-hall-asset-pack/PNG/Interior_objects.png';
 const BOARD_EMPTY_SRC = { x: 0, y: 156, w: 41, h: 62 };
 const BOARD_FULL_SRC = { x: 48, y: 156, w: 41, h: 62 };
+const CHEST_CLOSED_SRC = { x: 248, y: 357, w: 20, h: 20 };   // treasure chest (same guild-hall sheet)
+const CHEST_OPEN_SRC = { x: 276, y: 358, w: 23, h: 20 };
 const WELL_SRC = { x: 48, y: 498, w: 38, h: 38 };    // grass-base stone well in exterior.png
 const SMOKE_ENABLED = false;   // chimney smoke off until per-house (sheet-row) alignment is nailed
 const smokeSheet = new Image();
@@ -980,6 +982,28 @@ function collectDrawables() {
                 list.push({ y: by + TILE_H, draw: () => ctx.drawImage(boardSprite, Math.floor(boardScreen.x), Math.floor(boardScreen.y)) });
             }
         } else { boardScreen.w = 0; boardScreen.h = 0; }   // no board -> nothing to click
+    }
+
+    // rare treasure chest (glints while unopened to catch the eye)
+    if (world.treasure && boardReady && imageLoaded(boardSheet)) {
+        const tr = world.treasure;
+        const src = tr.opened ? CHEST_OPEN_SRC : CHEST_CLOSED_SRC;
+        const dw = Math.round(src.w * ASSET_SCALE * 1.4), dh = Math.round(src.h * ASSET_SCALE * 1.4);
+        const sx = cam.x + isoX(tr.i, tr.j) + TILE_W / 2 - 10, sy = cam.y + isoY(tr.i, tr.j);
+        list.push({
+            y: sy + TILE_H, layer: 2, draw: () => {
+                ctx.imageSmoothingEnabled = false;
+                const t = performance.now() / 1000;
+                if (!tr.opened) {   // soft golden glow + twinkle
+                    const pulse = 0.35 + 0.25 * Math.sin(t * 4);
+                    const g = ctx.createRadialGradient(sx, sy, 1, sx, sy, 16);
+                    g.addColorStop(0, `rgba(245,220,110,${pulse})`); g.addColorStop(1, 'rgba(245,220,110,0)');
+                    ctx.fillStyle = g; ctx.fillRect(sx - 16, sy - 16, 32, 32);
+                }
+                ctx.drawImage(boardSheet, src.x, src.y, src.w, src.h, Math.floor(sx - dw / 2), Math.floor(sy + TILE_H - dh), dw, dh);
+                if (!tr.opened && Math.floor(t * 3) % 2) drawText(ctx, '*', Math.floor(sx + 4), Math.floor(sy + TILE_H - dh - 5), '#fff4c0');
+            }
+        });
     }
 
     // completed structures

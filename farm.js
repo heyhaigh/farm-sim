@@ -180,6 +180,7 @@ export class World {
         this.scarecrows = [];   // (placeholder — scarecrows will keep birds off nearby crops)
         this.birds = [];
         this.#spawnBirds(4 + Math.floor(this.rand() * 3));
+        this.treasure = null;   // a rare treasure chest; the finder is richly rewarded
     }
 
     // ---- crows: perch in trees, hop tree-to-tree, and raid unguarded crops -------
@@ -256,6 +257,42 @@ export class World {
         const t = this.#birdTargetTree(b.i, b.j);
         if (t) this.#birdFlyTo(b, t, 'toTree');
         else { b.state = 'perch'; b.timer = 2 + this.rand() * 4; }
+    }
+    // ---- rare treasure chest -----------------------------------------------------
+    // Very occasionally a chest appears on open ground; the first farmer to reach it is
+    // richly rewarded (crops + goods now; special items later once inventory design lands).
+    #maybeSpawnTreasure() {
+        if (this.treasure) return;
+        if (this.rand() > 0.04) return;   // ~1 in 25 days — genuinely rare
+        for (let tries = 0; tries < 50; tries++) {
+            const a = this.rand() * Math.PI * 2, r = 8 + this.rand() * 22;
+            const i = Math.round(CENTER + Math.cos(a) * r), j = Math.round(CENTER + Math.sin(a) * r);
+            if (i < FOREST_BORDER || j < FOREST_BORDER || i >= GRID - FOREST_BORDER || j >= GRID - FOREST_BORDER) continue;
+            if (this.get(i, j) !== T.GRASS || this.pathBlocked(i, j)) continue;
+            this.treasure = { i, j, claimant: null, opened: false, openT: 0 };
+            this.addLog('A glint on the ground... is that a TREASURE CHEST?', '#f0d060');
+            return;
+        }
+    }
+    openTreasure(farmer) {
+        const tr = this.treasure; if (!tr || tr.opened) return;
+        tr.opened = true; tr.openT = 2.4; tr.claimant = null;
+        const s = farmer.sheet;
+        const crops = 8 + Math.floor(this.rand() * 12);
+        s.produce = (s.produce || 0) + crops;
+        farmer.wood += 4 + Math.floor(this.rand() * 5);
+        farmer.ore += 2 + Math.floor(this.rand() * 4);
+        const goods = ['wild wheat', 'wildflowers'];
+        const g = goods[Math.floor(this.rand() * goods.length)];
+        s.goods = s.goods || {}; s.goods[g] = (s.goods[g] || 0) + (2 + Math.floor(this.rand() * 3));
+        farmer.gainXP(8); farmer.sparkle = 3; farmer.say('TREASURE!', '#f0d060');
+        this.addLog(`${s.name} found a TREASURE CHEST! A haul of ${crops} crops, timber, ore and goods!`, '#f0d060');
+    }
+    #tickTreasure(dt) {
+        const tr = this.treasure; if (!tr) return;
+        if (tr.opened) { tr.openT -= dt; if (tr.openT <= 0) this.treasure = null; return; }
+        // release a stale claim if the claimant wandered off / isn't coming
+        if (tr.claimant && tr.claimant.state !== 'walk' && tr.claimant.state !== 'treasure') tr.claimant = null;
     }
     #tickBirds(dt) {
         if (this.isNight()) return;   // crows roost at night — no flying, hopping, or crop raids
@@ -1378,6 +1415,7 @@ export class World {
             this.#advanceSeason();
             this.#regrowWild();
             this.#encroach();
+            this.#maybeSpawnTreasure();
             this.addLog(`Day ${this.day} begins on Ry Farms`, '#f0d060');
             if (this.rand() < 0.5) this.#rollWeather();
         }
@@ -1387,6 +1425,7 @@ export class World {
         this.#tickProducers(dt);
         this.#tickLightning(dt);
         this.#tickBirds(dt);
+        this.#tickTreasure(dt);
         this.#maybeStartProject();
         this.updateLeader();
         for (const f of this.farmers) f.tick(dt);
@@ -1885,6 +1924,16 @@ export class Farmer {
             if (s.stats.con < 13) { this.think('I HATE THUNDER. HIDING.'); this.#goHome('shelter'); return; }
         }
 
+        // a rare treasure chest is worth dropping everything for — the nearest free farmer claims it
+        if (w.treasure && !w.treasure.opened && !w.treasure.claimant && !w.isNight() && this.energy > 0.2) {
+            const tr = w.treasure, d = Math.abs(tr.i - this.pos.i) + Math.abs(tr.j - this.pos.j);
+            if (d < 40) {
+                tr.claimant = this; this.think('IS THAT... TREASURE?! MINE!');
+                if (this.#goTo(tr.i + 0.5, tr.j + 0.5, 'treasure')) return;
+                tr.claimant = null;   // couldn't reach it — let someone else try
+            }
+        }
+
         // a new settler must clear their land, fence it, then build a house before farming
         if (this.plot.built.level < 1 && this.#pursueHomestead()) return;
         if (this.#maybeUpgradeHome()) return;
@@ -2375,6 +2424,7 @@ export class Farmer {
                     else if (then === 'shelter') { this.state = 'shelter'; this.say('yikes!'); }
                     else if (then === 'build') this.state = 'build';
                     else if (then === 'care') { this.state = 'care'; this.careTimer = 1.2; }
+                    else if (then === 'treasure') { this.world.openTreasure(this); this.state = 'decide'; }
                     else { this.state = 'idle'; this.wanderTimer = 1 + this.rand() * 2.5; }
                 } else {
                     const step = Math.min((this.speed * dt) / dist, 1);
