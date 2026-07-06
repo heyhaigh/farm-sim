@@ -683,6 +683,49 @@ export class World {
         return best;
     }
 
+    // Solid obstacles farmers must walk AROUND (buildings, wells, rocks, the board).
+    pathBlocked(i, j) {
+        const t = this.get(i, j);
+        if (t === T.HOUSE || t === T.WELL || t === T.STRUCT || t === T.COOP || t === T.BARN || t === T.ROCK) return true;
+        if (this.board && this.board.i === i && this.board.j === j) return true;
+        return false;
+    }
+
+    // A* over tiles avoiding obstacles. The goal tile is always allowed (so a bot can reach a
+    // rock it means to mine). Returns tile waypoints (excluding the start), or null if no path
+    // within the expansion cap (caller then falls back to a straight line).
+    findPath(start, goal) {
+        const si = Math.floor(start.i), sj = Math.floor(start.j);
+        const gi = Math.floor(goal.i), gj = Math.floor(goal.j);
+        if (si === gi && sj === gj) return [];
+        const okTile = (i, j) => (i === gi && j === gj) || !this.pathBlocked(i, j);
+        const key = (i, j) => i * GRID + j;
+        const open = [{ i: si, j: sj, g: 0, f: Math.abs(gi - si) + Math.abs(gj - sj), p: null }];
+        const best = new Map([[key(si, sj), 0]]);
+        const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+        let expansions = 0;
+        while (open.length) {
+            let bi = 0;
+            for (let k = 1; k < open.length; k++) if (open[k].f < open[bi].f) bi = k;
+            const cur = open.splice(bi, 1)[0];
+            if (cur.i === gi && cur.j === gj) {
+                const path = []; let n = cur; while (n) { path.push({ i: n.i, j: n.j }); n = n.p; }
+                path.reverse(); path.shift(); return path;
+            }
+            if (++expansions > 900) break;
+            for (const [di, dj] of dirs) {
+                const ni = cur.i + di, nj = cur.j + dj;
+                if (ni < 0 || nj < 0 || ni >= GRID || nj >= GRID || !okTile(ni, nj)) continue;
+                if (di && dj && this.pathBlocked(cur.i + di, cur.j) && this.pathBlocked(cur.i, cur.j + dj)) continue; // no corner-cut
+                const ng = cur.g + (di && dj ? 1.4 : 1), kk = key(ni, nj);
+                if (best.has(kk) && best.get(kk) <= ng) continue;
+                best.set(kk, ng);
+                open.push({ i: ni, j: nj, g: ng, f: ng + Math.abs(gi - ni) + Math.abs(gj - nj), p: cur });
+            }
+        }
+        return null;
+    }
+
     // nearest patch of wild forage (wheat or flowers) within reach
     nearestForage(pos, maxD = 15) {
         let best = null, bestD = maxD;
@@ -1445,7 +1488,16 @@ export class Farmer {
 
     // ---- movement & task routing -------------------------------------------------
 
-    #goTo(i, j, then) { this.path = { i, j, then }; this.state = 'walk'; }
+    #goTo(i, j, then) {
+        const tiles = this.world.findPath(this.pos, { i, j });
+        let waypoints = null;
+        if (tiles && tiles.length) {
+            waypoints = tiles.map(t => ({ i: t.i + 0.5, j: t.j + 0.5 }));
+            waypoints[waypoints.length - 1] = { i, j };   // exact final target
+        }
+        this.path = { i, j, then, waypoints, wi: 0 };
+        this.state = 'walk';
+    }
     #goHome(then) { this.#goTo(this.plot.house.i - 1 + 0.5, this.plot.house.j + 2.5, then); }
 
     // route a task into a walk + work, handling water fetch and producer targeting
@@ -1645,10 +1697,14 @@ export class Farmer {
             case 'decide-help': this.#decideHelp(); break;
 
             case 'walk': {
-                const dx = this.path.i - this.pos.i, dy = this.path.j - this.pos.j;
+                const P = this.path;
+                const wp = (P.waypoints && P.wi < P.waypoints.length) ? P.waypoints[P.wi] : { i: P.i, j: P.j };
+                const dx = wp.i - this.pos.i, dy = wp.j - this.pos.j;
                 const dist = Math.hypot(dx, dy);
-                if (dist < 0.14) {
-                    const then = this.path.then; this.path = null;
+                const arriveR = (P.waypoints && P.wi < P.waypoints.length - 1) ? 0.3 : 0.14;
+                if (dist < arriveR) {
+                    if (P.waypoints && P.wi < P.waypoints.length - 1) { P.wi++; break; }   // advance to next waypoint
+                    const then = P.then; this.path = null;
                     if (then === 'work') this.#startWork();
                     else if (then === 'poach') this.#startPoachAction();
                     else if (then === 'chop' || then === 'break') { this.chopTimer = (then === 'chop' ? 4.0 : 2.4) / (this.workSpeed() * (1 + Math.max(0, mod(this.sheet.stats.str)) * 0.12)); this.state = then; }
