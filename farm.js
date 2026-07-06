@@ -158,6 +158,7 @@ export class World {
         this.helpBoard = [];
         this.project = null;
         this.projectIndex = 0;
+        this.coops = [];      // farmer-proposed neighborhood projects (shared wells) — need-driven, sited where the members live
         this.structures = [];
         this.bonds = new Map();
         this.workMult = 1;
@@ -528,6 +529,7 @@ export class World {
         for (const s of this.structures) if (s.i === i && s.j === j) return true;
         const ps = this.project && this.project.site;
         if (ps && ps.i === i && ps.j === j) return true;
+        for (const c of this.coops) if (c.site.i === i && c.site.j === j) return true;
         return false;
     }
 
@@ -762,7 +764,7 @@ export class World {
             if (nx < other.x + other.w + 1 && nx + nw > other.x - 1 &&
                 ny < other.y + other.h + 1 && ny + nh > other.y - 1) return null;
         }
-        const blockers = [...this.wells, this.sign, this.board, ...this.structures, this.project?.site].filter(Boolean);
+        const blockers = [...this.wells, this.sign, this.board, ...this.structures, this.project?.site, ...this.coops.map(c => c.site)].filter(Boolean);
         for (const b of blockers) if (b.i >= nx - 1 && b.i <= nx + nw && b.j >= ny - 1 && b.j <= ny + nh) return null;
         const tiles = [];
         for (let j = ny; j < ny + nh; j++) for (let i = nx; i < nx + nw; i++) {
@@ -785,7 +787,7 @@ export class World {
             for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++)
                 if (other.cells.has(pkey(i + di, j + dj))) return 'blocked';   // 1-tile gap between farms
         }
-        const blockers = [...this.wells, this.sign, this.board, ...this.structures, this.project?.site].filter(Boolean);
+        const blockers = [...this.wells, this.sign, this.board, ...this.structures, this.project?.site, ...this.coops.map(c => c.site)].filter(Boolean);
         for (const b of blockers) if (Math.abs(b.i - i) <= 1 && Math.abs(b.j - j) <= 1) return 'blocked';
         const t = this.get(i, j);
         if (t === T.TREE || t === T.STUMP) return 'tree';
@@ -1154,6 +1156,148 @@ export class World {
         }
     }
 
+    // ---- neighborhood co-ops: need-driven shared infrastructure -------------------
+    // Unlike town projects (fixed order, sited at the central plaza, triggered by the
+    // town-wide harvest), a co-op is born from ONE farmer noticing their own pain — a
+    // long water haul — proposing a well near THEIR cluster, and recruiting the
+    // neighbors who share it. Members gather the materials and dig together.
+
+    // how far this farmer's home is from the nearest well (the daily pain)
+    waterHaul(farmer) {
+        const h = farmer.plot.house;
+        const wl = this.nearestWell(h);
+        return Math.abs(wl.i - h.i) + Math.abs(wl.j - h.j);
+    }
+
+    farmerCoop(farmer) { return this.coops.find(c => c.members.has(farmer)); }
+
+    // fellow farmers who share the pain: far from water AND living near the proposer
+    #coopNeighbors(farmer) {
+        const h = farmer.plot.house;
+        return this.farmers.filter(o => o !== farmer &&
+            this.waterHaul(o) >= FAR_WATER - 3 &&
+            Math.abs(o.plot.house.i - h.i) + Math.abs(o.plot.house.j - h.j) <= 26);
+    }
+
+    // open, reachable ground near the middle of the needy cluster, far enough from
+    // every existing well that the new one isn't redundant
+    #findCoopWellSite(farmer, mates) {
+        let ci = farmer.plot.house.i, cj = farmer.plot.house.j;
+        for (const m of mates) { ci += m.plot.house.i; cj += m.plot.house.j; }
+        ci = Math.round(ci / (mates.length + 1)); cj = Math.round(cj / (mates.length + 1));
+        for (let tries = 0; tries < 120; tries++) {
+            const a = this.rand() * Math.PI * 2, r = this.rand() * 8;
+            const i = Math.round(ci + Math.cos(a) * r), j = Math.round(cj + Math.sin(a) * r);
+            if (i < 3 || j < 3 || i >= GRID - 3 || j >= GRID - 3) continue;
+            if (this.get(i, j) !== T.GRASS) continue;
+            let ok = true;
+            for (const wl of this.wells) if (Math.abs(wl.i - i) + Math.abs(wl.j - j) < MIN_WELL_DIST) { ok = false; break; }
+            if (ok) for (const p of this.plots) { for (let dj = -1; dj <= 1 && ok; dj++) for (let di = -1; di <= 1; di++) if (p.cells.has(pkey(i + di, j + dj))) { ok = false; break; } }
+            if (ok) for (const st of this.structures) if (Math.abs(st.i - i) + Math.abs(st.j - j) < 4) { ok = false; break; }
+            if (ok && this.board && Math.abs(this.board.i - i) + Math.abs(this.board.j - j) < 4) ok = false;
+            if (ok && this.project?.site && Math.abs(this.project.site.i - i) + Math.abs(this.project.site.j - j) < 4) ok = false;
+            if (!ok) continue;
+            if (this.findPath(farmer.pos, { i, j }) === null) continue;   // must be reachable
+            return { i, j };
+        }
+        return null;
+    }
+
+    proposeCoop(farmer) {
+        if (this.coops.length) return null;                    // one neighborhood plan at a time
+        const mates = this.#coopNeighbors(farmer);
+        if (!mates.length) return null;                        // nobody shares the pain — no co-op
+        const site = this.#findCoopWellSite(farmer, mates);
+        if (!site) return null;
+        const coop = {
+            type: 'well', label: 'SHARED WELL', site, proposer: farmer,
+            members: new Set([farmer]), stage: 'rally', bornDay: this.day,
+            needWood: COOP_WELL.needWood, needOre: COOP_WELL.needOre, wood: 0, ore: 0,
+            points: 0, needed: COOP_WELL.needed, builders: new Set(),
+        };
+        this.coops.push(coop);
+        farmer.think("THE WELL'S A LONG HAUL - WE SHOULD DIG OUR OWN");
+        farmer.say('a well of our own!', '#8fc7e8');
+        this.addLog(`${farmer.sheet.name} proposed a shared well for their side of town`, '#8fc7e8');
+        return coop;
+    }
+
+    // a neighbor with the same long haul signs on; the plan activates at 2 members
+    joinCoop(farmer) {
+        const coop = this.coops[0];
+        if (!coop || coop.members.has(farmer)) return false;
+        if (this.waterHaul(farmer) < FAR_WATER - 3) return false;       // their haul is fine — no reason to dig
+        const h = farmer.plot.house;
+        if (Math.abs(coop.site.i - h.i) + Math.abs(coop.site.j - h.j) > 26) return false;   // too far away to benefit
+        if (farmer.sheet.personality.collaboration < 0.2) return false; // the true loners sit it out
+        coop.members.add(farmer);
+        farmer.say('count me in!', '#8fc7e8');
+        this.addLog(`${farmer.sheet.name} joined ${coop.proposer.sheet.name}'s well plan (${coop.members.size} hands)`, '#8fc7e8');
+        if (coop.stage === 'rally' && coop.members.size >= 2) {
+            coop.stage = 'gather';
+            this.addLog('The shared well has enough hands - the digging begins!', '#f0d060');
+        }
+        return true;
+    }
+
+    coopNeedsMaterials(coop) { return coop.wood < coop.needWood || coop.ore < coop.needOre; }
+
+    // a member drops off what they carry at the site
+    depositCoop(farmer, coop) {
+        let gave = 0;
+        const nw = Math.min(farmer.wood, coop.needWood - coop.wood);
+        if (nw > 0) { farmer.wood -= nw; coop.wood += nw; gave += nw; }
+        const no = Math.min(farmer.ore, coop.needOre - coop.ore);
+        if (no > 0) { farmer.ore -= no; coop.ore += no; gave += no; }
+        if (gave > 0) {
+            farmer.say(`+${gave} for the well`, '#8fc7e8');
+            if (!this.coopNeedsMaterials(coop) && coop.stage === 'gather') {
+                coop.stage = 'build';
+                this.addLog('Materials stacked at the well site - time to dig!', '#f0d060');
+            }
+        }
+        return gave;
+    }
+
+    contributeCoop(farmer, dt) {
+        const coop = this.coops[0];
+        if (!coop || coop.stage !== 'build') return;
+        coop.builders.add(farmer);
+        coop.points += dt * (1 + Math.max(0, mod(farmer.sheet.stats.str)) * 0.2) * this.workMult;
+        if (coop.points >= coop.needed) this.#completeCoop(coop);
+    }
+
+    #completeCoop(coop) {
+        this.coops = this.coops.filter(c => c !== coop);
+        const { site } = coop;
+        this.structures.push({ type: 'well2', i: site.i, j: site.j });
+        this.set(site.i, site.j, T.STRUCT);
+        this.wells.push({ i: site.i, j: site.j });
+        this.addLog(`The neighbors' shared well is finished - shorter hauls for ${coop.members.size} farms!`, '#f0d060');
+        const crew = new Set([...coop.members, ...coop.builders]);
+        for (const f of crew) {
+            f.gainXP(8); f.say('OUR WELL!', '#f0d060'); f.sparkle = 3;
+            for (const g of crew) if (g !== f && this.rand() < 0.75) { this.addBond(f, g); f.adjustOpinion(g, 0.2, 'dug our well together'); }
+        }
+    }
+
+    // a rally that never drew a second pair of hands fizzles after a couple of days;
+    // a dig that can't finish (materials nowhere to be found) is abandoned after a
+    // while so it doesn't block the next neighborhood plan forever
+    #tickCoops() {
+        this.coops = this.coops.filter(c => {
+            if (c.stage === 'rally' && this.day - c.bornDay >= COOP_RALLY_DAYS) {
+                this.addLog(`${c.proposer.sheet.name}'s well plan fizzled - nobody else signed on`, '#8a8fa0');
+                return false;
+            }
+            if (c.stage !== 'rally' && this.day - c.bornDay >= COOP_STALL_DAYS) {
+                this.addLog(`The shared well at ${c.site.i},${c.site.j} was abandoned - the dig stalled out`, '#8a8fa0');
+                return false;
+            }
+            return true;
+        });
+    }
+
     // ---- help board (generic; helper works whatever the plot needs) --------------
 
     // Effort estimate for a farmer's current backlog (drives the reward a poster offers
@@ -1416,6 +1560,7 @@ export class World {
             this.#regrowWild();
             this.#encroach();
             this.#maybeSpawnTreasure();
+            this.#tickCoops();
             this.addLog(`Day ${this.day} begins on Ry Farms`, '#f0d060');
             if (this.rand() < 0.5) this.#rollWeather();
         }
@@ -1431,6 +1576,14 @@ export class World {
         for (const f of this.farmers) f.tick(dt);
     }
 }
+
+// neighborhood co-op tuning: how far a water haul has to be before it hurts, how far
+// apart wells must sit (no redundant digs), and what a shared well takes to raise
+const FAR_WATER = 18;
+const MIN_WELL_DIST = 20;
+const COOP_WELL = { needWood: 10, needOre: 4, needed: 40 };
+const COOP_RALLY_DAYS = 2;
+const COOP_STALL_DAYS = 8;
 
 const PROJECT_DEFS = [
     { type: 'board', label: 'BULLETIN BOARD', at: 8, needed: 22, perk: 'FARMERS CAN POST JOBS' },
@@ -1483,6 +1636,7 @@ export class Farmer {
         this.thoughtBubbleTimer = 4 + this.rand() * 8;
         this.helpTask = null;
         this.helpCooldown = 0;
+        this.coopCooldown = 0;   // gates how often the shared-well idea can strike
         this.nextExpand = 8 + (sheet.seed % 5);      // jitter so farms don't grow in lockstep
         this.nextFacility = 12 + (sheet.seed % 6);
         this.targetProd = null;
@@ -1962,10 +2116,14 @@ export class Farmer {
             if (grew) return;
         }
 
-        // 1c. fill work: sow seeds, till new ground
+        // 1c. neighborhood co-op: digging a shared well beats another long haul to the
+        //     plaza — propose/join happens in passing; members pitch in ahead of fill work
+        if (!w.isNight() && this.energy > 0.3 && this.#pursueCoop()) return;
+
+        // 1d. fill work: sow seeds, till new ground
         const fill = this.#nextTaskOnPlot(this.plot, thirstThreshold, false);
 
-        // 1d. clear brush/trees/rocks ON my own plot to open more farmland. Interleaves with
+        // 1e. clear brush/trees/rocks ON my own plot to open more farmland. Interleaves with
         //     tilling (diligent bots clear more eagerly) so plots don't stay cluttered.
         if (!w.isNight()) {
             const ob = this.#nearestPlotObstacle();
@@ -2130,6 +2288,50 @@ export class Farmer {
             this.#goChop(); return true;
         }
         return false;
+    }
+
+    // Notice the pain (a long water haul), propose or join a shared-well plan, then pull
+    // your weight: haul carried materials to the site, chop/mine for what's missing, and
+    // dig together. Returns true when it started an action (walk/chop/mine/build).
+    #pursueCoop() {
+        const w = this.world;
+        let coop = w.farmerCoop(this);
+        if (!coop) {
+            if (w.coops.length) {
+                if (!w.joinCoop(this)) return false;       // not my side of town / haul is fine
+                coop = w.farmerCoop(this);
+            } else {
+                if (this.coopCooldown > 0 || this.p.collaboration < 0.3) return false;
+                if (w.waterHaul(this) < FAR_WATER) return false;
+                if (this.rand() > 0.3) return false;       // the idea strikes now and then, not every pass
+                this.coopCooldown = 45 + this.rand() * 60; // even a failed pitch isn't retried right away
+                w.proposeCoop(this);
+                return false;                              // keep farming while the plan rallies
+            }
+        }
+        if (!coop || coop.stage === 'rally') return false; // waiting on a second pair of hands
+        const site = coop.site;
+        if (w.coopNeedsMaterials(coop)) {
+            // only haul when carrying something the site still NEEDS — hauling wood to a
+            // site that's only short on ore is a wasted round trip (and a livelock)
+            const canGive = (coop.wood < coop.needWood && this.wood > 0) || (coop.ore < coop.needOre && this.ore > 0);
+            if (canGive) {
+                this.think('HAULING MATERIALS TO OUR WELL SITE');
+                return this.#goTo(site.i + 0.5, site.j + 1.5, 'coopdrop');
+            }
+            if (coop.wood < coop.needWood) {
+                const src = w.nearestWood(this.pos);
+                if (src) { this.think('TIMBER FOR OUR SHARED WELL'); return this.#goToWood(src); }
+            }
+            if (coop.ore < coop.needOre) {
+                const rock = w.nearestRock(this.pos, 60);
+                if (rock) { this.think('STONE FOR OUR SHARED WELL'); this.mineTarget = rock; return this.#goTo(rock.i + 0.5, rock.j + 0.5, 'mine'); }
+            }
+            return false;                                  // nothing gatherable right now
+        }
+        this.think('DIGGING OUR OWN WELL!');
+        const off = (this.sheet.seed % 3) - 1;
+        return this.#goTo(site.i + 0.5 + off, site.j + 1.6, 'coopbuild');
     }
 
     #goChop() {
@@ -2381,6 +2583,7 @@ export class Farmer {
         this.animTime += dt;
         this.helpCooldown = Math.max(0, this.helpCooldown - dt);
         this.poachCooldown = Math.max(0, this.poachCooldown - dt);
+        this.coopCooldown = Math.max(0, this.coopCooldown - dt);
         this.thoughtBubbleTimer -= dt;
         if (this.chatCooldown > 0) this.chatCooldown -= dt;
         // opportunistic small talk as bots pass each other (doesn't interrupt what they're doing)
@@ -2423,6 +2626,12 @@ export class Farmer {
                     else if (then === 'sick') this.state = 'sick';
                     else if (then === 'shelter') { this.state = 'shelter'; this.say('yikes!'); }
                     else if (then === 'build') this.state = 'build';
+                    else if (then === 'coopbuild') this.state = 'coopbuild';
+                    else if (then === 'coopdrop') {
+                        const coop = this.world.coops[0];
+                        if (coop) this.world.depositCoop(this, coop);
+                        this.state = 'decide';
+                    }
                     else if (then === 'care') { this.state = 'care'; this.careTimer = 1.2; }
                     else if (then === 'treasure') { this.world.openTreasure(this); this.state = 'decide'; }
                     else { this.state = 'idle'; this.wanderTimer = 1 + this.rand() * 2.5; }
@@ -2462,6 +2671,15 @@ export class Farmer {
                 const pr = this.world.project;
                 if (!pr) { this.state = 'decide'; break; }
                 this.world.contributeBuild(this, dt);
+                this.energy = Math.max(0, this.energy - ACTION_ENERGY.build * dt);
+                if (this.world.isNight() || this.energy < 0.3 || this.rand() < dt * 0.06) this.state = 'decide';
+                break;
+            }
+
+            case 'coopbuild': {
+                const coop = this.world.coops[0];
+                if (!coop || coop.stage !== 'build') { this.state = 'decide'; break; }
+                this.world.contributeCoop(this, dt);
                 this.energy = Math.max(0, this.energy - ACTION_ENERGY.build * dt);
                 if (this.world.isNight() || this.energy < 0.3 || this.rand() < dt * 0.06) this.state = 'decide';
                 break;

@@ -1013,6 +1013,18 @@ function collectDrawables() {
     // completed structures
     for (const st of world.structures) {
         const sx = cam.x + isoX(st.i, st.j), sy = cam.y + isoY(st.i, st.j);
+        if (st.type === 'well2' && homeReady && imageLoaded(homeSheet)) {
+            // extra wells (town second well, neighborhood shared wells) use the real well sprite
+            const wdw = Math.round(WELL_SRC.w * ASSET_SCALE), wdh = Math.round(WELL_SRC.h * ASSET_SCALE);
+            list.push({
+                y: sy + TILE_H, draw: () => {
+                    ctx.imageSmoothingEnabled = false;
+                    ctx.drawImage(homeSheet, WELL_SRC.x, WELL_SRC.y, WELL_SRC.w, WELL_SRC.h,
+                        Math.floor(sx + TILE_W / 2 - wdw / 2 - 10), Math.floor(sy + TILE_H - wdh + 2), wdw, wdh);
+                }
+            });
+            continue;
+        }
         let spr = structSprites[st.type];
         if (st.type === 'windmill') spr = spr[Math.floor(performance.now() / 350) % 2];
         list.push({
@@ -1041,6 +1053,32 @@ function collectDrawables() {
                 ctx.fillRect(Math.floor(sx - 12), Math.floor(sy - 13), Math.floor(24 * p), 2);
                 const lbl = pr.label;
                 drawText(ctx, lbl, Math.floor(sx - textWidth(lbl) / 2), Math.floor(sy - 22), '#f0d060');
+            }
+        });
+    }
+
+    // neighborhood co-op sites (farmer-proposed shared wells): same crate marker, blue
+    // while rallying/gathering materials, gold once the digging starts
+    for (const coop of world.coops) {
+        const sx = cam.x + isoX(coop.site.i, coop.site.j), sy = cam.y + isoY(coop.site.i, coop.site.j);
+        list.push({
+            y: sy + TILE_H, draw: () => {
+                if (crateReady && imageLoaded(crateSheet)) {
+                    ctx.imageSmoothingEnabled = false;
+                    const dw = Math.round(CRATES_SRC.w * ASSET_SCALE), dh = Math.round(CRATES_SRC.h * ASSET_SCALE);
+                    ctx.drawImage(crateSheet, CRATES_SRC.x, CRATES_SRC.y, CRATES_SRC.w, CRATES_SRC.h, Math.floor(sx - dw / 2), Math.floor(sy + TILE_H - dh), dw, dh);
+                } else {
+                    ctx.drawImage(scaffoldSprite, Math.floor(sx - 12), Math.floor(sy + TILE_H - 22));
+                }
+                const building = coop.stage === 'build';
+                const p = building ? Math.min(coop.points / coop.needed, 1)
+                    : Math.min((coop.wood + coop.ore) / (coop.needWood + coop.needOre), 1);
+                ctx.fillStyle = '#20222c';
+                ctx.fillRect(Math.floor(sx - 13), Math.floor(sy - 14), 26, 4);
+                ctx.fillStyle = building ? '#f0d060' : '#8fc7e8';
+                ctx.fillRect(Math.floor(sx - 12), Math.floor(sy - 13), Math.floor(24 * p), 2);
+                const lbl = coop.stage === 'rally' ? `${coop.label}?` : coop.label;
+                drawText(ctx, lbl, Math.floor(sx - textWidth(lbl) / 2), Math.floor(sy - 22), building ? '#f0d060' : '#8fc7e8');
             }
         });
     }
@@ -1430,6 +1468,22 @@ function drawBoard() {
         wrap(pr.perk, SHEET_LABEL);
     } else { drawText(ctx, 'no project underway', IX, y, SHEET_LABEL); y += 7; }
     y += 4;
+
+    // --- Neighborhood plans (farmer-proposed co-ops) ---
+    if (world.coops.length) {
+        y = sectionBand(IX, y, IW, 'NEIGHBORHOOD PLANS');
+        for (const c of world.coops) {
+            drawText(ctx, c.label, IX, y, SHEET_VAL); y += 7;
+            wrap(`${c.proposer.sheet.name}'s idea - ${c.members.size} signed on`, SHEET_LABEL);
+            if (c.stage === 'rally') wrap('needs one more pair of hands', '#8fc7e8');
+            else if (c.stage === 'gather') wrap(`materials: ${c.wood}/${c.needWood} wood, ${c.ore}/${c.needOre} ore`, '#8fc7e8');
+            else {
+                barFill(IX, y, IW, Math.min(c.points / c.needed, 1), '#8fc7e8');
+                drawText(ctx, `${Math.floor(c.points)}/${c.needed}`, IX + IW - 26, y - 1, SHEET_LABEL); y += 7;
+            }
+        }
+        y += 4;
+    }
 
     // --- Help wanted ---
     const reqs = world.helpBoard.filter(r => r.genuine);
