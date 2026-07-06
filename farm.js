@@ -871,21 +871,74 @@ export class World {
 
     // ---- help board (generic; helper works whatever the plot needs) --------------
 
-    postHelp(farmer, genuine = true) {
-        if (this.helpBoard.some(r => r.farmer === farmer)) return;
-        this.helpBoard.push({ farmer, genuine });
-        this.addLog(`${farmer.sheet.name} posted: NEED A HAND ON THE FARM`, '#e0a03c');
+    // Effort estimate for a farmer's current backlog (drives the reward a poster offers
+    // and the price a helper asks).
+    jobDifficulty(farmer) {
+        let d = 0;                        // urgent work drives most of it
+        for (const c of this.crops.values()) { if (c.owner !== farmer || c.withered) continue; if (c.stage === 3) d += 1.2; else if (c.water < 0.3) d += 0.8; }
+        let fieldWork = 0;                // routine tilling/sowing contributes a little, capped
+        for (const fld of farmer.plot.fields) { const t = this.get(fld.i, fld.j); if (t === T.GRASS) fieldWork += 0.15; else if (t === T.TILLED && !this.cropAt(fld.i, fld.j)) fieldWork += 0.3; }
+        d += Math.min(fieldWork, 3);
+        return Math.max(1, Math.min(12, Math.round(d)));
+    }
+    goodLabel(good) { return good; }
+    // What a poster will pay: an initial offer + a private ceiling. Collaborative/honest bots
+    // pay closer to fair; low-honesty bots lowball. Picks the good they can most spare.
+    chooseReward(farmer, difficulty) {
+        const s = farmer.sheet, p = s.personality;
+        const pools = [{ good: 'wood', have: farmer.wood }, { good: 'ore', have: farmer.ore }, { good: 'crops', have: s.harvested }];
+        for (const [g, n] of Object.entries(s.goods || {})) pools.push({ good: g, have: n });
+        pools.sort((a, b) => b.have - a.have);
+        const pick = pools.find(pl => pl.have > 0);
+        if (!pick) return null;
+        const fair = difficulty * 0.7;
+        const offer = Math.max(1, Math.min(pick.have, Math.round(fair * (0.5 + p.collaboration * 0.4 + p.honesty * 0.3))));
+        const max = Math.max(offer, Math.min(pick.have, Math.round(fair * (0.9 + p.honesty * 0.5))));
+        return { good: pick.good, offer, max };
+    }
+    transferGood(from, to, good, amount) {
+        let avail;
+        if (good === 'wood') avail = from.wood; else if (good === 'ore') avail = from.ore;
+        else if (good === 'crops') avail = from.sheet.harvested; else avail = (from.sheet.goods && from.sheet.goods[good]) || 0;
+        const n = Math.min(amount, avail);
+        if (n <= 0) return 0;
+        if (good === 'wood') { from.wood -= n; to.wood += n; }
+        else if (good === 'ore') { from.ore -= n; to.ore += n; }
+        else if (good === 'crops') { from.sheet.harvested -= n; to.sheet.harvested += n; }
+        else { from.sheet.goods[good] -= n; to.sheet.goods = to.sheet.goods || {}; to.sheet.goods[good] = (to.sheet.goods[good] || 0) + n; }
+        return n;
     }
 
+    postHelp(farmer, genuine = true) {
+        if (this.helpBoard.some(r => r.farmer === farmer)) return;
+        const difficulty = this.jobDifficulty(farmer);
+        const reward = this.chooseReward(farmer, difficulty);
+        this.helpBoard.push({ farmer, genuine, difficulty, reward });
+        const rtxt = reward ? ` (offers ${reward.offer} ${this.goodLabel(reward.good)})` : '';
+        this.addLog(`${farmer.sheet.name} posted for a hand${rtxt}`, '#e0a03c');
+    }
+
+    // A helper weighs each posting: accept if the pay meets their asking price (altruists help
+    // regardless), else haggle up to the poster's ceiling, else decline. Returns {req, agreed}.
     takeHelp(helper) {
         const hp = helper.sheet.personality;
-        if (hp.collaboration < 0.3 && this.rand() > 0.15) return null;
         for (let i = 0; i < this.helpBoard.length; i++) {
             const req = this.helpBoard[i];
             if (req.farmer === helper) continue;
-            if (hp.competitiveness > 0.6 && req.farmer === this.leader && hp.collaboration < 0.6) continue;
-            if (req.farmer.reputation < 0.35 && this.rand() > hp.collaboration) continue;
-            if (hp.collaboration > 0.45 || helper.sheet.stats.cha >= 14 || this.rand() < 0.4) { this.helpBoard.splice(i, 1); return req; }
+            if (req.farmer.reputation < 0.3 && this.rand() > hp.collaboration) continue;   // shun bad reputations
+            const altruist = hp.collaboration > 0.7 || (helper.sheet.stats.cha >= 15 && hp.honesty > 0.5);
+            const offered = req.reward ? req.reward.offer : 0;
+            const ask = Math.max(1, Math.round(req.difficulty * (0.5 + hp.competitiveness * 0.5 - hp.collaboration * 0.3)));
+            if (altruist || offered >= ask || !req.reward) {
+                this.helpBoard.splice(i, 1);
+                return { req, agreed: req.reward ? { good: req.reward.good, amount: offered } : null };
+            }
+            if (ask <= req.reward.max) {   // counteroffer within the poster's ceiling
+                this.addLog(`${helper.sheet.name} haggled ${req.farmer.sheet.name} up to ${ask} ${this.goodLabel(req.reward.good)}`, '#c9a45a');
+                this.helpBoard.splice(i, 1);
+                return { req, agreed: { good: req.reward.good, amount: ask } };
+            }
+            // otherwise decline this posting and consider the next
         }
         return null;
     }
@@ -1344,13 +1397,15 @@ export class Farmer {
         const fill = this.#nextTaskOnPlot(this.plot, thirstThreshold, false);
         if (fill) { this.#thinkTask(fill); this.#pursue(fill, this.plot, false); return; }
 
-        // 2. help a neighbor
-        const req = w.takeHelp(this);
-        if (req) {
-            this.helpTask = { requester: req.farmer, actionsLeft: 3 + Math.floor(this.rand() * 3), genuine: req.genuine, didWork: false };
+        // 2. help a neighbor (for an agreed reward)
+        const taken = w.takeHelp(this);
+        if (taken) {
+            const req = taken.req;
+            this.helpTask = { requester: req.farmer, actionsLeft: 3 + Math.floor(this.rand() * 3), genuine: req.genuine, didWork: false, reward: taken.agreed };
             this.think(`${req.farmer.sheet.name.toUpperCase()} NEEDS A HAND!`);
+            const payFor = taken.agreed ? ` FOR ${taken.agreed.amount} ${w.goodLabel(taken.agreed.good).toUpperCase()}` : '';
             this.say(`COMING ${req.farmer.sheet.name.split(' ')[0].toUpperCase()}!`, '#7dd069');
-            w.addLog(`${s.name} went to lend ${req.farmer.sheet.name} a hand`, '#7dd069');
+            w.addLog(`${s.name} took ${req.farmer.sheet.name}'s job${payFor}`, '#7dd069');
             this.state = 'decide-help'; return;
         }
 
@@ -1424,6 +1479,18 @@ export class Farmer {
                 other.adjustReputation(-0.12); this.adjustReputation(0.02);
             } else {
                 this.world.addBond(this, other);
+                // pay the agreed reward from the requester's stores
+                if (task.reward && task.reward.amount > 0) {
+                    const n = this.world.transferGood(other, this, task.reward.good, task.reward.amount);
+                    if (n > 0) {
+                        this.say(`+${n} ${task.reward.good}`, '#e8c860');
+                        this.world.addLog(`${other.sheet.name} paid ${this.sheet.name} ${n} ${this.world.goodLabel(task.reward.good)}`, '#e8c860');
+                        other.adjustReputation(0.03);   // paying up builds a good name
+                    } else {
+                        this.say("...they couldn't pay", '#e0a03c');
+                        other.adjustReputation(-0.08);  // welched on the deal
+                    }
+                }
                 this.world.addLog(`${this.sheet.name} finished helping ${other.sheet.name} (+bond)`, '#7dd069');
                 other.say('THANKS FRIEND!', '#7dd069'); other.helpCooldown = 20;
                 this.adjustReputation(0.05); this.gainXP(3);

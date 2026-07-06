@@ -1337,7 +1337,8 @@ function drawBoard() {
             const stat = r.farmer.state === 'sleep' ? 'asleep' : r.farmer.tired ? 'worn out' : 'swamped';
             drawText(ctx, stat, IX + IW - textWidth(stat), y, SHEET_LABEL); y += 7;
             for (const ln of wrapText('needs a hand ' + helpNeed(r.farmer), 30)) { drawText(ctx, ln, IX + 7, y, SHEET_LABEL); y += 7; }
-            y += 2;
+            const pay = r.reward ? `offers ${r.reward.offer} ${r.reward.good}` : 'offers only thanks';
+            drawText(ctx, pay, IX + 7, y, '#e8c860'); y += 9;
         }
     } else { drawText(ctx, 'nobody needs help right now', IX, y, SHEET_LABEL); y += 7; }
     y += 4;
