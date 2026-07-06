@@ -112,10 +112,14 @@ const FACILITY_DEFS = {
 };
 
 // energy / health tuning
-const AWAKE_DRAIN = 0.0022;
+const AWAKE_DRAIN = 0;        // no passive drain — merely being awake and farming never tires you;
+                             // only real labor (below) costs energy, so farms stay productive
 const SLEEP_RESTORE = 0.03;
-const REST_RESTORE = 0.022;
-const ACTION_ENERGY = { till: 0.055, plant: 0.03, water: 0.03, harvest: 0.05, clear: 0.045, build: 0.055, collect: 0.045, tend: 0.03 };
+const REST_RESTORE = 0.03;
+// Tending crops and animals is free — tilling a patch, sowing, watering, harvesting, collecting
+// eggs/milk, feeding. Only heavy construction (build) drains here; the rest is 0. Chopping,
+// mining, breaking stumps, fencing and raising scarecrows drain via the LABOR table below.
+const ACTION_ENERGY = { till: 0, plant: 0, water: 0.015, harvest: 0, clear: 0, build: 0.055, collect: 0, tend: 0 };
 // Clearing/building labor by effort: a shrub is quick and light, a tree is a long hard fell,
 // a stump is grubbing work, a rock is the heaviest, a fence post is medium. { time, energy }.
 // Costs kept modest so a settler can clear + fence + build without collapsing every day.
@@ -639,10 +643,10 @@ export class World {
             if (p.built.level < 1) continue;
             const grass = [];
             for (const key of p.cells) { const c = key.indexOf(','), i = +key.slice(0, c), j = +key.slice(c + 1); if (this.get(i, j) === T.GRASS && !this.#onActiveField(i, j) && !this.#protectedTile(i, j)) grass.push({ i, j }); }
-            let weeds = Math.min(grass.length, 1 + Math.floor(grass.length * 0.05));
+            let weeds = Math.min(grass.length, 1 + Math.floor(grass.length * 0.03));
             for (let n = 0; n < weeds && grass.length; n++) {
                 const g = grass.splice(Math.floor(this.rand() * grass.length), 1)[0];
-                if (this.rand() < 0.5) { this.set(g.i, g.j, T.FLOWER); sprouted++; ontoFarm = true; }
+                if (this.rand() < 0.35) { this.set(g.i, g.j, T.FLOWER); sprouted++; ontoFarm = true; }
             }
         }
         if (sprouted || matured) { this._tilesChanged = true; for (const p of this.plots) this.#rebuildFields(p); }
@@ -2337,9 +2341,12 @@ export class Farmer {
     // The unified "what needs doing on this plot" — crops AND facilities.
     // urgentOnly=true skips the low-priority sow/till "fill" work so a farmer
     // will choose to GROW the farm (expand/build) rather than endlessly tilling.
-    #nextTaskOnPlot(plot, thirstThreshold = 0.32, urgentOnly = false) {
+    // skipFacilities=true limits this to CROP work — ripe/thirsty/withered crops wither if
+    // neglected, so they're truly time-sensitive; facility produce (eggs/milk/lily/fish) just
+    // sits ready and shouldn't monopolize a farmer ahead of keeping the plot clear.
+    #nextTaskOnPlot(plot, thirstThreshold = 0.32, urgentOnly = false, skipFacilities = false) {
         // 1. collect anything ready (ripe crops, eggs, milk, blooms, catchable fish)
-        const readyProd = this.#findProducer(p => p.ready, plot);
+        const readyProd = skipFacilities ? null : this.#findProducer(p => p.ready, plot);
         const ripe = this.#findCrop(c => c.stage === 3 && !c.withered, plot);
         if (readyProd && (!ripe || Math.abs(readyProd.fx - this.pos.i) + Math.abs(readyProd.fy - this.pos.j) <
             Math.abs(ripe.i - this.pos.i) + Math.abs(ripe.j - this.pos.j)))
@@ -2351,7 +2358,7 @@ export class Farmer {
         // 3. sustain: water thirsty crops, feed/tend hungry producers
         const thirsty = this.#findCrop(c => !c.withered && c.water < thirstThreshold && c.stage < 3, plot);
         if (thirsty) return { act: 'water', crop: thirsty };
-        const hungry = this.#findProducer(p => p.fed < 0.35, plot);
+        const hungry = skipFacilities ? null : this.#findProducer(p => p.fed < 0.35, plot);
         if (hungry) return { act: 'tend', prod: hungry };
         if (urgentOnly) return null;
         // 4. sow + till (crop farms only) — lowest priority "fill" work
@@ -2785,11 +2792,24 @@ export class Farmer {
         let thirstThreshold = w.weather === 'drought' && mod(s.stats.wis) > 0 ? 0.55 : 0.32;
         if (this.goal === 'master farmer') thirstThreshold += 0.08;   // waters before the crop even asks
 
-        // 1. urgent farm chores (collect/harvest/water/tend — not filler tilling)
-        const urgent = this.#nextTaskOnPlot(this.plot, thirstThreshold, true);
-        if (urgent) { this.#thinkTask(urgent); this.#pursue(urgent, this.plot, false); return; }
+        // 1. urgent CROP care first (ripe/thirsty/withered crops are time-sensitive)
+        const urgentCrop = this.#nextTaskOnPlot(this.plot, thirstThreshold, true, true);
+        if (urgentCrop) { this.#thinkTask(urgentCrop); this.#pursue(urgentCrop, this.plot, false); return; }
 
-        // 1b. grow the homestead: gather wood, clear land, fence/build
+        // 1b. keep the plot tidy: a farmer whose fields are choking with brush/trees clears them
+        //     before collecting the umpteenth egg or chopping wood for MORE land. Encroachment
+        //     creeps in daily, so this runs ahead of facility busywork and growth.
+        if (!w.isNight() && this.energy > 0.25) {
+            const ob = this.#nearestPlotObstacle();
+            if (ob && this.rand() < 0.85) { this.#clearObstacle(ob); return; }
+        }
+
+        // 1b2. facility collection/tending (eggs/milk/lily/fish — ready produce keeps, so it
+        //      waits behind clearing but ahead of expansion and fill work)
+        const urgentFac = this.#nextTaskOnPlot(this.plot, thirstThreshold, true, false);
+        if (urgentFac) { this.#thinkTask(urgentFac); this.#pursue(urgentFac, this.plot, false); return; }
+
+        // 1c. grow the homestead: gather wood, clear land, fence/build
         if ((this.wantExpand || this.wantFacility) && !w.isNight()) {
             const grew = this.#pursueGrowth();
             if (grew) return;
@@ -2812,26 +2832,25 @@ export class Farmer {
         // 1e. fill work: sow seeds, till new ground
         const fill = this.#nextTaskOnPlot(this.plot, thirstThreshold, false);
 
-        // 1f. clear brush/trees/rocks ON my own plot to open more farmland. Interleaves with
-        //     tilling (diligent bots clear more eagerly) so plots don't stay cluttered.
-        if (!w.isNight()) {
-            const ob = this.#nearestPlotObstacle();
-            if (ob && (!fill || this.rand() < 0.35 + this.p.diligence * 0.35)) { this.#clearObstacle(ob); return; }
+        // (plot clearing now runs up in step 1b, before expansion)
+
+        // 2. help a posted job — BEFORE more of our own low-priority fill tilling, or a
+        //    farmer with endless ground to break never gets around to lending a hand.
+        //    takeHelp itself gates on personality/relationship, so loners still decline.
+        if (!w.isNight() && this.energy > 0.3) {
+            const taken = w.takeHelp(this);
+            if (taken) {
+                const req = taken.req;
+                this.helpTask = { requester: req.farmer, actionsLeft: 3 + Math.floor(this.rand() * 3), genuine: req.genuine, didWork: false, reward: taken.agreed };
+                this.think(`${req.farmer.sheet.name.toUpperCase()} NEEDS A HAND!`);
+                const payFor = taken.agreed ? ` FOR ${taken.agreed.amount} ${w.goodLabel(taken.agreed.good).toUpperCase()}` : '';
+                this.say(`COMING ${req.farmer.sheet.name.split(' ')[0].toUpperCase()}!`, '#7dd069');
+                w.addLog(`${s.name} took ${req.farmer.sheet.name}'s job${payFor}`, '#7dd069');
+                this.state = 'decide-help'; return;
+            }
         }
 
         if (fill) { this.#thinkTask(fill); this.#pursue(fill, this.plot, false); return; }
-
-        // 2. help a neighbor (for an agreed reward)
-        const taken = w.takeHelp(this);
-        if (taken) {
-            const req = taken.req;
-            this.helpTask = { requester: req.farmer, actionsLeft: 3 + Math.floor(this.rand() * 3), genuine: req.genuine, didWork: false, reward: taken.agreed };
-            this.think(`${req.farmer.sheet.name.toUpperCase()} NEEDS A HAND!`);
-            const payFor = taken.agreed ? ` FOR ${taken.agreed.amount} ${w.goodLabel(taken.agreed.good).toUpperCase()}` : '';
-            this.say(`COMING ${req.farmer.sheet.name.split(' ')[0].toUpperCase()}!`, '#7dd069');
-            w.addLog(`${s.name} took ${req.farmer.sheet.name}'s job${payFor}`, '#7dd069');
-            this.state = 'decide-help'; return;
-        }
 
         // 3. manipulators poach a neighbor's loot
         if (this.p.honesty < 0.32 && this.poachCooldown <= 0 && !w.isNight()) {
@@ -3119,6 +3138,12 @@ export class Farmer {
         if (task.prod) { ti = task.prod.fx; tj = task.prod.fy; }
         else if (task.crop) { ti = task.crop.i + 0.5; tj = task.crop.j + 0.5; }
         else { ti = task.field.i + 0.5; tj = task.field.j + 0.5; }
+        // aquatic producers (fish, lily pads) sit ON pond water — a solid tile. Collect from the
+        // SHORE: stand on the nearest walkable tile beside them, never in the water itself.
+        if (task.prod && this.world.pathBlocked(Math.floor(ti), Math.floor(tj))) {
+            const spot = this.world.nearestOpenTile({ i: ti, j: tj });
+            if (spot) { ti = spot.i + 0.5; tj = spot.j + 0.5; }
+        }
         // only claim the producer / queue the work once we know we can actually get there,
         // else an unreachable target leaves it flagged busy forever.
         if (!this.#goTo(ti, tj, 'work')) return;
