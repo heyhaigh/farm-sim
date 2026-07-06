@@ -208,6 +208,11 @@ function buildingArt(level) {
     if (level === 2) return { img: yurtL2, src: YURT_L2_SRC, ready: yurtL2Ready };
     return { img: yurtL1, src: YURT_L1_SRC, ready: yurtL1Ready };
 }
+// Town bulletin board (guild-hall pack): empty when no postings, papered when jobs are up.
+const boardSheet = new Image(); let boardReady = false; boardSheet.onload = () => { boardReady = true; }; boardSheet.onerror = () => {};
+boardSheet.src = './assets/craftpix-net-189780-free-top-down-pixel-art-guild-hall-asset-pack/PNG/Interior_objects.png';
+const BOARD_EMPTY_SRC = { x: 0, y: 156, w: 41, h: 62 };
+const BOARD_FULL_SRC = { x: 48, y: 156, w: 41, h: 62 };
 const WELL_SRC = { x: 48, y: 498, w: 38, h: 38 };    // grass-base stone well in exterior.png
 const SMOKE_ENABLED = false;   // chimney smoke off until per-house (sheet-row) alignment is nailed
 const smokeSheet = new Image();
@@ -935,8 +940,20 @@ function collectDrawables() {
         });
         const b = world.board;
         const bx = cam.x + isoX(b.i, b.j), by = cam.y + isoY(b.i, b.j);
-        boardScreen.x = bx + TILE_W / 2 - 13; boardScreen.y = by - 14; boardScreen.w = 26; boardScreen.h = 26;
-        list.push({ y: by + TILE_H, draw: () => ctx.drawImage(boardSprite, Math.floor(boardScreen.x), Math.floor(boardScreen.y)) });
+        if (boardReady) {
+            const src = world.helpBoard.some(r => r.genuine) ? BOARD_FULL_SRC : BOARD_EMPTY_SRC;
+            const dispW = Math.round(src.w * ASSET_SCALE), dispH = Math.round(src.h * ASSET_SCALE);
+            boardScreen.x = bx + TILE_W / 2 - dispW / 2; boardScreen.y = by + TILE_H - dispH; boardScreen.w = dispW; boardScreen.h = dispH;
+            list.push({
+                y: by + TILE_H, draw: () => {
+                    ctx.imageSmoothingEnabled = false;
+                    ctx.drawImage(boardSheet, src.x, src.y, src.w, src.h, Math.floor(boardScreen.x), Math.floor(boardScreen.y), dispW, dispH);
+                }
+            });
+        } else {
+            boardScreen.x = bx + TILE_W / 2 - 13; boardScreen.y = by - 14; boardScreen.w = 26; boardScreen.h = 26;
+            list.push({ y: by + TILE_H, draw: () => ctx.drawImage(boardSprite, Math.floor(boardScreen.x), Math.floor(boardScreen.y)) });
+        }
     }
 
     // completed structures
