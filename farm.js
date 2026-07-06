@@ -264,10 +264,10 @@ export class World {
     #maybeSpawnTreasure() {
         if (this.treasure) return;
         if (this.rand() > 0.04) return;   // ~1 in 25 days — genuinely rare
-        for (let tries = 0; tries < 50; tries++) {
-            const a = this.rand() * Math.PI * 2, r = 8 + this.rand() * 22;
-            const i = Math.round(CENTER + Math.cos(a) * r), j = Math.round(CENTER + Math.sin(a) * r);
-            if (i < FOREST_BORDER || j < FOREST_BORDER || i >= GRID - FOREST_BORDER || j >= GRID - FOREST_BORDER) continue;
+        const N = GRID - 2 * FOREST_BORDER;
+        for (let tries = 0; tries < 60; tries++) {
+            // anywhere on the map, not clustered near town — procedural placement
+            const i = FOREST_BORDER + Math.floor(this.rand() * N), j = FOREST_BORDER + Math.floor(this.rand() * N);
             if (this.get(i, j) !== T.GRASS || this.pathBlocked(i, j)) continue;
             this.treasure = { i, j, claimant: null, opened: false, openT: 0 };
             this.addLog('A glint on the ground... is that a TREASURE CHEST?', '#f0d060');

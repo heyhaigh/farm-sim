@@ -988,7 +988,7 @@ function collectDrawables() {
     if (world.treasure && boardReady && imageLoaded(boardSheet)) {
         const tr = world.treasure;
         const src = tr.opened ? CHEST_OPEN_SRC : CHEST_CLOSED_SRC;
-        const dw = Math.round(src.w * ASSET_SCALE * 1.4), dh = Math.round(src.h * ASSET_SCALE * 1.4);
+        const dw = Math.round(src.w * ASSET_SCALE), dh = Math.round(src.h * ASSET_SCALE);
         const sx = cam.x + isoX(tr.i, tr.j) + TILE_W / 2 - 10, sy = cam.y + isoY(tr.i, tr.j);
         list.push({
             y: sy + TILE_H, layer: 2, draw: () => {
