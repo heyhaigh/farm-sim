@@ -3207,11 +3207,16 @@ export class Farmer {
         const cfg = PROD[p.kind];
         let bonusMod = mod(s.stats.int); if (this.tired) bonusMod -= 2;
         const check = d20(this.rand, bonusMod);
-        let yieldN = cfg.yieldLo;
         const name = FACILITY_YIELD_NAME[p.kind] || 'produce';
-        if (check.crit || check.total >= 18) { yieldN = cfg.yieldHi + 1; w.addLog(`CRIT! ${s.name} gathers a bounty of ${name} (d20:${check.roll})`, '#f0d060'); this.say('BUMPER!', '#f0d060'); this.sparkle = 1.5; }
-        else if (check.fumble) { yieldN = 0; w.addLog(`${s.name} came up empty-handed... (d20:1)`, '#c05840'); this.say('nothing', '#c05840'); }
-        else if (check.total >= 10) yieldN = cfg.yieldHi;
+        // Fixed-yield producers (a hen lays exactly 1 egg/day) aren't subject to the crit/fumble
+        // drama — a bounty of 2 or an empty-handed 0 would both break their fixed daily yield.
+        // The d20 only swings variable-yield producers (cow/pig/goat/fish/pad).
+        let yieldN = cfg.yieldLo;
+        if (cfg.yieldHi > cfg.yieldLo) {
+            if (check.crit || check.total >= 18) { yieldN = cfg.yieldHi + 1; w.addLog(`CRIT! ${s.name} gathers a bounty of ${name} (d20:${check.roll})`, '#f0d060'); this.say('BUMPER!', '#f0d060'); this.sparkle = 1.5; }
+            else if (check.fumble) { yieldN = 0; w.addLog(`${s.name} came up empty-handed... (d20:1)`, '#c05840'); this.say('nothing', '#c05840'); }
+            else if (check.total >= 10) yieldN = cfg.yieldHi;
+        }
         const ownerSheet = (helping && owner) ? owner.sheet : s;
         ownerSheet.harvested += yieldN; w.harvestTotal += yieldN;
         ownerSheet.produce = (ownerSheet.produce || 0) + yieldN;   // spendable stockpile (harvested is lifetime-only)
