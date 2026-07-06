@@ -596,11 +596,12 @@ function addBirds(list) {
                 ctx.translate(sx, sy);
                 if (flip) ctx.scale(-1, 1);
                 if (flying && birdFlyReady && imageLoaded(birdFlySheet)) {
-                    // fly sheet: 144x64 cells, 3 cols. Rows 6-7 hold the big wing-spread frames;
-                    // alternate them to flap. Crop the full bird so nothing clips.
+                    // fly sheet: 144x64 cells, 3 cols. Rows 9-10 hold the big wing-spread birds;
+                    // crop TIGHT to that content (was cropping a mostly-empty 100x62 box, so the
+                    // bird rendered as a tiny off-center speck) and alternate them to flap.
                     const col = b.seed % 3;
-                    const row = (Math.floor(t * 7 + b.seed) % 2) ? 6 : 7;
-                    ctx.drawImage(birdFlySheet, col * 144, row * 64, 100, 62, -15, -13, 30, 19);
+                    const row = (Math.floor(t * 8 + b.seed) % 2) ? 9 : 10;
+                    ctx.drawImage(birdFlySheet, col * 144 + 14, row * 64 + 6, 72, 50, -16, -13, 32, 22);
                 } else {
                     // jump sheet: 32x32 cells, 20 cols x 3 rows — draw the WHOLE cell so no hop
                     // frame gets cut off.
