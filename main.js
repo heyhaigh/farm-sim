@@ -1118,6 +1118,18 @@ function drawFarmer(f, sx, sy) {
         ctx.drawImage(lanternSprite, px + (f.facing < 0 ? -3 : fw - 1), py + 9);
     }
 
+    // held hoe by day when doing farm work (so they read as farmers, not swordsmen)
+    const toolStates = f.state === 'work' || f.state === 'chop' || f.state === 'mine' || f.state === 'forage';
+    if (toolStates && !awakeAtNight) {
+        const dir = f.facing < 0 ? -1 : 1;
+        const hx = f.facing < 0 ? px + 1 : px + fw - 2;
+        const hy = py + Math.floor(fh * 0.46);
+        ctx.fillStyle = '#7a5632'; ctx.fillRect(hx, hy - 5, 1, 12);             // handle
+        ctx.fillStyle = '#6a4a2a'; ctx.fillRect(hx, hy - 5, 1, 2);
+        ctx.fillStyle = '#b6bcc8'; ctx.fillRect(hx + (dir < 0 ? -3 : 1), hy - 6, 3, 2);  // hoe blade
+        ctx.fillStyle = '#8a909c'; ctx.fillRect(hx + (dir < 0 ? -3 : 1), hy - 5, 3, 1);
+    }
+
     // carrying water indicator
     if (f.carryWater > 0 && f.state !== 'sleep') {
         ctx.fillStyle = '#5a8ac8';
