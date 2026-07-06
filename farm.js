@@ -1253,7 +1253,11 @@ export class World {
         const si = Math.floor(start.i), sj = Math.floor(start.j);
         const gi = Math.floor(goal.i), gj = Math.floor(goal.j);
         if (si === gi && sj === gj) return [];
-        const okTile = (i, j) => (i === gi && j === gj) || !this.pathBlocked(i, j);
+        // A tile is enterable if it's the goal, is open ground, OR we're stepping OUT of a
+        // blocked tile (escaping). From open ground you can never step back into a blocker,
+        // so normal paths still route around ponds/buildings — but a farmer stranded inside
+        // one (e.g. a pond carved under them) can always walk to the nearest shore.
+        const okTile = (i, j, fromBlocked) => (i === gi && j === gj) || fromBlocked || !this.pathBlocked(i, j);
         const key = (i, j) => i * GRID + j;
         const open = [{ i: si, j: sj, g: 0, f: Math.abs(gi - si) + Math.abs(gj - sj), p: null }];
         const best = new Map([[key(si, sj), 0]]);
@@ -1268,14 +1272,31 @@ export class World {
                 path.reverse(); path.shift(); return path;
             }
             if (++expansions > 900) break;
+            const curBlocked = this.pathBlocked(cur.i, cur.j);
             for (const [di, dj] of dirs) {
                 const ni = cur.i + di, nj = cur.j + dj;
-                if (ni < 0 || nj < 0 || ni >= GRID || nj >= GRID || !okTile(ni, nj)) continue;
-                if (di && dj && (this.pathBlocked(cur.i + di, cur.j) || this.pathBlocked(cur.i, cur.j + dj))) continue; // no corner-cut past an obstacle edge
+                if (ni < 0 || nj < 0 || ni >= GRID || nj >= GRID || !okTile(ni, nj, curBlocked)) continue;
+                // no corner-cut past an obstacle edge — but a bot escaping blocked terrain may cut freely
+                if (di && dj && !curBlocked && (this.pathBlocked(cur.i + di, cur.j) || this.pathBlocked(cur.i, cur.j + dj))) continue;
                 const ng = cur.g + (di && dj ? 1.4 : 1), kk = key(ni, nj);
                 if (best.has(kk) && best.get(kk) <= ng) continue;
                 best.set(kk, ng);
                 open.push({ i: ni, j: nj, g: ng, f: ng + Math.abs(gi - ni) + Math.abs(gj - nj), p: cur });
+            }
+        }
+        return null;
+    }
+
+    // Nearest open (walkable) tile to a position, by ring search — an escape target for a
+    // farmer stranded on a blocked tile (a pond/scarecrow/facility built underneath them).
+    nearestOpenTile(pos) {
+        const ci = Math.floor(pos.i), cj = Math.floor(pos.j);
+        for (let r = 1; r < 8; r++) {
+            for (let dj = -r; dj <= r; dj++) for (let di = -r; di <= r; di++) {
+                if (Math.max(Math.abs(di), Math.abs(dj)) !== r) continue;   // ring perimeter only
+                const i = ci + di, j = cj + dj;
+                if (i < 1 || j < 1 || i >= GRID - 1 || j >= GRID - 1) continue;
+                if (!this.pathBlocked(i, j)) return { i, j };
             }
         }
         return null;
@@ -1802,8 +1823,9 @@ export class World {
         const order = [...this.helpBoard].sort((a, b) => helper.opinionOf(b.farmer) - helper.opinionOf(a.farmer));
         for (const req of order) {
             if (req.farmer === helper) continue;
-            // a lone wolf works no one's land but a proven friend's
-            if (helper.goal === 'lone wolf' && helper.opinionOf(req.farmer) < 0.4) continue;
+            // a lone wolf keeps to their own rows — never works another's land (consistent
+            // with never posting for help or joining a co-op)
+            if (helper.goal === 'lone wolf') continue;
             const op = helper.opinionOf(req.farmer);          // how the helper feels about the poster
             if (op <= -0.35 && hp.collaboration < 0.85) continue;   // won't lift a finger for someone they resent
             if (req.farmer.reputation < 0.3 && op < 0.2 && this.rand() > hp.collaboration) continue;   // shun bad names (unless a personal friend)
@@ -2700,6 +2722,12 @@ export class Farmer {
     #decide() {
         const w = this.world, s = this.sheet;
 
+        // stranded on a solid tile (a pond/scarecrow/facility raised underfoot)? get out first.
+        if (w.pathBlocked(Math.floor(this.pos.i), Math.floor(this.pos.j))) {
+            const open = w.nearestOpenTile(this.pos);
+            if (open) { this.think('HOW DID I END UP HERE?!'); this.#goTo(open.i + 0.5, open.j + 0.5, 'wander'); return; }
+        }
+
         if (this.health === 'sick') { this.think('NEED TO REST AND GET WELL'); this.#goHome('sick'); return; }
         // exhaustion: worn down and still grinding -> pushed to rest; pushing through deep
         // strain can make you collapse and fall ill on the spot. Bots that have been sick before
@@ -3326,6 +3354,12 @@ export class Farmer {
 
             case 'walk': {
                 const P = this.path;
+                // absolute freeze watchdog: if position hasn't changed at all for a few seconds
+                // (any cause — a degenerate path, a tile changed mid-walk), bail and redecide.
+                if (this._freezePos && Math.abs(this.pos.i - this._freezePos.i) < 0.001 && Math.abs(this.pos.j - this._freezePos.j) < 0.001) {
+                    this._freezeT = (this._freezeT || 0) + dt;
+                    if (this._freezeT > 4) { this._freezeT = 0; this.path = null; this.state = 'decide'; break; }
+                } else { this._freezePos = { i: this.pos.i, j: this.pos.j }; this._freezeT = 0; }
                 const wp = (P.waypoints && P.wi < P.waypoints.length) ? P.waypoints[P.wi] : { i: P.i, j: P.j };
                 const dx = wp.i - this.pos.i, dy = wp.j - this.pos.j;
                 const dist = Math.hypot(dx, dy);
@@ -3341,8 +3375,8 @@ export class Farmer {
                     else if (then === 'fencepost') { this.fenceTimer = this.#laborTime('fencepost'); this.state = 'fencepost'; }
                     else if (then === 'scarecrow') { this.chopTimer = this.#laborTime('scarecrow'); this.state = 'scarecrow'; }
                     else if (then === 'fetchwater' || then === 'fetchwater-help') {
-                        // hard guard: only a finished, listed well yields water — never a build site
-                        if (this.fetchWellRef && !this.world.wells.includes(this.fetchWellRef)) {
+                        // hard guard: only a finished, listed, READY well yields water — never a build site
+                        if (this.fetchWellRef && (!this.world.wells.includes(this.fetchWellRef) || this.fetchWellRef.ready !== true)) {
                             this.fetchWellRef = null; this.state = 'decide'; break;
                         }
                         this.carryWater = this.maxWater; this.say('splash');

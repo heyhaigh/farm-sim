@@ -172,15 +172,20 @@ const ASSET_SCALE = 0.76;
 
 // Animal walk-sheets: 6 cols x 8 rows grids. We slice the side-profile row.
 const ANIMAL_ART_BASE = './assets/craftpix-net-291971-free-top-down-animals-farm-pixel-art-sprites/PNG/Without_shadow/';
+// Every sheet in this pack is a uniform 6-col x 8-row grid (frame size = naturalW/6);
+// rows 0-1 face front/back, rows 2-3 are the full 6-frame LEFT-facing side walk, rows
+// 4-7 are truncated 4-frame poses. We render row 2 (side) and flip for right-facing.
+// Frame PIXEL size differs per animal (Chick 16, most 32, Bull 64) so it's derived at
+// draw time from the image, never hardcoded.
 const ANIMAL_SHEETS = {
-    cow:     { file: 'Bull_animation_without_shadow', fw: 64, fh: 64 },
-    pig:     { file: 'Piglet_animation_without_shadow', fw: 32, fh: 32 },
-    goat:    { file: 'Sheep_animation_without_shadow', fw: 32, fh: 32 },
-    chicken: { file: 'Chick_animation_without_shadow', fw: 32, fh: 32 },
-    rooster: { file: 'Rooster_animation_without_shadow', fw: 32, fh: 32 },
+    cow:     { file: 'Bull_animation_without_shadow' },
+    pig:     { file: 'Piglet_animation_without_shadow' },
+    goat:    { file: 'Sheep_animation_without_shadow' },
+    chicken: { file: 'Chick_animation_without_shadow' },
+    rooster: { file: 'Rooster_animation_without_shadow' },
 };
-const ANIMAL_COLS = 6;
-let ANIMAL_SIDE_ROW = 5;   // side-profile (right-facing) row; tuned by eye
+const ANIMAL_COLS = 6, ANIMAL_ROWS = 8;
+let ANIMAL_SIDE_ROW = 2;   // full 6-frame side-profile walk row (rows 4-7 are only 4 frames)
 const animalImg = {};
 let animalArtReady = false;
 function loadAnimalArt() {
@@ -319,18 +324,19 @@ function drawCropSprite(crop, sx, sy) {
 function drawAnimal(p, px, py) {
     const cfg = ANIMAL_SHEETS[p.kind], img = animalImg[p.kind];
     if (!cfg || !img || !img.complete || !img.naturalWidth) return false;
+    const fw = img.naturalWidth / ANIMAL_COLS, fh = img.naturalHeight / ANIMAL_ROWS;
     const moving = Math.abs(p.vx) + Math.abs(p.vy) > 0.05;
     const col = moving ? Math.floor(p.anim * 6) % ANIMAL_COLS : 0;
-    const disp = Math.round(cfg.fw * ASSET_SCALE), top = Math.floor(py - disp * 0.86);
+    const disp = Math.round(fh * ASSET_SCALE), top = Math.floor(py - disp * 0.86);
     ctx.imageSmoothingEnabled = false;
     if (p.flip < 0) {
         ctx.save();
         ctx.translate(Math.floor(px + disp / 2), top);
         ctx.scale(-1, 1);
-        ctx.drawImage(img, col * cfg.fw, ANIMAL_SIDE_ROW * cfg.fh, cfg.fw, cfg.fh, 0, 0, disp, disp);
+        ctx.drawImage(img, col * fw, ANIMAL_SIDE_ROW * fh, fw, fh, 0, 0, disp, disp);
         ctx.restore();
     } else {
-        ctx.drawImage(img, col * cfg.fw, ANIMAL_SIDE_ROW * cfg.fh, cfg.fw, cfg.fh, Math.floor(px - disp / 2), top, disp, disp);
+        ctx.drawImage(img, col * fw, ANIMAL_SIDE_ROW * fh, fw, fh, Math.floor(px - disp / 2), top, disp, disp);
     }
     ctx.imageSmoothingEnabled = false;
     return true;
@@ -1189,7 +1195,9 @@ function drawProducer(p, px, py) {
         if (p.ready) {
             const bob = Math.round(Math.sin(performance.now() / 250 + p.anim) * 1);
             ctx.fillStyle = PRODUCT_ICON[p.kind] || '#fff';
-            const iy = Math.floor(py - (ANIMAL_SHEETS[p.kind].fw * ASSET_SCALE * 0.86) - 4 + bob);
+            const img = animalImg[p.kind];
+            const disp = img && img.naturalHeight ? Math.round(img.naturalHeight / ANIMAL_ROWS * ASSET_SCALE) : 24;
+            const iy = Math.floor(py - disp * 0.86 - 4 + bob);
             ctx.fillRect(Math.floor(px - 1), iy, 2, 2);
             ctx.fillRect(Math.floor(px - 2), iy + 1, 4, 1);
         }
