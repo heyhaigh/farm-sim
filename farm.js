@@ -328,19 +328,14 @@ export class World {
         }
     }
 
-    #clearPlotWildBuffer(plot, pad = 2) {
-        for (let j = plot.y - pad; j < plot.y + plot.h + pad; j++) {
-            for (let i = plot.x - pad; i < plot.x + plot.w + pad; i++) {
-                const owned = this.#hasCell(plot, i, j);
-                // never touch an unowned tile the plot grew AROUND (an enclosed rock/tree hole):
-                // it was deliberately not annexed, so it must stay as-is.
-                if (!owned && this.#hasCell(plot, i - 1, j) && this.#hasCell(plot, i + 1, j) &&
-                    this.#hasCell(plot, i, j - 1) && this.#hasCell(plot, i, j + 1)) continue;
-                const t = this.get(i, j);
-                const tallWild = t === T.TREE || t === T.STUMP || t === T.ROCK;
-                const forage = owned && (t === T.WHEAT || t === T.FLOWER);
-                if (tallWild || forage) this.set(i, j, T.GRASS);
-            }
+    // Clear wild growth ONLY on the plot's own cells (the homestead footprint). Never touch
+    // unowned tiles: a rock/tree on an expansion frontier or in an L-shaped notch is a
+    // resource the bots must mine/chop — expansion must not erase it for free.
+    #clearPlotWildBuffer(plot) {
+        for (const key of plot.cells) {
+            const c = key.indexOf(','), i = +key.slice(0, c), j = +key.slice(c + 1);
+            const t = this.get(i, j);
+            if (t === T.TREE || t === T.STUMP || t === T.ROCK || t === T.WHEAT || t === T.FLOWER) this.set(i, j, T.GRASS);
         }
     }
 
@@ -456,6 +451,14 @@ export class World {
     }
 
     // ---- farmers -----------------------------------------------------------------
+
+    // Same authority as addFarmer for whether a spawn is possible (a fitting slot exists, or
+    // ring 2 can still open) — so the +RY button doesn't disable while ring 2 could yet open.
+    canAddFarmer() {
+        const B = World.BASE_PLOT;
+        if (this.slots.some(s => !s.used && this.#candidateBlockers(null, s.i, s.j, B, B) !== null)) return true;
+        return this.ringCount === 1;
+    }
 
     addFarmer(memory, mutation = 0) {
         const B = World.BASE_PLOT;

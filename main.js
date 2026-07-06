@@ -1034,7 +1034,9 @@ function drawFarmer(f, sx, sy) {
         ctx.fillRect(px + (f.facing < 0 ? -2 : fw), py + 11, 2, 3);
     }
 
-    // freshly-picked produce held up above the head (real Supplies.png icon)
+    // freshly-picked produce held up above the head. This is a HUD/inventory icon (a held
+    // item badge), not a world sprite, so it's intentionally sized-to-fit (~11px) and exempt
+    // from the global ASSET_SCALE world-sprite rule.
     if (f.carryCrop && suppliesReady && imageLoaded(suppliesSheet) && PRODUCE_ICONS[f.carryCrop.type]) {
         const [ix, iy, iw, ih] = PRODUCE_ICONS[f.carryCrop.type];
         const sc = Math.min(1, 11 / Math.max(iw, ih));
@@ -1159,6 +1161,31 @@ function drawMinimap() {
     ctx.restore();
 }
 
+// Derive what a farmer most needs a hand with, for the board postings.
+function helpNeed(f) {
+    const plot = f.plot;
+    let ripe = 0, dry = 0;
+    for (const c of world.crops.values()) {
+        if (c.owner !== f || c.withered) continue;
+        if (c.stage === 3) ripe++;
+        else if (c.water < 0.3) dry++;
+    }
+    let ready = 0, readyKind = null;
+    for (const fac of plot.facilities) for (const pr of (fac.producers || [])) if (pr.ready) { ready++; readyKind = fac.struct ? fac.struct.kind : pr.kind; }
+    let toTill = 0, toPlant = 0;
+    for (const fld of plot.fields) {
+        const t = world.get(fld.i, fld.j);
+        if (t === T.GRASS) toTill++;
+        else if (t === T.TILLED && !world.cropAt(fld.i, fld.j)) toPlant++;
+    }
+    if (ripe) return `harvesting ${ripe} ripe ${f.sheet.crop}`;
+    if (dry) return `watering ${dry} thirsty crop${dry > 1 ? 's' : ''}`;
+    if (ready) return `collecting from the ${readyKind || 'pen'}`;
+    if (toPlant) return `sowing ${toPlant} empty bed${toPlant > 1 ? 's' : ''}`;
+    if (toTill) return `breaking ground (${Math.min(toTill, 99)} tiles)`;
+    return 'general farm chores';
+}
+
 // Town bulletin board: what the bots have posted — the communal project, help requests,
 // and build ambitions. A left-side scrollable kit panel.
 function drawBoard() {
@@ -1198,8 +1225,12 @@ function drawBoard() {
     if (reqs.length) {
         for (const r of reqs) {
             const nm = r.farmer.sheet.name.split(' ')[0];
-            drawText(ctx, '•', IX, y, '#e0a03c');
-            drawText(ctx, `${nm} needs a hand`, IX + 6, y, SHEET_VAL); y += 7;
+            drawText(ctx, '-', IX, y, '#e0a03c');
+            drawText(ctx, nm, IX + 7, y, SHEET_VAL);
+            const stat = r.farmer.state === 'sleep' ? 'asleep' : r.farmer.tired ? 'worn out' : 'swamped';
+            drawText(ctx, stat, IX + IW - textWidth(stat), y, SHEET_LABEL); y += 7;
+            for (const ln of wrapText('needs a hand ' + helpNeed(r.farmer), 30)) { drawText(ctx, ln, IX + 7, y, SHEET_LABEL); y += 7; }
+            y += 2;
         }
     } else { drawText(ctx, 'nobody needs help right now', IX, y, SHEET_LABEL); y += 7; }
     y += 4;
@@ -1211,7 +1242,7 @@ function drawBoard() {
         for (const f of ambitions) {
             const nm = f.sheet.name.split(' ')[0];
             const what = f.wantExpand ? 'wants more land' : 'wants to build';
-            drawText(ctx, '•', IX, y, '#c9a45a');
+            drawText(ctx, '-', IX, y, '#c9a45a');
             drawText(ctx, `${nm} ${what}`, IX + 6, y, SHEET_VAL); y += 7;
         }
     } else { drawText(ctx, 'everyone is content', IX, y, SHEET_LABEL); y += 7; }
@@ -1257,10 +1288,7 @@ function drawUI() {
     // night indicator
     if (world.isNight()) hx += drawText(ctx, 'NIGHT', hx, 7, '#8a9ade') + 6;
 
-    // open help requests
-    if (world.helpBoard.length) {
-        if (Math.floor(performance.now() / 500) % 2 === 0) drawText(ctx, `HELP!X${world.helpBoard.length}`, hx, 7, '#e0a03c');
-    }
+    // (help requests now surface on the Town Board, not the top bar)
 
     // roster nav button (left of +RY)
     ROSTER_BTN.x = BTN.x - ROSTER_BTN.w - 6;
@@ -1277,7 +1305,7 @@ function drawUI() {
     if (postCount > 0 && !boardOpen) { ctx.fillStyle = '#e0a03c'; ctx.fillRect(BOARD_BTN.x + BOARD_BTN.w - 4, BOARD_BTN.y - 1, 4, 4); }
 
     // spawn button
-    const full = !world.slots.some(s => !s.used);
+    const full = !world.canAddFarmer();
     ctx.fillStyle = full ? '#3a3f4c' : '#7dd069';
     ctx.fillRect(BTN.x, BTN.y, BTN.w, BTN.h);
     drawText(ctx, '+RY', BTN.x + 9, BTN.y + 4, full ? '#6a6f7c' : '#10240c');
@@ -1573,33 +1601,31 @@ out.addEventListener('pointerup', (e) => {
         return;
     }
 
-    // clicking the bulletin-board structure opens the board
-    if (inRect(p, boardScreen)) { boardOpen = true; selected = null; boardScroll = 0; return; }
+    // spawn button (top-right)
+    if (inRect(p, BTN)) { spawnFarmer(); return; }
 
-    // roster overlay interactions
+    // roster overlay (modal) — handle before any world/minimap clicks
     if (rosterOpen) {
         const rv = rosterView;
         if (rv) {
-            // close X (top-right of panel) or clicking outside the panel closes it
             if ((p.x > rv.x + rv.w - 14 && p.y < rv.y + 12) ||
-                p.x < rv.x || p.x > rv.x + rv.w || p.y < rv.y || p.y > rv.y + rv.h) {
-                rosterOpen = false;
-                return;
-            }
-            // row click -> select that farmer, keep roster open for browsing
+                p.x < rv.x || p.x > rv.x + rv.w || p.y < rv.y || p.y > rv.y + rv.h) { rosterOpen = false; return; }
             for (const row of rosterRows) {
                 if (p.y >= row.y0 && p.y <= row.y1 && p.x > rv.x && p.x < rv.x + rv.w) {
-                    selected = row.farmer; sheetScroll = 0;
-                    rosterOpen = false;   // jump to their detail sheet
-                    return;
+                    selected = row.farmer; sheetScroll = 0; rosterOpen = false; return;
                 }
             }
         }
         return;
     }
 
-    // minimap: jump the camera to the clicked spot
-    if (inRect(p, MINIMAP)) {
+    // detail card: X closes it; clicks anywhere inside it are consumed. Checked BEFORE the
+    // minimap because the full-height card is drawn OVER it (Codex: don't click through).
+    if (selected && inRect(p, SHEET_CLOSE)) { selected = null; return; }
+    if (selected && inRect(p, SHEET_RECT)) return;
+
+    // minimap: jump the camera (only interactive when visible — hidden under the card)
+    if (!selected && inRect(p, MINIMAP)) {
         const ti = (p.x - MINIMAP.x) / MINIMAP.w * GRID;
         const tj = (p.y - MINIMAP.y) / MINIMAP.h * GRID;
         cam.x = GW / 2 - isoX(ti, tj);
@@ -1607,12 +1633,8 @@ out.addEventListener('pointerup', (e) => {
         return;
     }
 
-    // spawn button
-    if (inRect(p, BTN)) { spawnFarmer(); return; }
-
-    // detail card: X closes it; clicking elsewhere inside it keeps the selection
-    if (selected && inRect(p, SHEET_CLOSE)) { selected = null; return; }
-    if (selected && inRect(p, SHEET_RECT)) return;
+    // clicking the bulletin-board structure in the world opens the board
+    if (inRect(p, boardScreen)) { boardOpen = true; selected = null; boardScroll = 0; return; }
 
     // farmer?
     let best = null, bestD = 1.6;
