@@ -52,6 +52,8 @@ let bootTime = 0;
 let booted = false;
 let rosterOpen = false;
 let rosterScroll = 0;
+let sheetScroll = 0;              // scroll offset for the selected-farmer detail card
+let sheetContentH = 0;           // measured content height (for clamping the scroll)
 const ROSTER_BTN = { x: 0, y: 3, w: 44, h: 12 };   // positioned in drawUI
 const MINIMAP = { x: 0, y: 0, w: 46, h: 46 };      // bottom-right legend, positioned in drawMinimap
 
@@ -1086,11 +1088,14 @@ function drawMinimap() {
     ctx.save();
     ctx.beginPath(); ctx.rect(mx, my, mw, mh); ctx.clip();
 
-    // owned land (very low contrast)
+    // owned land (very low contrast) — actual flex cells, not the bounding box (cached per rev)
     ctx.fillStyle = 'rgba(255,255,255,0.07)';
     for (const p of world.plots) {
-        const [px, py] = t2m(p.x, p.y);
-        ctx.fillRect(Math.floor(px), Math.floor(py), Math.max(1, Math.round(p.w / GRID * mw)), Math.max(1, Math.round(p.h / GRID * mh)));
+        if (p._miniRev !== p.rev) {
+            p._miniCells = [...p.cells].map(k => { const c = k.indexOf(','); return [+k.slice(0, c), +k.slice(c + 1)]; });
+            p._miniRev = p.rev;
+        }
+        for (const [ci, cj] of p._miniCells) { const [px, py] = t2m(ci, cj); ctx.fillRect(Math.floor(px), Math.floor(py), 1, 1); }
     }
     // wells + sign = 1 low-contrast dot each
     for (const wl of world.wells) dot(wl.i, wl.j, 'rgba(120,170,210,0.7)', 1);
@@ -1491,27 +1496,38 @@ out.addEventListener('wheel', (e) => {
 // Spawning
 // ---------------------------------------------------------------------------
 
+let reuseIdx = 0;
+// Deterministic pick: stable order by hashed id, so the same seed + docs always grow the
+// same roster. Once every memory is used, cycle through them in that stable order with an
+// increasing mutation each lap, so a small doc pool still yields distinct farmers (not the
+// same lowest-hash memory forever).
 function pickMemory() {
     const unused = memories.filter(m => !usedMemoryIds.has(m.id));
-    const pool = unused.length ? unused : memories;
-    // Deterministic pick: stable order by hashed id, so the same seed + docs always
-    // grow the same roster (reproducible cast of Ry Bots each load).
-    let best = pool[0], bestH = 0xffffffff;
-    for (const m of pool) {
-        const h = hashString((m.id || m.title || '') + ':pick');
-        if (h < bestH) { bestH = h; best = m; }
+    if (unused.length) {
+        let best = unused[0], bestH = 0xffffffff;
+        for (const m of unused) {
+            const h = hashString((m.id || m.title || '') + ':pick');
+            if (h < bestH) { bestH = h; best = m; }
+        }
+        usedMemoryIds.add(best.id);
+        return { memory: best, mutation: 0 };
     }
-    usedMemoryIds.add(best.id);
-    return best;
+    const ordered = memories
+        .map(m => ({ m, h: hashString((m.id || m.title || '') + ':pick') }))
+        .sort((a, b) => a.h - b.h).map(o => o.m);
+    const memory = ordered[reuseIdx % ordered.length];
+    const mutation = 1 + Math.floor(reuseIdx / ordered.length);
+    reuseIdx++;
+    return { memory, mutation };
 }
 
 function spawnFarmer() {
-    if (!world.slots.some(s => !s.used)) {
-        world.addLog('No plots left! The valley is full.', '#e0a03c');
-        return;
-    }
-    const f = world.addFarmer(pickMemory());
+    // addFarmer is the authority on room (it lazily opens ring 2 and collision-checks
+    // slots) — don't pre-guard on free slots or ring 2 can never open.
+    const pick = pickMemory();
+    const f = world.addFarmer(pick.memory, pick.mutation);
     if (f) { terrainDirty = true; selected = f; }
+    else world.addLog('No room left! The valley is full.', '#e0a03c');
 }
 
 // ---------------------------------------------------------------------------

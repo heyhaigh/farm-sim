@@ -329,11 +329,15 @@ export class World {
     #clearPlotWildBuffer(plot, pad = 2) {
         for (let j = plot.y - pad; j < plot.y + plot.h + pad; j++) {
             for (let i = plot.x - pad; i < plot.x + plot.w + pad; i++) {
+                const owned = this.#hasCell(plot, i, j);
+                // never touch an unowned tile the plot grew AROUND (an enclosed rock/tree hole):
+                // it was deliberately not annexed, so it must stay as-is.
+                if (!owned && this.#hasCell(plot, i - 1, j) && this.#hasCell(plot, i + 1, j) &&
+                    this.#hasCell(plot, i, j - 1) && this.#hasCell(plot, i, j + 1)) continue;
                 const t = this.get(i, j);
-                const inside = i >= plot.x && i < plot.x + plot.w && j >= plot.y && j < plot.y + plot.h;
                 const tallWild = t === T.TREE || t === T.STUMP || t === T.ROCK;
-                const plotForage = inside && (t === T.WHEAT || t === T.FLOWER);
-                if (tallWild || plotForage) this.set(i, j, T.GRASS);
+                const forage = owned && (t === T.WHEAT || t === T.FLOWER);
+                if (tallWild || forage) this.set(i, j, T.GRASS);
             }
         }
     }
@@ -580,6 +584,7 @@ export class World {
             { di: 0, dj: 1, out: cy > CENTER, axisOk: plot.h < MAX },
             { di: 0, dj: -1, out: cy < CENTER, axisOk: plot.h < MAX },
         ];
+        let fallback = null;   // best side that has legal cells but misses the 50% preference
         for (const outwardPass of [true, false]) {
             for (const d of dirs) {
                 if (!d.axisOk || d.out !== outwardPass) continue;
@@ -595,11 +600,16 @@ export class World {
                     else if (a === 'tree') trees.push({ i: ni, j: nj });
                 }
                 const usable = clear.length + trees.length;
-                if (usable === 0 || usable < Math.ceil(frontier * 0.5)) continue;  // need real progress
-                if (trees.length) return { state: 'trees', tiles: trees };
-                return { state: 'clear', cells: clear };
+                if (usable === 0) continue;
+                if (usable >= Math.ceil(frontier * 0.5)) {   // clean side: take it now
+                    return trees.length ? { state: 'trees', tiles: trees } : { state: 'clear', cells: clear };
+                }
+                if (!fallback || usable > fallback.usable) fallback = { clear, trees, usable };
             }
         }
+        // No side met the 50% preference, but if ANY legal cells exist, still make progress
+        // (otherwise a partly-boxed-in farm deadlocks forever with land still available).
+        if (fallback) return fallback.trees.length ? { state: 'trees', tiles: fallback.trees } : { state: 'clear', cells: fallback.clear };
         return { state: 'blocked' };
     }
 
@@ -1312,7 +1322,10 @@ export class Farmer {
         // 6. wander + muse
         this.think(this.rand() < 0.4 ? `REMEMBERING: ${String(s.memory.title).slice(0, 26)}..` : IDLE_THOUGHTS[Math.floor(this.rand() * IDLE_THOUGHTS.length)]);
         this.wanderTimer = 1.5 + this.rand() * 3;
-        this.#goTo(this.plot.x + 0.5 + this.rand() * (this.plot.w - 1), this.plot.y + 0.5 + this.rand() * (this.plot.h - 1), 'wander');
+        // wander to an owned interior field tile (works for L-shaped plots; never a hole/outside)
+        const spots = this.plot.fields;
+        if (spots.length) { const t = spots[Math.floor(this.rand() * spots.length)]; this.#goTo(t.i + 0.5, t.j + 0.5, 'wander'); }
+        else this.#goTo(this.plot.house.i, this.plot.house.j + 3, 'wander');
     }
 
     #thinkTask(task) {
