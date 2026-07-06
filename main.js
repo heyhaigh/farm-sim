@@ -194,6 +194,20 @@ const HOME_BASE = './assets/craftpix-net-654184-main-characters-home-free-top-do
 const homeSheet = new Image();
 let homeReady = false;
 const HOUSE_SRC = { x: 2, y: 5, w: 137, h: 125 };   // house within exterior.png (trimmed of the stone-wall row below)
+// Tiered dwellings: L1 tipi (Yurt2), L2 round yurt (Yurt1), L3 = the cottage above.
+// Each is a 128x128 sheet; the trimmed content box keeps the base anchored to the tile.
+const ROCKY_BASE = './assets/craftpix-net-639143-free-rocky-area-objects-pixel-art/PNG/Objects_separately/';
+const yurtL1 = new Image(); let yurtL1Ready = false; yurtL1.onload = () => { yurtL1Ready = true; }; yurtL1.onerror = () => {};
+const yurtL2 = new Image(); let yurtL2Ready = false; yurtL2.onload = () => { yurtL2Ready = true; }; yurtL2.onerror = () => {};
+yurtL1.src = ROCKY_BASE + 'Yurt2_grass_shadow.png';
+yurtL2.src = ROCKY_BASE + 'Yurt1_grass_shadow.png';
+const YURT_L1_SRC = { x: 26, y: 20, w: 75, h: 87 };   // trim of Yurt2_grass_shadow.png
+const YURT_L2_SRC = { x: 24, y: 26, w: 80, h: 76 };   // trim of Yurt1_grass_shadow.png
+function buildingArt(level) {
+    if (level >= 3) return { img: homeSheet, src: HOUSE_SRC, ready: homeReady };
+    if (level === 2) return { img: yurtL2, src: YURT_L2_SRC, ready: yurtL2Ready };
+    return { img: yurtL1, src: YURT_L1_SRC, ready: yurtL1Ready };
+}
 const WELL_SRC = { x: 48, y: 498, w: 38, h: 38 };    // grass-base stone well in exterior.png
 const SMOKE_ENABLED = false;   // chimney smoke off until per-house (sheet-row) alignment is nailed
 const smokeSheet = new Image();
@@ -841,28 +855,35 @@ function collectDrawables() {
         };
     }
 
-    // houses
+    // houses (tiered: L1 tipi -> L2 round yurt -> L3 cottage)
     for (const f of world.farmers) {
-        if (!f.plot.built.house) continue;   // not built yet
+        const level = f.plot.built.level;
+        if (level < 1) continue;   // homeless — nothing to draw
         const h = f.plot.house;
         const sx = cam.x + isoX(h.i + 1, h.j + 1);
         const sy = cam.y + isoY(h.i + 1, h.j + 1);
         const spr = houseSprite(f.sheet.colors.hatColor);
+        const art = buildingArt(level);
         const night = world.isNight();
         const indoors = isIndoors(f);
         list.push({
             y: sy + TILE_H, draw: () => {
                 let roofY;
-                if (homeReady) {
-                    const dispW = Math.round(HOUSE_SRC.w * ASSET_SCALE), dispH = Math.round(dispW * HOUSE_SRC.h / HOUSE_SRC.w);
+                if (art.ready) {
+                    const S = art.src;
+                    const dispW = Math.round(S.w * ASSET_SCALE), dispH = Math.round(dispW * S.h / S.w);
                     const hx = Math.floor(sx - dispW / 2), hy = Math.floor(sy + TILE_H - dispH + 3);
                     ctx.imageSmoothingEnabled = false;
-                    ctx.drawImage(homeSheet, HOUSE_SRC.x, HOUSE_SRC.y, HOUSE_SRC.w, HOUSE_SRC.h, hx, hy, dispW, dispH);
-                    if (SMOKE_ENABLED) drawSmoke(hx, hy, dispW, dispH, f.sheet.seed % 9);
+                    ctx.drawImage(art.img, S.x, S.y, S.w, S.h, hx, hy, dispW, dispH);
+                    if (SMOKE_ENABLED && level >= 3) drawSmoke(hx, hy, dispW, dispH, f.sheet.seed % 9);
                     if (night) {
                         ctx.fillStyle = indoors ? 'rgba(255,220,120,0.5)' : 'rgba(255,220,120,0.22)';
-                        ctx.fillRect(hx + Math.floor(dispW * 0.24), hy + Math.floor(dispH * 0.5), 5, 5);
-                        ctx.fillRect(hx + Math.floor(dispW * 0.55), hy + Math.floor(dispH * 0.5), 5, 5);
+                        if (level >= 3) {
+                            ctx.fillRect(hx + Math.floor(dispW * 0.24), hy + Math.floor(dispH * 0.5), 5, 5);
+                            ctx.fillRect(hx + Math.floor(dispW * 0.55), hy + Math.floor(dispH * 0.5), 5, 5);
+                        } else {
+                            ctx.fillRect(hx + Math.floor(dispW * 0.42), hy + Math.floor(dispH * 0.55), 5, 5);   // yurt doorway glow
+                        }
                     }
                     roofY = hy - 6;
                 } else {
@@ -1070,7 +1091,7 @@ function drawProducer(p, px, py) {
 // Is this farmer tucked inside their house (asleep / resting / ill / sheltering)?
 // Homeless settlers have no house yet, so they're always shown out in the open.
 function isIndoors(f) {
-    if (!f.plot.built.house) return false;
+    if (f.plot.built.level < 1) return false;
     return f.state === 'sleep' || f.state === 'rest' || f.state === 'sick' || f.state === 'shelter';
 }
 
@@ -1252,7 +1273,7 @@ function drawMinimap() {
     for (const p of world.plots) for (const fac of p.facilities) if (fac.struct) dot(fac.struct.i, fac.struct.j, 'rgba(150,120,90,0.7)', 2);
     // homes = a 4-dot (2x2) low-contrast grey cluster
     ctx.fillStyle = 'rgba(150,156,168,0.75)';
-    for (const p of world.plots) { if (!p.built.house) continue; const [px, py] = t2m(p.house.i, p.house.j); ctx.fillRect(Math.floor(px), Math.floor(py), 2, 2); }
+    for (const p of world.plots) { if (p.built.level < 1) continue; const [px, py] = t2m(p.house.i, p.house.j); ctx.fillRect(Math.floor(px), Math.floor(py), 2, 2); }
 
     // current viewport (the on-screen diamond)
     const corners = [screenToTile(0, 18), screenToTile(GW, 18), screenToTile(GW, GH - 22), screenToTile(0, GH - 22)];

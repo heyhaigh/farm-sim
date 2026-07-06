@@ -27,8 +27,14 @@ const WOOD_STUMP = 1;      // wood from grubbing out the stump
 const ORE_ROCK = 2;        // iron ore from breaking a rock
 const FACILITY_WOOD = 6;   // wood to raise a facility
 const FENCE_WOOD = 8;      // wood to fence the new homestead
-const HOUSE_WOOD = 14;     // wood to raise the house
-const HOUSE_ORE = 4;       // + stone (ore) for its walls
+// Tiered dwellings. L1 (tipi) is quick; L2 (yurt) is a real investment; L3 (cottage) is the
+// lifetime goal — the harvest gate (lifetime crops, NOT spent) makes L2->L3 take a year+.
+const HOUSE_TIERS = [
+    null,
+    { wood: 10, ore: 2, harvested: 0, name: 'tipi' },        // L1
+    { wood: 28, ore: 10, harvested: 40, name: 'yurt' },      // L2
+    { wood: 70, ore: 28, harvested: 220, name: 'cottage' },  // L3 — the ultimate home
+];
 const START_WOOD = 4;
 
 // Longer days so the world breathes slowly while the (now faster) farmers bustle.
@@ -486,9 +492,10 @@ export class World {
             // plot area is a SET of tiles (starts as the base square) so it can later grow
             // into L-shapes; `rev` bumps whenever `cells` changes so the renderer re-traces fences.
             cells: new Set(), rev: 0,
-            // settlers arrive to raw land: they must clear it and gather wood to raise a fence,
-            // then a house. Until then no fence/house renders and they sleep in the open.
-            built: { fence: false, house: false },
+            // settlers arrive to raw land: clear it, gather wood for a fence, then raise a
+            // level-1 tipi and slowly upgrade it (L1 tipi -> L2 yurt -> L3 cottage) over a year+.
+            // level 0 = homeless. Until level>=1 no house renders and they sleep in the open.
+            built: { fence: false, level: 0 },
         };
         for (let j = slot.j; j < slot.j + B; j++) for (let i = slot.i; i < slot.i + B; i++) plot.cells.add(pkey(i, j));
         this.#rebuildFields(plot);   // (plot is NOT auto-cleared; the house tiles are NOT placed yet)
@@ -652,13 +659,20 @@ export class World {
         this._tilesChanged = true;
         this.addLog(`${farmer.sheet.name} fenced in their homestead.`, '#7dd069');
     }
-    raiseHouse(farmer) {
-        const p = farmer.plot, h = p.house;
+    // True if the farmer can afford the given tier (wood + ore spent, lifetime harvest as a gate).
+    canBuild(farmer, level) {
+        const c = HOUSE_TIERS[level];
+        return c && farmer.wood >= c.wood && farmer.ore >= c.ore && farmer.sheet.harvested >= c.harvested;
+    }
+    raiseBuilding(farmer, level) {
+        const p = farmer.plot, h = p.house, c = HOUSE_TIERS[level];
+        farmer.wood -= c.wood; farmer.ore -= c.ore;
         for (let di = 0; di < 2; di++) for (let dj = 0; dj < 2; dj++) this.set(h.i + di, h.j + dj, T.HOUSE);
-        p.built.house = true;
+        p.built.level = level;
         this._tilesChanged = true;
         this.#rebuildFields(p);
-        this.addLog(`${farmer.sheet.name} raised their house! A home at last.`, '#f0d060');
+        if (level === 1) this.addLog(`${farmer.sheet.name} pitched a tipi — a first home!`, '#f0d060');
+        else this.addLog(`${farmer.sheet.name} upgraded to a ${c.name}!`, '#f0d060');
     }
 
     // Place the farmer's next preferred facility if there's room (no auto-expand;
@@ -1381,7 +1395,8 @@ export class Farmer {
     // Returns true if it took an action this tick.
     #pursueHomestead() {
         const w = this.world, p = this.plot;
-        if (p.built.house || w.isNight()) return false;
+        if (p.built.level >= 1 || w.isNight()) return false;
+        const c = HOUSE_TIERS[1];
         // 1) fence the claim first
         if (!p.built.fence) {
             if (this.wood >= FENCE_WOOD) { this.wood -= FENCE_WOOD; w.raiseFence(this); this.say('FENCED!', '#7dd069'); this.sparkle = 1.5; return true; }
@@ -1392,21 +1407,34 @@ export class Farmer {
         if (!w.houseSiteClear(p)) {
             const b = this.#nearestSiteBlocker();
             if (b) {
-                this.think('CLEARING GROUND FOR MY HOUSE');
+                this.think('CLEARING GROUND FOR MY HOME');
                 if (b.kind === 'rock') { this.mineTarget = b; this.#goTo(b.i + 0.5, b.j + 0.5, 'mine'); }
                 else { this.woodTarget = b; this.#goTo(b.i + 0.5, b.j + 0.5, b.kind === 'stump' ? 'break' : 'chop'); }
                 return true;
             }
         }
-        // 3) raise the house once timber + stone are stockpiled
-        if (this.wood >= HOUSE_WOOD && this.ore >= HOUSE_ORE) { this.wood -= HOUSE_WOOD; this.ore -= HOUSE_ORE; w.raiseHouse(this); this.say('HOME AT LAST!', '#f0d060'); this.sparkle = 2.5; return true; }
+        // 3) pitch the level-1 tipi once timber + stone are stockpiled
+        if (this.wood >= c.wood && this.ore >= c.ore) { w.raiseBuilding(this, 1); this.say('A ROOF!', '#f0d060'); this.sparkle = 2.5; return true; }
         // 4) gather what's still missing (stone, then timber)
-        if (this.ore < HOUSE_ORE) {
+        if (this.ore < c.ore) {
             const rock = w.nearestRock(this.pos, 40);
-            if (rock) { this.think('MINING STONE FOR THE WALLS'); this.mineTarget = rock; this.#goTo(rock.i + 0.5, rock.j + 0.5, 'mine'); return true; }
+            if (rock) { this.think('MINING STONE FOR MY HOME'); this.mineTarget = rock; this.#goTo(rock.i + 0.5, rock.j + 0.5, 'mine'); return true; }
         }
-        this.think(this.wood > 0 ? 'MORE TIMBER FOR THE HOUSE' : 'FELLING TIMBER FOR MY HOUSE');
+        this.think(this.wood > 0 ? 'MORE TIMBER FOR MY HOME' : 'FELLING TIMBER FOR MY HOME');
         this.#goChop(); return true;
+    }
+    // Save toward the next dwelling tier; upgrade when affordable. Low priority (runs after
+    // normal farm work), so L2/L3 accrete slowly from surplus timber/stone over many days.
+    #maybeUpgradeHome() {
+        const p = this.plot;
+        if (p.built.level < 1 || p.built.level >= 3 || this.world.isNight()) return false;
+        const next = p.built.level + 1;
+        if (this.world.houseSiteClear(p) && this.world.canBuild(this, next)) {
+            this.world.raiseBuilding(this, next);
+            this.say(next >= 3 ? 'A REAL HOME!' : 'A BIGGER HOME!', '#f0d060'); this.sparkle = 2.5;
+            return true;
+        }
+        return false;
     }
     #nearestSiteBlocker() {
         const w = this.world, h = this.plot.house;
@@ -1441,7 +1469,8 @@ export class Farmer {
         }
 
         // a new settler must clear their land, fence it, then build a house before farming
-        if (!this.plot.built.house && this.#pursueHomestead()) return;
+        if (this.plot.built.level < 1 && this.#pursueHomestead()) return;
+        if (this.#maybeUpgradeHome()) return;
 
         if (this.p.collaboration > 0.55 && !w.isNight()) {
             const sick = w.farmers.find(o => o !== this && o.health === 'sick' && !this.visitedSick.has(o.sheet.seed) &&
