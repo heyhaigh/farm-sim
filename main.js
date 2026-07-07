@@ -848,13 +848,20 @@ function bakeChunk(cx, cy) {
             if (t === T.TILLED) col = TILLED_C;
             if (t === T.PATH) col = PATH_C;
             if (t === T.HOUSE) col = '#5a5044';
-            if (t === T.WATER) col = winter ? '#5a7590' : ((i + j) % 2 ? '#2a5a72' : '#26506a');
+            // winter freezes the pond to pale, two-tone ice (vs deep liquid blue the rest of the year)
+            if (t === T.WATER) col = winter ? ((i + j) % 2 ? '#aecad8' : '#a0bccc') : ((i + j) % 2 ? '#2a5a72' : '#26506a');
             if (t === T.COOP || t === T.BARN) col = '#6a5a44';
             fillDiamond(bctx, sx, sy, col);
 
             if (t === T.WATER) {
-                bctx.fillStyle = winter ? '#8aa8c0' : '#3a6e86';
-                bctx.fillRect(sx + 5 + ((i * 5 + j) % 6 + 6) % 6, sy + 3 + ((i + j) % 3 + 3) % 3, 2, 1);
+                if (winter) {   // a bright shine + a faint crack line so the ice reads as frozen, not just pale water
+                    bctx.fillStyle = '#dcecf4';
+                    bctx.fillRect(sx + 5 + ((i * 5 + j) % 6 + 6) % 6, sy + 3 + ((i + j) % 3 + 3) % 3, 3, 1);
+                    if ((i * 3 + j) % 4 === 0) { bctx.fillStyle = '#c2d8e4'; bctx.fillRect(sx + 7, sy + 5, 4, 1); bctx.fillRect(sx + 9, sy + 6, 2, 1); }
+                } else {
+                    bctx.fillStyle = '#3a6e86';
+                    bctx.fillRect(sx + 5 + ((i * 5 + j) % 6 + 6) % 6, sy + 3 + ((i + j) % 3 + 3) % 3, 2, 1);
+                }
             } else if (t === T.TILLED) {
                 bctx.fillStyle = winter ? '#b8c0c8' : '#584028';
                 bctx.fillRect(sx + 6, sy + 4, 8, 1);
@@ -1501,6 +1508,8 @@ function fillDiamondAlpha(sx, sy, color) {
 }
 
 function drawProducer(p, px, py) {
+    // winter freezes the pond over: lily pads wither off and the fish sink out of sight until spring
+    if ((p.kind === 'pad' || p.kind === 'fish') && world.isWinter()) return;
     if (p.kind === 'pad') {
         const spr = lilyPadSprites[p.ready ? 1 : 0];
         ctx.drawImage(spr, Math.floor(px - 7), Math.floor(py - 5));
