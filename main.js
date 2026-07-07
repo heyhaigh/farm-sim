@@ -851,7 +851,9 @@ function bakeChunk(cx, cy) {
             }
             if (t === T.TILLED) col = TILLED_C;
             if (t === T.PATH) col = PATH_C;
-            if (t === T.HOUSE) col = '#5a5044';
+            // a FINISHED dwelling sits on plain grass (the sprite covers its core) — the only gray
+            // footprint is the foundation pad shown WHILE it's under construction (drawFoundation).
+            // (T.HOUSE keeps its grass colour here.)
             // winter freezes the pond to pale, two-tone ice (vs deep liquid blue the rest of the year)
             if (t === T.WATER) col = winter ? ((i + j) % 2 ? '#aecad8' : '#a0bccc') : ((i + j) % 2 ? '#2a5a72' : '#26506a');
             if (t === T.COOP || t === T.BARN) col = '#6a5a44';
@@ -1140,11 +1142,17 @@ function collectDrawables() {
 
     // houses (tiered: L1 tipi -> L2 round yurt -> L3 cottage)
     for (const f of world.farmers) {
-        const level = f.plot.built.level;
-        if (level < 1) continue;   // homeless — nothing to draw
-        const h = f.plot.house, F = 5;   // 5x5 footprint (World.HOUSE_FT); sprite sits centred within it
+        const p = f.plot, level = p.built.level;
+        const h = p.house, F = 5;   // 5x5 footprint (World.HOUSE_FT); sprite sits centred within it
         const sx = cam.x + isoX(h.i + (F - 1) / 2, h.j + (F - 1) / 2);   // footprint centre
         const sy = cam.y + isoY(h.i + (F - 1) / 2, h.j + (F - 1) / 2);
+        if (p.building) {   // under construction: gray foundation pad + a house rising by progress
+            const b = p.building, prog = Math.min(1, b.points / b.needed), art = buildingArt(b.level);
+            const ft = world.houseFt(p);
+            list.push({ y: sy + TILE_H, draw: () => drawFoundation(h, sx, sy, art, prog, ft) });
+            continue;
+        }
+        if (level < 1) continue;   // homeless — nothing to draw
         const spr = houseSprite(f.sheet.colors.hatColor);
         const art = buildingArt(level);
         const night = world.isNight();
@@ -1576,7 +1584,7 @@ function drawFarmer(f, sx, sy) {
     let frame = frames.idle;
     if (f.state === 'walk') {
         frame = Math.floor(f.animTime * 7) % 2 ? frames.walk1 : frames.walk2;
-    } else if (f.state === 'work' || f.state === 'build' || f.state === 'coopbuild' || f.state === 'chop' || f.state === 'break' || f.state === 'forage' || f.state === 'mine' || f.state === 'fencepost' || f.state === 'scarecrow') {
+    } else if (f.state === 'work' || f.state === 'build' || f.state === 'coopbuild' || f.state === 'housebuild' || f.state === 'chop' || f.state === 'break' || f.state === 'forage' || f.state === 'mine' || f.state === 'fencepost' || f.state === 'scarecrow') {
         frame = Math.floor(f.animTime * 5) % 2 ? frames.work : frames.idle;
     } else if (f.state === 'sleep') {
         frame = frames.sleep;
@@ -1943,6 +1951,28 @@ function drawBoard() {
         const thumbY = bodyY + (boardScroll / boardMaxScroll) * (bodyH - thumbH);
         ctx.fillStyle = 'rgba(201,164,90,0.55)'; ctx.fillRect(PX + PW - 5, Math.floor(thumbY), 2, Math.floor(thumbH));
     }
+}
+
+// A dwelling under construction: a gray foundation pad staked over the 5x5 footprint, with the
+// house sprite RISING from the ground (revealed bottom-up by build progress) + a progress bar.
+function drawFoundation(h, sx, sy, art, prog, ft = 5) {
+    const ci = h.i + 2, cj = h.j + 2, half = ft >> 1;   // footprint centred on the house centre
+    for (let dj = -half; dj <= half; dj++) for (let di = -half; di <= half; di++) {   // gray foundation pad
+        const dx = cam.x + isoX(ci + di, cj + dj) - 10, dy = cam.y + isoY(ci + di, cj + dj);
+        fillDiamond(ctx, Math.floor(dx), Math.floor(dy), ((di + dj) & 1) ? '#615c53' : '#6b665c');
+    }
+    if (art && art.ready && prog > 0) {   // the house rising, revealed from the bottom up
+        const S = art.src;
+        const dispW = Math.round(S.w * HOUSE_ART_SCALE), dispH = Math.round(dispW * S.h / S.w);
+        const hx = Math.floor(sx - dispW / 2), hy = Math.floor(sy + TILE_H - dispH + 3);
+        const srcH = Math.max(1, Math.round(S.h * prog)), srcY = S.y + S.h - srcH;
+        const dH = Math.max(1, Math.round(dispH * prog)), dY = hy + dispH - dH;
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(art.img, S.x, srcY, S.w, srcH, hx, dY, dispW, dH);
+    }
+    const barY = Math.floor(sy - 10), bw = 26;   // progress bar floating above the pad
+    ctx.fillStyle = '#20222c'; ctx.fillRect(Math.floor(sx - bw / 2), barY, bw, 4);
+    ctx.fillStyle = '#c9a45a'; ctx.fillRect(Math.floor(sx - bw / 2), barY, Math.round(bw * prog), 4);
 }
 
 // A small pixel speaker for the sound toggle: driver + cone pointing right, green sound-waves when
@@ -2820,7 +2850,8 @@ function frame(now) {
 
     // soundtrack follows the sim: seasonal theme by day, crickets/owls at night,
     // rain/thunder by weather, and a rooster crow at dawn once the town has one
-    audio.update({ isNight: world.isNight(), weather: world.weather, flash: world.lightningFlash, season: world.season, hasRooster: world.hasRooster() });
+    const anyBuilding = world.farmers.some(f => f.state === 'housebuild' || f.state === 'fencepost' || f.state === 'build' || f.state === 'coopbuild' || f.state === 'scarecrow');
+    audio.update({ isNight: world.isNight(), weather: world.weather, flash: world.lightningFlash, season: world.season, hasRooster: world.hasRooster(), building: anyBuilding });
     // at extreme speeds keep a bounded backlog (spread over coming frames) rather than dropping
     // all the leftover time, but cap it so we never spiral.
     if (steps >= 800) simAccumulator = Math.min(simAccumulator, 800 * FIXED_DT);

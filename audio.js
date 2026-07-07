@@ -124,10 +124,13 @@ class FarmAudio {
     }
 
     // called every frame with sim state
-    update({ isNight, weather, flash, season = 0, hasRooster = false }) {
+    update({ isNight, weather, flash, season = 0, hasRooster = false, building = false }) {
         this.hasRooster = hasRooster;
         if (!this.ctx) { this.wasNight = isNight; this.season = season; return; }
         const t = this.ctx.currentTime;
+        // a steady hammer-on-wood while ANY structure is being raised — an audible feedback loop
+        // that real work is happening (houses, fences, wells, communal projects).
+        if (building && this.enabled && t - (this.lastHammer || 0) > 0.44) { this.#hammer(); this.lastHammer = t; }
         this.season = season;
         // dawn: the rooster crow is disabled for now — the synth never read as a real crow, so
         // it's pulled from the dawn cue. (#crow()/playCrow() are left dormant below for a future
@@ -243,6 +246,26 @@ class FarmAudio {
         this.rainGain = this.ctx.createGain(); this.rainGain.gain.value = 0;
         src.connect(hp); hp.connect(lp); lp.connect(this.rainGain); this.rainGain.connect(this.master);
         src.start();
+    }
+
+    // One hammer knock on wood: a short bandpass-noise thwack over a low woody thud. Called on a
+    // steady rhythm from update() while any structure is being raised.
+    #hammer() {
+        const ctx = this.ctx, t = ctx.currentTime;
+        const src = ctx.createBufferSource(); src.buffer = this.#noiseBuffer(0.09);
+        const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1500; bp.Q.value = 1.1;
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.linearRampToValueAtTime(0.12, t + 0.004);
+        g.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
+        src.connect(bp); bp.connect(g); g.connect(this.master);
+        src.start(t); src.stop(t + 0.1);
+        const o = ctx.createOscillator(); o.type = 'triangle';
+        o.frequency.setValueAtTime(190, t); o.frequency.exponentialRampToValueAtTime(85, t + 0.08);
+        const og = ctx.createGain();
+        og.gain.setValueAtTime(0.08, t); og.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
+        o.connect(og); og.connect(this.master);
+        o.start(t); o.stop(t + 0.1);
     }
 
     #thunder() {

@@ -60,9 +60,9 @@ const FENCE_POST_WOOD = 1; // wood per fence post — reclaimed when torn down, 
 // farmer can't rush a farmhouse in a week. Livestock rides on the cottage (see FACILITY_MIN_LEVEL).
 const HOUSE_TIERS = [
     null,
-    { wood: 10, ore: 2, harvested: 0, minLevel: 0, name: 'tipi' },          // L1 — a roof, day one
-    { wood: 30, ore: 12, harvested: 300, minLevel: 9, name: 'yurt' },       // L2 — bigger yard + chickens
-    { wood: 120, ore: 60, harvested: 1400, minLevel: 18, name: 'cottage' }, // L3 — the estate: a year's work, then the herd
+    { wood: 10, ore: 2, harvested: 0, minLevel: 0, name: 'tipi', buildSteps: 30, footprint: 3 },        // L1 — 3x3, ~1/4 day
+    { wood: 30, ore: 12, harvested: 300, minLevel: 9, name: 'yurt', buildSteps: 62, footprint: 5 },     // L2 — 5x5, ~1/2 day
+    { wood: 120, ore: 60, harvested: 1400, minLevel: 18, name: 'cottage', buildSteps: 250, footprint: 5 }, // L3 — 5x5, ~2 days
 ];
 const START_WOOD = 4;
 const MAX_FARMERS = 8;   // the original map maxes out at the first ring's 8 homesteads
@@ -204,6 +204,8 @@ const LABOR = {
     chop: { time: 4.6, energy: 0.055 },      // fell a tree
     mine: { time: 4.2, energy: 0.07 },       // smash a rock
     scarecrow: { time: 3.5, energy: 0.04 },  // raise a scarecrow
+    housebuild: { time: 3.0, energy: 0.02 }, // one work-shift raising a dwelling (many per house; light
+                                             // per shift so a farmer can put in a long stretch before resting)
 };
 const SCARECROW_WOOD = 3;   // timber cost of a scarecrow
 const SCARECROW_LOSSES = 2; // crow raids a farmer will tolerate before building one
@@ -860,12 +862,12 @@ export class World {
         if (ontoFarm && this.rand() < 0.6) this.addLog('Wild brush is creeping into the farms — clear it before it takes root.', '#8a9a5a');
     }
 
-    // A dwelling occupies a 5x5 tile footprint (plot.house = its top-left). Reserve that plus a
-    // one-tile margin (and extra above, where the tall roof sprite overhangs) so crops and
-    // facilities never get placed under the house or its sprite.
+    // Reserve the dwelling's footprint (3x3 tipi / 5x5 yurt, centred on houseCentre) plus a one-tile
+    // margin (and extra above, where the tall roof sprite overhangs) so crops and facilities are
+    // never placed under the house or its sprite.
     #inHouse(plot, i, j) {
-        const h = plot.house, F = World.HOUSE_FT;
-        return i >= h.i - 1 && i <= h.i + F && j >= h.j - 2 && j <= h.j + F;
+        const c = this.houseCentre(plot), half = this.houseFt(plot) >> 1;
+        return i >= c.i - half - 1 && i <= c.i + half + 1 && j >= c.j - half - 2 && j <= c.j + half + 1;
     }
 
     #addRing(radius, count, phase) {
@@ -1472,6 +1474,7 @@ export class World {
             // level 0 = homeless. Until level>=1 no house renders and they sleep in the open.
             built: { fence: false, level: 0 },
             fencePosts: 0, fenceTarget: 0,   // fence is raised post-by-post, not instantly
+            building: null,                  // { level, points, needed } while a dwelling is under construction
         };
         for (let j = slot.j; j < slot.j + B; j++) for (let i = slot.i; i < slot.i + B; i++) plot.cells.add(pkey(i, j));
         this.#rebuildFields(plot);   // (plot is NOT auto-cleared; the house tiles are NOT placed yet)
@@ -1518,11 +1521,19 @@ export class World {
 
     static MAX_CELLS = 560;  // acreage cap (~23x23 worth of land, any shape, annexes included)
     static BASE_PLOT = 13;   // starting plot size (square); house + garden + facility zones fit inside
-    static HOUSE_FT = 5;     // a dwelling occupies a 5x5 tile footprint (C&C-style building pad)
+    static HOUSE_FT = 5;     // the MAX dwelling footprint (yurt/cottage); a tipi is smaller (3x3)
 
-    // The tile a settler stands on to enter / work at their home — the front-centre, just below the
-    // 5x5 footprint (plot.house is the footprint's top-left). Used for sleeping, crafting, care, etc.
-    houseDoor(plot) { return { i: plot.house.i + (World.HOUSE_FT >> 1), j: plot.house.j + World.HOUSE_FT }; }
+    // The footprint a plot's dwelling reserves right now: the tipi is 3x3, the yurt/cottage 5x5.
+    // Uses the building-in-progress tier if upgrading, else the built tier, else the tipi they'll
+    // raise first — so the reserve is always sized for what's there or coming.
+    houseFt(plot) {
+        const lv = plot.building ? plot.building.level : (plot.built.level >= 1 ? plot.built.level : 1);
+        return HOUSE_TIERS[lv]?.footprint || World.HOUSE_FT;
+    }
+    // The fixed centre of the footprint (plot.house is the MAX-footprint top-left, so centre = +2),
+    // and the door: front-centre one tile below the current footprint. Used for sleep/craft/care.
+    houseCentre(plot) { return { i: plot.house.i + 2, j: plot.house.j + 2 }; }
+    houseDoor(plot) { const c = this.houseCentre(plot), h = this.houseFt(plot) >> 1; return { i: c.i, j: c.j + h + 1 }; }
     // The homestead LADDER: your house is your license to hold land. A tipi keeps a modest
     // yard; the yurt earns real acreage; only the cottage commands a full estate. This is
     // what makes farmers hungry to upgrade — the farm can't outgrow the home.
@@ -1759,10 +1770,12 @@ export class World {
         return c && farmer.wood >= c.wood && farmer.ore >= c.ore &&
             farmer.sheet.harvested >= c.harvested && farmer.sheet.level >= (c.minLevel || 0);
     }
+    // Raise the finished dwelling in place (tiles + level). Materials are paid at the FOUNDATION
+    // now (startHouseBuild), so this is always called "free"; the caller does the log/celebration.
     raiseBuilding(farmer, level, free = false) {
-        const p = farmer.plot, h = p.house, c = HOUSE_TIERS[level];
+        const p = farmer.plot, h = p.house;
         if (!p.built.fence) return false;   // a home is never raised until the fence is fully up
-        if (!free) { farmer.wood -= c.wood; farmer.ore -= c.ore; }
+        if (!free) { const c = HOUSE_TIERS[level]; farmer.wood -= c.wood; farmer.ore -= c.ore; }
         // the building itself BLOCKS a modest 3x3 core (under the sprite); the surrounding ring of
         // the 5x5 footprint is reserved YARD — kept clear of crops/facilities (#inHouse) but left as
         // walkable grass, so a small dwelling isn't a giant solid slab.
@@ -1771,10 +1784,35 @@ export class World {
         p.built.level = level;
         this._tilesChanged = true;
         this.#rebuildFields(p);
-        if (free) this.addLog(`${farmer.sheet.name} cobbled together a rough lean-to just to survive.`, '#e0a03c');
-        else if (level === 1) this.addLog(`${farmer.sheet.name} pitched a tipi — a first home!`, '#f0d060');
-        else this.addLog(`${farmer.sheet.name} upgraded to a ${c.name}!`, '#f0d060');
         return true;
+    }
+
+    // Begin a dwelling: pay materials up front and lay a foundation on the 5x5 footprint. The farmer
+    // then works it up over many shifts (#buildHouse); it isn't a home until the labour's done.
+    startHouseBuild(farmer, level) {
+        const p = farmer.plot, c = HOUSE_TIERS[level];
+        if (!p.built.fence || p.building) return false;
+        farmer.wood -= c.wood; farmer.ore -= c.ore;
+        p.building = { level, points: 0, needed: c.buildSteps || 8 };
+        this._tilesChanged = true;
+        this.addLog(`${farmer.sheet.name} laid a foundation for a ${c.name}.`, '#c9a45a');
+        return true;
+    }
+    // One completed shift of building work — advances the build and raises the house when it's done.
+    buildHouseStep(farmer) {
+        const b = farmer.plot.building;
+        if (!b) return;
+        b.points++;
+        if (b.points >= b.needed) {
+            farmer.plot.building = null;
+            this.raiseBuilding(farmer, b.level, true);   // materials already paid at the foundation
+            farmer.say(b.level >= 3 ? 'A REAL HOME!' : b.level === 2 ? 'A BIGGER HOME!' : 'A ROOF!', '#f0d060');
+            farmer.sparkle = 2.5;
+            farmer.remember('event', b.level >= 3 ? 'Raised my cottage - the estate, the animals, all of it opens now'
+                : b.level === 2 ? 'Raised my yurt - more room and bigger stores at last' : 'Built my first home - a roof at last', null, 1.1);
+            this.addLog(b.level === 1 ? `${farmer.sheet.name} finished pitching a tipi — a first home!`
+                : `${farmer.sheet.name} finished raising a ${HOUSE_TIERS[b.level].name}!`, '#f0d060');
+        }
     }
 
     // Place the farmer's next preferred facility if there's room (no auto-expand;
@@ -3820,7 +3858,9 @@ export class Farmer {
         // exposure in an unwinnable spot. Rare — only when wood is effectively unavailable.
         if (this.nightsExposed >= 6 && this.wood < c.wood && !w.nearestWood(this.pos)) {
             p.built.fence = true; p.fenceTarget = Math.max(1, p.fenceTarget || 1); p.fencePosts = p.fenceTarget; p.rev++;
+            p.building = null;
             w.raiseBuilding(this, 1, true);
+            w.addLog(`${this.sheet.name} cobbled together a rough lean-to just to survive.`, '#e0a03c');
             this.say('shelter, at last', '#e0a03c'); this.sparkle = 1; this.nightsExposed = 0;
             return true;
         }
@@ -3855,8 +3895,9 @@ export class Farmer {
             const b = this.#nearestSiteBlocker();
             if (b) { this.think('CLEARING GROUND FOR MY HOME'); this.#clearObstacle(b); return true; }
         }
-        // 3) pitch the level-1 tipi once timber + stone are stockpiled
-        if (this.wood >= c.wood && this.ore >= c.ore) { w.raiseBuilding(this, 1); this.say('A ROOF!', '#f0d060'); this.sparkle = 2.5; return true; }
+        // 3) pitch the level-1 tipi once timber + stone are stockpiled — a WORKED build now: lay a
+        //     foundation, then labour it up shift by shift (see #buildHouse)
+        if (p.building || (this.wood >= c.wood && this.ore >= c.ore)) return this.#buildHouse(1);
         // 4) gather what's still missing (stone, then timber)
         if (this.ore < c.ore) {
             const rock = w.nearestRock(this.pos, 40);
@@ -4024,19 +4065,43 @@ export class Farmer {
     #maybeUpgradeHome() {
         const w = this.world, p = this.plot;
         if (p.built.level < 1 || p.built.level >= 3 || w.isNight()) return false;
+        if (p.building) return this.#buildHouse(p.building.level);   // an upgrade already under way — work it
         const next = p.built.level + 1;
         if (!w.canBuild(this, next)) return false;   // can't afford yet — keep farming and saving
-        // afford it: clear the site of any encroaching trees/rocks/brush BEFORE raising it
+        // afford it: clear the site of any encroaching trees/rocks/brush BEFORE laying the foundation
         if (!w.houseSiteClear(p)) {
             const b = this.#nearestSiteBlocker();
             if (b) { this.think('CLEARING SPACE TO UPGRADE MY HOME'); this.#clearObstacle(b); return true; }
         }
-        w.raiseBuilding(this, next);
         this.wantUpgrade = false;
-        this.say(next >= 3 ? 'A REAL HOME!' : 'A BIGGER HOME!', '#f0d060'); this.sparkle = 2.5;
-        this.remember('event', next >= 3 ? 'Raised my cottage - the estate, the animals, all of it opens now'
-            : 'Raised my yurt - more land and bigger stores at last', null, 1.2);
+        return this.#buildHouse(next);   // lay the foundation + start the worked build (celebration on completion)
+    }
+
+    // Lay a foundation (if not already) and put in a shift raising the dwelling — a WORKED build:
+    // the farmer stands at the front door of the 5x5 footprint and labours it up over many shifts.
+    #buildHouse(level) {
+        const w = this.world, p = this.plot;
+        if (!p.building && !w.startHouseBuild(this, level)) return false;
+        const b = p.building;
+        if (!b) return false;
+        this.think(`RAISING MY ${HOUSE_TIERS[b.level].name.toUpperCase()} — ${b.points}/${b.needed}`);
+        const d = w.houseDoor(p);
+        if (Math.abs(this.pos.i - (d.i + 0.5)) + Math.abs(this.pos.j - (d.j + 0.5)) < 1.9) {
+            this.buildTimer = this.#laborTime('housebuild'); this.state = 'housebuild'; return true;
+        }
+        if (!this.#goTo(d.i + 0.5, d.j + 0.5, 'housebuild')) this.#backoff();
         return true;
+    }
+    #completeHouseStep() {
+        this.#laborDrain('housebuild');
+        if (this.plot.building) {
+            this.world.buildHouseStep(this);   // advances the build; raises the house on the final shift
+            this.sparkle = Math.max(this.sparkle, 0.7);
+            if (this.plot.building && this.energy > 0.14) {   // more to raise and not spent -> keep hammering in place
+                this.buildTimer = this.#laborTime('housebuild'); this.state = 'housebuild'; return;
+            }
+        }
+        this.state = 'decide';
     }
     // Nearest tree/stump/rock/brush sitting ON my own plot cells (clutter to clear for farmland).
     #nearestPlotObstacle() {
@@ -5137,6 +5202,7 @@ export class Farmer {
                     else if (then === 'mine') { this.chopTimer = this.#laborTime('mine'); this.state = 'mine'; }
                     else if (then === 'forage') { this.forageTimer = this.#laborTime('forage'); this.state = 'forage'; }
                     else if (then === 'fencepost') { this.fenceTimer = this.#laborTime('fencepost'); this.state = 'fencepost'; }
+                    else if (then === 'housebuild') { this.buildTimer = this.#laborTime('housebuild'); this.state = 'housebuild'; }
                     else if (then === 'scarecrow') { this.chopTimer = this.#laborTime('scarecrow'); this.state = 'scarecrow'; }
                     else if (then === 'fetchwater' || then === 'fetchwater-help') {
                         // hard guard: only a finished, listed, READY well yields water — never a build site
@@ -5203,6 +5269,7 @@ export class Farmer {
             case 'craft': this.craftTimer -= dt; if (this.craftTimer <= 0) this.#completeCraft(); break;
             case 'forage': this.forageTimer -= dt; if (this.forageTimer <= 0) this.#completeForage(); break;
             case 'fencepost': this.fenceTimer -= dt; if (this.fenceTimer <= 0) this.#completeFencePost(); break;
+            case 'housebuild': this.buildTimer -= dt; if (this.buildTimer <= 0) this.#completeHouseStep(); break;
             case 'scarecrow': this.chopTimer -= dt; if (this.chopTimer <= 0) this.#completeScarecrow(); break;
 
             case 'build': {
