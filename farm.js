@@ -1171,7 +1171,7 @@ export class World {
             const desiredR = 14 + v * 50 + (this.rand() - 0.5) * 12;        // ~plaza .. ~far fogged corner
             const baseAng = this.rand() * Math.PI * 2;
             const spot = this.#findHomestead(f.plot, desiredR, baseAng, B);
-            if (spot) this.#relocatePlot(f, spot.i, spot.j, B);
+            if (spot) this.#reserveHomestead(f, spot.i, spot.j, B);
         }
     }
 
@@ -1207,24 +1207,35 @@ export class World {
         return Math.min(3, trees) - water * 2;
     }
 
-    // Move a (still-pristine) plot to a new spot: reposition the rect, rebuild fields, reveal the
-    // homestead patch + a corridor back to the plaza, and MUSTER the settler at the plaza — the
-    // founders all gather at the well and then set out for the ground they chose (homesteading
-    // pulls them there along the revealed corridor).
-    #relocatePlot(f, i, j, B) {
+    // RESERVE (but don't yet stake) the ground a founder is drawn to: fix the plot's rect so no one
+    // else claims it, but leave its cells EMPTY (unsited) so nothing renders on the map. Muster the
+    // settler at the plaza and reveal a trail out — they physically travel to the ground, scout it,
+    // and STAKE it on arrival (claimHomestead), so plots appear one by one as founders settle rather
+    // than all pre-outlined at once.
+    #reserveHomestead(f, i, j, B) {
         const plot = f.plot;
-        plot.x = i; plot.y = j; plot.w = B; plot.h = B;
-        plot.house = { i: i + 4, j: j + 4 };   // footprint centred in the plot
-        plot.cells = new Set();
-        for (let jj = j; jj < j + B; jj++) for (let ii = i; ii < i + B; ii++) plot.cells.add(pkey(ii, jj));
-        plot.rev++; plot._fenceRing = null;
-        this.#rebuildFields(plot);
-        const pci = i + (B >> 1), pcj = j + (B >> 1);
-        this.reveal(pci, pcj, 13);                          // the homestead + a resource margin
-        this.#revealCorridor(CENTER, CENTER, pci, pcj, 4);  // a trail from the plaza so they can walk out
-        // spawn at the plaza, angled toward their claim, so the opening reads as founders dispersing
-        const bearing = Math.atan2(pcj - CENTER, pci - CENTER), r = 4 + this.rand() * 2.5;
+        plot.x = i; plot.y = j; plot.w = B; plot.h = B;   // rect reserved (overlap-checked) but NOT sited
+        plot.house = { i: i + 4, j: j + 4 };
+        plot.cells = new Set();                            // empty until claimed -> no fence/outline yet
+        plot.sited = false; plot.rev++; plot._fenceRing = null;
+        plot.built.fence = false; plot.built.level = 0;
+        f.claim = { i: i + (B >> 1), j: j + (B >> 1) };    // the ground they're heading for
+        this.#revealCorridor(CENTER, CENTER, f.claim.i, f.claim.j, 4);   // a trail to walk out on
+        const bearing = Math.atan2(f.claim.j - CENTER, f.claim.i - CENTER), r = 4 + this.rand() * 2.5;
         f.pos = { i: CENTER + Math.cos(bearing) * r, j: CENTER + Math.sin(bearing) * r };
+    }
+    // The settler reached the ground they scouted — STAKE it: fill the plot's cells, lay out the
+    // fields, reveal the homestead. Only now does it appear on the map and real homesteading begin.
+    claimHomestead(f) {
+        const plot = f.plot;
+        if (plot.sited) return;
+        const B = plot.w;
+        for (let jj = plot.y; jj < plot.y + B; jj++) for (let ii = plot.x; ii < plot.x + B; ii++) plot.cells.add(pkey(ii, jj));
+        plot.sited = true; plot.rev++; plot._fenceRing = null;
+        this.#rebuildFields(plot);
+        this.reveal(plot.x + (B >> 1), plot.y + (B >> 1), 13);   // light up the homestead now they're here
+        this.addLog(`${f.sheet.name} scouted the land and staked out a homestead.`, '#7dd069');
+        f.say('this ground will do.', '#7dd069'); f.sparkle = 1.5;
     }
     // Reveal a straight trail of fog between two points so a settler can path along it.
     #revealCorridor(i0, j0, i1, j1, r) {
@@ -1523,6 +1534,7 @@ export class World {
             built: { fence: false, level: 0 },
             fencePosts: 0, fenceTarget: 0,   // fence is raised post-by-post, not instantly
             building: null,                  // { level, points, needed } while a dwelling is under construction
+            sited: false,                    // false until the settler physically travels out and STAKES it
         };
         for (let j = slot.j; j < slot.j + B; j++) for (let i = slot.i; i < slot.i + B; i++) plot.cells.add(pkey(i, j));
         this.#rebuildFields(plot);   // (plot is NOT auto-cleared; the house tiles are NOT placed yet)
@@ -3277,6 +3289,7 @@ export class Farmer {
                                   // raise the guardian (decays slowly, like a fading grudge)
         this.donateCooldown = 1 + Math.floor((sheet.seed >>> 5) % 3);  // days between silo donations
         this.donateTarget = null; // pending surplus a farmer is hauling to the town silo
+        this.claim = null;        // the ground a founder is travelling out to stake (until their plot is sited)
         this.scarecrowTarget = null;
 
         // episodic memory: a day-stamped journal of what happened to THIS bot — who helped,
@@ -3895,6 +3908,19 @@ export class Farmer {
         }
     }
 
+    // Travel from the plaza out to the ground this founder was drawn to, and STAKE it on arrival.
+    // Until then their plot is only a reservation — nothing on the map — so plots appear one by one
+    // as founders reach and claim their land, rather than all pre-outlined from the first frame.
+    #seekHomestead() {
+        const w = this.world, c = this.claim;
+        if (!c) { this.plot.sited = true; return; }   // safety — no claim recorded, treat as settled
+        if (Math.abs(this.pos.i - (c.i + 0.5)) + Math.abs(this.pos.j - (c.j + 0.5)) < 3) {
+            w.claimHomestead(this); return;            // reached the ground — stake it
+        }
+        this.think('SCOUTING FOR GOOD GROUND TO SETTLE');
+        if (!this.#goTo(c.i + 0.5, c.j + 0.5, 'seek')) this.#backoff();
+    }
+
     // A raw settler clears their land, fences it, then raises a house — before normal farming.
     // Returns true if it took an action this tick.
     #pursueHomestead() {
@@ -4229,6 +4255,10 @@ export class Farmer {
             const open = w.nearestOpenTile(this.pos);
             if (open) { this.think('HOW DID I END UP HERE?!'); this.#goTo(open.i + 0.5, open.j + 0.5, 'wander'); return; }
         }
+
+        // a founder who hasn't STAKED their claim yet: travel out from the plaza, scout the ground
+        // they were drawn to, and stake it on arrival (then normal homesteading begins).
+        if (!this.plot.sited) { this.#seekHomestead(); return; }
 
         if (this.health === 'sick') { this.think('NEED TO REST AND GET WELL'); this.#goHome('sick'); return; }
         // exhaustion: worn down and still grinding -> pushed to rest; pushing through deep
@@ -5251,6 +5281,7 @@ export class Farmer {
                     else if (then === 'forage') { this.forageTimer = this.#laborTime('forage'); this.state = 'forage'; }
                     else if (then === 'fencepost') { this.fenceTimer = this.#laborTime('fencepost'); this.state = 'fencepost'; }
                     else if (then === 'housebuild') { this.buildTimer = this.#laborTime('housebuild'); this.state = 'housebuild'; }
+                    else if (then === 'seek') { this.world.claimHomestead(this); this.state = 'decide'; }
                     else if (then === 'scarecrow') { this.chopTimer = this.#laborTime('scarecrow'); this.state = 'scarecrow'; }
                     else if (then === 'fetchwater' || then === 'fetchwater-help') {
                         // hard guard: only a finished, listed, READY well yields water — never a build site
