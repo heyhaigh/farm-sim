@@ -259,10 +259,12 @@ const TREASURE_GLOW = { cache: '245,220,110', timber: '198,150,86', goods: '230,
 const crateSheet = new Image(); let crateReady = false; crateSheet.onload = () => { crateReady = true; }; crateSheet.onerror = () => {};
 crateSheet.src = './assets/craftpix-net-654184-main-characters-home-free-top-down-pixel-art-asset/Tiled_files/Interior.png';
 const CRATES_SRC = { x: 69, y: 60, w: 26, h: 29 };   // just the two crates — stop before the next sprite
-// the wandering merchant (guild-hall Citizen sprite: 32x32 frames, 6-col walk / 12-col idle, 4 dir rows)
+// the wandering merchant — a DIFFERENT guild-hall character each visit (32x32 frames, 6-col walk,
+// 4 dir rows [down,up,left,right]). Idle/trading uses walk frame 0, so no separate idle sheet needed.
 const GUILD_BASE = './assets/craftpix-net-189780-free-top-down-pixel-art-guild-hall-asset-pack/PNG/';
-const merchantWalk = new Image(); merchantWalk.onerror = () => {}; merchantWalk.src = GUILD_BASE + 'Citizen1_Walk.png';
-const merchantIdle = new Image(); merchantIdle.onerror = () => {}; merchantIdle.src = GUILD_BASE + 'Citizen1_Idle.png';
+const MERCHANT_SHEETS = ['Citizen1_Walk', 'Citizen2_Walk', 'Fighter2_Walk'].map(f => {
+    const img = new Image(); img.onerror = () => {}; img.src = GUILD_BASE + f + '.png'; return img;
+});
 // facing (0=down,1=left,2=right,3=up) -> sheet row. The Citizen sheet rows run [down, up, left, right].
 const MERCHANT_ROW = [0, 2, 3, 1];
 const WELL_SRC = { x: 48, y: 498, w: 38, h: 38 };    // grass-base stone well in exterior.png
@@ -1364,7 +1366,7 @@ function drawStall(sx, sy) {
 
 function drawMerchant(m, sx, sy) {
     const walking = m.state === 'arriving' || m.state === 'leaving';
-    const img = walking ? merchantWalk : (imageLoaded(merchantIdle) ? merchantIdle : merchantWalk);
+    const img = MERCHANT_SHEETS[m.spriteIdx] || MERCHANT_SHEETS[0];
     if (!img || !imageLoaded(img)) {   // sprite not loaded — a small stand-in figure
         ctx.fillStyle = '#7a5a8a'; ctx.fillRect(Math.floor(sx - 3), Math.floor(sy + TILE_H / 2 - 12), 6, 12);
         return;
@@ -1372,7 +1374,7 @@ function drawMerchant(m, sx, sy) {
     const cols = Math.max(1, Math.round(img.naturalWidth / 32)), rows = 4;
     const fw = img.naturalWidth / cols, fh = img.naturalHeight / rows;
     const row = MERCHANT_ROW[m.facing] ?? 0;
-    const col = walking ? (m.frame % cols) : (Math.floor(performance.now() / 240) % cols);
+    const col = walking ? (m.frame % cols) : 0;   // stands (frame 0) while trading
     const disp = Math.round(fh * ASSET_SCALE);
     const px = Math.floor(sx - disp / 2), py = Math.floor(sy + TILE_H / 2 - disp + 2);
     ctx.fillStyle = 'rgba(10,14,10,0.35)';
@@ -2078,6 +2080,20 @@ function buildingUnder(mx, my) {
         push(Math.floor(sx - halfw), Math.floor(sy - halfh + TILE_H / 2), Math.floor(halfw * 2), Math.floor(halfh * 2),
             facLines(fac, world.farmers.find(fm => fm.plot === p)));
     }
+    // the wandering merchant, while their stall is open
+    const mch = world.merchant;
+    if (mch && mch.state === 'trading') {
+        const sx = cam.x + isoX(mch.pos.i, mch.pos.j), sy = cam.y + isoY(mch.pos.i, mch.pos.j);
+        const disp = Math.round(32 * ASSET_SCALE);
+        push(Math.floor(sx - disp / 2), Math.floor(sy + TILE_H / 2 - disp + 2), disp, disp, [
+            { t: mch.name.replace(/^an? /, '').toUpperCase(), c: TT_G },
+            { t: 'Wandering trader', c: TT_L },
+            { t: 'Trades surplus goods for ore', c: TT_GR },
+            { t: `1 ore per ${mch.rate} goods`, c: TT_B },
+            { t: `${mch.stock} ore in stock`, c: TT_GR },
+        ]);
+    }
+
     // most specific match = the drawn box whose center is nearest the cursor
     let best = null, bestD = Infinity;
     for (const r of rects) {

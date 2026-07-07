@@ -2759,13 +2759,14 @@ export class World {
         if (!stall) return;                       // plaza not clear/revealed yet — try again next day
         const arrive = this.#merchantArrivalSpot(stall) || { i: stall.i, j: stall.j };
         this.merchantVisit++;
+        const type = MERCHANT_TYPES[Math.floor(this.rand() * MERCHANT_TYPES.length)];
         this.merchant = {
             state: 'arriving', pos: { i: arrive.i + 0.5, j: arrive.j + 0.5 },
             stall, arrive, target: stall, path: null, pi: 0,
-            facing: 0, frame: 0, animT: 0, stock: MERCHANT_ORE_STOCK, traded: 0, leaveTime: 0,
-            visit: this.merchantVisit,
+            facing: 0, frame: 0, animT: 0, traded: 0, leaveTime: 0,
+            visit: this.merchantVisit, name: type.name, spriteIdx: type.sprite, rate: type.rate, stock: type.stock,
         };
-        this.addLog('A traveling merchant is approaching the market...', '#e8c860');
+        this.addLog(`${type.name[0].toUpperCase() + type.name.slice(1)} is approaching the market...`, '#e8c860');
     }
 
     // an open, revealed plaza-adjacent tile for the stall (not on the well/board/statue/a plot)
@@ -2815,13 +2816,13 @@ export class World {
     doTrade(f) {
         const m = this.merchant;
         if (!m || m.state !== 'trading' || m.stock <= 0) return false;
-        const g = f.sheet.goods || {};
+        const g = f.sheet.goods || {}, rate = m.rate || MERCHANT_RATE;
         let total = 0; for (const k in g) total += g[k];
         // how much ore they can get: capped by the merchant's stock, a comfortable reserve, and
-        // what their surplus can actually pay for (RATE goods each)
-        const oreWant = Math.min(m.stock, Math.max(0, 12 - f.ore), Math.floor(total / MERCHANT_RATE));
+        // what their surplus can actually pay for (rate goods each)
+        const oreWant = Math.min(m.stock, Math.max(0, 12 - f.ore), Math.floor(total / rate));
         if (oreWant <= 0) return false;
-        let toSpend = oreWant * MERCHANT_RATE, paid = 0;
+        let toSpend = oreWant * rate, paid = 0;
         const pools = Object.keys(g).filter(k => g[k] > 0).sort((a, b) => g[b] - g[a]);   // spend the most-plentiful first
         for (const k of pools) { while (toSpend > 0 && g[k] > 0) { g[k]--; toSpend--; paid++; } if (toSpend <= 0) break; }
         f.ore += oreWant; m.stock -= oreWant; m.traded += oreWant;
@@ -2846,9 +2847,15 @@ const COOP_STALL_DAYS = 8;
 // to trekking the highlands for stone. RATE goods buy one ore.
 const MERCHANT_INTERVAL = 6;      // days between visits (plus a jitter)
 const MERCHANT_STAY_DAYS = 1.3;   // how long the stall lingers before packing up
-const MERCHANT_ORE_STOCK = 30;    // ore the merchant brings to sell each visit
 const MERCHANT_SPEED = 2.6;       // travel speed (tiles/sec)
-const MERCHANT_RATE = 2;          // surplus goods paid per ore bought
+const MERCHANT_RATE = 2;          // default surplus goods paid per ore (a type may differ)
+// Each visit is a DIFFERENT trader — its own look (sprite index into the guild-hall characters),
+// name, exchange rate (goods per ore) and how much ore it carries. Picked deterministically per visit.
+const MERCHANT_TYPES = [
+    { name: 'a traveling Peddler', sprite: 0, rate: 2, stock: 30 },
+    { name: 'a Caravan Trader', sprite: 1, rate: 2, stock: 42 },   // hauls a big load of ore
+    { name: 'a roving Merchant', sprite: 2, rate: 3, stock: 24 },  // drives a harder bargain
+];
 
 // episodic-journal tuning: cap per bot, and nightly decay per memory kind — hard
 // lessons stick for a season+, relationship/job episodes for weeks, small talk for days
@@ -4109,7 +4116,7 @@ export class Farmer {
         if (!m || m.state !== 'trading' || m.stock <= 0) return false;
         if (w.isNight() || this.energy < 0.35 || this.tradeCooldown > 0) return false;
         if (this.ore >= 10) return false;                              // already well-stocked on stone
-        if (this.#tradeableGoods() < MERCHANT_RATE * 2) return false;  // nothing much to spare
+        if (this.#tradeableGoods() < (m.rate || MERCHANT_RATE) * 2) return false;  // nothing much to spare
         if (Math.abs(this.pos.i - m.stall.i) + Math.abs(this.pos.j - m.stall.j) <= 1.8) { this.#completeTrade(); return true; }
         this.think('THE MERCHANT IS IN TOWN — GOODS FOR ORE');
         if (this.#goTo(m.stall.i + 0.5, m.stall.j + 1.3, 'trade')) return true;
