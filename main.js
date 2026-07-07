@@ -247,6 +247,9 @@ function loadImageSet(base, sets, store, onReady) {
 // animals, crops). They share the same source-library dimensions, so a single modifier
 // keeps every sprite at the same pixel density; relative sizes come from native art.
 const ASSET_SCALE = 0.76;
+// A dwelling RESERVES a 5x5 footprint (nothing else may encroach) but the sprite keeps its normal
+// size — it just sits centred in that footprint with dead space around it.
+const HOUSE_ART_SCALE = ASSET_SCALE;
 
 // Animal walk-sheets: 6 cols x 8 rows grids. We slice the side-profile row.
 const ANIMAL_ART_BASE = './assets/craftpix-net-291971-free-top-down-animals-farm-pixel-art-sprites/PNG/Without_shadow/';
@@ -1139,9 +1142,9 @@ function collectDrawables() {
     for (const f of world.farmers) {
         const level = f.plot.built.level;
         if (level < 1) continue;   // homeless — nothing to draw
-        const h = f.plot.house;
-        const sx = cam.x + isoX(h.i + 1, h.j + 1);
-        const sy = cam.y + isoY(h.i + 1, h.j + 1);
+        const h = f.plot.house, F = 5;   // 5x5 footprint (World.HOUSE_FT); sprite sits centred within it
+        const sx = cam.x + isoX(h.i + (F - 1) / 2, h.j + (F - 1) / 2);   // footprint centre
+        const sy = cam.y + isoY(h.i + (F - 1) / 2, h.j + (F - 1) / 2);
         const spr = houseSprite(f.sheet.colors.hatColor);
         const art = buildingArt(level);
         const night = world.isNight();
@@ -1151,7 +1154,7 @@ function collectDrawables() {
                 let roofY;
                 if (art.ready) {
                     const S = art.src;
-                    const dispW = Math.round(S.w * ASSET_SCALE), dispH = Math.round(dispW * S.h / S.w);
+                    const dispW = Math.round(S.w * HOUSE_ART_SCALE), dispH = Math.round(dispW * S.h / S.w);
                     const hx = Math.floor(sx - dispW / 2), hy = Math.floor(sy + TILE_H - dispH + 3);
                     ctx.imageSmoothingEnabled = false;
                     ctx.drawImage(art.img, S.x, S.y, S.w, S.h, hx, hy, dispW, dispH);
@@ -2203,11 +2206,12 @@ function buildingUnder(mx, my) {
     const push = (x, y, w, h, lines) => rects.push({ x, y, w, h, lines });
     for (const f of world.farmers) {
         if (f.plot.built.level < 1) continue;
-        const h = f.plot.house, lvl = f.plot.built.level;
-        const sx = cam.x + isoX(h.i + 1, h.j + 1), sy = cam.y + isoY(h.i + 1, h.j + 1);
+        const h = f.plot.house, lvl = f.plot.built.level, F = 5;
+        const sx = cam.x + isoX(h.i + (F - 1) / 2, h.j + (F - 1) / 2);
+        const sy = cam.y + isoY(h.i + (F - 1) / 2, h.j + (F - 1) / 2);
         const art = buildingArt(lvl);
         if (art && art.ready) {
-            const S = art.src, bw = Math.round(S.w * ASSET_SCALE), bh = Math.round(bw * S.h / S.w);
+            const S = art.src, bw = Math.round(S.w * HOUSE_ART_SCALE), bh = Math.round(bw * S.h / S.w);
             push(Math.floor(sx - bw / 2), Math.floor(sy + TILE_H - bh + 3), bw, bh, houseLines(f, lvl));
         } else push(Math.floor(sx - 17), Math.floor(sy - 22), 34, 30, houseLines(f, lvl));
     }

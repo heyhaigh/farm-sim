@@ -860,12 +860,12 @@ export class World {
         if (ontoFarm && this.rand() < 0.6) this.addLog('Wild brush is creeping into the farms — clear it before it takes root.', '#8a9a5a');
     }
 
-    // house occupies a 2x2 footprint; keep crops/facilities off it and its door
-    // Reserve the house's VISUAL footprint (the sprite is ~5 tiles wide / taller than its
-    // 2x3 tile base), so crops and facilities never get placed under the house sprite.
+    // A dwelling occupies a 5x5 tile footprint (plot.house = its top-left). Reserve that plus a
+    // one-tile margin (and extra above, where the tall roof sprite overhangs) so crops and
+    // facilities never get placed under the house or its sprite.
     #inHouse(plot, i, j) {
-        const h = plot.house;
-        return i >= h.i - 1 && i <= h.i + 2 && j >= h.j - 1 && j <= h.j + 3;
+        const h = plot.house, F = World.HOUSE_FT;
+        return i >= h.i - 1 && i <= h.i + F && j >= h.j - 2 && j <= h.j + F;
     }
 
     #addRing(radius, count, phase) {
@@ -1176,7 +1176,7 @@ export class World {
     #relocatePlot(f, i, j, B) {
         const plot = f.plot;
         plot.x = i; plot.y = j; plot.w = B; plot.h = B;
-        plot.house = { i: i + 5, j: j + 5 };
+        plot.house = { i: i + 4, j: j + 4 };   // 5x5 footprint centred in the plot
         plot.cells = new Set();
         for (let jj = j; jj < j + B; jj++) for (let ii = i; ii < i + B; ii++) plot.cells.add(pkey(ii, jj));
         plot.rev++; plot._fenceRing = null;
@@ -1462,7 +1462,7 @@ export class World {
         const plot = {
             x: slot.i, y: slot.j, w: B, h: B,
             // house upper-center: ~4 tiles of fenced yard behind it, garden room in front, facility room to the sides
-            house: { i: slot.i + 5, j: slot.j + 5 },
+            house: { i: slot.i + 4, j: slot.j + 4 },   // 5x5 footprint centred in the 13x13 plot
             fields: [], facilities: [],
             // plot area is a SET of tiles (starts as the base square) so it can later grow
             // into L-shapes; `rev` bumps whenever `cells` changes so the renderer re-traces fences.
@@ -1518,6 +1518,11 @@ export class World {
 
     static MAX_CELLS = 560;  // acreage cap (~23x23 worth of land, any shape, annexes included)
     static BASE_PLOT = 13;   // starting plot size (square); house + garden + facility zones fit inside
+    static HOUSE_FT = 5;     // a dwelling occupies a 5x5 tile footprint (C&C-style building pad)
+
+    // The tile a settler stands on to enter / work at their home — the front-centre, just below the
+    // 5x5 footprint (plot.house is the footprint's top-left). Used for sleeping, crafting, care, etc.
+    houseDoor(plot) { return { i: plot.house.i + (World.HOUSE_FT >> 1), j: plot.house.j + World.HOUSE_FT }; }
     // The homestead LADDER: your house is your license to hold land. A tipi keeps a modest
     // yard; the yurt earns real acreage; only the cottage commands a full estate. This is
     // what makes farmers hungry to upgrade — the farm can't outgrow the home.
@@ -1660,7 +1665,7 @@ export class World {
 
     // The building sprites are far wider than the 2x2 tile footprint, so the clear zone spans
     // the whole visual area — nothing (tree/rock/brush/water) may overlap where a dwelling sits.
-    static SITE = { di0: -2, di1: 3, dj0: -2, dj1: 4 };
+    static SITE = { di0: -1, di1: 5, dj0: -2, dj1: 5 };   // clear the 5x5 footprint + a margin (roof overhangs above)
     houseSiteClear(plot) {
         const h = plot.house, S = World.SITE;
         for (let dj = S.dj0; dj <= S.dj1; dj++) for (let di = S.di0; di <= S.di1; di++) {
@@ -1758,7 +1763,11 @@ export class World {
         const p = farmer.plot, h = p.house, c = HOUSE_TIERS[level];
         if (!p.built.fence) return false;   // a home is never raised until the fence is fully up
         if (!free) { farmer.wood -= c.wood; farmer.ore -= c.ore; }
-        for (let di = 0; di < 2; di++) for (let dj = 0; dj < 2; dj++) this.set(h.i + di, h.j + dj, T.HOUSE);
+        // the building itself BLOCKS a modest 3x3 core (under the sprite); the surrounding ring of
+        // the 5x5 footprint is reserved YARD — kept clear of crops/facilities (#inHouse) but left as
+        // walkable grass, so a small dwelling isn't a giant solid slab.
+        const off = (World.HOUSE_FT - 3) >> 1;   // 1 for a 5x5 footprint -> core at h+1..h+3
+        for (let di = off; di < off + 3; di++) for (let dj = off; dj < off + 3; dj++) this.set(h.i + di, h.j + dj, T.HOUSE);
         p.built.level = level;
         this._tilesChanged = true;
         this.#rebuildFields(p);
@@ -3435,8 +3444,8 @@ export class Farmer {
         if (r) {   // materials in hand — walk home and forge it
             this.craftTarget = r;
             this.think(`ENOUGH ORE — TIME TO FORGE A ${r.name}`);
-            const h = this.plot.house;
-            return this.#goTo(h.i + 0.5, h.j + 2.5, 'craft');
+            const d = this.world.houseDoor(this.plot);
+            return this.#goTo(d.i + 0.5, d.j + 0.5, 'craft');
         }
         // leveled for the next tool but short on ore? go mine toward it — an intentional goal,
         // the way farmers gather wood to expand. Only once the home is built (no ore rivalry).
@@ -4160,7 +4169,8 @@ export class Farmer {
             if (sick && this.rand() < (this.goal === 'good neighbor' ? 0.8 : 0.5)) {
                 this.visitedSick.add(sick.sheet.seed); this.careTarget = sick;
                 this.think(`${sick.sheet.name.split(' ')[0].toUpperCase()} IS SICK. I'LL LOOK IN.`);
-                this.#goTo(sick.plot.house.i + 0.5, sick.plot.house.j + 2.5, 'care'); return;
+                const cd = w.houseDoor(sick.plot);
+                this.#goTo(cd.i + 0.5, cd.j + 0.5, 'care'); return;
             }
         }
 
@@ -4334,7 +4344,7 @@ export class Farmer {
         this.think(this.rand() < 0.4 ? `REMEMBERING: ${String(s.memory.title).slice(0, 26)}..` : IDLE_THOUGHTS[Math.floor(this.rand() * IDLE_THOUGHTS.length)]);
         // wander to an owned interior field tile (works for L-shaped plots; never a hole/outside)
         if (spots.length) { const t = spots[Math.floor(this.rand() * spots.length)]; this.#goTo(t.i + 0.5, t.j + 0.5, 'wander'); }
-        else this.#goTo(this.plot.house.i, this.plot.house.j + 3, 'wander');
+        else { const d = this.world.houseDoor(this.plot); this.#goTo(d.i, d.j, 'wander'); }
     }
 
     #thinkTask(task) {
@@ -4786,7 +4796,7 @@ export class Farmer {
         this.state = 'walk';
         return true;
     }
-    #goHome(then) { this.#goTo(this.plot.house.i - 1 + 0.5, this.plot.house.j + 2.5, then); }
+    #goHome(then) { const d = this.world.houseDoor(this.plot); this.#goTo(d.i + 0.5, d.j + 0.5, then); }
 
     // route a task into a walk + work, handling water fetch and producer targeting
     #pursue(task, plot, helping) {
