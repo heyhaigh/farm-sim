@@ -1132,6 +1132,24 @@ export class World {
         // far, fogged corners of the valley to farm in isolation. Plots are still pristine (no ticks
         // yet), so this is a clean reposition. See #resettleByPersonality.
         this.#resettleByPersonality();
+
+        // seed the activity feed with the town's founding, so it reads as an ongoing chronicle from
+        // the moment the game loads (rather than an empty bar until the first event fires).
+        this.#seedFoundingLog();
+    }
+
+    #seedFoundingLog() {
+        const fs = this.farmers;
+        if (!fs.length) return;
+        const first = n => n.sheet.name.split(' ')[0];
+        const social = fs.reduce((a, b) => this.#ventureOf(a) <= this.#ventureOf(b) ? a : b);
+        const loner = fs.reduce((a, b) => this.#ventureOf(a) >= this.#ventureOf(b) ? a : b);
+        const B = '#8a9ade', G = '#c9a45a';
+        this.addLog(`${fs.length} settlers crossed the ridge into an empty valley, seeking new ground.`, B);
+        this.addLog(`They mustered at the old well and named the place RY FARMS.`, G);
+        this.addLog(`${first(social)}, who thrives in company, staked a claim close by the plaza.`, B);
+        this.addLog(`${first(loner)}, a lone spirit, struck out for the far wilds to farm alone.`, B);
+        this.addLog(`The first ${this.seasonName.toLowerCase()} dawned over the valley — and the work began.`, G);
     }
 
     // venture factor 0..1: how far from the plaza a farmer wants to settle. Centered on the ~0.54
