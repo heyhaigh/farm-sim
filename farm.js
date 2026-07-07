@@ -5145,34 +5145,48 @@ export class Farmer {
 
     #completeForage() {
         const w = this.world, s = this.sheet, tgt = this.forageTarget;
-        this.forageTarget = null;
         this.#laborDrain('forage');
         const t = tgt && w.get(tgt.i, tgt.j);
         if (t === T.WHEAT || t === T.FLOWER) {
+            const tier = obstacleTier(tgt.i, tgt.j), key = pkey(tgt.i, tgt.j);   // a big thicket takes a few passes
+            const hits = (w.rockWork.get(key) || 0) + 1;
+            if (hits < tier + 1 && this.energy > 0.12) {   // still dense — keep clearing in place
+                w.rockWork.set(key, hits);
+                this.forageTimer = this.#laborTime('forage'); this.state = 'forage'; return;
+            }
+            w.rockWork.delete(key);
             w.set(tgt.i, tgt.j, T.GRASS);
-            const yieldN = 1 + (mod(s.stats.wis) > 1 || this.rand() < 0.4 ? 1 : 0);
+            const yieldN = (1 + (mod(s.stats.wis) > 1 || this.rand() < 0.4 ? 1 : 0)) * (tier + 1);   // bulk = more forage
             s.harvested += yieldN; w.harvestTotal += yieldN;
-            // stash the good for future bartering
             const good = t === T.FLOWER ? 'flower' : 'wheat';
             s.goods = s.goods || {};
             s.goods[good] = (s.goods[good] || 0) + yieldN;
             this.say(`+${yieldN} ${t === T.FLOWER ? 'flowers' : 'wild wheat'}`, t === T.FLOWER ? '#e878b0' : '#e8c860');
             this.gainXP(1);
         }
+        this.forageTarget = null;
         this.state = 'decide';
     }
 
     #completeChop() {
         const w = this.world, tgt = this.woodTarget;
-        this.woodTarget = null;
         if (tgt) {
             const t = w.get(tgt.i, tgt.j);
             if (t === T.TREE) {
                 this.#laborDrain('chop');           // felling a tree is heavy work
+                const tier = obstacleTier(tgt.i, tgt.j), key = pkey(tgt.i, tgt.j);   // a big old tree takes more
+                const hits = (w.rockWork.get(key) || 0) + 1;
+                if (hits < tier + 1 && this.energy > 0.12) {   // still standing — keep chopping in place
+                    w.rockWork.set(key, hits);
+                    this.chopTimer = this.#laborTime('chop'); this.state = 'chop'; return;
+                }
+                w.rockWork.delete(key);
                 w.set(tgt.i, tgt.j, T.STUMP);
-                this.wood += WOOD_TREE;
-                this.say(`+${WOOD_TREE} wood`, '#c8a060');
-                this.gainXP(1);
+                const wood = WOOD_TREE * (tier + 1);   // a bigger trunk yields more timber
+                this.wood += wood;
+                this.say(`+${wood} wood`, '#c8a060');
+                this.gainXP(1 + tier);
+                this.woodTarget = null;
                 // The stump is left standing — grubbing it is the farmer's own call. It's worth as
                 // much wood as the trunk was (WOOD_STUMP), so when they next need wood nearestWood
                 // may well send them back for it; the DEMAND is what drives the choice, not a script.
@@ -5184,6 +5198,7 @@ export class Farmer {
                 this.gainXP(1);
             } else this.#laborDrain('break');
         }
+        this.woodTarget = null;   // (a partial big-tree chop returned earlier, keeping its target)
         this.state = 'decide';
     }
 

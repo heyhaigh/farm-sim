@@ -598,33 +598,37 @@ function pickLoadedImage(store, names, i, j, seed = 0) {
 // Wild billboards use the shared ASSET_SCALE (defined up top) like everything else.
 function wildDims(img) { return { w: Math.round(img.naturalWidth * ASSET_SCALE), h: Math.round(img.naturalHeight * ASSET_SCALE) }; }
 function wildSpec(i, j, t, season) {
+    const tsz = obstacleTier(i, j);   // size tier (0/1/2) — bigger obstacle = bigger sprite + more work to clear
     if (t === T.TREE) {
+        const sc = 1 + tsz * 0.13;   // old-growth trees loom taller (they take more chops)
         const treeSet = TREE_SETS[season.name] || TREE_SETS.SUMMER;
         const img = pickLoadedImage(treeImg, treeSet, i, j, 61);
         if (img) {
-            const { w, h } = wildDims(img);
-            return { img, w, h, anchor: 0.82, depth: 0.4, leaves: season.name === 'FALL', seed: hash2(i, j, 73) };
+            const d = wildDims(img);
+            return { img, w: Math.round(d.w * sc), h: Math.round(d.h * sc), anchor: 0.82, depth: 0.4, leaves: season.name === 'FALL', seed: hash2(i, j, 73) };
         }
         const species = TREE_SPECIES[hash2(i, j, 63) % TREE_SPECIES.length];
         const spr = treeSprite(species, season.name);
-        return { img: spr, w: spr.width, h: spr.height, anchor: 1, nudgeY: 2, depth: 0.4, leaves: season.name === 'FALL', seed: hash2(i, j, 73) };
+        return { img: spr, w: Math.round(spr.width * sc), h: Math.round(spr.height * sc), anchor: 1, nudgeY: 2, depth: 0.4, leaves: season.name === 'FALL', seed: hash2(i, j, 73) };
     }
     if (t === T.FLOWER) {
+        const sc = 1 + tsz * 0.26;   // a big flowering thicket
         const bushSet = BUSH_SETS[season.name] || BUSH_SETS.SUMMER;
         const img = pickLoadedImage(bushImg, bushSet, i, j, 64);
         if (img) {
-            const { w, h } = wildDims(img);
-            return { img, w, h, anchor: 0.74, depth: -1 };
+            const d = wildDims(img);
+            return { img, w: Math.round(d.w * sc), h: Math.round(d.h * sc), anchor: 0.74, depth: -1 };
         }
-        return { img: flowerSprite, w: flowerSprite.width, h: flowerSprite.height, anchor: 1, nudgeY: 2, depth: -1 };
+        return { img: flowerSprite, w: Math.round(flowerSprite.width * sc), h: Math.round(flowerSprite.height * sc), anchor: 1, nudgeY: 2, depth: -1 };
     }
     if (t === T.WHEAT) {
+        const sc = 1 + tsz * 0.26;
         const img = pickLoadedImage(bushImg, FERN_NAMES, i, j, 66);
         if (img) {
-            const { w, h } = wildDims(img);
-            return { img, w, h, anchor: 0.72, depth: -1 };
+            const d = wildDims(img);
+            return { img, w: Math.round(d.w * sc), h: Math.round(d.h * sc), anchor: 0.72, depth: -1 };
         }
-        return { img: wheatSprite, w: wheatSprite.width, h: wheatSprite.height, anchor: 1, nudgeY: 2, depth: -1 };
+        return { img: wheatSprite, w: Math.round(wheatSprite.width * sc), h: Math.round(wheatSprite.height * sc), anchor: 1, nudgeY: 2, depth: -1 };
     }
     if (t === T.STUMP) {
         const img = pickLoadedImage(stumpImg, STUMP_NAMES, i, j, 26);
