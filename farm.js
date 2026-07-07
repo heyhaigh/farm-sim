@@ -1939,6 +1939,8 @@ export class World {
     negotiateWellAccess(farmer, well) {
         const owner = this.farmers.find(f => well.owners.has(f.sheet.seed));
         if (!owner) return false;
+        // a farmer would rather haul water the long way than beg a favour off someone they resent
+        if (farmer.opinionOf(owner) <= -0.35) { farmer.say("I'd sooner haul it myself", '#e0a03c'); return false; }
         const op = owner.opinionOf(farmer);
         const key = this.wellKey(farmer, well);
         if (owner.goal === 'lone wolf' || op <= -0.2) {
@@ -2044,7 +2046,9 @@ export class World {
         if (this.waterHaul(farmer) < FAR_WATER - 3) return false;       // their haul is fine — no reason to dig
         const h = farmer.plot.house;
         if (Math.abs(coop.site.i - h.i) + Math.abs(coop.site.j - h.j) > 26) return false;   // too far away to benefit
-        if (farmer.sheet.personality.collaboration < 0.2) return false; // the true loners sit it out
+        if (farmer.effCollab() < 0.2) return false;                    // the true loners (and the out-of-sorts) sit it out
+        if (farmer.opinionOf(coop.proposer) <= -0.3) return false;     // won't share a well with someone they resent
+        if (coop.proposer.opinionOf(farmer) <= -0.3) return false;     // and the proposer wouldn't want them either
         coop.members.add(farmer);
         farmer.say('count me in!', '#8fc7e8');
         this.addLog(`${farmer.sheet.name} joined ${coop.proposer.sheet.name}'s well plan (${coop.members.size} hands)`, '#8fc7e8');
@@ -2112,7 +2116,7 @@ export class World {
                 (Math.abs(b.plot.house.i - coop.site.i) + Math.abs(b.plot.house.j - coop.site.j)));
         for (const o of near) {
             const p = o.sheet.personality;
-            if (o.goal === 'lone wolf' || o.opinionOf(prop) <= -0.2 || p.collaboration < 0.2) continue;
+            if (o.goal === 'lone wolf' || o.opinionOf(prop) <= -0.2 || prop.opinionOf(o) <= -0.3 || o.effCollab() < 0.2) continue;
             const gratis = o.goal === 'good neighbor' || o.opinionOf(prop) >= 0.4;
             const per = gratis ? 0 : (o.goal === 'sharp trader' || p.competitiveness > 0.6) ? 3 : 5;
             coop.members.add(o);
@@ -2266,6 +2270,7 @@ export class World {
             if (helper.goal === 'lone wolf') continue;
             const op = helper.opinionOf(req.farmer);          // how the helper feels about the poster
             if (op <= -0.35 && hc < 0.85) continue;   // won't lift a finger for someone they resent
+            if (req.farmer.opinionOf(helper) <= -0.35) continue;   // ...and the poster won't accept a resented hand either
             if (req.farmer.reputation < 0.3 && op < 0.2 && this.rand() > hc) continue;   // shun bad names (unless a personal friend)
             const friend = op >= 0.4;
             const altruist = friend || hc > 0.7 || helper.goal === 'good neighbor' || (helper.sheet.stats.cha >= 15 && hp.honesty > 0.5);
@@ -4387,6 +4392,17 @@ export class Farmer {
 
             case 'walk': {
                 const P = this.path;
+                // recoil: an idle wanderer who spots someone they can't stand drift close breaks
+                // off and re-routes away (the wander step then picks the far corner of their land).
+                // Only ever interrupts aimless wandering — real errands are never derailed.
+                if (P.then === 'wander') {
+                    this.avoidCooldown = (this.avoidCooldown || 0) - dt;
+                    if (this.avoidCooldown <= 0) {
+                        this.avoidCooldown = 1.2;
+                        const foe = this.#dislikedNear(2.8);
+                        if (foe) { this.think(`NOT NEAR ${shortName(foe).toUpperCase()}. NO THANKS.`); this.path = null; this.state = 'decide'; break; }
+                    }
+                }
                 // absolute freeze watchdog: if position hasn't changed at all for a few seconds
                 // (any cause — a degenerate path, a tile changed mid-walk), bail and redecide.
                 if (this._freezePos && Math.abs(this.pos.i - this._freezePos.i) < 0.001 && Math.abs(this.pos.j - this._freezePos.j) < 0.001) {
