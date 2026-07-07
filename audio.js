@@ -129,8 +129,9 @@ class FarmAudio {
         if (!this.ctx) { this.wasNight = isNight; this.season = season; return; }
         const t = this.ctx.currentTime;
         this.season = season;
-        // dawn: the rooster (if the town has one) announces it
-        if (this.wasNight && !isNight && hasRooster) this.#crow();
+        // dawn: the rooster crow is disabled for now — the synth never read as a real crow, so
+        // it's pulled from the dawn cue. (#crow()/playCrow() are left dormant below for a future
+        // rework; re-enable by restoring the call: if (this.wasNight && !isNight && hasRooster) this.#crow();)
         this.wasNight = isNight;
         // day/night crossfade: music out, night chorus in (~4s)
         const target = isNight ? 1 : 0;
