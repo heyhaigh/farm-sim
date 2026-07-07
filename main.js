@@ -346,7 +346,8 @@ function drawAnimal(p, px, py) {
     const col = moving ? Math.floor(p.anim * 6) % ANIMAL_COLS : 0;
     const disp = Math.round(fh * ASSET_SCALE), top = Math.floor(py - disp * 0.86);
     ctx.imageSmoothingEnabled = false;
-    if (p.flip < 0) {
+    // the CraftPix animal sheets face LEFT by default, so mirror when moving RIGHT (flip > 0)
+    if (p.flip > 0) {
         ctx.save();
         ctx.translate(Math.floor(px + disp / 2), top);
         ctx.scale(-1, 1);
@@ -1278,7 +1279,7 @@ function drawFarmer(f, sx, sy) {
     let frame = frames.idle;
     if (f.state === 'walk') {
         frame = Math.floor(f.animTime * 7) % 2 ? frames.walk1 : frames.walk2;
-    } else if (f.state === 'work' || f.state === 'build' || f.state === 'chop' || f.state === 'break' || f.state === 'forage') {
+    } else if (f.state === 'work' || f.state === 'build' || f.state === 'coopbuild' || f.state === 'chop' || f.state === 'break' || f.state === 'forage' || f.state === 'mine' || f.state === 'fencepost' || f.state === 'scarecrow') {
         frame = Math.floor(f.animTime * 5) % 2 ? frames.work : frames.idle;
     } else if (f.state === 'sleep') {
         frame = frames.sleep;

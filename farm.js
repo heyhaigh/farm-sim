@@ -318,7 +318,9 @@ export class World {
         for (const t of all) { const d = (t.i - i) ** 2 + (t.j - j) ** 2; if (d < bestD) { bestD = d; best = t; } }
         return best;
     }
-    #scarecrowNear(i, j) { return this.scarecrows.some(s => Math.abs(s.i - i) + Math.abs(s.j - j) <= 6); }
+    // a scarecrow keeps crows off crops within a 9-tile radius (widened from 6 so it actually
+    // covers a meaningful chunk of a homestead's fields)
+    #scarecrowNear(i, j) { return this.scarecrows.some(s => Math.abs(s.i - i) + Math.abs(s.j - j) <= 9); }
     scarecrowOnPlot(plot) { return this.scarecrows.some(s => plot.cells.has(pkey(s.i, s.j))); }
     #birdCropTarget(i, j, maxD) {
         let best = null, bestD = maxD * maxD + 1;
@@ -348,7 +350,7 @@ export class World {
     }
     #birdEat(b) {
         const c = b.target; b.target = null;
-        if (c && !c.withered) {
+        if (c && !c.withered && !this.#scarecrowNear(c.i, c.j)) {   // a scarecrow raised mid-flight still saves the crop
             const key = `${c.i},${c.j}`, live = this.crops.get(key);
             if (live && live === c) {
                 if (c.stage <= 1) { this.crops.delete(key); this.set(c.i, c.j, T.TILLED); }
@@ -3095,8 +3097,12 @@ export class Farmer {
         // 1d. town project: shared infrastructure beats low-priority fill work
         if (w.project && this.p.collaboration > 0.35 && this.energy > 0.3) {
             this.think(`RAISING THE ${w.project.label}!`);
-            const site = w.project.site; const off = (this.sheet.seed % 3) - 1;
-            this.#goTo(site.i + 0.5 + off, site.j + 1.6, 'build'); return;
+            const site = w.project.site;
+            // already at the site? build in place — don't re-walk on every redecide (the jitter)
+            if (Math.abs(this.pos.i - (site.i + 0.5)) + Math.abs(this.pos.j - (site.j + 1.6)) < 2.2) { this.state = 'build'; return; }
+            const off = (this.sheet.seed % 3) - 1;
+            if (!this.#goTo(site.i + 0.5 + off, site.j + 1.6, 'build')) this.#goTo(site.i + 0.5, site.j + 1.6, 'build');
+            return;
         }
 
         // 1e. fill work: sow seeds, till new ground
@@ -3304,8 +3310,12 @@ export class Farmer {
             return false;                                  // nothing gatherable right now
         }
         this.think('DIGGING OUR OWN WELL!');
+        // already at the dig? work in place rather than re-pathing to an exact offset tile that
+        // may be unreachable — that endless re-approach is what made builders twitch on the spot
+        if (Math.abs(this.pos.i - (site.i + 0.5)) + Math.abs(this.pos.j - (site.j + 1.6)) < 2.2) { this.state = 'coopbuild'; return true; }
         const off = (this.sheet.seed % 3) - 1;
-        return this.#goTo(site.i + 0.5 + off, site.j + 1.6, 'coopbuild');
+        if (!this.#goTo(site.i + 0.5 + off, site.j + 1.6, 'coopbuild')) return this.#goTo(site.i + 0.5, site.j + 1.6, 'coopbuild');
+        return true;
     }
 
     #goChop() {
