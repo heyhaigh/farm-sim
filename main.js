@@ -24,6 +24,7 @@ const [game, ctx] = makeCanvas(GW, GH);
 
 const out = document.getElementById('tv');
 const crt = new CRT(out, game);
+out.style.cursor = 'none';   // the OS pointer is replaced by an in-world pixel hand (drawCursor)
 
 function resize() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -75,6 +76,78 @@ function sectionBand(x, y, w, title) {
     ctx.fillStyle = '#4a3824'; ctx.fillRect(x, y + 9, w, 1);
     drawText(ctx, title, x + 3, y + 2, '#c9a45a');
     return y + 12;
+}
+// Custom pixel-art cursors, drawn INTO the game canvas each frame so the CRT shader warps them to
+// land under the physical pointer (mouse.x/y are already curve-mapped via crt.screenToGame). The
+// DEFAULT is a classic arrow; over anything clickable / tooltip-bearing it swaps to a gold pointing
+// glove (the web arrow→hand convention). 'o' = dark outline, '#' = fill; ' ' = transparent.
+// CURSOR_ARROW hotspot = the top-left tip (0,0); CURSOR_HAND hotspot = the fingertip (col 1, row 0).
+const CURSOR_ARROW = [
+    'o         ',
+    'oo        ',
+    'o#o       ',
+    'o##o      ',
+    'o###o     ',
+    'o####o    ',
+    'o#####o   ',
+    'o######o  ',
+    'o#######o ',
+    'o####oooo ',
+    'o#o##o    ',
+    'oo o##o   ',
+    'o   o##o  ',
+    '    o##o  ',
+    '     ooo  ',
+];
+const CURSOR_HAND = [
+    ' oo      ',
+    'o##o     ',
+    'o##o     ',
+    'o##o     ',
+    'o##ooo   ',
+    'o#####oo ',
+    'o#######o',
+    'o#######o',
+    'o#######o',
+    'o#######o',
+    ' o#####o ',
+    ' o#####o ',
+    '  ooooo  ',
+];
+function blitCursor(bmp, ox, oy, fill) {
+    ctx.fillStyle = 'rgba(0,0,0,0.30)';   // soft drop shadow (whole mask, +1px) for depth over busy terrain
+    for (let r = 0; r < bmp.length; r++) { const row = bmp[r];
+        for (let c = 0; c < row.length; c++) if (row[c] !== ' ') ctx.fillRect(ox + c + 1, oy + r + 1, 1, 1); }
+    for (let r = 0; r < bmp.length; r++) { const row = bmp[r];
+        for (let c = 0; c < row.length; c++) { const ch = row[c]; if (ch === ' ') continue;
+            ctx.fillStyle = ch === 'o' ? '#1a120a' : fill; ctx.fillRect(ox + c, oy + r, 1, 1); } }
+}
+function drawCursor(mx, my, hot) {
+    const x = Math.round(mx), y = Math.round(my);
+    if (hot) {
+        blitCursor(CURSOR_HAND, x - 1, y, '#f6d24e');   // gold pointing glove; fingertip at the pointer
+        ctx.fillStyle = 'rgba(246,210,78,0.22)';         // faint gold halo so "clickable" reads at a glance
+        ctx.fillRect(x - 2, y + 5, 1, 6); ctx.fillRect(x + 8, y + 6, 1, 5);
+    } else {
+        blitCursor(CURSOR_ARROW, x, y, '#f4f0e6');       // arrow; tip at the pointer
+    }
+}
+// True when the pointer is over something clickable — swaps the cursor to its gold "pointer" look.
+function cursorIsHot(worldTooltip) {
+    const m = mouse;
+    if (m.x < 0) return false;
+    for (const b of [ROSTER_BTN, SND_BTN, FWD_BTN, FF_BTN, SPEED1_BTN]) if (b.w && inRect(m, b)) return true;
+    if (!BOARD_BTN.hidden && inRect(m, BOARD_BTN)) return true;
+    if (selected) {
+        if (inRect(m, SHEET_CLOSE)) return true;
+        for (const tb of SHEET_TABS) if (inRect(m, tb)) return true;
+        if (MEM_PREV.w && inRect(m, MEM_PREV)) return true;
+        if (MEM_NEXT.w && inRect(m, MEM_NEXT)) return true;
+        for (const sl of sheetSlots) if (sl.y >= sheetBodyY - 2 && sl.y + sl.h <= sheetBodyY + sheetBodyH + 2 && inRect(m, sl)) return true;
+    }
+    if (!selected && inRect(m, MINIMAP)) return true;
+    if (rosterOpen) { for (const r of rosterRows) if (m.y >= r.y0 && m.y < r.y1) return true; }
+    return !!worldTooltip;   // hovering a building/farmer/merchant that shows a tooltip
 }
 const ROSTER_BTN = { x: 0, y: 3, w: 44, h: 12 };   // positioned in drawUI
 const MINIMAP = { x: 0, y: 0, w: 46, h: 46 };      // bottom-right legend, positioned in drawMinimap
@@ -2698,11 +2771,19 @@ function frame(now) {
 
     // building hover tooltip — only when hovering the world (not over a panel, not dragging,
     // and not while an inventory-slot tooltip is already showing on the open sheet)
+    let worldHover = false;
     if (booted && mouse.x >= 0 && !mouse.dragging && !rosterOpen && !boardOpen && mouse.y > 18 &&
         !(selected && inRect(mouse, SHEET_RECT)) && !inRect(mouse, MINIMAP)) {
         const info = buildingUnder(mouse.x, mouse.y);
-        if (info) drawInfoBox(mouse.x, mouse.y, info);
+        if (info) { drawInfoBox(mouse.x, mouse.y, info); worldHover = true; }
+        else {   // a walking farmer under the cursor is clickable even without a tooltip
+            const tile = screenToTile(mouse.x, mouse.y);
+            worldHover = world.farmers.some(f => Math.hypot(f.pos.i - tile.i, f.pos.j - tile.j) < 1.6);
+        }
     }
+
+    // custom pixel hand cursor, on top of everything (dragging = pressed/gold too)
+    if (mouse.x >= 0) drawCursor(mouse.x, mouse.y, mouse.dragging || cursorIsHot(worldHover));
 
     crt.setPalette(hexPalette(world.seasonDef.dmg));
     crt.render(t);
