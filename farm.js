@@ -9,7 +9,7 @@
 // livestock pen (milk) — each with its own "producers" the farmer tends and
 // collects from. Which facility comes first reflects the farmer's archetype.
 
-import { mulberry32, mod, growFarmer } from './dna.js';
+import { mulberry32, mod, growFarmer, personalityLabel } from './dna.js';
 
 // The FOUNDING VALLEY: the hand-tuned region generated with the original global algorithm
 // (plaza, homestead ring, clustered groves). Beyond it the world is INFINITE — tiles are
@@ -934,6 +934,48 @@ export class World {
     addLog(text, color = '#c8ccd8') {
         this.log.push({ text, color, t: performance.now() });
         if (this.log.length > 80) this.log.shift();
+    }
+
+    // The founding roster should have real texture. If the memory-grown personalities didn't
+    // happen to include an agent-of-chaos manipulator and a moody/mercurial farmer, nudge the
+    // nearest candidates into those roles. Deterministic: the same roster always resolves the
+    // same way (sorted picks, no rand), so it never breaks reproducibility.
+    ensureFounderVariety() {
+        const fs = this.farmers;
+        if (fs.length < 3) return;
+        const P = f => f.sheet.personality;
+        const relabel = f => { const id = personalityLabel(P(f)); P(f).label = id.label; P(f).creed = id.creed; };
+        // 1) a manipulator — genuinely low honesty, with the drive/temper to stir the pot
+        let chaos = fs.find(f => P(f).honesty < 0.2);
+        if (!chaos) {
+            chaos = [...fs].sort((a, b) => (P(a).honesty - P(b).honesty) || (P(b).competitiveness - P(a).competitiveness))[0];
+            const p = P(chaos);
+            // an idle, competitive, dishonest schemer: low honesty + drive, but slack diligence
+            // (so they have time to scheme instead of farm), a moderate social face, a lively temper
+            p.honesty = 0.1; p.competitiveness = Math.max(p.competitiveness, 0.72);
+            p.diligence = Math.min(p.diligence, 0.3); p.collaboration = Math.max(0.35, Math.min(0.55, p.collaboration));
+            p.volatility = Math.max(p.volatility ?? 0.5, 0.55);
+            relabel(chaos);
+        }
+        // named so they're easy to spot in the roster
+        chaos.sheet.name = 'Chaos Ry';
+        this.addLog(`${chaos.sheet.name} has a scheming glint in their eye...`, '#c07050');
+
+        // 2) a mercurial — high temper, middling everything else (warm then cold, quick to bristle)
+        let moody = fs.find(f => f !== chaos && (P(f).volatility ?? 0) > 0.72);
+        if (!moody) {
+            const neutral = f => ['collaboration', 'competitiveness', 'honesty', 'diligence'].reduce((s, k) => s + Math.abs(P(f)[k] - 0.5), 0);
+            moody = [...fs].filter(f => f !== chaos).sort((a, b) => neutral(a) - neutral(b))[0];
+            if (moody) {
+                const p = P(moody);
+                p.volatility = 0.85; p.collaboration = Math.max(0.35, Math.min(0.6, p.collaboration));
+                relabel(moody);
+            }
+        }
+        if (moody) {
+            moody.sheet.name = 'Mercurial Ry';
+            this.addLog(`${moody.sheet.name} runs hot and cold — hard to read.`, '#c8a060');
+        }
     }
 
     #initLlmChat() {
@@ -2213,6 +2255,7 @@ export class World {
     // regardless), else haggle up to the poster's ceiling, else decline. Returns {req, agreed}.
     takeHelp(helper) {
         const hp = helper.sheet.personality;
+        const hc = helper.effCollab();   // today's MOOD-adjusted teamwork — swings for the mercurial
         // consider warm names first: a helper's memories of past dealings decide whose
         // posting gets looked at — so some bonds deepen while others never form
         const order = [...this.helpBoard].sort((a, b) => helper.opinionOf(b.farmer) - helper.opinionOf(a.farmer));
@@ -2222,10 +2265,10 @@ export class World {
             // with never posting for help or joining a co-op)
             if (helper.goal === 'lone wolf') continue;
             const op = helper.opinionOf(req.farmer);          // how the helper feels about the poster
-            if (op <= -0.35 && hp.collaboration < 0.85) continue;   // won't lift a finger for someone they resent
-            if (req.farmer.reputation < 0.3 && op < 0.2 && this.rand() > hp.collaboration) continue;   // shun bad names (unless a personal friend)
+            if (op <= -0.35 && hc < 0.85) continue;   // won't lift a finger for someone they resent
+            if (req.farmer.reputation < 0.3 && op < 0.2 && this.rand() > hc) continue;   // shun bad names (unless a personal friend)
             const friend = op >= 0.4;
-            const altruist = friend || hp.collaboration > 0.7 || helper.goal === 'good neighbor' || (helper.sheet.stats.cha >= 15 && hp.honesty > 0.5);
+            const altruist = friend || hc > 0.7 || helper.goal === 'good neighbor' || (helper.sheet.stats.cha >= 15 && hp.honesty > 0.5);
             const good = req.reward ? req.reward.good : 'crops';
             const gv = helper.goodValue(good);                 // a good the helper NEEDS is worth more per unit
             const offered = req.reward ? req.reward.offer : 0;
@@ -2233,7 +2276,7 @@ export class World {
             // about the poster (friends work for less, the barely-tolerated cost more). A good the
             // helper is already flush in drives a HARDER bargain (not an outright refusal) — a
             // generous enough offer can still tempt them.
-            let askWorth = req.difficulty * (0.5 + hp.competitiveness * 0.5 - hp.collaboration * 0.3 - op * 0.4);
+            let askWorth = req.difficulty * (0.5 + hp.competitiveness * 0.5 - hc * 0.3 - op * 0.4);
             if (gv < 0.8 && !altruist) askWorth *= 1.7;
             if (helper.goal === 'sharp trader') askWorth *= 1.2;   // their labor is never cheap
             if (altruist || offered * gv >= askWorth || !req.reward) {
@@ -2731,11 +2774,22 @@ export class Farmer {
         this.reputation = 0.55;
         this.poachCooldown = 6 + this.rand() * 10;
         this.visitedSick = new Set();
+        // MOOD: a -1..1 emotional weather that random-walks each dawn, its swing scaled by the
+        // `volatility` trait. It shifts how collaborative the bot ACTS today (effCollab), so a
+        // mercurial farmer helps in warm streaks then withdraws when they're out of sorts.
+        this.mood = 0;
+        this.helpPostedDay = -99;   // when they last posted a genuine plea (for the moody's slow burn)
         // social memory: a DIRECTIONAL opinion of each neighbour (seed -> -1..1), built from
         // real events (help, pay, welching, poaching, soup). Grudges + gratitude are personal
         // and decay toward neutral over time. Drives who they help / trade with (see takeHelp).
         this.opinions = new Map();
     }
+
+    // how collaborative this bot is ACTING today: their base teamwork, shifted by today's mood
+    // (a big shift for the mercurial, none for the even-keeled). This — not the raw trait —
+    // gates who they help, visit, and dig wells with, so their generosity visibly runs hot/cold.
+    get volatility() { return this.p.volatility ?? 0.5; }
+    effCollab() { return Math.max(0, Math.min(1, this.p.collaboration + this.mood * this.volatility * 0.6)); }
 
     opinionOf(other) { return other ? (this.opinions.get(other.sheet.seed) || 0) : 0; }
     adjustOpinion(other, d, reason) {
@@ -3018,9 +3072,21 @@ export class Farmer {
         return n;
     }
 
-    #nearestNeighborLoot() {
+    // the neighbour within `range` this bot most resents (opinion < -0.3), or null — used to
+    // physically steer away from someone they can't stand
+    #dislikedNear(range = 9) {
+        let worst = null, wv = -0.3;
+        for (const o of this.world.farmers) {
+            if (o === this) continue;
+            const v = this.opinionOf(o);
+            if (v < wv && Math.abs(o.pos.i - this.pos.i) + Math.abs(o.pos.j - this.pos.j) < range) { wv = v; worst = o; }
+        }
+        return worst;
+    }
+
+    #nearestNeighborLoot(range = 9) {
         // a collectible on someone else's plot (ripe crop OR ready producer) for poaching
-        let best = null, bestD = 9;
+        let best = null, bestD = range;
         for (const plot of this.world.plots) {
             if (plot === this.plot) continue;
             for (const f of plot.fields) {
@@ -3070,6 +3136,20 @@ export class Farmer {
     // chooseReward, sick visits, the grind, the co-op).
     reflect() {
         const j = this.journal, p = this.p;
+
+        // a new day's mood: an emotional random walk, its amplitude the `volatility` trait.
+        // Even-keeled bots barely move; the mercurial can wake up transformed.
+        this.mood = Math.max(-1, Math.min(1, this.mood * 0.55 + (this.world.rand() - 0.5) * 2 * this.volatility));
+        // the moody's slow burn: a genuine plea for help still hanging a day later stings —
+        // they sour and quietly blame the town's most able hand for leaving them to it
+        if (this.volatility > 0.5 && this.world.day - this.helpPostedDay >= 1 &&
+            this.world.helpBoard.some(r => r.farmer === this && r.genuine)) {
+            this.mood = Math.max(-1, this.mood - 0.5);
+            const able = this.world.leader;
+            if (able && able !== this) this.adjustOpinion(able, -0.16, 'left me to it when I asked for help');
+            this.think('I ASKED FOR HELP. NOBODY CAME.');
+        }
+
         const burned = j.filter(m => m.kind === 'person' && /welch|trick|thiev|stole|short/i.test(m.text)).length;
         const warm = j.filter(m => (m.kind === 'person' || m.kind === 'event') && /hand|soup|paid|dug|nursed/i.test(m.text)).length;
         const deals = this.jobStats.accepted + this.jobStats.haggled;
@@ -3095,8 +3175,13 @@ export class Farmer {
         const weak = mod(this.sheet.stats.str) <= 0 || mod(this.sheet.stats.dex) <= 0;
         let genuine = true, ask = false;
         if (pending >= 4 && weak) ask = true;
-        else if (this.p.honesty < 0.3 && this.p.collaboration < 0.5 && this.rand() < 0.1) { ask = true; genuine = false; this.think('IF I LOOK BUSY, SOMEONE WILL HELP'); }
-        if (ask) { this.world.postHelp(this, genuine); this.helpCooldown = 30; if (genuine) this.think('SO MUCH TO DO... I COULD USE A HAND'); }
+        // the manipulator cries wolf to get free labor — the more crooked they are, the oftener
+        else if (this.p.honesty < 0.4 && this.rand() < 0.04 + Math.max(0, 0.4 - this.p.honesty) * 0.35) { ask = true; genuine = false; this.think('IF I LOOK BUSY, SOMEONE WILL HELP'); }
+        if (ask) {
+            this.world.postHelp(this, genuine);
+            this.helpCooldown = 30;
+            if (genuine) { this.helpPostedDay = this.world.day; this.think('SO MUCH TO DO... I COULD USE A HAND'); }
+        }
     }
 
     // A raw settler clears their land, fences it, then raises a house — before normal farming.
@@ -3221,6 +3306,9 @@ export class Farmer {
         } else if (grudge && grudge.v < -0.3 && grudge.who !== other && this.rand() < 0.4) {
             speakerLine = `DON'T TRUST ${shortName(grudge.who).toUpperCase()}...`;
             speakerColor = '#c9a45a';
+            // a manipulator's poison actually LANDS: the listener's regard for the badmouthed
+            // farmer slips — that's the chaos-agent quietly turning the town against each other.
+            if (this.p.honesty < 0.35 && other !== grudge.who) other.adjustOpinion(grudge.who, -0.1, `heard unsettling things about them`);
         } else if (w.weather === 'storm') {
             speakerLine = this.#pickLine(['SKY SOUNDS ANGRY TODAY.', 'COUNT YOUR ROOF BEAMS.']);
             speakerColor = '#8a9ade';
@@ -3263,6 +3351,13 @@ export class Farmer {
         const busy = o => o.health !== 'healthy' || o.state === 'sleep' || o.state === 'rest' || o.state === 'sick' || o.state === 'shelter';
         const other = w.farmers.find(o => o !== this && !busy(o) && Math.abs(o.pos.i - this.pos.i) + Math.abs(o.pos.j - this.pos.j) < 3.2);
         if (!other) return false;
+        // real resentment kills the small talk: if either strongly dislikes the other, they give
+        // a cold shoulder and move on — no exchange (see also the wander steering-away below).
+        if (Math.min(this.opinionOf(other), other.opinionOf(this)) <= -0.35) {
+            this.chatCooldown = 10 + this.rand() * 10;
+            if (this.opinionOf(other) <= -0.35 && this.rand() < 0.5) this.think(`NOT A WORD TO ${shortName(other).toUpperCase()}.`);
+            return false;
+        }
         this.chatCooldown = 12 + this.rand() * 12;
         other.chatCooldown = Math.max(other.chatCooldown, 6 + this.rand() * 6);
         const op = this.opinionOf(other);
@@ -3421,7 +3516,7 @@ export class Farmer {
         if (this.plot.built.level < 1 && this.#pursueHomestead()) return;
         if (this.#maybeUpgradeHome()) return;
 
-        if (this.p.collaboration > 0.55 && !w.isNight()) {
+        if (this.effCollab() > 0.55 && !w.isNight()) {
             const sick = w.farmers.find(o => o !== this && o.health === 'sick' && !this.visitedSick.has(o.sheet.seed) &&
                 Math.abs(o.pos.i - this.pos.i) + Math.abs(o.pos.j - this.pos.j) < 16);
             if (sick && this.rand() < (this.goal === 'good neighbor' ? 0.8 : 0.5)) {
@@ -3551,9 +3646,17 @@ export class Farmer {
             this.exploreCooldown = Math.max(this.exploreCooldown, 12);   // probes aren't free — don't spam them
         }
 
+        // 2c. an AGENT OF CHAOS would rather lift a neighbor's ripe crop than till their own
+        //     row — for the deeply crooked, easy theft outranks honest fill work (they range
+        //     wider for it, too). This is BEFORE fill so a scheming bot actually schemes.
+        if (this.p.honesty < 0.25 && this.poachCooldown <= 0 && !w.isNight() && this.energy > 0.3) {
+            const steal = this.#nearestNeighborLoot(26);   // ranges to the neighboring farms
+            if (steal) { this.think("WHY WORK WHEN THAT ONE'S RIPE FOR THE TAKING..."); this.#pursuePoach(steal); return; }
+        }
+
         if (fill) { this.#thinkTask(fill); this.#pursue(fill, this.plot, false); return; }
 
-        // 3. manipulators poach a neighbor's loot
+        // 3. the merely shady poach a neighbor's loot once their own work is done
         if (this.p.honesty < 0.32 && this.poachCooldown <= 0 && !w.isNight()) {
             const steal = this.#nearestNeighborLoot();
             if (steal) { this.think('NOBODYS WATCHING THAT ONE...'); this.#pursuePoach(steal); return; }
@@ -3580,11 +3683,20 @@ export class Farmer {
             if (rock) { this.think('GOOD STONE HERE — ORE FOR BUILDING.'); this.mineTarget = rock; this.#goTo(rock.i + 0.5, rock.j + 0.5, 'mine'); return; }
         }
 
-        // 6. wander + muse
-        this.think(this.rand() < 0.4 ? `REMEMBERING: ${String(s.memory.title).slice(0, 26)}..` : IDLE_THOUGHTS[Math.floor(this.rand() * IDLE_THOUGHTS.length)]);
+        // 6. wander + muse — but if someone I can't stand has drifted close, I keep my distance
         this.wanderTimer = 1.5 + this.rand() * 3;
-        // wander to an owned interior field tile (works for L-shaped plots; never a hole/outside)
         const spots = this.plot.fields;
+        const avoid = this.#dislikedNear(9);
+        if (avoid && spots.length) {
+            // retreat to the corner of my own land farthest from them
+            let best = spots[0], bd = -1;
+            for (const c of spots) { const d = Math.abs(c.i - avoid.pos.i) + Math.abs(c.j - avoid.pos.j); if (d > bd) { bd = d; best = c; } }
+            this.think(`KEEPING MY DISTANCE FROM ${shortName(avoid).toUpperCase()}.`);
+            this.#goTo(best.i + 0.5, best.j + 0.5, 'wander');
+            return;
+        }
+        this.think(this.rand() < 0.4 ? `REMEMBERING: ${String(s.memory.title).slice(0, 26)}..` : IDLE_THOUGHTS[Math.floor(this.rand() * IDLE_THOUGHTS.length)]);
+        // wander to an owned interior field tile (works for L-shaped plots; never a hole/outside)
         if (spots.length) { const t = spots[Math.floor(this.rand() * spots.length)]; this.#goTo(t.i + 0.5, t.j + 0.5, 'wander'); }
         else this.#goTo(this.plot.house.i, this.plot.house.j + 3, 'wander');
     }
@@ -3855,7 +3967,7 @@ export class Farmer {
                 if (!w.joinCoop(this)) return false;       // not my side of town / haul is fine
                 coop = w.farmerCoop(this);
             } else {
-                if (this.coopCooldown > 0 || this.p.collaboration < 0.3) return false;
+                if (this.coopCooldown > 0 || this.effCollab() < 0.3) return false;
                 if (w.waterHaul(this) < FAR_WATER) return false;
                 if (this.rand() > 0.3) return false;       // the idea strikes now and then, not every pass
                 this.coopCooldown = 45 + this.rand() * 60; // even a failed pitch isn't retried right away
@@ -4156,7 +4268,9 @@ export class Farmer {
             if (witness) { witness.say('HEY! THIEF!', '#c05840'); this.say('uh oh', '#e0a03c'); this.adjustReputation(-0.12); w.addBond(this, witness, -1); witness.adjustOpinion(this, -0.25, 'caught them thieving'); w.addLog(`${witness.sheet.name} caught ${s.name} stealing ${name}!`, '#c05840'); }
             else w.addLog(`${s.name} quietly made off with a ${name}`, '#e0a03c');
         }
-        this.poachCooldown = 20 + this.rand() * 25;
+        // the more crooked the bot, the sooner they're tempted to pilfer again (a chaos-agent
+        // at honesty ~0.1 poaches roughly twice as often as a merely-shady one)
+        this.poachCooldown = (20 + this.rand() * 25) * (0.45 + this.p.honesty);
         this.state = 'decide';
     }
 

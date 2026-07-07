@@ -2630,6 +2630,7 @@ function drawBootScreen(t) {
     world.set = (i, j, t) => { origSet(i, j, t); world._tilesChanged = true; };
 
     for (let i = 0; i < 8; i++) spawnFarmer();   // start with the full founding eight
+    world.ensureFounderVariety();                // guarantee a chaos-agent + a moody farmer among them
     selected = null;
 
     // center camera on the well
