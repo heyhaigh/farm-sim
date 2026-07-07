@@ -419,6 +419,18 @@ export class World {
     // ---- rare treasure chest -----------------------------------------------------
     // Very occasionally a chest appears on open ground; the first farmer to reach it is
     // richly rewarded (crops + goods now; special items later once inventory design lands).
+    // How "deep" a find is: 0 at the valley rim, climbing the further out it sits — richer loot
+    // lives further from home (mirrors the ore-rich highlands). Caps so rewards stay sane.
+    #treasureDepth(i, j) { return Math.max(0, Math.min(1.5, (Math.hypot(i - CENTER, j - CENTER) - 36) / 80)); }
+    // Weighted roll for WHAT a find is, biased outward: the deep wilds hide ore lodes and relics.
+    #rollTreasureKind(depth) {
+        const r = this.rand();
+        if (depth > 0.7 && r < 0.10 + depth * 0.10) return 'relic';    // rare deep keepsake
+        if (r < 0.22 + depth * 0.20) return 'lode';                    // an ore vein — likelier the deeper you go
+        if (r < 0.50) return 'timber';                                 // a woodcutter's forgotten stash
+        if (r < 0.74) return 'goods';                                  // a bundle of trade goods
+        return 'cache';                                                // a mixed homestead cache
+    }
     #maybeSpawnTreasure() {
         if (this.treasure) return;
         if (this.rand() > 0.04) return;   // ~1 in 25 days — genuinely rare
@@ -429,7 +441,8 @@ export class World {
             const i = R.i0 + Math.floor(this.rand() * (R.i1 - R.i0 + 1));
             const j = R.j0 + Math.floor(this.rand() * (R.j1 - R.j0 + 1));
             if (!this.isRevealed(i, j) || this.get(i, j) !== T.GRASS || this.pathBlocked(i, j)) continue;
-            this.treasure = { i, j, claimant: null, opened: false, openT: 0 };
+            const depth = this.#treasureDepth(i, j);
+            this.treasure = { i, j, claimant: null, opened: false, openT: 0, depth, kind: this.#rollTreasureKind(depth) };
             this.addLog('A glint on the ground... is that a TREASURE CHEST?', '#f0d060');
             return;
         }
@@ -440,24 +453,60 @@ export class World {
         if (this.treasure) return false;
         const spot = this.nearestOpenTile({ i, j });
         if (!spot) return false;
-        this.treasure = { i: spot.i, j: spot.j, claimant: null, opened: false, openT: 0 };
-        this.addLog('Something glints out in the newly charted wilds...', '#f0d060');
+        const depth = this.#treasureDepth(spot.i, spot.j);
+        this.treasure = { i: spot.i, j: spot.j, claimant: null, opened: false, openT: 0, depth, kind: this.#rollTreasureKind(depth) };
+        this.addLog(depth > 0.7 ? 'Something gleams in the deep wilds — a find worth the journey...' : 'Something glints out in the newly charted wilds...', '#f0d060');
         return true;
     }
     openTreasure(farmer) {
         const tr = this.treasure; if (!tr || tr.opened) return;
         tr.opened = true; tr.openT = 2.4; tr.claimant = null;
-        const s = farmer.sheet;
-        const crops = 8 + Math.floor(this.rand() * 12);
-        s.produce = (s.produce || 0) + crops;
-        farmer.wood += 4 + Math.floor(this.rand() * 5);
-        farmer.ore += 2 + Math.floor(this.rand() * 4);
-        const goods = ['wild wheat', 'wildflowers'];
-        const g = goods[Math.floor(this.rand() * goods.length)];
-        s.goods = s.goods || {}; s.goods[g] = (s.goods[g] || 0) + (2 + Math.floor(this.rand() * 3));
-        farmer.gainXP(8); farmer.sparkle = 3; farmer.say('TREASURE!', '#f0d060');
-        farmer.remember('event', `Found a treasure chest! ${crops} crops plus timber, ore and goods`, null, 1.2);
-        this.addLog(`${s.name} found a TREASURE CHEST! A haul of ${crops} crops, timber, ore and goods!`, '#f0d060');
+        const s = farmer.sheet, mult = 1 + (tr.depth || 0);   // deeper finds pay more
+        const rnd = (a, b) => a + Math.floor(this.rand() * (b - a + 1));
+        s.goods = s.goods || {};
+        farmer.sparkle = 3;
+        if (tr.kind === 'lode') {
+            const ore = Math.round(rnd(6, 11) * mult);
+            farmer.ore += ore; farmer.gainXP(6 + Math.round((tr.depth || 0) * 6));
+            farmer.say('AN ORE LODE!', '#c8d0dc');
+            farmer.remember('event', `Struck an ore lode in the wilds — ${ore} ore, the stuff crafting is made of`, null, 1.3);
+            this.addLog(`${s.name} struck an ORE LODE out in the wilds — ${ore} ore!`, '#c8d0dc');
+        } else if (tr.kind === 'timber') {
+            const wood = Math.round(rnd(9, 16) * mult);
+            farmer.wood += wood; farmer.gainXP(5);
+            farmer.say('A TIMBER STASH!', '#b98a4a');
+            farmer.remember('event', `Found a woodcutter's forgotten stash — ${wood} timber`, null, 1.15);
+            this.addLog(`${s.name} found a forgotten TIMBER STASH — ${wood} wood!`, '#b98a4a');
+        } else if (tr.kind === 'goods') {
+            const pool = ['wild wheat', 'wildflowers', 'egg', 'wool', 'lily'];
+            const picks = [];
+            for (let k = 0; k < 2 + (this.rand() < (tr.depth || 0) ? 1 : 0); k++) {
+                const g = pool[Math.floor(this.rand() * pool.length)];
+                const n = Math.round(rnd(3, 6) * mult); s.goods[g] = (s.goods[g] || 0) + n;
+                picks.push(`${n} ${g}`);
+            }
+            farmer.gainXP(5); farmer.say('A TRADE BUNDLE!', '#e0b050');
+            farmer.remember('event', `Found a bundle of trade goods — ${picks.join(', ')}`, null, 1.1);
+            this.addLog(`${s.name} found a BUNDLE of trade goods — ${picks.join(', ')}!`, '#e0b050');
+        } else if (tr.kind === 'relic') {
+            // a keepsake from the deep wilds: a big boon and a lasting bump to one ability
+            const abilities = ['str', 'dex', 'con', 'int', 'wis', 'cha'];
+            const ab = abilities[Math.floor(this.rand() * abilities.length)];
+            s.stats[ab] = (s.stats[ab] || 10) + 1;
+            farmer.gainXP(18); farmer.wood += rnd(4, 8); farmer.ore += rnd(3, 6);
+            farmer.say('A RELIC!', '#f0c850');
+            farmer.remember('event', `Unearthed an ancient relic in the deep wilds — it left me sharper (+1 ${ab.toUpperCase()})`, null, 1.6);
+            this.addLog(`${s.name} unearthed an ANCIENT RELIC in the deep wilds! (+1 ${ab.toUpperCase()}, and a fine haul)`, '#f0c850');
+        } else {   // mixed homestead cache — the old reliable
+            const crops = Math.round(rnd(8, 16) * mult);
+            s.produce = (s.produce || 0) + crops;
+            farmer.wood += rnd(4, 8); farmer.ore += rnd(2, 4);
+            const g = ['wild wheat', 'wildflowers'][Math.floor(this.rand() * 2)];
+            s.goods[g] = (s.goods[g] || 0) + rnd(2, 4);
+            farmer.gainXP(8); farmer.say('TREASURE!', '#f0d060');
+            farmer.remember('event', `Found a treasure chest! ${crops} crops plus timber, ore and goods`, null, 1.2);
+            this.addLog(`${s.name} found a TREASURE CHEST! ${crops} crops, plus timber, ore and goods!`, '#f0d060');
+        }
     }
     #tickTreasure(dt) {
         const tr = this.treasure; if (!tr) return;
@@ -4127,7 +4176,9 @@ export class Farmer {
         this.say('NEW LAND!', '#8fc7e8'); this.sparkle = 1.5;
         this.remember('event', `Ventured past the fog line - found ${find}`, null, 1.0);
         w.addLog(`${s.name} charted new territory: ${find}`, '#8fc7e8');
-        if (this.rand() < 0.18) w.spawnFrontierTreasure(ci, cj);
+        // the deeper the trek, the likelier it turns up a cache (and the richer that cache will be)
+        const depth = Math.max(0, Math.min(1.5, (Math.hypot(ci - CENTER, cj - CENTER) - 36) / 80));
+        if (this.rand() < 0.14 + depth * 0.16) w.spawnFrontierTreasure(ci, cj);
         this.state = 'decide';
     }
 

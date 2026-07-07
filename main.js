@@ -253,6 +253,8 @@ const BOARD_EMPTY_SRC = { x: 0, y: 156, w: 41, h: 62 };
 const BOARD_FULL_SRC = { x: 48, y: 156, w: 41, h: 62 };
 const CHEST_CLOSED_SRC = { x: 248, y: 357, w: 20, h: 20 };   // treasure chest (same guild-hall sheet)
 const CHEST_OPEN_SRC = { x: 276, y: 358, w: 23, h: 20 };
+// the chest's glow is tinted by what's inside, so a keen eye can read the find from afar
+const TREASURE_GLOW = { cache: '245,220,110', timber: '198,150,86', goods: '230,182,86', lode: '176,196,224', relic: '250,214,96' };
 // stacked wooden crates — the "under construction" marker for town projects (board/toolshed/…)
 const crateSheet = new Image(); let crateReady = false; crateSheet.onload = () => { crateReady = true; }; crateSheet.onerror = () => {};
 crateSheet.src = './assets/craftpix-net-654184-main-characters-home-free-top-down-pixel-art-asset/Tiled_files/Interior.png';
@@ -1143,14 +1145,17 @@ function collectDrawables() {
             y: sy + TILE_H, layer: 2, draw: () => {
                 ctx.imageSmoothingEnabled = false;
                 const t = performance.now() / 1000;
-                if (!tr.opened) {   // soft golden glow + twinkle
-                    const pulse = 0.35 + 0.25 * Math.sin(t * 4);
-                    const g = ctx.createRadialGradient(sx, sy, 1, sx, sy, 16);
-                    g.addColorStop(0, `rgba(245,220,110,${pulse})`); g.addColorStop(1, 'rgba(245,220,110,0)');
-                    ctx.fillStyle = g; ctx.fillRect(sx - 16, sy - 16, 32, 32);
+                const rgb = TREASURE_GLOW[tr.kind] || TREASURE_GLOW.cache;
+                const rare = tr.kind === 'relic' || tr.kind === 'lode';   // deep finds glow bigger & brighter
+                if (!tr.opened) {   // glow + twinkle, tinted by the loot within
+                    const pulse = (rare ? 0.5 : 0.35) + 0.25 * Math.sin(t * (rare ? 5 : 4));
+                    const rad = rare ? 20 : 16;
+                    const g = ctx.createRadialGradient(sx, sy, 1, sx, sy, rad);
+                    g.addColorStop(0, `rgba(${rgb},${pulse})`); g.addColorStop(1, `rgba(${rgb},0)`);
+                    ctx.fillStyle = g; ctx.fillRect(sx - rad, sy - rad, rad * 2, rad * 2);
                 }
                 ctx.drawImage(boardSheet, src.x, src.y, src.w, src.h, Math.floor(sx - dw / 2), Math.floor(sy + TILE_H - dh), dw, dh);
-                if (!tr.opened && Math.floor(t * 3) % 2) drawText(ctx, '*', Math.floor(sx + 4), Math.floor(sy + TILE_H - dh - 5), '#fff4c0');
+                if (!tr.opened && Math.floor(t * 3) % 2) drawText(ctx, '*', Math.floor(sx + 4), Math.floor(sy + TILE_H - dh - 5), `rgba(${rgb},1)`);
             }
         });
     }
