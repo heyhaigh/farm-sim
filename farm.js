@@ -147,22 +147,22 @@ const FACILITY_DEFS = {
 // energy / health tuning
 const AWAKE_DRAIN = 0;        // no passive drain — merely being awake and farming never tires you;
                              // only real labor (below) costs energy, so farms stay productive
-const SLEEP_RESTORE = 0.03;
-const REST_RESTORE = 0.03;
+const SLEEP_RESTORE = 0.04;
+const REST_RESTORE = 0.045;   // recover faster, so a short breather is enough — less time slumped, more time about
 // Tending crops and animals is free — tilling a patch, sowing, watering, harvesting, collecting
 // eggs/milk, feeding. Only heavy construction (build) drains here; the rest is 0. Chopping,
 // mining, breaking stumps, fencing and raising scarecrows drain via the LABOR table below.
-const ACTION_ENERGY = { till: 0, plant: 0, water: 0.008, harvest: 0, clear: 0, build: 0.055, collect: 0, tend: 0 };
+const ACTION_ENERGY = { till: 0, plant: 0, water: 0.006, harvest: 0, clear: 0, build: 0.04, collect: 0, tend: 0 };
 // Clearing/building labor by effort: a shrub is quick and light, a tree is a long hard fell,
 // a stump is grubbing work, a rock is the heaviest, a fence post is medium. { time, energy }.
 // Costs kept modest so a settler can clear + fence + build without collapsing every day.
 const LABOR = {
-    forage: { time: 1.6, energy: 0.03 },    // clear a shrub / brush
-    fencepost: { time: 1.8, energy: 0.04 }, // set a fence post
-    break: { time: 2.8, energy: 0.055 },    // grub out a stump
-    chop: { time: 4.6, energy: 0.08 },      // fell a tree
-    mine: { time: 4.2, energy: 0.10 },      // smash a rock
-    scarecrow: { time: 3.5, energy: 0.06 }, // raise a scarecrow
+    forage: { time: 1.6, energy: 0.02 },     // clear a shrub / brush
+    fencepost: { time: 1.8, energy: 0.028 }, // set a fence post
+    break: { time: 2.8, energy: 0.038 },     // grub out a stump
+    chop: { time: 4.6, energy: 0.055 },      // fell a tree
+    mine: { time: 4.2, energy: 0.07 },       // smash a rock
+    scarecrow: { time: 3.5, energy: 0.04 },  // raise a scarecrow
 };
 const SCARECROW_WOOD = 3;   // timber cost of a scarecrow
 const SCARECROW_LOSSES = 2; // crow raids a farmer will tolerate before building one
@@ -3388,8 +3388,24 @@ export class Farmer {
             if (this.opinionOf(other) <= -0.35 && this.rand() < 0.5) this.think(`NOT A WORD TO ${shortName(other).toUpperCase()}.`);
             return false;
         }
-        this.chatCooldown = 12 + this.rand() * 12;
-        other.chatCooldown = Math.max(other.chatCooldown, 6 + this.rand() * 6);
+        // Not every passing counts as a conversation — a farmer stops to talk only sometimes,
+        // and far more readily for a neighbour who likely has something WORTH HEARING: a seasoned,
+        // successful, well-travelled hand (or the town leader). Trusted friends are easy to talk to
+        // too. This keeps chatter sparse (a few a day) and skews it toward the informative.
+        // Idle chatter is now RARE — a farmer mostly keeps to their work. What tips them into
+        // stopping is a good REASON: a neighbour they TRUST (friendPull), or one who likely has
+        // something worth hearing (infoValue: seasoned / successful / well-travelled / the leader).
+        // A random pass between strangers almost never becomes a conversation.
+        const infoValue = other.sheet.level * 0.015 + Math.min(0.12, other.sheet.harvested / 900) +
+            Math.min(0.1, (other.discovered || 0) / 450) + (other === w.leader ? 0.08 : 0);
+        const friendPull = Math.max(0, this.opinionOf(other)) * 0.28;   // trust drives it most
+        const wantToTalk = 0.008 + this.effCollab() * 0.035 + infoValue + friendPull;
+        if (this.rand() > wantToTalk) { this.chatCooldown = 45 + this.rand() * 35; return false; }
+        // a good long lull after a real conversation — nobody chatters every minute, even at work
+        this.chatCooldown = 110 + this.rand() * 70;
+        other.chatCooldown = Math.max(other.chatCooldown, 70 + this.rand() * 40);
+        // there's a real tip in talking to someone further along — a little learned wisdom
+        if (other.sheet.level > this.sheet.level) this.gainXP(1);
         const op = this.opinionOf(other);
         const grudge = this.topRegard(-1);
         // the most vivid non-smalltalk memory involving this neighbor — history colors the greeting
