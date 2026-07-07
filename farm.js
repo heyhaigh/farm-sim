@@ -54,16 +54,28 @@ const ORE_ROCK = 2;        // iron ore from breaking a rock
 const FACILITY_WOOD = 6;   // wood to raise a facility
 const FENCE_WOOD = 8;      // wood to fence the new homestead
 const FENCE_POST_WOOD = 1; // wood per fence post — reclaimed when torn down, paid when built
-// Tiered dwellings. L1 (tipi) is quick; L2 (yurt) is a real investment; L3 (cottage) is the
-// lifetime goal — the harvest gate (lifetime crops, NOT spent) makes L2->L3 take a year+.
+// Tiered dwellings. L1 (tipi) is quick shelter; L2 (yurt) is a real mid-game investment; L3
+// (cottage) is the lifetime goal — a full YEAR of graft. Each tier gates on lifetime crops
+// (harvested, NOT spent), a personal LEVEL (minLevel), and a real pile of timber + stone, so a
+// farmer can't rush a farmhouse in a week. Livestock rides on the cottage (see FACILITY_MIN_LEVEL).
 const HOUSE_TIERS = [
     null,
-    { wood: 10, ore: 2, harvested: 0, name: 'tipi' },        // L1
-    { wood: 24, ore: 8, harvested: 30, name: 'yurt' },       // L2 — bigger yard, bigger stores
-    { wood: 55, ore: 22, harvested: 110, name: 'cottage' },  // L3 — the estate: livestock + frontier fields
+    { wood: 10, ore: 2, harvested: 0, minLevel: 0, name: 'tipi' },          // L1 — a roof, day one
+    { wood: 30, ore: 12, harvested: 300, minLevel: 9, name: 'yurt' },       // L2 — bigger yard + chickens
+    { wood: 120, ore: 60, harvested: 1400, minLevel: 18, name: 'cottage' }, // L3 — the estate: a year's work, then the herd
 ];
 const START_WOOD = 4;
 const MAX_FARMERS = 8;   // the original map maxes out at the first ring's 8 homesteads
+
+// Leveling is EXPONENTIAL: the XP to advance a level grows geometrically, so early levels come
+// quick but mastery is a real haul — a farmer who used to hit LV20 in a fortnight now takes most
+// of a year. xpForLevel(L) = the XP needed to go from level L to level L+1.
+const XP_BASE = 12, XP_GROWTH = 1.29;
+export function xpForLevel(level) { return Math.round(XP_BASE * Math.pow(XP_GROWTH, Math.max(0, level - 1))); }
+
+// Which house tier a facility needs: chickens (coop) come with the yurt; ponds and livestock pens
+// (cows/pigs/goats) are a cottage privilege — the herd is what pulls a farmer up the last rung.
+const FACILITY_MIN_LEVEL = { coop: 2, pond: 3, pen: 3 };
 
 // Longer days so the world breathes slowly while the (now faster) farmers bustle.
 export const DAY_LENGTH = 300;
@@ -1629,10 +1641,12 @@ export class World {
         this._tilesChanged = true;
         this.addLog(`${farmer.sheet.name} finished fencing their homestead.`, '#7dd069');
     }
-    // True if the farmer can afford the given tier (wood + ore spent, lifetime harvest as a gate).
+    // True if the farmer can raise the given tier: enough timber + stone to spend, and past the
+    // lifetime-harvest AND personal-level gates (both scale hard so a farmhouse is a season's goal).
     canBuild(farmer, level) {
         const c = HOUSE_TIERS[level];
-        return c && farmer.wood >= c.wood && farmer.ore >= c.ore && farmer.sheet.harvested >= c.harvested;
+        return c && farmer.wood >= c.wood && farmer.ore >= c.ore &&
+            farmer.sheet.harvested >= c.harvested && farmer.sheet.level >= (c.minLevel || 0);
     }
     raiseBuilding(farmer, level, free = false) {
         const p = farmer.plot, h = p.house, c = HOUSE_TIERS[level];
@@ -1653,7 +1667,9 @@ export class World {
     buildNextFacility(farmer) {
         const plot = farmer.plot;
         const built = new Set(plot.facilities.map(f => f.type));
-        const nextType = (farmer.sheet.facilityPrefs || ['pond', 'coop', 'pen']).find(t => !built.has(t));
+        // the first preferred facility that's unbuilt AND unlocked by the current house tier
+        const nextType = (farmer.sheet.facilityPrefs || ['pond', 'coop', 'pen'])
+            .find(t => !built.has(t) && plot.built.level >= (FACILITY_MIN_LEVEL[t] || 3));
         if (!nextType) return false;
         const region = this.#findFacilityRegion(plot, nextType);
         if (!region) return false;
@@ -1664,9 +1680,15 @@ export class World {
         return true;
     }
 
+    // an unbuilt facility the farmer's CURRENT house tier already unlocks (buildable right now)
     farmerHasUnbuiltFacility(farmer) {
         const built = new Set(farmer.plot.facilities.map(f => f.type));
-        return (farmer.sheet.facilityPrefs || []).some(t => !built.has(t));
+        return (farmer.sheet.facilityPrefs || []).some(t => !built.has(t) && farmer.plot.built.level >= (FACILITY_MIN_LEVEL[t] || 3));
+    }
+    // an unbuilt facility LOCKED behind a higher house tier (the dream that pulls them up the ladder)
+    farmerHasLockedFacility(farmer) {
+        const built = new Set(farmer.plot.facilities.map(f => f.type));
+        return (farmer.sheet.facilityPrefs || []).some(t => !built.has(t) && farmer.plot.built.level < (FACILITY_MIN_LEVEL[t] || 3));
     }
 
     // Spiral ring search over KNOWN (revealed) territory — the world is infinite now, so
@@ -3187,12 +3209,16 @@ export class Farmer {
     gainXP(n) {
         const s = this.sheet;
         s.xp += n;
-        if (s.xp >= s.level * 12) {
-            s.xp = 0; s.level++;
+        // exponential curve — carry the overflow (don't waste a big gain), and allow a rare
+        // multi-level jump when a windfall lands at low levels where thresholds are small
+        let need = xpForLevel(s.level);
+        while (s.xp >= need) {
+            s.xp -= need; s.level++;
             const up = ['str', 'dex', 'con', 'int', 'wis', 'cha'][Math.floor(this.rand() * 6)];
             s.stats[up] = Math.min(20, s.stats[up] + 1);
             this.world.addLog(`${s.name} reached LV ${s.level}! +1 ${up.toUpperCase()}`, '#7dd069');
             this.sparkle = 2.5; this.say('LEVEL UP!', '#7dd069');
+            need = xpForLevel(s.level);
         }
     }
 
@@ -3206,8 +3232,10 @@ export class Farmer {
     // Storage grows with the HOME: a tipi holds a handcart's worth, the yurt a shed,
     // the cottage a proper barn of timber and ore. (Part of the housing ladder's pull.)
     storageCap() {
+        // each tier's stores must comfortably exceed the NEXT tier's build cost, or a farmer could
+        // never save up for the upgrade (the yurt holds enough timber+stone to bank a whole cottage).
         const lvl = this.plot.built.level;
-        return lvl >= 3 ? { wood: 160, ore: 80 } : lvl >= 2 ? { wood: 80, ore: 40 } : { wood: 40, ore: 20 };
+        return lvl >= 3 ? { wood: 220, ore: 110 } : lvl >= 2 ? { wood: 140, ore: 75 } : { wood: 45, ore: 22 };
     }
     // how many crops one 'water' action serves — a can/rig waters several at once
     waterReach() { return this.hasTool('sprinkler') ? 5 : this.hasTool('wateringCan') ? 3 : 1; }
@@ -4125,13 +4153,14 @@ export class Farmer {
     #pursueGrowth() {
         const w = this.world;
 
-        // Facility first if wanted and there's already room + wood.
-        // LIVESTOCK IS A COTTAGE PRIVILEGE: no coop, pen or pond until the L3 home stands —
-        // the dream of animals is what pulls farmers up the housing ladder.
-        if (this.wantFacility && this.plot.built.level < 3) {
+        // Facility first if wanted and there's already room + wood. Chickens come with the yurt,
+        // but PONDS + LIVESTOCK PENS are a cottage privilege — if the only facility they still crave
+        // is locked behind a higher tier, the dream converts into the savings plan that pulls them
+        // up the ladder (see FACILITY_MIN_LEVEL).
+        if (this.wantFacility && !w.farmerHasUnbuiltFacility(this) && w.farmerHasLockedFacility(this)) {
             if (this.rand() < 0.15) this.think(this.rand() < 0.5 ? 'ANIMALS NEED A REAL FARMHOUSE FIRST.' : 'THE COTTAGE FIRST. THEN THE HERD.');
             this.wantFacility = false;
-            this.wantUpgrade = true;   // the blocked dream becomes a savings plan
+            this.wantUpgrade = true;   // the locked dream becomes a savings plan
         }
         if (this.wantFacility) {
             if (w.farmerHasUnbuiltFacility(this)) {
@@ -4651,11 +4680,11 @@ export class Farmer {
             grower.nextExpand = Math.round(grower.nextExpand * 2.1);
             grower.wantExpand = true;
         }
-        // the animal dream: with a cottage it becomes a building plan; without one, it
-        // becomes the SAVINGS plan for the cottage (the ladder's strongest pull)
-        if (grower.sheet.harvested >= grower.nextFacility && this.world.farmerHasUnbuiltFacility(grower)) {
-            if (grower.plot.built.level >= 3) grower.wantFacility = true;
-            else grower.wantUpgrade = true;
+        // the animal dream: a facility their tier already unlocks becomes a building plan; a
+        // facility locked behind the cottage becomes the SAVINGS plan for it (the ladder's pull)
+        if (grower.sheet.harvested >= grower.nextFacility) {
+            if (this.world.farmerHasUnbuiltFacility(grower)) grower.wantFacility = true;
+            else if (this.world.farmerHasLockedFacility(grower)) grower.wantUpgrade = true;
         }
     }
 

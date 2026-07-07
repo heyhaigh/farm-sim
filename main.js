@@ -2,7 +2,7 @@
 
 import { fetchMemories, mod, fmtMod, STAT_NAMES, TRAIT_NAMES, TRAIT_LABELS, hashString } from './dna.js';
 import { audio } from './audio.js';
-import { World, CHUNK, T, DAY_LENGTH, NIGHT_LENGTH, ITEMS, CRAFTABLES } from './farm.js';
+import { World, CHUNK, T, DAY_LENGTH, NIGHT_LENGTH, ITEMS, CRAFTABLES, xpForLevel } from './farm.js';
 import {
     TILE_W, TILE_H, makeCanvas, drawText, textWidth,
     makeFarmerSprites, makeCropSprites, makeHouse, makeWell, makeBoard, makeFencePost,
@@ -2253,7 +2253,7 @@ function drawSheet(f) {
         if (f.goal) { drawText(ctx, `> course: ${f.goal.toUpperCase()}`, IX, y, '#d08cc8'); y += 7; }
         y += 2;
         drawText(ctx, 'ENERGY', IX, y, SHEET_LABEL); barFill(IX + 42, y, IW - 42, f.energy, eCol); y += 6;
-        drawText(ctx, 'XP', IX, y, SHEET_LABEL); barFill(IX + 42, y, IW - 42, Math.min(s.xp / (s.level * 12), 1), '#5a8ac8'); y += 10;
+        drawText(ctx, 'XP', IX, y, SHEET_LABEL); barFill(IX + 42, y, IW - 42, Math.min(s.xp / xpForLevel(s.level), 1), '#5a8ac8'); y += 10;
 
         y = sectionBand(IX, y, IW, 'PERSONALITY');
         TRAIT_NAMES.forEach((tn) => { drawText(ctx, TRAIT_LABELS[tn], IX, y, SHEET_LABEL); barFill(IX + 58, y, IW - 58, p[tn], TRAIT_COLORS[tn]); y += 7; });
