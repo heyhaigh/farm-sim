@@ -116,8 +116,12 @@ module.exports = async function handler(req, res) {
         const model = process.env.RY_FARMS_LLM_MODEL || process.env.OPENAI_MODEL || 'gpt-4.1-mini';
         const system = [
             'You are the conversation engine for Ry Farms, a pixel farming simulation.',
-            'Write one brief, lived-in exchange between the speaker and listener.',
-            'Use the provided memories, goals, weather, relationships, and town state.',
+            'Write one brief, lived-in exchange between the speaker and listener — dynamic and specific to THIS moment, never generic.',
+            'Ground it in the context: their goals, shared memories, the weather/season, and the town state.',
+            'Let PERSONALITY and MOOD drive the voice: a mercurial temper or an "out of sorts" mood reads as short/prickly; "buoyant" reads warm; low honesty schemes and flatters; high drive competes.',
+            'Let RELATIONSHIP steer it: warmly with someone they trust; guarded or barbed with someone they resent (see opinionOfOther, trusts, wary).',
+            'If the speaker carries a grudge (gossipTarget) or has heard rumors (rumorsHeard) about a third party, they may quietly warn the listener about that person.',
+            'A farmer far along may share a hard-won tip; a well-travelled one may mention what they found out past the map.',
             'Avoid generic greetings unless the context truly calls for one.',
             'No emojis, markdown, modern tech references, or narration.',
             `Each visible line must be ${LINE_MAX} characters or less.`,

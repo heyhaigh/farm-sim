@@ -1023,12 +1023,18 @@ export class World {
     }
 
     #chatProfile(farmer, other) {
-        const s = farmer.sheet;
+        const s = farmer.sheet, p = s.personality;
+        const moodWord = farmer.mood > 0.35 ? 'buoyant' : farmer.mood < -0.35 ? 'out of sorts' : 'even';
         return {
             name: s.name,
-            archetype: s.personality.label,
-            creed: s.personality.creed,
+            archetype: p.label,
+            creed: p.creed,
             goal: farmer.goal || 'finding their way',
+            // the inner weather that colours how they'll talk right now
+            mood: moodWord,
+            temper: p.volatility > 0.66 ? 'mercurial' : p.volatility < 0.34 ? 'even-keeled' : 'steady',
+            traits: { teamwork: p.collaboration, drive: p.competitiveness, honesty: p.honesty, workEthic: p.diligence },
+            level: s.level,
             health: farmer.health,
             energy: Math.round(farmer.energy * 100) / 100,
             state: farmer.state,
@@ -1037,7 +1043,11 @@ export class World {
             cropsOnHand: farmer.sheet.produce || 0,
             wood: farmer.wood,
             ore: farmer.ore,
+            tilesExplored: farmer.discovered || 0,
             opinionOfOther: Math.round(farmer.opinionOf(other) * 100) / 100,
+            trusts: farmer.allRegard(1).map(r => r.who.sheet.name.split(' ')[0]),
+            wary: farmer.allRegard(-1).map(r => r.who.sheet.name.split(' ')[0]),
+            rumorsHeard: (farmer.gossip || []).slice(-4).map(g => `${g.from} warned against ${g.about}`),
             strongestSharedMemories: this.#journalBrief(farmer, other, 5),
             recentMemories: this.#journalBrief(farmer, null, 5),
         };
@@ -1087,7 +1097,9 @@ export class World {
         if (!cfg?.enabled || typeof fetch !== 'function') return false;
         if (cfg.inflight >= 1 || this.time < cfg.disabledUntil) return false;
         if (this.time - cfg.lastAt < LLM_CHAT_REQUEST_COOLDOWN) return false;
-        if (this.rand() > 0.82) return false;
+        // conversations are already sparse; when the LLM is available, let it drive nearly all of
+        // them (the scripted lines are a fallback for offline / failed / in-flight requests only)
+        if (this.rand() > 0.95) return false;
 
         cfg.inflight++;
         cfg.lastAt = this.time;
@@ -3171,8 +3183,8 @@ export class Farmer {
         // a new day's mood: an emotional random walk, its amplitude the `volatility` trait.
         // Even-keeled bots barely move; the mercurial can wake up transformed.
         this.mood = Math.max(-1, Math.min(1, this.mood * 0.55 + (this.world.rand() - 0.5) * 2 * this.volatility));
-        // yesterday's rumors fade — town gossip is short-lived; the faintest is forgotten
-        if (this.gossip.length) { for (const g of this.gossip) g.strength *= 0.8; this.gossip = this.gossip.filter(g => g.strength > 0.22); }
+        // yesterday's rumors fade slowly — a warning lingers a couple of weeks before it's forgotten
+        if (this.gossip.length) { for (const g of this.gossip) g.strength *= 0.93; this.gossip = this.gossip.filter(g => g.strength > 0.2); }
         // the moody's slow burn: a genuine plea for help still hanging a day later stings —
         // they sour and quietly blame the town's most able hand for leaving them to it
         if (this.volatility > 0.5 && this.world.day - this.helpPostedDay >= 1 &&
@@ -3416,8 +3428,8 @@ export class Farmer {
         // GOSSIP — an independent aside, whatever pleasantry they exchange: a farmer with a real
         // grudge will sometimes warn this (still-neutral) neighbour off the one they resent. A
         // manipulator (low honesty) poisons the well far more readily, AND it lands (opinion drop).
-        if (grudge && grudge.v < -0.3 && grudge.who !== other && other.opinionOf(grudge.who) > -0.35 &&
-            this.rand() < (this.p.honesty < 0.35 ? 0.6 : 0.18)) {
+        if (grudge && grudge.v < -0.2 && grudge.who !== other && other.opinionOf(grudge.who) > -0.4 &&
+            this.rand() < (this.p.honesty < 0.35 ? 0.9 : 0.6)) {
             other.hearGossip(this, grudge.who);
             if (this.p.honesty < 0.35) other.adjustOpinion(grudge.who, -0.1, 'heard unsettling things about them');
         }
