@@ -2778,6 +2778,7 @@ export class Farmer {
             0.18 + this.p.competitiveness * 0.35 + (1 - this.p.collaboration) * 0.3 + ((sheet.seed >>> 3) % 20) / 100));
         this.exploreHeading = ((sheet.seed % 628) / 100);   // a personal compass bearing (radians)
         this.exploreCooldown = 20 + (sheet.seed % 30);      // staggered first treks
+        this.oreExpedCooldown = 0;                           // paces ore expeditions (need-driven treks for stone)
         this.discovered = 0;                                 // lifetime tiles personally uncovered
         this.annexCooldown = 0;                              // gates frontier-field scouting
         this.pendingAnnex = null;                            // the staked claim being walked to
@@ -3007,6 +3008,7 @@ export class Farmer {
             this.wood >= next.wood && this.ore < next.ore && this.energy > 0.35) {
             const rock = this.world.nearestRock(this.pos, 34);
             if (rock) { this.think(`MINING ORE FOR A ${next.name}`); this.mineTarget = rock; return this.#goTo(rock.i + 0.5, rock.j + 0.5, 'mine'); }
+            if (this.#seekOreAfar(next.name)) return true;   // no rock nearby → venture to the highlands
         }
         return false;
     }
@@ -3281,6 +3283,7 @@ export class Farmer {
         if (this.ore < c.ore) {
             const rock = w.nearestRock(this.pos, 40);
             if (rock) { this.mineTarget = rock; if (this.#goTo(rock.i + 0.5, rock.j + 0.5, 'mine')) { this.think('MINING STONE FOR MY HOME'); return true; } }
+            if (this.#seekOreAfar('HOME')) return true;   // no stone within reach → highland expedition
         }
         this.think(this.wood > 0 ? 'MORE TIMBER FOR MY HOME' : 'FELLING TIMBER FOR MY HOME');
         if (this.#goChop()) return true;
@@ -3633,6 +3636,7 @@ export class Farmer {
                 } else if (this.ore < c.ore) {
                     const rock = w.nearestRock(this.pos, 50);
                     if (rock) { this.think(`STONE FOR THE ${c.name.toUpperCase()} - ${this.ore}/${c.ore}`); this.mineTarget = rock; if (this.#goTo(rock.i + 0.5, rock.j + 0.5, 'mine')) return; }
+                    else if (this.#seekOreAfar(c.name.toUpperCase())) return;   // mined out at home → expedition
                 } else this.wantUpgrade = false;   // affordable — the next decide pass raises it
             }
         }
@@ -3666,6 +3670,7 @@ export class Farmer {
                 } else if (pr.ore < pr.needOre) {
                     const rock = w.nearestRock(this.pos, 60);
                     if (rock) { this.think(`STONE FOR THE ${pr.label}`); this.mineTarget = rock; if (this.#goTo(rock.i + 0.5, rock.j + 0.5, 'mine')) return; }
+                    else if (this.#seekOreAfar(pr.label)) return;   // valley tapped out → expedition for the monument's stone
                 }
                 // nothing haulable/gatherable right now — get on with the farm
             } else {
@@ -3897,6 +3902,46 @@ export class Farmer {
 
     // Pick a spot on (or just past) the fog line along this bot's personal compass
     // bearing. Walking there lifts the fog en route; arriving is the discovery.
+    // Local rock is mined out (rocks NEVER regrow) but the highlands past the fog carry richer
+    // ore the deeper you go. A farmer who NEEDS stone for a committed goal mounts an EXPEDITION:
+    // first mine any ore a prior leg already brought within reach, else strike OUTWARD from the
+    // valley past the fog line and chart new country until an ore field turns up. `name` is what
+    // the ore is for (flavours the thought). Returns true if it took the trek/mine this tick.
+    #seekOreAfar(name) {
+        const w = this.world;
+        if (w.isNight() || this.energy < 0.4) return false;
+        // a prior leg may already have revealed an outcrop within a walkable reach (findPath-safe)
+        const near = w.nearestRock(this.pos, 55);
+        if (near) { this.think(`ORE AT LAST — FOR THE ${name}`); this.mineTarget = near; return this.#goTo(near.i + 0.5, near.j + 0.5, 'mine'); }
+        if (this.oreExpedCooldown > 0) return false;
+        const tgt = this.#outwardFrontierTarget();
+        if (!tgt) { this.oreExpedCooldown = 25; return false; }   // hemmed in — try again shortly
+        this.oreExpedCooldown = 45 + this.rand() * 55;
+        this.think('MY STONE IS SPENT — OFF TO THE HIGHLANDS FOR ORE');
+        this.remember('event', `Set out for the highlands seeking ore for a ${name.toLowerCase()}`, null, 0.7);
+        return this.#goTo(tgt.i + 0.5, tgt.j + 0.5, 'explore');
+    }
+
+    // Like #frontierTarget, but the bearing is biased OUTWARD from the valley centre — rising
+    // distance means richer ore fields (see #genTile rockRich), so an ore-seeker heads deeper in.
+    #outwardFrontierTarget() {
+        const w = this.world;
+        const base = Math.atan2(this.pos.j - CENTER, this.pos.i - CENTER);   // points away from the centre
+        for (let attempt = 0; attempt < 5; attempt++) {
+            // first probe straight out, then fan symmetrically wider around the outward bearing
+            const h = base + (attempt === 0 ? (this.rand() - 0.5) * 0.5 : Math.ceil(attempt / 2) * 0.7 * (attempt % 2 ? 1 : -1));
+            const di = Math.cos(h), dj = Math.sin(h);
+            for (let d = 6; d <= 46; d += 2) {
+                let ti = Math.round(this.pos.i + di * d), tj = Math.round(this.pos.j + dj * d);
+                if (w.isRevealed(ti, tj)) continue;
+                for (let k = 0; k < 6 && w.pathBlocked(ti, tj); k++) { ti += Math.sign(di) || 1; tj += Math.sign(dj); }
+                if (w.pathBlocked(ti, tj)) continue;
+                return { i: ti, j: tj };
+            }
+        }
+        return null;
+    }
+
     #frontierTarget() {
         const w = this.world;
         let h = this.exploreHeading + (this.rand() - 0.5) * 1.2;
@@ -4417,6 +4462,7 @@ export class Farmer {
         this.coopCooldown = Math.max(0, this.coopCooldown - dt);
         this.wellAskCooldown = Math.max(0, this.wellAskCooldown - dt);
         this.exploreCooldown = Math.max(0, this.exploreCooldown - dt);
+        this.oreExpedCooldown = Math.max(0, this.oreExpedCooldown - dt);
         this.annexCooldown = Math.max(0, this.annexCooldown - dt);
         // every farmer lifts the fog around wherever they walk — the map grows with the town
         {
