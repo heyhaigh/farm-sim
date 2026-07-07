@@ -2006,6 +2006,7 @@ export class World {
     // Credit donated town XP and roll any level-ups (exponential thresholds). Levelling the town
     // is what unlocks the next communal build / draws a merchant — a shared, visible milestone.
     addTownXP(n) {
+        if (!(n > 0)) return;                        // ignore non-positive / non-finite credits (never corrupt townXP)
         if (this.townLevel >= TOWN_MAX_LEVEL) return;
         this.townXP += n;
         let need = townXpForLevel(this.townLevel);
