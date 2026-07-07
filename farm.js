@@ -11,8 +11,12 @@
 
 import { mulberry32, mod, growFarmer } from './dna.js';
 
+// The FOUNDING VALLEY: the hand-tuned region generated with the original global algorithm
+// (plaza, homestead ring, clustered groves). Beyond it the world is INFINITE — tiles are
+// generated lazily, chunk by chunk, from pure position-hash noise as farmers explore.
 export const GRID = 110;
 export const CENTER = GRID / 2;
+export const CHUNK = 16;   // tile side of one lazily-generated (and lazily-rendered) chunk
 const FOREST_BORDER = 5;   // keep trees this many tiles off the map edge
 const ISO_HALF_W = 10;     // mirrors TILE_W / 2 without importing renderer code
 const ISO_HALF_H = 5;      // mirrors TILE_H / 2 without importing renderer code
@@ -55,8 +59,8 @@ const FENCE_POST_WOOD = 1; // wood per fence post — reclaimed when torn down, 
 const HOUSE_TIERS = [
     null,
     { wood: 10, ore: 2, harvested: 0, name: 'tipi' },        // L1
-    { wood: 28, ore: 10, harvested: 40, name: 'yurt' },      // L2
-    { wood: 70, ore: 28, harvested: 220, name: 'cottage' },  // L3 — the ultimate home
+    { wood: 24, ore: 8, harvested: 30, name: 'yurt' },       // L2 — bigger yard, bigger stores
+    { wood: 55, ore: 22, harvested: 110, name: 'cottage' },  // L3 — the estate: livestock + frontier fields
 ];
 const START_WOOD = 4;
 const MAX_FARMERS = 8;   // the original map maxes out at the first ring's 8 homesteads
@@ -207,6 +211,14 @@ export class World {
         this.seed = seed >>> 0;
         this.rand = mulberry32(seed);
         this.tiles = new Uint8Array(GRID * GRID).fill(T.GRASS);
+        // Infinite wilderness beyond the founding valley: chunk key "cx,cy" -> Uint8Array of
+        // tiles, generated on first touch from PURE hash noise (never world.rand — generation
+        // order must not affect determinism). Fog of war: matching per-chunk reveal bitmaps.
+        this.chunks = new Map();
+        this.fog = new Map();
+        this.dirtyChunks = new Set();   // chunk keys whose ground/fog changed (renderer rebakes)
+        this.revealRect = { i0: CENTER, j0: CENTER, i1: CENTER, j1: CENTER };
+        this.exploredTiles = 0;
         this.crops = new Map();
         this.plots = [];
         this.farmers = [];
@@ -237,6 +249,7 @@ export class World {
         this.workMult = 1;
         this.growthMult = 1;
         this.lightningMult = 1;
+        this.rainBoost = 1;   // guardian statues call the rains: more rain weather, deeper soak
         this.leader = null;
         this.llmChat = this.#initLlmChat();
 
@@ -251,6 +264,10 @@ export class World {
         this.#addRing(26, 8, 0.42);
 
         this.#growForest();
+
+        // the founders know their valley: reveal a generous circle around the plaza —
+        // everything beyond (the valley corners included) starts under fog of war
+        this.reveal(CENTER, CENTER, 42);
 
         this.scarecrows = [];   // (placeholder — scarecrows will keep birds off nearby crops)
         this.birds = [];
@@ -285,11 +302,15 @@ export class World {
     }
 
     // ---- crows: perch in trees, hop tree-to-tree, and raid unguarded crops -------
-    #allTrees() {
+    // Scans only EXPLORED territory (the crows are town ambience, not world scouts), and
+    // caps the haul — the revealed region grows without bound as farmers explore.
+    #allTrees(cap = 400) {
         const out = [];
-        for (let j = FOREST_BORDER; j < GRID - FOREST_BORDER; j++)
-            for (let i = FOREST_BORDER; i < GRID - FOREST_BORDER; i++)
-                if (this.get(i, j) === T.TREE) out.push({ i, j });
+        const R = this.revealRect;
+        const step = Math.max(1, Math.ceil(Math.max(R.i1 - R.i0, R.j1 - R.j0) / 160));
+        for (let j = R.j0; j <= R.j1 && out.length < cap; j += step)
+            for (let i = R.i0; i <= R.i1 && out.length < cap; i += step)
+                if (this.isRevealed(i, j) && this.get(i, j) === T.TREE) out.push({ i, j });
         return out;
     }
     #spawnBirds(n) {
@@ -313,10 +334,16 @@ export class World {
     #birdTargetTree(i, j) {
         const near = this.#treesNear(i, j, 12);
         if (near.length) return near[Math.floor(this.rand() * near.length)];   // a nearby tree = short hop
-        const all = this.#allTrees();                                          // else the nearest tree anywhere
-        let best = null, bestD = 1e18;
-        for (const t of all) { const d = (t.i - i) ** 2 + (t.j - j) ** 2; if (d < bestD) { bestD = d; best = t; } }
-        return best;
+        // else spiral outward for the nearest known tree (bounded — no full-world scans)
+        const ci = Math.round(i), cj = Math.round(j);
+        for (let r = 13; r <= 40; r++) {
+            for (let dj = -r; dj <= r; dj++) for (let di = -r; di <= r; di++) {
+                if (Math.max(Math.abs(di), Math.abs(dj)) !== r) continue;
+                const ni = ci + di, nj = cj + dj;
+                if (this.isRevealed(ni, nj) && this.get(ni, nj) === T.TREE) return { i: ni, j: nj };
+            }
+        }
+        return null;
     }
     // a scarecrow keeps crows off crops within a 9-tile radius (widened from 6 so it actually
     // covers a meaningful chunk of a homestead's fields)
@@ -372,15 +399,27 @@ export class World {
     #maybeSpawnTreasure() {
         if (this.treasure) return;
         if (this.rand() > 0.04) return;   // ~1 in 25 days — genuinely rare
-        const N = GRID - 2 * FOREST_BORDER;
+        // anywhere in EXPLORED territory — the more the town uncovers, the more ground
+        // a chest can turn up on (exploring literally grows the treasure pool)
+        const R = this.revealRect;
         for (let tries = 0; tries < 60; tries++) {
-            // anywhere on the map, not clustered near town — procedural placement
-            const i = FOREST_BORDER + Math.floor(this.rand() * N), j = FOREST_BORDER + Math.floor(this.rand() * N);
-            if (this.get(i, j) !== T.GRASS || this.pathBlocked(i, j)) continue;
+            const i = R.i0 + Math.floor(this.rand() * (R.i1 - R.i0 + 1));
+            const j = R.j0 + Math.floor(this.rand() * (R.j1 - R.j0 + 1));
+            if (!this.isRevealed(i, j) || this.get(i, j) !== T.GRASS || this.pathBlocked(i, j)) continue;
             this.treasure = { i, j, claimant: null, opened: false, openT: 0 };
             this.addLog('A glint on the ground... is that a TREASURE CHEST?', '#f0d060');
             return;
         }
+    }
+    // Explorers stumble onto caches the crows never see — spawned at the freshly
+    // revealed frontier so the reward lands where the boldness happened.
+    spawnFrontierTreasure(i, j) {
+        if (this.treasure) return false;
+        const spot = this.nearestOpenTile({ i, j });
+        if (!spot) return false;
+        this.treasure = { i: spot.i, j: spot.j, claimant: null, opened: false, openT: 0 };
+        this.addLog('Something glints out in the newly charted wilds...', '#f0d060');
+        return true;
     }
     openTreasure(farmer) {
         const tr = this.treasure; if (!tr || tr.opened) return;
@@ -523,8 +562,7 @@ export class World {
     }
 
     #treeFits(i, j, minX = 48, minY = 28) {
-        if (i < FOREST_BORDER || j < FOREST_BORDER || i >= GRID - FOREST_BORDER || j >= GRID - FOREST_BORDER) return false;
-        const t = this.get(i, j);
+        const t = this.get(i, j);   // the world has no edges anymore — only spacing rules
         if (t !== T.GRASS && t !== T.WHEAT && t !== T.FLOWER && t !== T.STUMP) return false;
         const a = i - j, b = i + j;
         for (let y = j - 9; y <= j + 9; y++) {
@@ -602,16 +640,18 @@ export class World {
         }
     }
 
-    // Nature slowly reclaims cleared land: a few outskirt tiles regrow each day.
+    // Nature slowly reclaims cleared land: a few tiles of EXPLORED country regrow each day.
+    // (The wilderness under fog never needs regrowth — it generates pristine on reveal.)
     #regrowWild() {
         const nearAnyPlot = (i, j, pad = 2) => this.plots.some(p => i >= p.x - pad && i < p.x + p.w + pad && j >= p.y - pad && j < p.y + p.h + pad);
         let treesGrown = 0, wheatGrown = 0;
+        const R = this.revealRect;
         for (let k = 0; k < 24; k++) {
-            const i = 2 + Math.floor(this.rand() * (GRID - 4));
-            const j = 2 + Math.floor(this.rand() * (GRID - 4));
+            const i = R.i0 + Math.floor(this.rand() * (R.i1 - R.i0 + 1));
+            const j = R.j0 + Math.floor(this.rand() * (R.j1 - R.j0 + 1));
+            if (!this.isRevealed(i, j)) continue;
             const t = this.get(i, j);
             if ((t !== T.GRASS && t !== T.STUMP) || nearAnyPlot(i, j)) continue;
-            if (i < FOREST_BORDER || j < FOREST_BORDER || i >= GRID - FOREST_BORDER || j >= GRID - FOREST_BORDER) continue;
             const r = Math.hypot(i - CENTER, j - CENTER);
             if (r > 24) {
                 // near the forest: stumps sprout saplings, gaps refill with wild growth
@@ -635,7 +675,7 @@ export class World {
         if (this.#inAnyHouseFootprint(i, j)) return true;
         if (this.board && this.board.i === i && this.board.j === j) return true;
         for (const w of this.wells) if (w.i === i && w.j === j) return true;
-        for (const s of this.structures) if (s.i === i && s.j === j) return true;
+        for (const s of this.structures) { const sz = s.size || 1; if (i >= s.i && i < s.i + sz && j >= s.j && j < s.j + sz) return true; }
         const ps = this.project && this.project.site;
         if (ps && ps.i === i && ps.j === j) return true;
         for (const c of this.coops) if (c.site.i === i && c.site.j === j) return true;
@@ -647,15 +687,25 @@ export class World {
     // INTO farms (pressuring bots to keep clearing — see #nearestPlotObstacle) and onto expansion
     // frontiers (trees there block annexation). A neglected farm gets reclaimed by the wild.
     #encroach() {
+        // Encroachment is FARM pressure, not a world simulation: scan only each plot's
+        // neighborhood (padded box) instead of the whole — now infinite — map. Wilderness
+        // regrowth elsewhere is #regrowWild's job.
         const sprouts = [], matures = [];
-        for (let j = FOREST_BORDER; j < GRID - FOREST_BORDER; j++) {
-            for (let i = FOREST_BORDER; i < GRID - FOREST_BORDER; i++) {
-                const t = this.get(i, j);
-                if (t !== T.TREE && t !== T.FLOWER) continue;
-                if (t === T.FLOWER && !this.#onActiveField(i, j) && !this.#protectedTile(i, j) && this.#treeFits(i, j, 48, 28)) matures.push({ i, j });
-                for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-                    const gi = i + di, gj = j + dj;
-                    if (this.get(gi, gj) === T.GRASS && !this.#onActiveField(gi, gj) && !this.#protectedTile(gi, gj)) sprouts.push({ i: gi, j: gj });
+        const seenTiles = new Set();
+        for (const p of this.plots) {
+            const PAD = 6;
+            for (let j = p.y - PAD; j < p.y + p.h + PAD; j++) {
+                for (let i = p.x - PAD; i < p.x + p.w + PAD; i++) {
+                    const tk = pkey(i, j);
+                    if (seenTiles.has(tk)) continue;
+                    seenTiles.add(tk);
+                    const t = this.get(i, j);
+                    if (t !== T.TREE && t !== T.FLOWER) continue;
+                    if (t === T.FLOWER && !this.#onActiveField(i, j) && !this.#protectedTile(i, j) && this.#treeFits(i, j, 48, 28)) matures.push({ i, j });
+                    for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+                        const gi = i + di, gj = j + dj;
+                        if (this.get(gi, gj) === T.GRASS && !this.#onActiveField(gi, gj) && !this.#protectedTile(gi, gj)) sprouts.push({ i: gi, j: gj });
+                    }
                 }
             }
         }
@@ -706,14 +756,131 @@ export class World {
     }
 
     idx(i, j) { return j * GRID + i; }
+    static chunkKey(i, j) { return Math.floor(i / CHUNK) + ',' + Math.floor(j / CHUNK); }
+
+    // Tile access over an INFINITE plane. The founding valley lives in the flat array;
+    // everything beyond is chunked and generated on first touch from pure hash noise.
     get(i, j) {
-        if (i < 0 || j < 0 || i >= GRID || j >= GRID) return T.GRASS;
-        return this.tiles[this.idx(i, j)];
+        if (i >= 0 && j >= 0 && i < GRID && j < GRID) return this.tiles[j * GRID + i];
+        const cx = Math.floor(i / CHUNK), cy = Math.floor(j / CHUNK);
+        return this.#chunk(cx, cy)[(j - cy * CHUNK) * CHUNK + (i - cx * CHUNK)];
     }
     set(i, j, t) {
-        if (i < 0 || j < 0 || i >= GRID || j >= GRID) return;
-        this.tiles[this.idx(i, j)] = t;
+        if (i >= 0 && j >= 0 && i < GRID && j < GRID) this.tiles[j * GRID + i] = t;
+        else {
+            const cx = Math.floor(i / CHUNK), cy = Math.floor(j / CHUNK);
+            this.#chunk(cx, cy)[(j - cy * CHUNK) * CHUNK + (i - cx * CHUNK)] = t;
+        }
+        this.dirtyChunks.add(World.chunkKey(i, j));
         this._tilesChanged = true;
+    }
+
+    #chunk(cx, cy) {
+        const key = cx + ',' + cy;
+        let ch = this.chunks.get(key);
+        if (!ch) {
+            ch = new Uint8Array(CHUNK * CHUNK);
+            const i0 = cx * CHUNK, j0 = cy * CHUNK;
+            for (let j = 0; j < CHUNK; j++) for (let i = 0; i < CHUNK; i++) {
+                const wi = i0 + i, wj = j0 + j;
+                // valley tiles inside a boundary chunk stay in the flat array; the chunk
+                // cell is dead storage there (get() never routes to it)
+                ch[j * CHUNK + i] = (wi >= 0 && wj >= 0 && wi < GRID && wj < GRID)
+                    ? T.GRASS : this.#genTile(wi, wj);
+            }
+            this.chunks.set(key, ch);
+        }
+        return ch;
+    }
+
+    // ---- infinite wilderness generation (PURE functions of position + world seed) --------
+    // Distance bands give explorers real reasons to venture: deeper forest belts (timber),
+    // rocky highlands (the ore that gates crafting), wildflower meadows, and — far out —
+    // still lakes. No world.rand() in here, ever: generation order must never matter.
+    #genTile(i, j) {
+        const s = this.seed;
+        const r = Math.hypot(i - CENTER, j - CENTER);
+        // distant still lakes (never near the valley rim, so the transition stays seamless)
+        if (r > 68) {
+            const lakeN = tileNoise(i + 211, j - 149, 26, s + 210) * 0.62 +
+                tileNoise(i - 87, j + 61, 9, s + 211) * 0.28 +
+                tileRand(i, j, s + 212) * 0.10;
+            if (lakeN > 0.80) return T.WATER;
+            if (lakeN > 0.785) return T.GRASS;   // a clear muddy shore ring around each lake
+        }
+        // rocky highlands: outcrop fields that grow RICHER the deeper you venture — the
+        // wilderness carries the ore that crafting needs (rocks never regrow, so the frontier
+        // is where late-game stone comes from)
+        const rockN = tileNoise(i + 71, j - 37, 10, s + 41) * 0.55 +
+            tileNoise(i - 17, j + 53, 24, s + 42) * 0.33 +
+            tileRand(i, j, s + 43) * 0.12;
+        const rockRich = Math.min(2.1, 1.0 + Math.max(0, r - 40) / 80);
+        if (tileRand(i, j, s + 44) < Math.max(0, rockN - 0.60) * 0.5 * rockRich) return T.ROCK;
+        if (this.#wildTreeAt(i, j)) return T.TREE;
+        // wild forage carpets (same formulas as the valley, so the boundary blends)
+        const wheatN = tileNoise(i - 31, j + 7, 9, s + 4) * 0.58 +
+            tileNoise(i + 5, j + 29, 21, s + 5) * 0.30 + tileRand(i, j, s + 6) * 0.12;
+        const flowerN = tileNoise(i + 43, j - 23, 8, s + 7) * 0.56 +
+            tileNoise(i - 13, j + 17, 18, s + 8) * 0.32 + tileRand(i, j, s + 9) * 0.12;
+        const pw = Math.max(0, wheatN - 0.55) * 0.72, pf = Math.max(0, flowerN - 0.53) * 0.64;
+        const roll = tileRand(i, j, s + 10);
+        if (roll < pw) return T.WHEAT;
+        if (roll < pw + pf) return T.FLOWER;
+        return T.GRASS;
+    }
+
+    // Trees on a jittered SCREEN-SPACE lattice: candidates live in cells of the iso plane
+    // (a = i-j horizontal, b = i+j vertical), so any two trees keep the same on-screen
+    // spacing the valley's #treeFits enforced — without needing neighbor look-ups (pure).
+    #wildTreeAt(i, j) {
+        const s = this.seed;
+        const a = i - j, b = i + j;
+        const u = Math.floor(a / 5), v = Math.floor(b / 6);
+        // one jittered candidate spot per lattice cell
+        let ca = u * 5 + Math.floor(tileRand(u, v, s + 120) * 3);        // a-jitter 0..2 -> min gap 3
+        let cb = v * 6 + Math.floor(tileRand(u, v, s + 121) * 3) * 2;    // b-jitter {0,2,4} keeps gap
+        if (((ca ^ cb) & 1) !== 0) cb += 1;                              // parity: i,j must be integers
+        if (a !== ca || b !== cb) return false;
+        // grove density: deep-forest belts with open meadows between, denser further out
+        const grove = tileNoise(i + 11, j - 5, 12, s + 101) * 0.5 +
+            tileNoise(i - 37, j + 19, 27, s + 102) * 0.5;
+        const r = Math.hypot(i - CENTER, j - CENTER);
+        const belt = Math.min(0.22, Math.max(0, r - 55) / 260);   // wilds grow wilder, gently
+        return grove + belt > 0.56;
+    }
+
+    // ---- fog of war -----------------------------------------------------------------
+    #fogChunk(cx, cy) {
+        const key = cx + ',' + cy;
+        let f = this.fog.get(key);
+        if (!f) { f = new Uint8Array(CHUNK * CHUNK); this.fog.set(key, f); }
+        return f;
+    }
+    isRevealed(i, j) {
+        const cx = Math.floor(i / CHUNK), cy = Math.floor(j / CHUNK);
+        const f = this.fog.get(cx + ',' + cy);
+        return f ? f[(j - cy * CHUNK) * CHUNK + (i - cx * CHUNK)] === 1 : false;
+    }
+    // Reveal a circle of tiles (a farmer's sight as they walk). Returns how many tiles were
+    // NEWLY uncovered, expands the explored bounding rect, and dirties touched chunks so the
+    // renderer re-bakes their fog.
+    reveal(i, j, r = 5) {
+        let newly = 0;
+        const R = this.revealRect;
+        for (let dj = -r; dj <= r; dj++) for (let di = -r; di <= r; di++) {
+            if (di * di + dj * dj > r * r + r) continue;
+            const ii = i + di, jj = j + dj;
+            const cx = Math.floor(ii / CHUNK), cy = Math.floor(jj / CHUNK);
+            const f = this.#fogChunk(cx, cy);
+            const idx = (jj - cy * CHUNK) * CHUNK + (ii - cx * CHUNK);
+            if (f[idx]) continue;
+            f[idx] = 1; newly++;
+            this.dirtyChunks.add(cx + ',' + cy);
+            if (ii < R.i0) R.i0 = ii; if (ii > R.i1) R.i1 = ii;
+            if (jj < R.j0) R.j0 = jj; if (jj > R.j1) R.j1 = jj;
+        }
+        this.exploredTiles += newly;
+        return newly;
     }
     blocked(i, j) {
         const t = this.get(i, j);
@@ -1077,8 +1244,12 @@ export class World {
 
     // ---- farm expansion + diversification ---------------------------------------
 
-    static MAX_PLOT = 23;
+    static MAX_CELLS = 560;  // acreage cap (~23x23 worth of land, any shape, annexes included)
     static BASE_PLOT = 13;   // starting plot size (square); house + garden + facility zones fit inside
+    // The homestead LADDER: your house is your license to hold land. A tipi keeps a modest
+    // yard; the yurt earns real acreage; only the cottage commands a full estate. This is
+    // what makes farmers hungry to upgrade — the farm can't outgrow the home.
+    static tierCellCap(level) { return level >= 3 ? World.MAX_CELLS : level >= 2 ? 360 : 200; }
 
     // Validate a candidate rect for a plot; returns null if it collides with a
     // neighbor plot / commons / edge, else the list of woodland tiles to clear.
@@ -1105,7 +1276,7 @@ export class World {
     // commons, water, or a rock). Rocks/neighbours block, which is what carves plots into
     // non-rectangular (L) shapes as they grow around each other.
     #annexClass(plot, i, j) {
-        if (i < 2 || j < 2 || i >= GRID - 2 || j >= GRID - 2) return 'blocked';
+        if (!this.isRevealed(i, j)) return 'blocked';   // you can't fence land you haven't charted
         for (const other of this.plots) {
             if (other.cells.has(pkey(i, j))) return 'blocked';
             if (other === plot) continue;
@@ -1125,19 +1296,21 @@ export class World {
     // cells, so the plot grows into L-shapes instead of forced rectangles.
     // Returns { state: 'max'|'blocked'|'trees'|'clear', tiles?, cells? }
     expansionInfo(plot) {
-        const MAX = World.MAX_PLOT;
-        if (plot.w >= MAX && plot.h >= MAX) return { state: 'max' };
+        // ambition is capped by ACREAGE, not by a bounding box — annex fields make plots
+        // disconnected, so bbox width/height stopped meaning anything. The cap scales with
+        // the HOUSE tier: a grander home licenses a grander estate.
+        if (plot.cells.size >= World.tierCellCap(plot.built.level)) return { state: 'max' };
         const cx = plot.x + plot.w / 2, cy = plot.y + plot.h / 2;
         const dirs = [
-            { di: 1, dj: 0, out: cx > CENTER, axisOk: plot.w < MAX },
-            { di: -1, dj: 0, out: cx < CENTER, axisOk: plot.w < MAX },
-            { di: 0, dj: 1, out: cy > CENTER, axisOk: plot.h < MAX },
-            { di: 0, dj: -1, out: cy < CENTER, axisOk: plot.h < MAX },
+            { di: 1, dj: 0, out: cx > CENTER },
+            { di: -1, dj: 0, out: cx < CENTER },
+            { di: 0, dj: 1, out: cy > CENTER },
+            { di: 0, dj: -1, out: cy < CENTER },
         ];
         let fallback = null;   // best side that has legal cells but misses the 50% preference
         for (const outwardPass of [true, false]) {
             for (const d of dirs) {
-                if (!d.axisOk || d.out !== outwardPass) continue;
+                if (d.out !== outwardPass) continue;
                 const clear = [], trees = [];
                 let frontier = 0;
                 for (const key of plot.cells) {
@@ -1170,6 +1343,10 @@ export class World {
         const p = farmer.plot;
         const info = this.expansionInfo(p);
         if (info.state !== 'clear') return false;
+        // never grab past what the HOUSE licenses — trim the frontier to fit the tier cap
+        const room = World.tierCellCap(p.built.level) - p.cells.size;
+        if (room <= 0) return false;
+        if (info.cells.length > room) info.cells = info.cells.slice(0, room);
         const { removed, added } = this.fenceDelta(p, info.cells);
         // self-guard: even with the reclaimed posts, the farmer must be able to pay for the new
         // fence line — never expand for free by clamping wood to 0 (Codex #4)
@@ -1187,6 +1364,25 @@ export class World {
         const name = farmer.sheet.name;
         if (removed > 0) this.addLog(`${name} tore down ${removed} fence post${removed > 1 ? 's' : ''} (+${removed} wood) and re-fenced the bigger yard`, '#7dd069');
         else this.addLog(`${name} fenced in new land!`, '#7dd069');
+        return true;
+    }
+
+    // Take a DETACHED set of cells into a farmer's plot (a frontier annex field). Pays the
+    // fence-wood delta, converts forage to clear grass, and rebuilds bounds/fields/fence.
+    // Returns false (spending nothing) if the farmer can't cover the new fence line.
+    annexCells(farmer, cells) {
+        const p = farmer.plot;
+        const { removed, added } = this.fenceDelta(p, cells);
+        if (farmer.wood + removed * FENCE_POST_WOOD < added * FENCE_POST_WOOD) return false;
+        farmer.wood = Math.max(0, farmer.wood + removed * FENCE_POST_WOOD - added * FENCE_POST_WOOD);
+        for (const { i, j } of cells) {
+            p.cells.add(pkey(i, j));
+            const t = this.get(i, j);
+            if (t === T.WHEAT || t === T.FLOWER) this.set(i, j, T.GRASS);
+        }
+        this.#recomputeBounds(p);
+        this.#rebuildFields(p);
+        this._tilesChanged = true;
         return true;
     }
 
@@ -1304,32 +1500,46 @@ export class World {
         return (farmer.sheet.facilityPrefs || []).some(t => !built.has(t));
     }
 
+    // Spiral ring search over KNOWN (revealed) territory — the world is infinite now, so
+    // full scans are gone; farmers work from what the town has actually charted.
+    #spiralFind(pos, maxR, match) {
+        const ci = Math.round(pos.i), cj = Math.round(pos.j);
+        if (this.isRevealed(ci, cj)) { const m = match(ci, cj); if (m) return m; }
+        for (let r = 1; r <= maxR; r++) {
+            for (let dj = -r; dj <= r; dj++) for (let di = -r; di <= r; di++) {
+                if (Math.max(Math.abs(di), Math.abs(dj)) !== r) continue;   // ring perimeter only
+                const i = ci + di, j = cj + dj;
+                if (!this.isRevealed(i, j)) continue;
+                const m = match(i, j);
+                if (m) return m;
+            }
+        }
+        return null;
+    }
+
     // nearest fellable tile (TREE preferred), optionally restricted to a set
     nearestWood(pos, restrict) {
-        let best = null, bestD = 1e9;
-        const scan = (wantStump) => {
-            for (let j = 0; j < GRID; j++) for (let i = 0; i < GRID; i++) {
-                const t = this.get(i, j);
-                if (wantStump ? t !== T.STUMP : t !== T.TREE) continue;
-                if (restrict && !restrict.some(r => r.i === i && r.j === j)) continue;
-                const d = Math.abs(i - pos.i) + Math.abs(j - pos.j);
-                if (d < bestD) { bestD = d; best = { i, j, kind: wantStump ? 'stump' : 'tree' }; }
-            }
-        };
-        scan(false);                         // prefer standing trees
-        if (!best) scan(true);               // else grub a stump
-        return best;
+        if (restrict) {
+            let best = null, bestD = 1e9;
+            const scan = (wantStump) => {
+                for (const rt of restrict) {
+                    const t = this.get(rt.i, rt.j);
+                    if (wantStump ? t !== T.STUMP : t !== T.TREE) continue;
+                    const d = Math.abs(rt.i - pos.i) + Math.abs(rt.j - pos.j);
+                    if (d < bestD) { bestD = d; best = { i: rt.i, j: rt.j, kind: wantStump ? 'stump' : 'tree' }; }
+                }
+            };
+            scan(false); if (!best) scan(true);
+            return best;
+        }
+        const tree = this.#spiralFind(pos, 48, (i, j) => this.get(i, j) === T.TREE ? { i, j, kind: 'tree' } : null);
+        if (tree) return tree;
+        return this.#spiralFind(pos, 48, (i, j) => this.get(i, j) === T.STUMP ? { i, j, kind: 'stump' } : null);
     }
 
     // nearest breakable rock within reach (for ore)
     nearestRock(pos, maxD = 10) {
-        let best = null, bestD = maxD + 1;
-        for (let j = 0; j < GRID; j++) for (let i = 0; i < GRID; i++) {
-            if (this.get(i, j) !== T.ROCK) continue;
-            const d = Math.abs(i - pos.i) + Math.abs(j - pos.j);
-            if (d < bestD) { bestD = d; best = { i, j }; }
-        }
-        return best;
+        return this.#spiralFind(pos, maxD, (i, j) => this.get(i, j) === T.ROCK ? { i, j } : null);
     }
 
     // Solid obstacles farmers must walk AROUND (buildings, wells, rocks, the board).
@@ -1352,7 +1562,11 @@ export class World {
         // so normal paths still route around ponds/buildings — but a farmer stranded inside
         // one (e.g. a pond carved under them) can always walk to the nearest shore.
         const okTile = (i, j, fromBlocked) => (i === gi && j === gj) || fromBlocked || !this.pathBlocked(i, j);
-        const key = (i, j) => i * GRID + j;
+        const key = (i, j) => i + ',' + j;   // string keys — coordinates are unbounded (and can be negative)
+        // search window: the start/goal bounding box plus a generous detour margin. The world
+        // is infinite, so the window (plus the node cap) is what keeps A* sane.
+        const wi0 = Math.min(si, gi) - 30, wi1 = Math.max(si, gi) + 30;
+        const wj0 = Math.min(sj, gj) - 30, wj1 = Math.max(sj, gj) + 30;
         const open = [{ i: si, j: sj, g: 0, f: Math.abs(gi - si) + Math.abs(gj - sj), p: null }];
         const best = new Map([[key(si, sj), 0]]);
         const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
@@ -1365,11 +1579,11 @@ export class World {
                 const path = []; let n = cur; while (n) { path.push({ i: n.i, j: n.j }); n = n.p; }
                 path.reverse(); path.shift(); return path;
             }
-            if (++expansions > 900) break;
+            if (++expansions > 1800) break;
             const curBlocked = this.pathBlocked(cur.i, cur.j);
             for (const [di, dj] of dirs) {
                 const ni = cur.i + di, nj = cur.j + dj;
-                if (ni < 0 || nj < 0 || ni >= GRID || nj >= GRID || !okTile(ni, nj, curBlocked)) continue;
+                if (ni < wi0 || nj < wj0 || ni > wi1 || nj > wj1 || !okTile(ni, nj, curBlocked)) continue;
                 // no corner-cut past an obstacle edge — but a bot escaping blocked terrain may cut freely
                 if (di && dj && !curBlocked && (this.pathBlocked(cur.i + di, cur.j) || this.pathBlocked(cur.i, cur.j + dj))) continue;
                 const ng = cur.g + (di && dj ? 1.4 : 1), kk = key(ni, nj);
@@ -1389,7 +1603,6 @@ export class World {
             for (let dj = -r; dj <= r; dj++) for (let di = -r; di <= r; di++) {
                 if (Math.max(Math.abs(di), Math.abs(dj)) !== r) continue;   // ring perimeter only
                 const i = ci + di, j = cj + dj;
-                if (i < 1 || j < 1 || i >= GRID - 1 || j >= GRID - 1) continue;
                 if (!this.pathBlocked(i, j)) return { i, j };
             }
         }
@@ -1398,14 +1611,10 @@ export class World {
 
     // nearest patch of wild forage (wheat or flowers) within reach
     nearestForage(pos, maxD = 15) {
-        let best = null, bestD = maxD;
-        for (let j = 0; j < GRID; j++) for (let i = 0; i < GRID; i++) {
+        return this.#spiralFind(pos, maxD, (i, j) => {
             const t = this.get(i, j);
-            if (t !== T.WHEAT && t !== T.FLOWER) continue;
-            const d = Math.abs(i - pos.i) + Math.abs(j - pos.j);
-            if (d < bestD) { bestD = d; best = { i, j, tile: t }; }
-        }
-        return best;
+            return (t === T.WHEAT || t === T.FLOWER) ? { i, j, tile: t } : null;
+        });
     }
 
     #findFacilityRegion(plot, type) {
@@ -1501,33 +1710,61 @@ export class World {
         if (this.project || this.projectIndex >= PROJECT_DEFS.length) return;
         const def = PROJECT_DEFS[this.projectIndex];
         if (this.harvestTotal < def.at) return;
-        const site = this.#findStructureSpot();
+        // a guardian statue waits for a master hand: nobody carves the stone until someone
+        // in town has the level for it
+        if (def.lvlReq && !this.farmers.some(f => f.sheet.level >= def.lvlReq)) return;
+        const site = this.#findStructureSpot(def.size || 1);
         if (!site) return;
         this.projectIndex++;
-        this.project = { ...def, site, points: 0, builders: new Set() };
-        this.addLog(`TOWN PROJECT: build a ${def.label}! (${def.perk})`, '#f0d060');
+        this.project = {
+            ...def, site, points: 0, builders: new Set(),
+            wood: 0, ore: 0, needWood: def.wood || 0, needOre: def.ore || 0,
+        };
+        const mats = def.wood ? ` — needs ${def.wood} wood + ${def.ore} ore` : '';
+        this.addLog(`TOWN PROJECT: build a ${def.label}! (${def.perk})${mats}`, '#f0d060');
     }
 
-    #findStructureSpot() {
+    #findStructureSpot(size = 1) {
         for (let tries = 0; tries < 80; tries++) {
             const a = this.rand() * Math.PI * 2;
-            const r = 7 + this.rand() * 5;   // out on the plaza ring, clear of the central well
+            const r = 7 + this.rand() * (4 + size * 2);   // grander monuments sit further out on the ring
             const i = Math.round(CENTER + Math.cos(a) * r);
             const j = Math.round(CENTER + Math.sin(a) * r);
-            if (this.get(i, j) !== T.GRASS) continue;
             let clear = true;
-            for (const p of this.plots) if (i >= p.x - 1 && i <= p.x + p.w + 1 && j >= p.y - 1 && j <= p.y + p.h + 1) { clear = false; break; }
-            for (const s of this.structures) if (Math.abs(s.i - i) + Math.abs(s.j - j) < 5) { clear = false; break; }
-            if (Math.abs(this.well.i - i) + Math.abs(this.well.j - j) < 6) clear = false;   // keep well clear (sprites are big)
-            if (this.board && Math.abs(this.board.i - i) + Math.abs(this.board.j - j) < 5) clear = false;
+            // the whole size x size footprint must be plain grass
+            for (let dj = 0; dj < size && clear; dj++) for (let di = 0; di < size; di++)
+                if (this.get(i + di, j + dj) !== T.GRASS) { clear = false; break; }
+            if (!clear) continue;
+            const pad = 1 + size;
+            for (const p of this.plots) if (i >= p.x - pad && i <= p.x + p.w + pad && j >= p.y - pad && j <= p.y + p.h + pad) { clear = false; break; }
+            for (const s of this.structures) if (Math.abs(s.i - i) + Math.abs(s.j - j) < 5 + size) { clear = false; break; }
+            if (Math.abs(this.well.i - i) + Math.abs(this.well.j - j) < 6 + size) clear = false;   // keep well clear (sprites are big)
+            if (this.board && Math.abs(this.board.i - i) + Math.abs(this.board.j - j) < 5 + size) clear = false;
             if (clear) return { i, j };
         }
         return null;
     }
 
+    // statues gather materials FIRST (hauled by the town), then the carving starts
+    projectNeedsMaterials(pr = this.project) { return !!pr && (pr.wood < pr.needWood || pr.ore < pr.needOre); }
+    depositProject(farmer) {
+        const pr = this.project;
+        if (!pr) return 0;
+        let gave = 0;
+        const nw = Math.min(farmer.wood, pr.needWood - pr.wood);
+        if (nw > 0) { farmer.wood -= nw; pr.wood += nw; gave += nw; }
+        const no = Math.min(farmer.ore, pr.needOre - pr.ore);
+        if (no > 0) { farmer.ore -= no; pr.ore += no; gave += no; }
+        if (gave > 0) {
+            this.addLog(`${farmer.sheet.name} hauled materials to the ${pr.label} site (${pr.wood}/${pr.needWood} wood, ${pr.ore}/${pr.needOre} ore)`, '#c8a060');
+            farmer.gainXP(1);
+        }
+        return gave;
+    }
+
     contributeBuild(farmer, dt) {
         const pr = this.project;
-        if (!pr) return;
+        if (!pr || this.projectNeedsMaterials(pr)) return;   // no carving before the stone arrives
         pr.builders.add(farmer);
         pr.points += dt * (1 + Math.max(0, mod(farmer.sheet.stats.str)) * 0.2) * this.workMult;
         if (pr.points >= pr.needed) this.#completeProject();
@@ -1542,16 +1779,22 @@ export class World {
             // not a buffed structure. Once it's up, farmers can post jobs.
             this.board = { i: site.i, j: site.j };
         } else {
-            this.structures.push({ type, i: site.i, j: site.j });
-            this.set(site.i, site.j, T.STRUCT);
+            const size = pr.size || 1;
+            this.structures.push({ type, i: site.i, j: site.j, size });
+            for (let dj = 0; dj < size; dj++) for (let di = 0; di < size; di++) this.set(site.i + di, site.j + dj, T.STRUCT);
             if (type === 'toolshed') this.workMult *= 1.12;
             else if (type === 'windmill') this.growthMult *= 1.15;
-            else if (type === 'tower') this.lightningMult = 0.5;
+            else if (type.startsWith('statue')) {
+                // each tier SUPERSEDES the last: exponentially calmer skies, richer rains
+                this.lightningMult = pr.lightning;
+                this.rainBoost = pr.rain;
+            }
             else if (type === 'well2') this.wells.push({ i: site.i, j: site.j, ready: true });
         }
         this.addLog(`The ${label} is finished! ${perk}`, '#f0d060');
         for (const f of pr.builders) {
             f.gainXP(6); f.say('HOORAY!', '#f0d060'); f.sparkle = 3;
+            f.remember('event', `We raised the ${label.toLowerCase()} together`, null, 1.1);
             for (const g of pr.builders) if (g !== f && this.rand() < 0.6) this.addBond(f, g);
         }
     }
@@ -1665,7 +1908,7 @@ export class World {
         for (let tries = 0; tries < 120; tries++) {
             const a = this.rand() * Math.PI * 2, r = this.rand() * 8;
             const i = Math.round(ci + Math.cos(a) * r), j = Math.round(cj + Math.sin(a) * r);
-            if (i < 3 || j < 3 || i >= GRID - 3 || j >= GRID - 3) continue;
+            if (!this.isRevealed(i, j)) continue;   // dig only on charted open land
             if (this.get(i, j) !== T.GRASS) continue;
             let ok = true;
             for (const wl of this.wells) if (Math.abs(wl.i - i) + Math.abs(wl.j - j) < MIN_WELL_DIST) { ok = false; break; }
@@ -1984,7 +2227,9 @@ export class World {
         for (const [state, w] of Object.entries(table)) {
             const bias = seasonBias[state];
             if (bias === 0) continue;   // season hard-excludes it (no storms in winter, no blizzards otherwise)
-            const v = w * (0.4 + (bias ?? 1)); blended[state] = v; sum += v;
+            let v = w * (0.4 + (bias ?? 1));
+            if (state === 'rain') v *= this.rainBoost;   // the statues call the rains oftener
+            blended[state] = v; sum += v;
         }
         let r = this.rand() * sum;
         for (const [state, w] of Object.entries(blended)) { r -= w; if (r <= 0) { this.#setWeather(state); return; } }
@@ -2022,7 +2267,8 @@ export class World {
         for (const crop of this.crops.values()) {
             if (crop.withered) continue;
             if (raining) {
-                const rainGain = (this.weather === 'storm' ? 0.055 : 0.032) * (crop.rainAbsorbMul || 1);
+                // guardian statues deepen the soak — rain waters the fields harder
+                const rainGain = (this.weather === 'storm' ? 0.055 : 0.032) * (crop.rainAbsorbMul || 1) * this.rainBoost;
                 crop.water = Math.min(1, crop.water + rainGain * dt);
                 crop.dryTime = 0;
             } else {
@@ -2100,12 +2346,25 @@ export class World {
                             if (p.inside) p.inside = false;   // morning: come out of the building
                             p.wanderT -= dt;
                             if (p.wanderT <= 0) {
-                                p.wanderT = 0.6 + this.rand() * 1.8;
-                                const ang = this.rand() * Math.PI * 2;
-                                const spd = (p.kind === 'chicken' || p.kind === 'rooster' ? 0.5 : 0.28);
-                                p.vx = Math.cos(ang) * spd; p.vy = Math.sin(ang) * spd;
+                                const poultry = p.kind === 'chicken' || p.kind === 'rooster';
+                                if (poultry) {
+                                    // hens dart and peck — quick hops, short pauses
+                                    p.wanderT = 0.6 + this.rand() * 1.8;
+                                    const ang = this.rand() * Math.PI * 2;
+                                    p.vx = Math.cos(ang) * 0.5; p.vy = Math.sin(ang) * 0.5;
+                                    p.hop = 0.35;
+                                } else if (this.rand() < 0.72) {
+                                    // cattle/sheep/pigs GRAZE: mostly they just stand and chew,
+                                    // holding one spot for a long, contented while
+                                    p.wanderT = 6 + this.rand() * 14;
+                                    p.vx = 0; p.vy = 0;
+                                } else {
+                                    // ...then drift a slow step or two to fresher grass
+                                    p.wanderT = 1.6 + this.rand() * 2.4;
+                                    const ang = this.rand() * Math.PI * 2;
+                                    p.vx = Math.cos(ang) * 0.11; p.vy = Math.sin(ang) * 0.11;
+                                }
                                 if (Math.abs(p.vx) > 0.02) p.flip = p.vx > 0 ? 1 : -1;
-                                if (p.kind === 'chicken' || p.kind === 'rooster') p.hop = 0.35;
                             }
                             const px = p.fx, py = p.fy;
                             p.fx += p.vx * dt; p.fy += p.vy * dt;
@@ -2289,12 +2548,22 @@ const GOAL_CREEDS = {
     'master farmer': 'THE CRAFT IS THE REWARD.',
 };
 
+// The guardian statues replace the old storm tower: a 3-tier chain of carved monuments,
+// each unlocked by the town's most experienced hand (lvlReq), costing EXPONENTIALLY more
+// stone and timber, claiming a bigger square footprint — and bending the sky harder:
+// lightning falls off exponentially while the rains come oftener and soak deeper (less
+// hand-watering). Farmers haul the materials together, then carve together.
 const PROJECT_DEFS = [
     { type: 'board', label: 'BULLETIN BOARD', at: 8, needed: 22, perk: 'FARMERS CAN POST JOBS' },
     { type: 'toolshed', label: 'TOOLSHED', at: 20, needed: 30, perk: 'ALL WORK +12% FASTER' },
     { type: 'windmill', label: 'WINDMILL', at: 55, needed: 45, perk: 'CROPS GROW +15% FASTER' },
-    { type: 'tower', label: 'STORM TOWER', at: 100, needed: 55, perk: 'LIGHTNING HALVED' },
+    { type: 'statue1', label: 'GUARDIAN HEAD', at: 100, needed: 55, lvlReq: 8, wood: 14, ore: 8, size: 1,
+      lightning: 0.55, rain: 1.2, perk: 'LIGHTNING -45%, RAIN +20%' },
     { type: 'well2', label: 'SECOND WELL', at: 160, needed: 65, perk: 'SHORTER WATER RUNS' },
+    { type: 'statue2', label: 'FOX SENTINEL', at: 260, needed: 110, lvlReq: 16, wood: 35, ore: 20, size: 2,
+      lightning: 0.3, rain: 1.45, perk: 'LIGHTNING -70%, RAIN +45%' },
+    { type: 'statue3', label: 'STONE MOTHER', at: 480, needed: 220, lvlReq: 26, wood: 88, ore: 50, size: 3,
+      lightning: 0.12, rain: 1.75, perk: 'LIGHTNING -88%, RAIN +75%' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -2358,11 +2627,23 @@ export class Farmer {
         this.nextFacility = 12 + (sheet.seed % 6);
         this.targetProd = null;
 
+        // the pull of the horizon: how strongly this bot itches to walk past the fog line.
+        // Competitive loners feel it hardest; content collaborators mostly stay home.
+        this.wanderlust = Math.max(0.08, Math.min(0.9,
+            0.18 + this.p.competitiveness * 0.35 + (1 - this.p.collaboration) * 0.3 + ((sheet.seed >>> 3) % 20) / 100));
+        this.exploreHeading = ((sheet.seed % 628) / 100);   // a personal compass bearing (radians)
+        this.exploreCooldown = 20 + (sheet.seed % 30);      // staggered first treks
+        this.discovered = 0;                                 // lifetime tiles personally uncovered
+        this.annexCooldown = 0;                              // gates frontier-field scouting
+        this.pendingAnnex = null;                            // the staked claim being walked to
+        this._revI = null; this._revJ = null;                // last tile whose fog we lifted
+
         // resource inventory (tradeable): wood from trees, ore from rocks, plus sheet.goods forage
         this.wood = START_WOOD;
         this.ore = 0;
         this.wantExpand = false;
         this.wantFacility = false;
+        this.wantUpgrade = false; // ambition blocked by the HOUSE -> actively save toward the next tier
         this.woodTarget = null;
         this.tools = new Set();   // crafted tools owned (see CRAFTABLES) — unlock at level, cost ore
         this.craftTarget = null;  // the recipe a farmer has walked home to build
@@ -2442,6 +2723,20 @@ export class Farmer {
         return who ? { who, v: bestV } : null;
     }
 
+    // Every meaningful relationship in one pass, strongest first: sign>0 lists everyone this
+    // bot trusts past the threshold, sign<0 everyone they're wary of. For the sheet's TOWN
+    // TIES — trust is rarely singular in a town that helps, trades and digs wells together.
+    allRegard(sign, threshold = 0.15, cap = 4) {
+        const out = [];
+        for (const [seed, v] of this.opinions) {
+            if (sign > 0 ? v <= threshold : v >= -threshold) continue;
+            const who = this.world.farmers.find(f => f.sheet.seed === seed);
+            if (who) out.push({ who, v });
+        }
+        out.sort((a, b) => sign > 0 ? b.v - a.v : a.v - b.v);
+        return out.slice(0, cap);
+    }
+
     get tired() { return this.energy < 0.35; }
 
     get speed() {
@@ -2497,6 +2792,12 @@ export class Farmer {
 
     // ---- crafting & inventory ---------------------------------------------------
     hasTool(id) { return this.tools.has(id); }
+    // Storage grows with the HOME: a tipi holds a handcart's worth, the yurt a shed,
+    // the cottage a proper barn of timber and ore. (Part of the housing ladder's pull.)
+    storageCap() {
+        const lvl = this.plot.built.level;
+        return lvl >= 3 ? { wood: 160, ore: 80 } : lvl >= 2 ? { wood: 80, ore: 40 } : { wood: 40, ore: 20 };
+    }
     // how many crops one 'water' action serves — a can/rig waters several at once
     waterReach() { return this.hasTool('sprinkler') ? 5 : this.hasTool('wateringCan') ? 3 : 1; }
 
@@ -2558,11 +2859,13 @@ export class Farmer {
     }
 
     // items this bot actually holds, for the inventory grid. Only non-zero stacks.
+    // wood/ore carry their house-tier storage cap so the UI can show "12 / 40".
     inventoryItems() {
         const out = [];
-        const push = (id, count) => { if (count > 0 && ITEMS[id]) out.push({ id, name: ITEMS[id].name, icon: ITEMS[id].icon, count }); };
-        push('wood', this.wood);
-        push('ore', this.ore);
+        const caps = this.storageCap();
+        const push = (id, count, cap) => { if (count > 0 && ITEMS[id]) out.push({ id, name: ITEMS[id].name, icon: ITEMS[id].icon, count, cap }); };
+        push('wood', this.wood, caps.wood);
+        push('ore', this.ore, caps.ore);
         push('crops', this.sheet.produce || 0);
         const g = this.sheet.goods || {};
         for (const key of ['wheat', 'flower']) push(key, g[key] || 0);
@@ -2917,7 +3220,10 @@ export class Farmer {
             if (b) { this.think('CLEARING SPACE TO UPGRADE MY HOME'); this.#clearObstacle(b); return true; }
         }
         w.raiseBuilding(this, next);
+        this.wantUpgrade = false;
         this.say(next >= 3 ? 'A REAL HOME!' : 'A BIGGER HOME!', '#f0d060'); this.sparkle = 2.5;
+        this.remember('event', next >= 3 ? 'Raised my cottage - the estate, the animals, all of it opens now'
+            : 'Raised my yurt - more land and bigger stores at last', null, 1.2);
         return true;
     }
     // Nearest tree/stump/rock/brush sitting ON my own plot cells (clutter to clear for farmland).
@@ -3081,6 +3387,25 @@ export class Farmer {
             if (grew) return;
         }
 
+        // 1c.4 the housing ladder: when ambition is BLOCKED by the house (land cap hit,
+        //      livestock wanted, stores overflowing), gather actively toward the next tier
+        //      instead of waiting for loose change. The raise itself happens at the top of
+        //      decide (#maybeUpgradeHome) the moment the materials are in hand.
+        if (this.wantUpgrade && !w.isNight() && this.energy > 0.3) {
+            const next = this.plot.built.level + 1;
+            const c = HOUSE_TIERS[next];
+            if (!c || this.plot.built.level >= 3) this.wantUpgrade = false;
+            else if (this.sheet.harvested >= c.harvested) {
+                if (this.wood < c.wood) {
+                    const src = w.nearestWood(this.pos);
+                    if (src) { this.think(`TIMBER FOR THE ${c.name.toUpperCase()} - ${this.wood}/${c.wood}`); if (this.#goToWood(src)) return; }
+                } else if (this.ore < c.ore) {
+                    const rock = w.nearestRock(this.pos, 50);
+                    if (rock) { this.think(`STONE FOR THE ${c.name.toUpperCase()} - ${this.ore}/${c.ore}`); this.mineTarget = rock; if (this.#goTo(rock.i + 0.5, rock.j + 0.5, 'mine')) return; }
+                } else this.wantUpgrade = false;   // affordable — the next decide pass raises it
+            }
+        }
+
         // 1c.5 craft an unlocked tool (watering can etc.) — a finite one-off investment that
         //      pays back in efficiency, so it sits above the endless facility treadmill.
         if (this.#maybeCraft()) return;
@@ -3097,15 +3422,29 @@ export class Farmer {
         // 1c2. the crows have taken enough: raise a scarecrow over the fields
         if (!w.isNight() && this.birdLosses >= SCARECROW_LOSSES && this.#pursueScarecrow()) return;
 
-        // 1d. town project: shared infrastructure beats low-priority fill work
+        // 1d. town project: shared infrastructure beats low-priority fill work. Statues
+        //     want their stone and timber HAULED first; the carving starts once it's all in.
         if (w.project && this.p.collaboration > 0.35 && this.energy > 0.3) {
-            this.think(`RAISING THE ${w.project.label}!`);
-            const site = w.project.site;
-            // already at the site? build in place — don't re-walk on every redecide (the jitter)
-            if (Math.abs(this.pos.i - (site.i + 0.5)) + Math.abs(this.pos.j - (site.j + 1.6)) < 2.2) { this.state = 'build'; return; }
-            const off = (this.sheet.seed % 3) - 1;
-            if (!this.#goTo(site.i + 0.5 + off, site.j + 1.6, 'build')) this.#goTo(site.i + 0.5, site.j + 1.6, 'build');
-            return;
+            const pr = w.project, site = pr.site;
+            if (w.projectNeedsMaterials(pr)) {
+                const canGive = (pr.wood < pr.needWood && this.wood > 0) || (pr.ore < pr.needOre && this.ore > 0);
+                if (canGive) { this.think(`HAULING STONE FOR THE ${pr.label}`); if (this.#goTo(site.i + 0.5, site.j + 1.6, 'projdrop')) return; }
+                else if (pr.wood < pr.needWood) {
+                    const src = w.nearestWood(this.pos);
+                    if (src) { this.think(`TIMBER FOR THE ${pr.label}`); if (this.#goToWood(src)) return; }
+                } else if (pr.ore < pr.needOre) {
+                    const rock = w.nearestRock(this.pos, 60);
+                    if (rock) { this.think(`STONE FOR THE ${pr.label}`); this.mineTarget = rock; if (this.#goTo(rock.i + 0.5, rock.j + 0.5, 'mine')) return; }
+                }
+                // nothing haulable/gatherable right now — get on with the farm
+            } else {
+                this.think(`RAISING THE ${pr.label}!`);
+                // already at the site? build in place — don't re-walk on every redecide (the jitter)
+                if (Math.abs(this.pos.i - (site.i + 0.5)) + Math.abs(this.pos.j - (site.j + 1.6)) < 2.2 + (pr.size || 1)) { this.state = 'build'; return; }
+                const off = (this.sheet.seed % 3) - 1;
+                if (!this.#goTo(site.i + 0.5 + off, site.j + 1.6 + (pr.size || 1) - 1, 'build')) this.#goTo(site.i + 0.5, site.j + 1.6, 'build');
+                return;
+            }
         }
 
         // 1e. fill work: sow seeds, till new ground
@@ -3127,6 +3466,19 @@ export class Farmer {
                 w.addLog(`${s.name} took ${req.farmer.sheet.name}'s job${payFor}`, '#7dd069');
                 this.state = 'decide-help'; return;
             }
+        }
+
+        // 2b. wanderlust: an ADVENTURE, not idle filler — it outranks yet another till-row,
+        //     because the map is infinite and whoever walks farthest, the town knows more.
+        //     The long cooldown keeps it a few treks a day at most; fill work resumes after.
+        if (!w.isNight() && this.energy > 0.5 && this.exploreCooldown <= 0 && this.rand() < this.wanderlust * 0.5) {
+            const tgt = this.#frontierTarget();
+            if (tgt) {
+                this.exploreCooldown = 70 + this.rand() * 110;
+                this.think(this.rand() < 0.5 ? 'WHAT LIES PAST THE TREE LINE?' : 'THE MAP ENDS THERE. NOT FOR LONG.');
+                if (this.#goTo(tgt.i + 0.5, tgt.j + 0.5, 'explore')) return;
+            }
+            this.exploreCooldown = Math.max(this.exploreCooldown, 12);   // probes aren't free — don't spam them
         }
 
         if (fill) { this.#thinkTask(fill); this.#pursue(fill, this.plot, false); return; }
@@ -3234,7 +3586,14 @@ export class Farmer {
     #pursueGrowth() {
         const w = this.world;
 
-        // Facility first if wanted and there's already room + wood
+        // Facility first if wanted and there's already room + wood.
+        // LIVESTOCK IS A COTTAGE PRIVILEGE: no coop, pen or pond until the L3 home stands —
+        // the dream of animals is what pulls farmers up the housing ladder.
+        if (this.wantFacility && this.plot.built.level < 3) {
+            if (this.rand() < 0.15) this.think(this.rand() < 0.5 ? 'ANIMALS NEED A REAL FARMHOUSE FIRST.' : 'THE COTTAGE FIRST. THEN THE HERD.');
+            this.wantFacility = false;
+            this.wantUpgrade = true;   // the blocked dream becomes a savings plan
+        }
         if (this.wantFacility) {
             if (w.farmerHasUnbuiltFacility(this)) {
                 if (this.wood >= FACILITY_WOOD && w.buildNextFacility(this)) {
@@ -3252,7 +3611,19 @@ export class Farmer {
 
         if (this.wantExpand) {
             const info = w.expansionInfo(this.plot);
-            if (info.state === 'max' || info.state === 'blocked') { this.wantExpand = false; return false; }
+            if (info.state === 'max' || info.state === 'blocked') {
+                // boxed in at home? the frontier is open — stake a detached field out in
+                // charted country where the land is better (build where the advantage is)
+                if (info.state === 'blocked' && this.#pursueFrontierField()) return true;
+                // land-capped by the HOUSE, not the terrain: the ambition turns homeward —
+                // a grander home is the license for a grander estate
+                if (info.state === 'max' && this.plot.built.level < 3 &&
+                    this.plot.cells.size >= World.tierCellCap(this.plot.built.level)) {
+                    this.think(this.plot.built.level < 2 ? 'MY YARD IS FULL. A YURT WOULD CHANGE THAT.' : 'THE COTTAGE. THEN THE ESTATE.');
+                    this.wantUpgrade = true;   // the blocked acreage becomes a savings plan
+                }
+                this.wantExpand = false; return false;
+            }
             if (info.state === 'trees') {
                 // clear the woodland standing in the way of the new fence line
                 const src = w.nearestWood(this.pos, info.tiles);
@@ -3270,6 +3641,134 @@ export class Farmer {
             this.#goChop(); return true;
         }
         return false;
+    }
+
+    // ---- the frontier ------------------------------------------------------------
+
+    // Pick a spot on (or just past) the fog line along this bot's personal compass
+    // bearing. Walking there lifts the fog en route; arriving is the discovery.
+    #frontierTarget() {
+        const w = this.world;
+        let h = this.exploreHeading + (this.rand() - 0.5) * 1.2;
+        for (let attempt = 0; attempt < 4; attempt++, h += 1.7) {
+            const di = Math.cos(h), dj = Math.sin(h);
+            for (let d = 6; d <= 44; d += 2) {
+                let ti = Math.round(this.pos.i + di * d), tj = Math.round(this.pos.j + dj * d);
+                if (w.isRevealed(ti, tj)) continue;
+                // first fog tile on this bearing — nudge to walkable ground (generates the chunk)
+                for (let k = 0; k < 6 && w.pathBlocked(ti, tj); k++) { ti += Math.sign(di) || 1; tj += Math.sign(dj); }
+                if (w.pathBlocked(ti, tj)) continue;   // dense thicket here — keep probing outward
+                this.exploreHeading = h;   // a fruitful bearing becomes the new compass
+                return { i: ti, j: tj };
+            }
+        }
+        return null;   // everything nearby is charted — the frontier has moved on
+    }
+
+    // Arrival past the fog line: XP for boldness, a journal entry, and a read of WHAT
+    // was found (ore fields, timber, open meadow) — plus the rare frontier cache.
+    #completeExplore() {
+        const w = this.world, s = this.sheet;
+        const ci = Math.round(this.pos.i), cj = Math.round(this.pos.j);
+        let rocks = 0, trees = 0, clear = 0, water = 0;
+        for (let dj = -5; dj <= 5; dj++) for (let di = -5; di <= 5; di++) {
+            const t = w.get(ci + di, cj + dj);
+            if (t === T.ROCK) rocks++; else if (t === T.TREE) trees++;
+            else if (t === T.GRASS) clear++; else if (t === T.WATER) water++;
+        }
+        const find = water >= 6 ? 'a still lake out here'
+            : rocks >= 7 ? `an ore field - ${rocks} outcrops in sight`
+            : trees >= 8 ? 'deep timber country'
+            : clear >= 70 ? 'wide open meadow - fine farmland'
+            : 'new country charted';
+        this.gainXP(3);
+        this.say('NEW LAND!', '#8fc7e8'); this.sparkle = 1.5;
+        this.remember('event', `Ventured past the fog line - found ${find}`, null, 1.0);
+        w.addLog(`${s.name} charted new territory: ${find}`, '#8fc7e8');
+        if (this.rand() < 0.18) w.spawnFrontierTreasure(ci, cj);
+        this.state = 'decide';
+    }
+
+    // Boxed in at home but the frontier is open: scout charted country for the best clear
+    // block and stake a DETACHED annex field there. Costs real fence wood (the full new
+    // perimeter — no shared edges with home), so it's an investment, not a freebie.
+    static ANNEX = 4;   // annex field side (4x4 = 16 cells)
+    #pursueFrontierField() {
+        const w = this.world;
+        if (this.annexCooldown > 0) return false;
+        // redrawing your plot lines across open country is a COTTAGE holder's right (L3) —
+        // and even then, only within what the house licenses
+        if (this.plot.built.level < 3) return false;
+        if (this.plot.cells.size + Farmer.ANNEX * Farmer.ANNEX > World.tierCellCap(this.plot.built.level)) return false;
+        if (this.pendingAnnex) {   // already committed — keep walking / keep funding it
+            const net = this.pendingAnnex.net;
+            if (this.wood < net) { this.think(`${net} POSTS FOR THE FRONTIER FIELD`); this.#goChop(); return true; }
+            const c = this.pendingAnnex.center;
+            return this.#goTo(c.i + 0.5, c.j + 0.5, 'annex');
+        }
+        const site = this.#scoutAnnexSite();
+        if (!site) { this.annexCooldown = 90; return false; }
+        const { net } = w.fenceDelta(this.plot, site.cells);
+        this.pendingAnnex = { ...site, net };
+        w.addLog(`${this.sheet.name} staked a claim on frontier land`, '#8fc7e8');
+        this.think('GOOD LAND OUT THERE. STAKING IT.');
+        if (this.wood < net) { this.#goChop(); return true; }
+        return this.#goTo(site.center.i + 0.5, site.center.j + 0.5, 'annex');
+    }
+
+    // Search charted land in a ring around home for the best ANNEX x ANNEX block:
+    // clear/forage ground only, off every plot (with buffer), scored for openness.
+    #scoutAnnexSite() {
+        const w = this.world, A = Farmer.ANNEX ?? 4;
+        const h = this.plot.house;
+        let best = null;
+        for (let tries = 0; tries < 70; tries++) {
+            const ang = this.rand() * Math.PI * 2;
+            const dist = 9 + this.rand() * 26;
+            const bi = Math.round(h.i + Math.cos(ang) * dist), bj = Math.round(h.j + Math.sin(ang) * dist);
+            let ok = true, score = -dist * 0.35, cells = [];
+            for (let j = bj; j < bj + A && ok; j++) for (let i = bi; i < bi + A; i++) {
+                if (!w.isRevealed(i, j)) { ok = false; break; }
+                const t = w.get(i, j);
+                if (t !== T.GRASS && t !== T.WHEAT && t !== T.FLOWER) { ok = false; break; }
+                if (w.cropAt(i, j)) { ok = false; break; }
+                // stay a full buffer off every plot (own included — a detached field, not a bulge)
+                for (const p of w.plots) for (let dj = -1; dj <= 1 && ok; dj++) for (let di = -1; di <= 1; di++)
+                    if (p.cells.has(pkey(i + di, j + dj))) { ok = false; break; }
+                if (!ok) break;
+                score += t === T.GRASS ? 1 : 0.5;
+                cells.push({ i, j });
+            }
+            if (!ok) continue;
+            // structures need a wider berth
+            for (const st of [...w.wells, w.board, w.project?.site, ...w.coops.map(c => c.site), ...w.structures].filter(Boolean))
+                if (Math.abs(st.i - bi) < A + 3 && Math.abs(st.j - bj) < A + 3) { ok = false; break; }
+            if (!ok) continue;
+            if (!best || score > best.score) best = { cells, score, center: { i: bi + (A >> 1), j: bj + (A >> 1) } };
+        }
+        return best;
+    }
+
+    // Arrived at the staked claim: re-validate, pay the fence, and take the land.
+    #completeAnnex() {
+        const w = this.world, s = this.sheet;
+        const claim = this.pendingAnnex; this.pendingAnnex = null;
+        this.annexCooldown = 60;
+        if (!claim) { this.state = 'decide'; return; }
+        // the world moved while we walked — every cell must still be legal
+        let ok = this.wood >= claim.net;
+        if (ok) for (const { i, j } of claim.cells) {
+            const t = w.get(i, j);
+            if ((t !== T.GRASS && t !== T.WHEAT && t !== T.FLOWER) || w.cropAt(i, j)) { ok = false; break; }
+            for (const p of w.plots) if (p.cells.has(pkey(i, j))) { ok = false; break; }
+        }
+        if (!ok || !w.annexCells(this, claim.cells)) { this.think('THE CLAIM FELL THROUGH.'); this.state = 'decide'; return; }
+        this.wantExpand = false;
+        this.nextExpand = Math.round(this.nextExpand * 2.1);
+        this.gainXP(4); this.sparkle = 2.5; this.say('A FRONTIER FIELD!', '#8fc7e8');
+        this.remember('event', 'Fenced a frontier field beyond the old boundaries - room at last', null, 1.2);
+        w.addLog(`${s.name} fenced a FRONTIER FIELD out in the wilds!`, '#f0d060');
+        this.state = 'decide';
     }
 
     // Notice the pain (a long water haul), propose or join a shared-well plan, then pull
@@ -3554,8 +4053,11 @@ export class Farmer {
             grower.nextExpand = Math.round(grower.nextExpand * 2.1);
             grower.wantExpand = true;
         }
+        // the animal dream: with a cottage it becomes a building plan; without one, it
+        // becomes the SAVINGS plan for the cottage (the ladder's strongest pull)
         if (grower.sheet.harvested >= grower.nextFacility && this.world.farmerHasUnbuiltFacility(grower)) {
-            grower.wantFacility = true;
+            if (grower.plot.built.level >= 3) grower.wantFacility = true;
+            else grower.wantUpgrade = true;
         }
     }
 
@@ -3669,6 +4171,30 @@ export class Farmer {
         this.poachCooldown = Math.max(0, this.poachCooldown - dt);
         this.coopCooldown = Math.max(0, this.coopCooldown - dt);
         this.wellAskCooldown = Math.max(0, this.wellAskCooldown - dt);
+        this.exploreCooldown = Math.max(0, this.exploreCooldown - dt);
+        this.annexCooldown = Math.max(0, this.annexCooldown - dt);
+        // storage is bounded by the home (tipi cart -> yurt shed -> cottage barn); overflow
+        // simply can't be kept — a full store is one more reason to build the bigger house
+        {
+            const cap = this.storageCap();
+            if (this.wood > cap.wood || this.ore > cap.ore) {
+                this.wood = Math.min(this.wood, cap.wood);
+                this.ore = Math.min(this.ore, cap.ore);
+                if (this._storeFullT === undefined || this._storeFullT <= 0) {
+                    this._storeFullT = 60;
+                    if (this.plot.built.level < 3) { this.think('MY STORES ARE FULL - A BIGGER HOME WOULD HOLD MORE'); this.wantUpgrade = true; }
+                }
+            }
+            if (this._storeFullT > 0) this._storeFullT -= dt;
+        }
+        // every farmer lifts the fog around wherever they walk — the map grows with the town
+        {
+            const fi = Math.floor(this.pos.i), fj = Math.floor(this.pos.j);
+            if (fi !== this._revI || fj !== this._revJ) {
+                this._revI = fi; this._revJ = fj;
+                this.discovered += this.world.reveal(fi, fj);
+            }
+        }
         this.thoughtBubbleTimer -= dt;
         if (this.chatCooldown > 0) this.chatCooldown -= dt;
         // opportunistic small talk as bots pass each other (doesn't interrupt what they're doing)
@@ -3730,7 +4256,10 @@ export class Farmer {
                         if (coop) this.world.depositCoop(this, coop);
                         this.state = 'decide';
                     }
+                    else if (then === 'projdrop') { this.world.depositProject(this); this.state = 'decide'; }
                     else if (then === 'care') { this.state = 'care'; this.careTimer = 1.2; }
+                    else if (then === 'explore') this.#completeExplore();
+                    else if (then === 'annex') this.#completeAnnex();
                     else if (then === 'treasure') { this.world.openTreasure(this); this.state = 'decide'; }
                     else { this.state = 'idle'; this.wanderTimer = 1 + this.rand() * 2.5; }
                 } else {

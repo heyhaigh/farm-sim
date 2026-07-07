@@ -2,7 +2,7 @@
 
 import { fetchMemories, mod, fmtMod, STAT_NAMES, TRAIT_NAMES, TRAIT_LABELS, hashString } from './dna.js';
 import { audio } from './audio.js';
-import { World, GRID, CENTER, T, DAY_LENGTH, NIGHT_LENGTH, ITEMS, CRAFTABLES } from './farm.js';
+import { World, CHUNK, T, DAY_LENGTH, NIGHT_LENGTH, ITEMS, CRAFTABLES } from './farm.js';
 import {
     TILE_W, TILE_H, makeCanvas, drawText, textWidth,
     makeFarmerSprites, makeCropSprites, makeHouse, makeWell, makeBoard, makeFencePost,
@@ -216,6 +216,15 @@ const yurtL1 = new Image(); let yurtL1Ready = false; yurtL1.onload = () => { yur
 const yurtL2 = new Image(); let yurtL2Ready = false; yurtL2.onload = () => { yurtL2Ready = true; }; yurtL2.onerror = () => {};
 yurtL1.src = ROCKY_BASE + 'Yurt2_grass_shadow.png';
 yurtL2.src = ROCKY_BASE + 'Yurt1_grass_shadow.png';
+// the three guardian statues (lightning wards) — carved tier by tier on the town square
+const statueImgs = {
+    statue1: new Image(), statue2: new Image(), statue3: new Image(),
+};
+statueImgs.statue1.src = ROCKY_BASE + 'Rock_statue_head_ground_shadow.png';
+statueImgs.statue2.src = ROCKY_BASE + 'Rock_statue_fox_ground_shadow.png';
+statueImgs.statue3.src = ROCKY_BASE + 'Rock_statue_mother_ground_shadow.png';
+for (const img of Object.values(statueImgs)) img.onerror = () => {};
+const STATUE_DRAW_W = { statue1: 46, statue2: 80, statue3: 134 };   // grander tiers loom larger
 const YURT_L1_SRC = { x: 26, y: 20, w: 75, h: 87 };   // trim of Yurt2_grass_shadow.png
 const YURT_L2_SRC = { x: 24, y: 26, w: 80, h: 76 };   // trim of Yurt1_grass_shadow.png
 function buildingArt(level) {
@@ -656,12 +665,22 @@ function addBirds(list) {
 }
 
 // ---------------------------------------------------------------------------
-// Terrain pre-render (redrawn only when tiles change)
+// Terrain: chunked ground canvases (the world is INFINITE — baked chunk by chunk,
+// on demand, and re-baked only when their tiles or fog change)
 // ---------------------------------------------------------------------------
 
-const TERRAIN_OX = (GRID * TILE_W) / 2;
-const [terrain, tctx] = makeCanvas(GRID * TILE_W + TILE_W, GRID * TILE_H + TILE_H);
-let terrainDirty = true;
+// one chunk's diamond of tiles fits in this bounding box (plus a tile of slack)
+const CHUNK_PX_W = (2 * CHUNK - 1) * (TILE_W / 2) + TILE_W;
+const CHUNK_PX_H = (2 * CHUNK - 1) * (TILE_H / 2) + TILE_H;
+const chunkCanvases = new Map();   // "cx,cy" -> { canvas, ox, oy } in world-iso pixels
+let terrainDirty = true;           // legacy "everything changed" flag -> clears the whole cache
+
+// world-iso pixel origin of chunk (cx,cy)'s canvas: leftmost tile is (i0, j0+C-1),
+// topmost is (i0, j0)
+function chunkOrigin(cx, cy) {
+    const i0 = cx * CHUNK, j0 = cy * CHUNK;
+    return { x: isoX(i0, j0 + CHUNK - 1) - TILE_W / 2, y: isoY(i0, j0) };
+}
 
 const PATH_C = '#8a7a58';
 
@@ -706,21 +725,33 @@ function grassPatch(i, j) {
     return 0;                 // plain
 }
 
-function redrawTerrain() {
+// Bake ONE chunk's ground into a cached canvas. Unrevealed tiles bake as fog (a near-black
+// diamond with a faint hash weave — no tile data is read for them, so rendering never
+// forces the world to generate scenery nobody has walked to). Revealed tiles on the fog
+// frontier get a soft dark rim so the boundary reads as a receding veil, not a hard cut.
+function bakeChunk(cx, cy) {
+    const [cv, bctx] = makeCanvas(CHUNK_PX_W, CHUNK_PX_H);
+    const org = chunkOrigin(cx, cy);
     const season = world.seasonDef;
     const [GRASS_A, GRASS_B] = season.ground;
     const TILLED_C = season.tilled;
     const winter = season.name === 'WINTER';
     const flower = winter ? '#e8eef4' : season.name === 'FALL' ? '#c89040' : season.name === 'SUMMER' ? '#f0d84a' : '#e8709a';
-    tctx.fillStyle = '#2a3438';
-    tctx.fillRect(0, 0, terrain.width, terrain.height);
-
-    // ground pass
-    for (let j = 0; j < GRID; j++) {
-        for (let i = 0; i < GRID; i++) {
+    const i0 = cx * CHUNK, j0 = cy * CHUNK;
+    for (let j = j0; j < j0 + CHUNK; j++) {
+        for (let i = i0; i < i0 + CHUNK; i++) {
+            const sx = isoX(i, j) - TILE_W / 2 - org.x;
+            const sy = isoY(i, j) - org.y;
+            if (!world.isRevealed(i, j)) {
+                // fog of war: untrodden country
+                fillDiamond(bctx, sx, sy, (i + j) % 2 ? '#0c1016' : '#0a0e13');
+                if (rand2(i, j, 91) < 0.16) {
+                    bctx.fillStyle = 'rgba(90,110,140,0.10)';
+                    bctx.fillRect(sx + 6 + Math.floor(rand2(i, j, 92) * 18), sy + 3 + Math.floor(rand2(i, j, 93) * 9), 2, 1);
+                }
+                continue;
+            }
             const t = world.get(i, j);
-            const sx = TERRAIN_OX + isoX(i, j) - TILE_W / 2;
-            const sy = isoY(i, j);
             const grassy = t === T.GRASS || t === T.TREE || t === T.STUMP || t === T.WHEAT || t === T.FLOWER || t === T.ROCK;
             let col = (i + j) % 2 ? GRASS_A : GRASS_B;
             let patch = 0;
@@ -734,15 +765,15 @@ function redrawTerrain() {
             if (t === T.HOUSE) col = '#5a5044';
             if (t === T.WATER) col = winter ? '#5a7590' : ((i + j) % 2 ? '#2a5a72' : '#26506a');
             if (t === T.COOP || t === T.BARN) col = '#6a5a44';
-            fillDiamond(tctx, sx, sy, col);
+            fillDiamond(bctx, sx, sy, col);
 
             if (t === T.WATER) {
-                tctx.fillStyle = winter ? '#8aa8c0' : '#3a6e86';
-                tctx.fillRect(sx + 5 + ((i * 5 + j) % 6), sy + 3 + ((i + j) % 3), 2, 1);
+                bctx.fillStyle = winter ? '#8aa8c0' : '#3a6e86';
+                bctx.fillRect(sx + 5 + ((i * 5 + j) % 6 + 6) % 6, sy + 3 + ((i + j) % 3 + 3) % 3, 2, 1);
             } else if (t === T.TILLED) {
-                tctx.fillStyle = winter ? '#b8c0c8' : '#584028';
-                tctx.fillRect(sx + 6, sy + 4, 8, 1);
-                tctx.fillRect(sx + 6, sy + 6, 8, 1);
+                bctx.fillStyle = winter ? '#b8c0c8' : '#584028';
+                bctx.fillRect(sx + 6, sy + 4, 8, 1);
+                bctx.fillRect(sx + 6, sy + 6, 8, 1);
             } else if (grassy) {
                 const scatter = rand2(i, j, 41);
                 const density = patch === 3 ? 0.34 : patch === 2 ? 0.24 : 0.15;
@@ -754,22 +785,52 @@ function redrawTerrain() {
                     const dw = Math.round(d.w * scale), dh = Math.round(d.h * scale);
                     const ox = Math.round((rand2(i, j, 45) - 0.5) * 8);
                     const oy = Math.round((rand2(i, j, 46) - 0.5) * 4);
-                    tctx.drawImage(grassDetailsImg, d.x, d.y, d.w, d.h,
+                    bctx.drawImage(grassDetailsImg, d.x, d.y, d.w, d.h,
                         sx + Math.floor(TILE_W / 2 - dw / 2) + ox,
                         sy + Math.floor(TILE_H / 2 - dh / 2) + oy, dw, dh);
                 }
                 // subtle procedural speckle on non-decal tiles
                 else if (patch === 3) {
-                    tctx.fillStyle = flower;
-                    tctx.fillRect(sx + 5 + Math.floor(rand2(i, j, 47) * 10), sy + 2 + Math.floor(rand2(i, j, 48) * 6), 1, 1);
+                    bctx.fillStyle = flower;
+                    bctx.fillRect(sx + 5 + Math.floor(rand2(i, j, 47) * 10), sy + 2 + Math.floor(rand2(i, j, 48) * 6), 1, 1);
                 } else if (patch === 2 && rand2(i, j, 49) < 0.34) {
-                    tctx.fillStyle = shade(GRASS_A, 1.16);
-                    tctx.fillRect(sx + 6 + Math.floor(rand2(i, j, 50) * 8), sy + 3 + Math.floor(rand2(i, j, 51) * 4), 1, 2);
+                    bctx.fillStyle = shade(GRASS_A, 1.16);
+                    bctx.fillRect(sx + 6 + Math.floor(rand2(i, j, 50) * 8), sy + 3 + Math.floor(rand2(i, j, 51) * 4), 1, 2);
                 }
+            }
+            // the veil's edge: revealed ground next to fog dims toward it
+            if (!world.isRevealed(i + 1, j) || !world.isRevealed(i - 1, j) ||
+                !world.isRevealed(i, j + 1) || !world.isRevealed(i, j - 1)) {
+                fillDiamond(bctx, sx, sy, 'rgba(8,10,16,0.42)');
             }
         }
     }
-    terrainDirty = false;
+    return { canvas: cv, ox: org.x, oy: org.y };
+}
+
+// The set of chunk canvases intersecting the viewport, baked on demand.
+function drawTerrainChunks() {
+    if (terrainDirty) { chunkCanvases.clear(); terrainDirty = false; }
+    for (const k of world.dirtyChunks) chunkCanvases.delete(k);
+    world.dirtyChunks.clear();
+    if (chunkCanvases.size > 420) chunkCanvases.clear();   // roam far enough and old bakes just fall away
+
+    const cs = [screenToTile(0, 0), screenToTile(GW, 0), screenToTile(GW, GH), screenToTile(0, GH)];
+    let iMin = Infinity, iMax = -Infinity, jMin = Infinity, jMax = -Infinity;
+    for (const c of cs) { if (c.i < iMin) iMin = c.i; if (c.i > iMax) iMax = c.i; if (c.j < jMin) jMin = c.j; if (c.j > jMax) jMax = c.j; }
+    const cx0 = Math.floor((iMin - 2) / CHUNK), cx1 = Math.floor((iMax + 2) / CHUNK);
+    const cy0 = Math.floor((jMin - 2) / CHUNK), cy1 = Math.floor((jMax + 2) / CHUNK);
+    for (let cy = cy0; cy <= cy1; cy++) {
+        for (let cx = cx0; cx <= cx1; cx++) {
+            const org = chunkOrigin(cx, cy);
+            const dx = Math.floor(cam.x + org.x), dy = Math.floor(cam.y + org.y);
+            if (dx > GW || dy > GH || dx + CHUNK_PX_W < 0 || dy + CHUNK_PX_H < 0) continue;
+            const key = cx + ',' + cy;
+            let entry = chunkCanvases.get(key);
+            if (!entry) { entry = bakeChunk(cx, cy); chunkCanvases.set(key, entry); }
+            ctx.drawImage(entry.canvas, dx, dy);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -894,10 +955,13 @@ function collectDrawables() {
         const M = 12;
         let iMin = Infinity, iMax = -Infinity, jMin = Infinity, jMax = -Infinity;
         for (const c of cs) { if (c.i < iMin) iMin = c.i; if (c.i > iMax) iMax = c.i; if (c.j < jMin) jMin = c.j; if (c.j > jMax) jMax = c.j; }
-        iMin = Math.max(0, Math.floor(iMin) - M); iMax = Math.min(GRID - 1, Math.ceil(iMax) + M);
-        jMin = Math.max(0, Math.floor(jMin) - M); jMax = Math.min(GRID - 1, Math.ceil(jMax) + M);
+        iMin = Math.floor(iMin) - M; iMax = Math.ceil(iMax) + M;   // no world edges to clamp to anymore
+        jMin = Math.floor(jMin) - M; jMax = Math.ceil(jMax) + M;
         for (let j = jMin; j <= jMax; j++) {
-            for (let i = iMin; i <= iMax; i++) addWildDrawable(list, i, j);
+            for (let i = iMin; i <= iMax; i++) {
+                if (!world.isRevealed(i, j)) continue;   // flora under fog stays hidden (and ungenerated)
+                addWildDrawable(list, i, j);
+            }
         }
     }
     addBirds(list);
@@ -1086,8 +1150,26 @@ function collectDrawables() {
             });
             continue;
         }
+        if (st.type.startsWith('statue') && imageLoaded(statueImgs[st.type])) {
+            // guardian statues: anchored to the CENTER of their size x size footprint,
+            // feet on the far corner's ground line so they sort correctly with walkers
+            const img = statueImgs[st.type], size = st.size || 1;
+            const cxT = st.i + size / 2 - 0.5, cyT = st.j + size / 2 - 0.5;
+            const bx = cam.x + isoX(cxT, cyT);
+            const by = cam.y + isoY(st.i + size - 1, st.j + size - 1) + TILE_H;
+            const dw = STATUE_DRAW_W[st.type] || 46;
+            const dh = Math.round(dw * img.naturalHeight / img.naturalWidth);
+            list.push({
+                y: by, draw: () => {
+                    ctx.imageSmoothingEnabled = false;
+                    ctx.drawImage(img, Math.floor(bx - dw / 2), Math.floor(by - dh + 4), dw, dh);
+                }
+            });
+            continue;
+        }
         let spr = structSprites[st.type];
         if (st.type === 'windmill') spr = spr[Math.floor(performance.now() / 350) % 2];
+        if (!spr) continue;   // unknown structure type (e.g. statue art still loading)
         list.push({
             y: sy + TILE_H, draw: () =>
                 ctx.drawImage(spr, Math.floor(sx - spr.width / 2), Math.floor(sy + TILE_H - spr.height))
@@ -1439,17 +1521,56 @@ const SPEED1_BTN = { x: 0, y: 3, w: 0, h: 12 };   // revert to 1x (visible while
 
 // Minimap legend (bottom-right): faint land/buildings, bright farmer dots, a viewport box.
 // Click it to jump the camera. Buildings are low-contrast; a home = 4 dots, a well = 1.
+// The minimap is a WINDOW that follows the camera across the ever-growing map — it starts
+// on the town (the camera does) and pans with the main view. Terrain base layer is cached
+// and rebuilt only when the window moves meaningfully or the fog recedes.
+const MINI_SPAN = 84;                       // tiles the window shows edge-to-edge
+const [miniBase, miniCtx] = makeCanvas(46, 46);
+let miniKey = '';
+function minimapWindow() {
+    const c = screenToTile(GW / 2, GH / 2);   // the camera's current focus tile
+    return { ci: Math.round(c.i), cj: Math.round(c.j) };
+}
+function rebuildMiniBase(ci, cj) {
+    const step = MINI_SPAN / 46;
+    const seasonIdx = world.season;
+    for (let py = 0; py < 46; py++) {
+        for (let px = 0; px < 46; px++) {
+            const i = Math.round(ci - MINI_SPAN / 2 + px * step);
+            const j = Math.round(cj - MINI_SPAN / 2 + py * step);
+            let col = '#15171d';                       // fog
+            if (world.isRevealed(i, j)) {
+                const t = world.get(i, j);
+                col = t === T.WATER ? '#2a5a72'
+                    : t === T.TREE ? (seasonIdx === 3 ? '#4a5a52' : '#2f5a30')
+                    : t === T.ROCK ? '#6a6f78'
+                    : t === T.TILLED ? '#5e4830'
+                    : (t === T.HOUSE || t === T.COOP || t === T.BARN || t === T.STRUCT || t === T.WELL) ? '#8a8070'
+                    : seasonIdx === 3 ? '#8fa0ac' : '#3d5a33';   // open ground (snowy in winter)
+            }
+            miniCtx.fillStyle = col;
+            miniCtx.fillRect(px, py, 1, 1);
+        }
+    }
+}
 function drawMinimap() {
     MINIMAP.x = GW - MINIMAP.w - 5;
     MINIMAP.y = GH - 22 - MINIMAP.h - 5;
     const { x: mx, y: my, w: mw, h: mh } = MINIMAP;
-    const t2m = (i, j) => [mx + (i / GRID) * mw, my + (j / GRID) * mh];
-    const dot = (i, j, col, s = 1) => { const [px, py] = t2m(i, j); ctx.fillStyle = col; ctx.fillRect(Math.floor(px), Math.floor(py), s, s); };
+    const { ci, cj } = minimapWindow();
+    const t2m = (i, j) => [mx + ((i - ci) / MINI_SPAN + 0.5) * mw, my + ((j - cj) / MINI_SPAN + 0.5) * mh];
+    const inWin = (i, j) => Math.abs(i - ci) <= MINI_SPAN / 2 && Math.abs(j - cj) <= MINI_SPAN / 2;
+    const dot = (i, j, col, s = 1) => { if (!inWin(i, j)) return; const [px, py] = t2m(i, j); ctx.fillStyle = col; ctx.fillRect(Math.floor(px), Math.floor(py), s, s); };
+    MINIMAP._ci = ci; MINIMAP._cj = cj;   // for click-to-jump mapping
+
+    // cached terrain base — rebuilt when the window drifts, the fog recedes, or seasons turn
+    const key = `${Math.round(ci / 4)},${Math.round(cj / 4)}:${world.exploredTiles}:${world.season}`;
+    if (key !== miniKey) { miniKey = key; rebuildMiniBase(ci, cj); }
 
     ctx.fillStyle = 'rgba(10,11,15,0.9)';
     ctx.fillRect(mx - 3, my - 3, mw + 6, mh + 6);
-    ctx.fillStyle = 'rgba(34,36,42,0.92)';            // dark-gray field
-    ctx.fillRect(mx, my, mw, mh);
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(miniBase, mx, my, mw, mh);
     ctx.strokeStyle = 'rgba(255,255,255,0.22)';
     ctx.strokeRect(mx - 2.5, my - 2.5, mw + 5, mh + 5);
 
@@ -1842,7 +1963,7 @@ function drawSheet(f) {
         if (it) {
             const key = `inv:${it.id}`;
             drawItemSlot(sx, sy, SZ, itemIcon(it.icon), it.count, { sel: selectedSlotKey === key });
-            addSlot(sx, sy, key, { title: it.name, body: `you have ${it.count}` });
+            addSlot(sx, sy, key, { title: it.name, body: it.cap ? `you have ${it.count} / ${it.cap} storage` : `you have ${it.count}` });
         } else drawItemSlot(sx, sy, SZ, null, null);
     }
     y += Math.ceil(slotCount / PER_ROW) * PITCH + 2;
@@ -1908,17 +2029,21 @@ function drawSheet(f) {
         for (const line of wrapText(lesson, 32).slice(0, 3)) { drawText(ctx, line, IX + 2, y, '#c9a45a'); y += 7; }
         y += 3;
     }
-    const friend = f.topRegard(1), grudge = f.topRegard(-1);
-    if ((friend && friend.v > 0.15) || (grudge && grudge.v < -0.15)) {
+    // TOWN TIES: every meaningful relationship, not just the strongest. Trust in a town
+    // that helps, trades and digs wells together is rarely singular — list them all
+    // (strongest first), each with its remembered reason. The wary list only appears
+    // when a grudge actually exists.
+    const friends = f.allRegard(1), grudges = f.allRegard(-1);
+    if (friends.length || grudges.length) {
         y = sectionBand(IX, y, IW, 'TOWN TIES');
-        if (friend && friend.v > 0.15) {
-            drawText(ctx, `Trusts ${friend.who.sheet.name.split(' ')[0]}`, IX + 2, y, '#7dd069'); y += 7;
-            const r = f.opinionReasons && f.opinionReasons.get(friend.who.sheet.seed);
+        for (const fr of friends) {
+            drawText(ctx, `Trusts ${fr.who.sheet.name.split(' ')[0]}`, IX + 2, y, '#7dd069'); y += 7;
+            const r = f.opinionReasons && f.opinionReasons.get(fr.who.sheet.seed);
             if (r) for (const line of wrapText(`- ${r}`, 30).slice(0, 1)) { drawText(ctx, line, IX + 6, y, SHEET_LABEL); y += 7; }
         }
-        if (grudge && grudge.v < -0.15) {
-            drawText(ctx, `Wary of ${grudge.who.sheet.name.split(' ')[0]}`, IX + 2, y, '#c05840'); y += 7;
-            const r = f.opinionReasons && f.opinionReasons.get(grudge.who.sheet.seed);
+        for (const gr of grudges) {
+            drawText(ctx, `Wary of ${gr.who.sheet.name.split(' ')[0]}`, IX + 2, y, '#c05840'); y += 7;
+            const r = f.opinionReasons && f.opinionReasons.get(gr.who.sheet.seed);
             if (r) for (const line of wrapText(`- ${r}`, 30).slice(0, 1)) { drawText(ctx, line, IX + 6, y, SHEET_LABEL); y += 7; }
         }
         y += 3;
@@ -2166,10 +2291,12 @@ out.addEventListener('pointerup', (e) => {
         return;
     }
 
-    // minimap: jump the camera (only interactive when visible — hidden under the card)
+    // minimap: jump the camera (only interactive when visible — hidden under the card).
+    // The map is a camera-following WINDOW now, so clicks map through its center.
     if (!selected && inRect(p, MINIMAP)) {
-        const ti = (p.x - MINIMAP.x) / MINIMAP.w * GRID;
-        const tj = (p.y - MINIMAP.y) / MINIMAP.h * GRID;
+        const ci = MINIMAP._ci ?? world.well.i, cj = MINIMAP._cj ?? world.well.j;
+        const ti = ci + ((p.x - MINIMAP.x) / MINIMAP.w - 0.5) * MINI_SPAN;
+        const tj = cj + ((p.y - MINIMAP.y) / MINIMAP.h - 0.5) * MINI_SPAN;
         cam.x = GW / 2 - isoX(ti, tj);
         cam.y = GH / 2 - isoY(ti, tj);
         return;
@@ -2195,6 +2322,16 @@ out.addEventListener('wheel', (e) => {
     if (boardOpen) { e.preventDefault(); boardScroll = Math.max(0, Math.min(boardMaxScroll, boardScroll + e.deltaY * 0.5)); return; }
     if (selected) { e.preventDefault(); sheetScroll = Math.max(0, Math.min(maxSheetScroll, sheetScroll + e.deltaY * 0.5)); }
 }, { passive: false });
+
+// T = snap the camera home to town (the plaza well). Plain T, not cmd+T — the browser
+// owns cmd+T (new tab) and never lets the page see it.
+window.addEventListener('keydown', (e) => {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if ((e.key === 't' || e.key === 'T') && world) {
+        cam.x = GW / 2 - isoX(world.well.i, world.well.j);
+        cam.y = GH / 2 - isoY(world.well.i, world.well.j) - 20;
+    }
+});
 
 // ---------------------------------------------------------------------------
 // Spawning
@@ -2272,17 +2409,15 @@ function frame(now) {
     ctx.fillStyle = '#2a3438';
     ctx.fillRect(0, 0, GW, GH);
 
-    if (terrainDirty || world._tilesChanged) {
-        world._tilesChanged = false;
-        redrawTerrain();
-    }
-    ctx.drawImage(terrain, Math.floor(cam.x - TERRAIN_OX), Math.floor(cam.y));
+    world._tilesChanged = false;   // chunk-level dirt now drives rebakes
+    if (world._seasonChanged) { chunkCanvases.clear(); world._seasonChanged = false; }
+    drawTerrainChunks();
 
-    // hover tile highlight
+    // hover tile highlight (only over charted ground — the fog keeps its secrets)
     if (mouse.x >= 0 && !mouse.dragging) {
         const tile = screenToTile(mouse.x, mouse.y);
         const ti = Math.floor(tile.i), tj = Math.floor(tile.j);
-        if (ti >= 0 && tj >= 0 && ti < GRID && tj < GRID) {
+        if (world.isRevealed(ti, tj)) {
             strokeDiamond(ctx, Math.floor(cam.x + isoX(ti, tj) - TILE_W / 2 + TILE_W / 2 - 10), Math.floor(cam.y + isoY(ti, tj)), 'rgba(255,255,255,0.35)');
         }
     }
@@ -2370,5 +2505,9 @@ function drawBootScreen(t) {
         // deterministic stepping for reproducibility tests: N uniform FIXED_DT sim ticks
         runSteps: (n) => { for (let k = 0; k < n; k++) world.tick(FIXED_DT); },
         FIXED_DT,
+        // center the camera on a tile (uses the REAL internal resolution — external camera
+        // math can only guess GW/GH from the window aspect and lands wide of the mark)
+        goTo: (i, j) => { cam.x = GW / 2 - isoX(i, j); cam.y = GH / 2 - isoY(i, j); },
+        get GW() { return GW; }, get GH() { return GH; },
     };
 })();
