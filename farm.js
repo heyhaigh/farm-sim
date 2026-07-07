@@ -742,6 +742,10 @@ export class World {
                 for (const c of this.crops.values()) if (!c.withered) { c.withered = true; killed++; }
                 if (killed) this.addLog(`The frost takes the fields — ${killed} crops die back for winter.`, '#a8c8e8');
             }
+            // an ACTIVE weather the new season forbids (a fall storm rolling into winter, or a
+            // winter blizzard into spring) is ended immediately, not left running until the next
+            // scheduled roll (Codex #1).
+            if ((def.weather[this.weather] ?? 1) === 0) this.#rollWeather();
             this._tilesChanged = true;
             this._seasonChanged = true;
         }
@@ -1165,6 +1169,9 @@ export class World {
         const info = this.expansionInfo(p);
         if (info.state !== 'clear') return false;
         const { removed, added } = this.fenceDelta(p, info.cells);
+        // self-guard: even with the reclaimed posts, the farmer must be able to pay for the new
+        // fence line — never expand for free by clamping wood to 0 (Codex #4)
+        if (farmer.wood + removed * FENCE_POST_WOOD < added * FENCE_POST_WOOD) return false;
         for (const { i, j } of info.cells) {
             p.cells.add(pkey(i, j));
             if (this.get(i, j) === T.WHEAT || this.get(i, j) === T.FLOWER) this.set(i, j, T.GRASS);
@@ -1458,6 +1465,16 @@ export class World {
             for (let k = 0; k < n; k++) fac.producers.push(this.#makeProducer(kind, cx + (rand() - 0.5) * region.w * 0.6, cy + (rand() - 0.5) * region.h * 0.6, region));
         }
         plot.facilities.push(fac);
+        // A new build turns tiles solid — a barn under a fresh animal, or a pond carved under a
+        // chicken that had roamed there. Sweep ALL of the plot's land animals off any now-blocked
+        // tile onto valid yard ground so none render standing on a building or on the water.
+        for (const otherFac of plot.facilities) for (const pr of otherFac.producers) {
+            if (pr.kind === 'fish' || pr.kind === 'pad') continue;   // pond life belongs on the water
+            if (!this.#producerCanStand(plot, pr.fx, pr.fy)) {
+                const spot = this.#nearestYardTile(plot, pr.fx, pr.fy);
+                if (spot) { pr.fx = spot.i + 0.5; pr.fy = spot.j + 0.5; pr.vx = 0; pr.vy = 0; }
+            }
+        }
         this.#rebuildFields(plot);   // facility tiles removed from crop fields
     }
 
@@ -2054,43 +2071,68 @@ export class World {
                     // Movement. Land animals (poultry/livestock) roam the WHOLE fenced yard by
                     // day and retire into their coop/barn at night; pond life stays in the water.
                     const landAnimal = cfg.wander && p.kind !== 'fish' && p.kind !== 'pad';
-                    if (cfg.wander && !p.busy && !(stormy && p.kind !== 'fish')) {
-                        if (landAnimal && fac.struct && night) {
-                            // dusk: walk back to the building's doorway and tuck in for the night
+                    if (landAnimal) {
+                        // Never occupy a blocked/unowned tile. This runs EVERY tick (even when busy
+                        // or storm-frozen) so an animal is rescued if a pond/coop was carved under
+                        // it, it was claimed by a collector on bad ground, or it spawned on the barn
+                        // tile — the doorway where a tucked-in animal is parked is itself valid, so
+                        // sleeping animals are left alone (Codex #2, Opus Area 4).
+                        if (!p.inside && !this.#producerCanStand(plot, p.fx, p.fy)) {
+                            const spot = this.#nearestYardTile(plot, p.fx, p.fy);
+                            if (spot) { p.fx = spot.i + 0.5; p.fy = spot.j + 0.5; p.vx = 0; p.vy = 0; }
+                        }
+                        if (night && fac.struct) {
+                            // dusk: walk to the doorway and tuck in — happens rain, shine OR STORM,
+                            // so a stormy night never strands the flock outside (Codex #3). Only step
+                            // onto valid ground; if the way is blocked (pond/rock between), just tuck
+                            // in rather than tramp across water.
                             const tx = fac.struct.i + 0.5, ty = fac.struct.j + 1.1;
                             const dx = tx - p.fx, dy = ty - p.fy, d = Math.hypot(dx, dy) || 1;
                             if (p.inside || d < 0.45) { p.inside = true; p.fx = tx; p.fy = ty; p.vx = 0; p.vy = 0; }
-                            else { const spd = 0.7; p.fx += (dx / d) * spd * dt; p.fy += (dy / d) * spd * dt; p.flip = dx > 0 ? 1 : -1; }
-                        } else {
-                            if (p.inside) { p.inside = false; p.fy += 0.5; }   // morning: step out of the building
+                            else {
+                                const spd = 0.7, nx = p.fx + (dx / d) * spd * dt, ny = p.fy + (dy / d) * spd * dt;
+                                if (this.#producerCanStand(plot, nx, ny)) { p.fx = nx; p.fy = ny; p.flip = dx > 0 ? 1 : -1; }
+                                else { p.inside = true; p.fx = tx; p.fy = ty; p.vx = 0; p.vy = 0; }
+                            }
+                        } else if (!p.busy && !stormy) {
+                            if (p.inside) p.inside = false;   // morning: come out of the building
                             p.wanderT -= dt;
                             if (p.wanderT <= 0) {
                                 p.wanderT = 0.6 + this.rand() * 1.8;
                                 const ang = this.rand() * Math.PI * 2;
-                                const spd = (p.kind === 'chicken' || p.kind === 'rooster' ? 0.5 : p.kind === 'fish' ? 0.35 : 0.28);
+                                const spd = (p.kind === 'chicken' || p.kind === 'rooster' ? 0.5 : 0.28);
                                 p.vx = Math.cos(ang) * spd; p.vy = Math.sin(ang) * spd;
                                 if (Math.abs(p.vx) > 0.02) p.flip = p.vx > 0 ? 1 : -1;
                                 if (p.kind === 'chicken' || p.kind === 'rooster') p.hop = 0.35;
                             }
                             const px = p.fx, py = p.fy;
                             p.fx += p.vx * dt; p.fy += p.vy * dt;
-                            if (landAnimal) {
-                                // stay inside the fenced yard, off water/buildings/rocks
-                                const bx0 = plot.x + 0.4, bx1 = plot.x + plot.w - 0.4, by0 = plot.y + 0.4, by1 = plot.y + plot.h - 0.4;
-                                if (p.fx < bx0) { p.fx = bx0; p.vx = Math.abs(p.vx); }
-                                if (p.fx > bx1) { p.fx = bx1; p.vx = -Math.abs(p.vx); }
-                                if (p.fy < by0) { p.fy = by0; p.vy = Math.abs(p.vy); }
-                                if (p.fy > by1) { p.fy = by1; p.vy = -Math.abs(p.vy); }
-                                if (!this.#producerCanStand(plot, p.fx, p.fy)) { p.fx = px; p.fy = py; p.vx = -p.vx; p.vy = -p.vy; }
-                            } else {
-                                const r = p.region, pad = 0.35;   // pond life stays in the water
-                                if (p.fx < r.x + pad) { p.fx = r.x + pad; p.vx = Math.abs(p.vx); }
-                                if (p.fx > r.x + r.w - pad) { p.fx = r.x + r.w - pad; p.vx = -Math.abs(p.vx); }
-                                if (p.fy < r.y + pad) { p.fy = r.y + pad; p.vy = Math.abs(p.vy); }
-                                if (p.fy > r.y + r.h - pad) { p.fy = r.y + r.h - pad; p.vy = -Math.abs(p.vy); }
-                            }
+                            // stay inside the fenced yard, off water/buildings/rocks
+                            const bx0 = plot.x + 0.4, bx1 = plot.x + plot.w - 0.4, by0 = plot.y + 0.4, by1 = plot.y + plot.h - 0.4;
+                            if (p.fx < bx0) { p.fx = bx0; p.vx = Math.abs(p.vx); }
+                            if (p.fx > bx1) { p.fx = bx1; p.vx = -Math.abs(p.vx); }
+                            if (p.fy < by0) { p.fy = by0; p.vy = Math.abs(p.vy); }
+                            if (p.fy > by1) { p.fy = by1; p.vy = -Math.abs(p.vy); }
+                            if (!this.#producerCanStand(plot, p.fx, p.fy)) { p.fx = px; p.fy = py; p.vx = -p.vx; p.vy = -p.vy; }
                             if (p.hop > 0) p.hop = Math.max(0, p.hop - dt);
                         }
+                    } else if (cfg.wander && !p.busy && !(stormy && p.kind !== 'fish')) {
+                        // pond life (fish/lily): stays in the water region
+                        p.wanderT -= dt;
+                        if (p.wanderT <= 0) {
+                            p.wanderT = 0.6 + this.rand() * 1.8;
+                            const ang = this.rand() * Math.PI * 2;
+                            const spd = p.kind === 'fish' ? 0.35 : 0.28;
+                            p.vx = Math.cos(ang) * spd; p.vy = Math.sin(ang) * spd;
+                            if (Math.abs(p.vx) > 0.02) p.flip = p.vx > 0 ? 1 : -1;
+                        }
+                        p.fx += p.vx * dt; p.fy += p.vy * dt;
+                        const r = p.region, pad = 0.35;
+                        if (p.fx < r.x + pad) { p.fx = r.x + pad; p.vx = Math.abs(p.vx); }
+                        if (p.fx > r.x + r.w - pad) { p.fx = r.x + r.w - pad; p.vx = -Math.abs(p.vx); }
+                        if (p.fy < r.y + pad) { p.fy = r.y + pad; p.vy = Math.abs(p.vy); }
+                        if (p.fy > r.y + r.h - pad) { p.fy = r.y + r.h - pad; p.vy = -Math.abs(p.vy); }
+                        if (p.hop > 0) p.hop = Math.max(0, p.hop - dt);
                     }
                 }
             }
@@ -2101,6 +2143,17 @@ export class World {
     #producerCanStand(plot, fx, fy) {
         const i = Math.floor(fx), j = Math.floor(fy);
         return plot.cells.has(pkey(i, j)) && !this.pathBlocked(i, j);
+    }
+    // nearest owned, walkable yard tile — where a stranded animal (on a coop/barn tile) hops to
+    #nearestYardTile(plot, fx, fy) {
+        let best = null, bd = Infinity;
+        for (const key of plot.cells) {
+            const c = key.indexOf(','), i = +key.slice(0, c), j = +key.slice(c + 1);
+            if (this.pathBlocked(i, j)) continue;
+            const d = Math.abs(i + 0.5 - fx) + Math.abs(j + 0.5 - fy);
+            if (d < bd) { bd = d; best = { i, j }; }
+        }
+        return best;
     }
 
     plotOwnerOf(plot) { return this.farmers.find(f => f.plot === plot); }
