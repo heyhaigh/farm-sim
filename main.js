@@ -2,7 +2,7 @@
 
 import { fetchMemories, mod, fmtMod, STAT_NAMES, TRAIT_NAMES, TRAIT_LABELS, hashString } from './dna.js';
 import { audio } from './audio.js';
-import { World, CHUNK, T, DAY_LENGTH, NIGHT_LENGTH, ITEMS, CRAFTABLES, xpForLevel } from './farm.js';
+import { World, CHUNK, T, DAY_LENGTH, NIGHT_LENGTH, ITEMS, CRAFTABLES, xpForLevel, obstacleTier } from './farm.js';
 import {
     TILE_W, TILE_H, makeCanvas, drawText, textWidth,
     makeFarmerSprites, makeCropSprites, makeHouse, makeWell, makeBoard, makeFencePost,
@@ -634,8 +634,8 @@ function wildSpec(i, j, t, season) {
     if (t === T.ROCK) {
         const img = pickLoadedImage(rockImg, ROCK_NAMES, i, j, 68);
         if (!img) return null;
-        const { w, h } = wildDims(img);
-        return { img, w, h, anchor: 0.86, depth: -0.25 };
+        const d = wildDims(img), scale = 1 + obstacleTier(i, j) * 0.3;   // big boulders loom larger
+        return { img, w: Math.round(d.w * scale), h: Math.round(d.h * scale), anchor: 0.86, depth: -0.25 };
     }
     return null;
 }

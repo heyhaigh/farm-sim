@@ -164,6 +164,15 @@ function tileHash(i, j, seed = 0) {
 function tileRand(i, j, seed = 0) {
     return tileHash(i, j, seed) / 4294967296;
 }
+// The bulk of an obstacle (rock/tree/bush) at a tile, deterministic from its position: 0 = small,
+// 1 = medium, 2 = big. Most are small; a few are big boulders/old trees that are a real slog to
+// clear. Used by BOTH the sim (clearing labour + reward scale) and the render (sprite scale), and by
+// the homestead assessment (a founder shuns ground studded with big rocks early on). Exported so
+// main.js scales the very same tiles.
+export function obstacleTier(i, j) {
+    const r = tileHash(i, j, 0x517e) % 100;
+    return r < 62 ? 0 : r < 88 ? 1 : 2;   // ~62% small / 26% medium / 12% big
+}
 function lerp(a, b, t) { return a + (b - a) * t; }
 function smooth(t) { return t * t * (3 - 2 * t); }
 function tileNoise(i, j, scale, seed = 0) {
@@ -254,6 +263,7 @@ export class World {
         this.seed = seed >>> 0;
         this.rand = mulberry32(seed);
         this.tiles = new Uint8Array(GRID * GRID).fill(T.GRASS);
+        this.rockWork = new Map();   // tilekey -> mining shifts landed on a big rock (persists till it breaks)
         // Infinite wilderness beyond the founding valley: chunk key "cx,cy" -> Uint8Array of
         // tiles, generated on first touch from PURE hash noise (never world.rand — generation
         // order must not affect determinism). Fog of war: matching per-chunk reveal bitmaps.
@@ -1198,13 +1208,15 @@ export class World {
     // A rough "is this good ground?" score: +1 per nearby stand of timber (up to 3), -2 if the plot
     // sits on water. Cheap sampling of the plot + a ring around it.
     #homesteadScore(x, y, B) {
-        let trees = 0, water = 0;
+        let trees = 0, water = 0, bigRock = 0;
         for (let s = 0; s < 9; s++) {
             const i = x - 2 + ((s * 5 + 1) % (B + 4)), j = y - 2 + ((s * 7 + 3) % (B + 4));
             const t = this.get(i, j);
-            if (t === T.TREE) trees++; else if (t === T.WATER) water++;
+            if (t === T.TREE) trees++;
+            else if (t === T.WATER) water++;
+            else if (t === T.ROCK && obstacleTier(i, j) === 2) bigRock++;   // a founder shuns big boulders
         }
-        return Math.min(3, trees) - water * 2;
+        return Math.min(3, trees) - water * 2 - bigRock * 2;
     }
 
     // RESERVE (but don't yet stake) the ground a founder is drawn to: fix the plot's rect so no one
@@ -5202,14 +5214,22 @@ export class Farmer {
 
     #completeMine() {
         const w = this.world, tgt = this.mineTarget;
-        this.mineTarget = null;
         this.#laborDrain('mine');
         if (tgt && w.get(tgt.i, tgt.j) === T.ROCK) {
-            w.set(tgt.i, tgt.j, T.GRASS);
-            this.ore += ORE_ROCK;
-            this.say(`+${ORE_ROCK} ore`, '#a8b0c0');
-            this.gainXP(1);
-        }
+            const tier = obstacleTier(tgt.i, tgt.j), key = pkey(tgt.i, tgt.j);   // big rocks are a slog
+            const hits = (w.rockWork.get(key) || 0) + 1;
+            if (hits >= tier + 1) {                       // shattered — bulk pays off in ore + XP
+                w.rockWork.delete(key);
+                w.set(tgt.i, tgt.j, T.GRASS);
+                const ore = ORE_ROCK * (tier + 1);
+                this.ore += ore; this.say(`+${ore} ore`, '#a8b0c0'); this.gainXP(1 + tier);
+                this.mineTarget = null;
+            } else {                                      // still standing — keep swinging in place
+                w.rockWork.set(key, hits);
+                if (this.energy > 0.12) { this.chopTimer = this.#laborTime('mine'); this.state = 'mine'; return; }
+                this.mineTarget = null;   // too spent — leave the boulder half-worked and come back later
+            }
+        } else this.mineTarget = null;
         this.state = 'decide';
     }
 
