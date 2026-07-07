@@ -1617,8 +1617,8 @@ function drawFarmer(f, sx, sy) {
 // UI
 // ---------------------------------------------------------------------------
 
-const FWD_BTN = { x: 0, y: 3, w: 0, h: 12 };      // 2x speed
-const FF_BTN = { x: 0, y: 3, w: 0, h: 12 };       // 10x speed
+const FWD_BTN = { x: 0, y: 3, w: 0, h: 12 };      // 5x speed
+const FF_BTN = { x: 0, y: 3, w: 0, h: 12 };       // 20x speed
 const SPEED1_BTN = { x: 0, y: 3, w: 0, h: 12 };   // revert to 1x (visible while sped up)
 
 // Minimap legend (bottom-right): faint land/buildings, bright farmer dots, a viewport box.
@@ -1888,10 +1888,10 @@ function drawUI() {
         drawText(ctx, label, rect.x + BPAD, rect.y + 4, active ? activeFg : '#c8ccd8');
     };
 
-    // speed controls in the corner: > = 2x, >> = 10x; a 1X revert appears while sped up
+    // speed controls in the corner: > = 5x, >> = 20x; a 1X revert appears while sped up
     const spd = world._speedMult || 1;
-    barBtn(FF_BTN, '>>', spd === 10, '#e0a03c', '#221a0e');
-    barBtn(FWD_BTN, '>', spd === 2, '#e0a03c', '#221a0e');
+    barBtn(FF_BTN, '>>', spd === 20, '#e0a03c', '#221a0e');
+    barBtn(FWD_BTN, '>', spd === 5, '#e0a03c', '#221a0e');
     SPEED1_BTN.w = 0;
     if (spd !== 1) barBtn(SPEED1_BTN, '1X', true, '#c05840', '#ffffff');
 
@@ -2506,8 +2506,8 @@ out.addEventListener('pointerup', (e) => {
     }
 
     // spawn button (top-right)
-    if (inRect(p, FWD_BTN)) { world._speedMult = world._speedMult === 2 ? 1 : 2; return; }
-    if (inRect(p, FF_BTN)) { world._speedMult = world._speedMult === 10 ? 1 : 10; return; }
+    if (inRect(p, FWD_BTN)) { world._speedMult = world._speedMult === 5 ? 1 : 5; return; }
+    if (inRect(p, FF_BTN)) { world._speedMult = world._speedMult === 20 ? 1 : 20; return; }
     if (SPEED1_BTN.w && inRect(p, SPEED1_BTN)) { world._speedMult = 1; return; }
 
     // roster overlay (modal) — handle before any world/minimap clicks
