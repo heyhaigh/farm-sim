@@ -49,6 +49,7 @@ const WOOD_STUMP = 1;      // wood from grubbing out the stump
 const ORE_ROCK = 2;        // iron ore from breaking a rock
 const FACILITY_WOOD = 6;   // wood to raise a facility
 const FENCE_WOOD = 8;      // wood to fence the new homestead
+const FENCE_POST_WOOD = 1; // wood per fence post — reclaimed when torn down, paid when built
 // Tiered dwellings. L1 (tipi) is quick; L2 (yurt) is a real investment; L3 (cottage) is the
 // lifetime goal — the harvest gate (lifetime crops, NOT spent) makes L2->L3 take a year+.
 const HOUSE_TIERS = [
@@ -1072,7 +1073,6 @@ export class World {
 
     static MAX_PLOT = 23;
     static BASE_PLOT = 13;   // starting plot size (square); house + garden + facility zones fit inside
-    expandCost(plot) { return 4 + Math.max(0, Math.floor((Math.max(plot.w, plot.h) - 13) / 2)) * 2; }
 
     // Validate a candidate rect for a plot; returns null if it collides with a
     // neighbor plot / commons / edge, else the list of woodland tiles to clear.
@@ -1157,11 +1157,14 @@ export class World {
         return { state: 'blocked' };
     }
 
-    // Commit an expansion (caller has already checked wood + clear state).
+    // Commit an expansion (caller has already checked wood + clear state). The old fence line
+    // facing the new land is TORN DOWN (its posts reclaimed as wood) and a new fence is raised
+    // around the enlarged perimeter (paid in wood) — a net 1 wood per post of perimeter growth.
     expandPlot(farmer) {
-        const info = this.expansionInfo(farmer.plot);
-        if (info.state !== 'clear') return false;
         const p = farmer.plot;
+        const info = this.expansionInfo(p);
+        if (info.state !== 'clear') return false;
+        const { removed, added } = this.fenceDelta(p, info.cells);
         for (const { i, j } of info.cells) {
             p.cells.add(pkey(i, j));
             if (this.get(i, j) === T.WHEAT || this.get(i, j) === T.FLOWER) this.set(i, j, T.GRASS);
@@ -1170,7 +1173,11 @@ export class World {
         this.#clearPlotWildBuffer(p, 1);
         this.#rebuildFields(p);
         this._tilesChanged = true;
-        this.addLog(`${farmer.sheet.name} fenced in new land!`, '#7dd069');
+        // reclaim torn-down posts, pay for the new perimeter
+        farmer.wood = Math.max(0, farmer.wood + removed * FENCE_POST_WOOD - added * FENCE_POST_WOOD);
+        const name = farmer.sheet.name;
+        if (removed > 0) this.addLog(`${name} tore down ${removed} fence post${removed > 1 ? 's' : ''} (+${removed} wood) and re-fenced the bigger yard`, '#7dd069');
+        else this.addLog(`${name} fenced in new land!`, '#7dd069');
         return true;
     }
 
@@ -1185,6 +1192,40 @@ export class World {
         }
         return true;
     }
+    // The set of fence-edge segments around a cell-set, each keyed by the two tiles it
+    // separates (sorted, so it's identified by LOCATION not by which side owns it). Lets us
+    // diff the fence before/after an expansion to know how many posts get torn down vs built.
+    #fenceEdgeSet(cells) {
+        const s = new Set();
+        for (const key of cells) {
+            const c = key.indexOf(','), i = +key.slice(0, c), j = +key.slice(c + 1);
+            for (const [di, dj] of [[0, -1], [1, 0], [0, 1], [-1, 0]]) {
+                const nk = pkey(i + di, j + dj);
+                if (!cells.has(nk)) s.add(key < nk ? `${key}|${nk}` : `${nk}|${key}`);
+            }
+        }
+        return s;
+    }
+    // Fence bookkeeping for annexing `addCells` onto a plot: how many old posts get torn
+    // down (reclaim 1 wood each), how many new posts get raised (cost 1 wood each), and the
+    // net wood the farmer must have on hand. Expanding into a pocket can even REFUND wood.
+    fenceDelta(plot, addCells) {
+        const before = this.#fenceEdgeSet(plot.cells);
+        const next = new Set(plot.cells);
+        for (const c of addCells) next.add(pkey(c.i, c.j));
+        const after = this.#fenceEdgeSet(next);
+        let removed = 0, added = 0;
+        for (const e of before) if (!after.has(e)) removed++;
+        for (const e of after) if (!before.has(e)) added++;
+        return { removed, added, net: Math.max(0, (added - removed) * FENCE_POST_WOOD) };
+    }
+    // Predict the fence-wood cost of a plot's NEXT expansion (0 if nothing to annex).
+    fenceDeltaForNext(plot) {
+        const info = this.expansionInfo(plot);
+        if (info.state !== 'clear') return { removed: 0, added: 0, net: 0 };
+        return this.fenceDelta(plot, info.cells);
+    }
+
     // How many posts a plot's fence takes (roughly its perimeter, clamped) — the fence is
     // built one post at a time, so this is a real chunk of work.
     fencePostTarget(plot) {
@@ -3156,12 +3197,14 @@ export class Farmer {
                 if (src) { this.think('CLEARING TREES FOR MORE LAND'); this.#goToWood(src); return true; }
                 this.wantExpand = false; return false;
             }
-            // clear border — pay the wood cost to fence it in
-            const cost = w.expandCost(this.plot);
-            if (this.wood >= cost) {
-                if (w.expandPlot(this)) { this.wood -= cost; this.nextExpand = Math.round(this.nextExpand * 2.1); this.wantExpand = false; this.think('MY FARM GROWS'); return true; }
+            // clear border — need enough wood for the NET new fencing (old posts torn down on
+            // the inner edge are reclaimed, so annexing into a pocket can cost little or nothing)
+            const { net } = w.fenceDeltaForNext(this.plot);
+            if (this.wood >= net) {
+                if (w.expandPlot(this)) { this.nextExpand = Math.round(this.nextExpand * 2.1); this.wantExpand = false; this.think('MY FARM GROWS'); return true; }
                 this.wantExpand = false; return false;
             }
+            this.think(`NEED ${net} WOOD TO FENCE THE NEW LINE`);
             this.#goChop(); return true;
         }
         return false;
