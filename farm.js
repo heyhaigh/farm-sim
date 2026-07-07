@@ -1583,28 +1583,43 @@ export class World {
         return this.fenceDelta(plot, info.cells);
     }
 
-    // How many posts a plot's fence takes (roughly its perimeter, clamped) — the fence is
-    // built one post at a time, so this is a real chunk of work.
-    fencePostTarget(plot) {
-        let edges = 0;
-        for (const key of plot.cells) {
-            const c = key.indexOf(','), i = +key.slice(0, c), j = +key.slice(c + 1);
-            if (!plot.cells.has(pkey(i, j - 1))) edges++;
-            if (!plot.cells.has(pkey(i + 1, j))) edges++;
-            if (!plot.cells.has(pkey(i, j + 1))) edges++;
-            if (!plot.cells.has(pkey(i - 1, j))) edges++;
-        }
-        return Math.max(8, Math.min(edges, 30));
-    }
-    // A border tile to stand at while raising post #idx (just for visible movement around the plot).
-    fencePostSpot(plot, idx) {
+    // The border cells of a plot, ORDERED as a perimeter walk so a farmer laying the fence moves
+    // post-to-post along the line (like tilling a field row by row) instead of teleport-hopping to
+    // arbitrary tiles. Ordering: angle around the plot centroid, ties broken by radius then i,j so
+    // it never depends on Set-iteration quirks. Cached per plot, rebuilt when the geometry (rev)
+    // changes. atan2/sort are pure math — determinism-safe.
+    fenceRing(plot) {
+        if (plot._fenceRing && plot._fenceRingRev === plot.rev) return plot._fenceRing;
         const border = [];
+        let cx = 0, cy = 0;
         for (const key of plot.cells) {
             const c = key.indexOf(','), i = +key.slice(0, c), j = +key.slice(c + 1);
-            if (!plot.cells.has(pkey(i, j - 1)) || !plot.cells.has(pkey(i + 1, j)) || !plot.cells.has(pkey(i, j + 1)) || !plot.cells.has(pkey(i - 1, j))) border.push({ i, j });
+            if (!plot.cells.has(pkey(i, j - 1)) || !plot.cells.has(pkey(i + 1, j)) || !plot.cells.has(pkey(i, j + 1)) || !plot.cells.has(pkey(i - 1, j))) {
+                border.push({ i, j }); cx += i; cy += j;
+            }
         }
-        if (!border.length) return { i: plot.house.i, j: plot.house.j + 2 };
-        return border[idx % border.length];
+        if (border.length) { cx /= border.length; cy /= border.length; }
+        border.sort((a, b) => {
+            const aa = Math.atan2(a.j - cy, a.i - cx), ab = Math.atan2(b.j - cy, b.i - cx);
+            if (aa !== ab) return aa - ab;
+            const ra = (a.i - cx) * (a.i - cx) + (a.j - cy) * (a.j - cy), rb = (b.i - cx) * (b.i - cx) + (b.j - cy) * (b.j - cy);
+            if (ra !== rb) return ra - rb;
+            return (a.i - b.i) || (a.j - b.j);
+        });
+        plot._fenceRing = border; plot._fenceRingRev = plot.rev;
+        return border;
+    }
+    // How many posts a plot's fence takes — one per border tile, so it's a real walk around the
+    // perimeter (clamped to a floor so a tiny claim still feels like a chunk of work).
+    fencePostTarget(plot) {
+        return Math.max(8, this.fenceRing(plot).length);
+    }
+    // The exact border tile to stand ON while raising post #idx — consecutive idx are adjacent
+    // cells along the ring, so the farmer walks the fence line rather than jumping around it.
+    fencePostSpot(plot, idx) {
+        const ring = this.fenceRing(plot);
+        if (!ring.length) return { i: plot.house.i, j: plot.house.j + 2 };
+        return ring[idx % ring.length];
     }
     completeFence(farmer) {
         farmer.plot.built.fence = true;

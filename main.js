@@ -967,17 +967,30 @@ function drawWeather(dt, t) {
 // cell set. Cached per plot.rev so the topology is only recomputed when the plot grows.
 function plotOutline(plot) {
     if (plot._outline && plot._outlineRev === plot.rev) return plot._outline;
-    const cells = plot.cells, rails = [], postSet = new Set();
+    const cells = plot.cells, railSegs = [], postSet = new Set();
     const addPost = (ci, cj) => postSet.add(ci + ',' + cj);
+    let cx = 0, cy = 0, n = 0;
     for (const key of cells) {
         const c = key.indexOf(','), i = +key.slice(0, c), j = +key.slice(c + 1);
-        if (!cells.has(i + ',' + (j - 1))) { rails.push(i, j, i + 1, j); addPost(i, j); addPost(i + 1, j); }
-        if (!cells.has((i + 1) + ',' + j)) { rails.push(i + 1, j, i + 1, j + 1); addPost(i + 1, j); addPost(i + 1, j + 1); }
-        if (!cells.has(i + ',' + (j + 1))) { rails.push(i, j + 1, i + 1, j + 1); addPost(i, j + 1); addPost(i + 1, j + 1); }
-        if (!cells.has((i - 1) + ',' + j)) { rails.push(i, j, i, j + 1); addPost(i, j); addPost(i, j + 1); }
+        cx += i; cy += j; n++;
+        if (!cells.has(i + ',' + (j - 1))) { railSegs.push([i, j, i + 1, j]); addPost(i, j); addPost(i + 1, j); }
+        if (!cells.has((i + 1) + ',' + j)) { railSegs.push([i + 1, j, i + 1, j + 1]); addPost(i + 1, j); addPost(i + 1, j + 1); }
+        if (!cells.has(i + ',' + (j + 1))) { railSegs.push([i, j + 1, i + 1, j + 1]); addPost(i, j + 1); addPost(i + 1, j + 1); }
+        if (!cells.has((i - 1) + ',' + j)) { railSegs.push([i, j, i, j + 1]); addPost(i, j); addPost(i, j + 1); }
     }
+    if (n) { cx /= n; cy /= n; }
+    // Order posts and rails as a perimeter walk (angle around the plot centre) so the under-
+    // construction reveal (drawn as a fraction of this list) grows in the SAME direction the
+    // farmer walks the fence line — the fence rises right where they're standing, not top-down.
+    const ang = (i, j) => Math.atan2(j - cy, i - cx);
+    const postArr = [];
+    for (const k of postSet) { const c = k.indexOf(','); postArr.push({ i: +k.slice(0, c), j: +k.slice(c + 1) }); }
+    postArr.sort((a, b) => ang(a.i, a.j) - ang(b.i, b.j) || (a.i - b.i) || (a.j - b.j));
+    railSegs.sort((a, b) => ang((a[0] + a[2]) / 2, (a[1] + a[3]) / 2) - ang((b[0] + b[2]) / 2, (b[1] + b[3]) / 2) || (a[0] - b[0]) || (a[1] - b[1]));
     const posts = [];
-    for (const k of postSet) { const c = k.indexOf(','); posts.push(+k.slice(0, c), +k.slice(c + 1)); }
+    for (const p of postArr) posts.push(p.i, p.j);
+    const rails = [];
+    for (const s of railSegs) rails.push(s[0], s[1], s[2], s[3]);
     plot._outline = { posts, rails }; plot._outlineRev = plot.rev;
     return plot._outline;
 }
