@@ -1748,7 +1748,7 @@ function drawBoard() {
 
     const bodyY = PY + 32, bodyH = PH - 32 - 5;
     ctx.save(); ctx.beginPath(); ctx.rect(IX - 3, bodyY, IW + 6, bodyH); ctx.clip();
-    let y = bodyY - boardScroll;
+    let y = bodyY - Math.round(boardScroll);
     const wrap = (t, col, ind = 0) => { for (const ln of wrapText(t, 30 - ind)) { drawText(ctx, ln, IX + ind, y, col); y += 7; } };
 
     // --- Town project ---
@@ -2133,7 +2133,7 @@ function drawSheet(f) {
     sheetBodyY = bodyY; sheetBodyH = bodyH;
     ctx.save();
     ctx.beginPath(); ctx.rect(IX - 3, bodyY, IW + 6, bodyH); ctx.clip();
-    let y = bodyY - sheetScroll;
+    let y = bodyY - Math.round(sheetScroll);   // integer offset keeps bars/icons crisp while scrolling
 
     if (sheetLastSel !== f) { sheetLastSel = f; sheetMemPage = 0; }
     for (const line of wrapText(p.creed, 32).slice(0, 2)) { drawText(ctx, `"${line}"`, IX, y, SHEET_LABEL); y += 7; }
@@ -2404,7 +2404,7 @@ function drawRoster() {
     ctx.clip();
 
     rows.forEach((f, idx) => {
-        const ry = bodyTop + idx * rowH - rosterScroll;
+        const ry = bodyTop + idx * rowH - Math.round(rosterScroll);
         if (ry + rowH < bodyTop || ry > bodyBot) return;   // off-screen
         const s = f.sheet;
         const isLeader = world.leader === f;

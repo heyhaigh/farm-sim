@@ -42,17 +42,19 @@ const FONT = {
 
 export function drawText(ctx, str, x, y, color, scale = 1) {
     ctx.fillStyle = color;
-    let cx = x;
+    // snap to integer source pixels so glyphs never land on a half-pixel (which the browser would
+    // anti-alias into a blur — the cause of the shimmer when a panel is scrolled by a fractional amount)
+    let cx = Math.round(x); const yy = Math.round(y);
     for (const raw of String(str).toUpperCase()) {
         const glyph = FONT[raw] || FONT['?'];
         for (let i = 0; i < 15; i++) {
             if (glyph[i] === '1') {
-                ctx.fillRect(cx + (i % 3) * scale, y + Math.floor(i / 3) * scale, scale, scale);
+                ctx.fillRect(cx + (i % 3) * scale, yy + Math.floor(i / 3) * scale, scale, scale);
             }
         }
         cx += 4 * scale;
     }
-    return cx - x;
+    return cx - Math.round(x);
 }
 
 export function textWidth(str, scale = 1) {
