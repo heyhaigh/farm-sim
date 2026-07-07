@@ -2882,12 +2882,12 @@ const PROJECT_DEFS = [
     { type: 'toolshed', label: 'TOOLSHED', at: 20, needed: 30, perk: 'ALL WORK +12% FASTER' },
     { type: 'windmill', label: 'WINDMILL', at: 55, needed: 45, perk: 'CROPS GROW +15% FASTER' },
     { type: 'statue1', label: 'GUARDIAN HEAD', at: 100, needed: 55, lvlReq: 8, wood: 14, ore: 8, size: 1,
-      lightning: 0.55, rain: 1.2, perk: 'LIGHTNING -45%, RAIN +20%' },
+      lightning: 0.82, rain: 1.1, perk: 'LIGHTNING -18%, RAIN +10%' },
     { type: 'well2', label: 'SECOND WELL', at: 160, needed: 65, perk: 'SHORTER WATER RUNS' },
     { type: 'statue2', label: 'FOX SENTINEL', at: 260, needed: 110, lvlReq: 16, wood: 35, ore: 20, size: 2,
-      lightning: 0.3, rain: 1.45, perk: 'LIGHTNING -70%, RAIN +45%' },
+      lightning: 0.55, rain: 1.3, perk: 'LIGHTNING -45%, RAIN +30%' },
     { type: 'statue3', label: 'STONE MOTHER', at: 480, needed: 220, lvlReq: 26, wood: 88, ore: 50, size: 3,
-      lightning: 0.12, rain: 1.75, perk: 'LIGHTNING -88%, RAIN +75%' },
+      lightning: 0.25, rain: 1.6, perk: 'LIGHTNING -75%, RAIN +60%' },
 ];
 
 // ---------------------------------------------------------------------------

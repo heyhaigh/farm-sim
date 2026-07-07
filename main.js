@@ -2014,9 +2014,9 @@ const STRUCT_INFO = {
     toolshed: ['TOOLSHED', 'Town structure', 'All farm work +12% faster', TT_GR],
     windmill: ['WINDMILL', 'Town structure', 'Crops grow +15% faster', TT_GR],
     well2: ['WELL', 'Water source', 'Shorter water runs', TT_B],
-    statue1: ['GUARDIAN HEAD', 'Guardian statue - tier 1', 'Lightning -45% - Rain +20%', TT_B],
-    statue2: ['FOX SENTINEL', 'Guardian statue - tier 2', 'Lightning -70% - Rain +45%', TT_B],
-    statue3: ['STONE MOTHER', 'Guardian statue - tier 3', 'Lightning -88% - Rain +75%', TT_B],
+    statue1: ['GUARDIAN HEAD', 'Guardian statue - tier 1', 'Lightning -18% - Rain +10%', TT_B],
+    statue2: ['FOX SENTINEL', 'Guardian statue - tier 2', 'Lightning -45% - Rain +30%', TT_B],
+    statue3: ['STONE MOTHER', 'Guardian statue - tier 3', 'Lightning -75% - Rain +60%', TT_B],
 };
 function structLines(s) {
     const m = STRUCT_INFO[s.type] || [String(s.type).toUpperCase(), 'Structure', '', TT_GR];
