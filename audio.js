@@ -314,21 +314,22 @@ class FarmAudio {
         ];
         // vocal-tract formants pushed BRIGHT — a cockerel's crow is piercing, energy up past 3 kHz
         const formants = [[720, 5, 1.0], [1550, 7, 0.85], [2900, 8, 0.6], [3900, 9, 0.32]];
+        const P = 1.4;   // pitch multiplier — a cockerel crows high and shrill
         for (const s of syll) {
-            const t = t0 + s.off;
+            const t = t0 + s.off, f0 = s.f0 * P, f1 = s.f1 * P;
             const mix = ctx.createGain();
             const oscs = [];
             // a reedy, buzzy stack: two detuned saws + two detuned squares (strong odd-harmonic buzz)
             for (const [type, det] of [['sawtooth', -9], ['sawtooth', 9], ['square', -5], ['square', 6]]) {
                 const o = ctx.createOscillator(); o.type = type; o.detune.value = det;
-                o.frequency.setValueAtTime(s.f0, t);
-                o.frequency.exponentialRampToValueAtTime(Math.max(90, s.f1), t + s.dur * 0.85);
+                o.frequency.setValueAtTime(f0, t);
+                o.frequency.exponentialRampToValueAtTime(Math.max(90, f1), t + s.dur * 0.85);
                 o.connect(mix); oscs.push(o);
             }
             // warble/yodel on the long finish — the rooster's characteristic waver
             if (s.warble) {
                 const lfo = ctx.createOscillator(); lfo.type = 'triangle'; lfo.frequency.value = s.warble;
-                const lg = ctx.createGain(); lg.gain.value = s.f0 * 0.055;
+                const lg = ctx.createGain(); lg.gain.value = f0 * 0.055;
                 lfo.connect(lg); for (const o of oscs) lg.connect(o.frequency);
                 lfo.start(t); lfo.stop(t + s.dur + 0.05);
             }
