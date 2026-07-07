@@ -258,6 +258,9 @@ export class World {
         this.well = { i: CENTER, j: CENTER, ready: true };
         this.sign = null;                                 // (RY sign removed)
         this.board = null;    // no bulletin board until the town builds one together (first communal project)
+        this.merchant = null;                             // the wandering trader, present only during a visit
+        this.merchantNextDay = 4 + Math.floor(this.rand() * 3);   // first caravan rolls in around day 4-6
+        this.merchantVisit = 0;                           // visit counter (varies the stall spot)
         this.wells = [this.well];
         this.set(this.well.i, this.well.j, T.WELL);
 
@@ -2665,8 +2668,114 @@ export class World {
         this.#tickBirds(dt);
         this.#tickTreasure(dt);
         this.#maybeStartProject();
+        this.#tickMerchant(dt);
         this.updateLeader();
         for (const f of this.farmers) f.tick(dt);
+    }
+
+    // ---- Wandering merchant: schedule, travel in/out, and the goods-for-ore trade ----
+    #tickMerchant(dt) {
+        if (!this.merchant) {
+            if (this.day >= this.merchantNextDay && !this.isNight()) this.#spawnMerchant();
+            return;
+        }
+        const m = this.merchant;
+        if (m.state === 'arriving') {
+            if (this.#moveMerchant(dt)) {
+                m.state = 'trading'; m.facing = 0; m.frame = 0;
+                m.leaveTime = this.time + MERCHANT_STAY_DAYS * (DAY_LENGTH + NIGHT_LENGTH);
+                this.addLog('A traveling merchant set up a stall by the plaza — bring surplus goods to trade for ore!', '#e8c860');
+            }
+        } else if (m.state === 'trading') {
+            if (this.time >= m.leaveTime || m.stock <= 0) {
+                m.state = 'leaving'; m.target = m.arrive; m.path = null; m.pi = 0;
+                this.addLog(`The merchant is packing up${m.traded > 0 ? ` (traded away ${m.traded} ore)` : ''}.`, '#c8a060');
+            }
+        } else if (m.state === 'leaving') {
+            if (this.#moveMerchant(dt)) {
+                this.addLog('The merchant rode off toward the next town.', '#8a8fa0');
+                this.merchant = null;
+                this.merchantNextDay = this.day + MERCHANT_INTERVAL + Math.floor(this.rand() * 3);
+            }
+        }
+    }
+
+    #spawnMerchant() {
+        const stall = this.#merchantStallSpot();
+        if (!stall) return;                       // plaza not clear/revealed yet — try again next day
+        const arrive = this.#merchantArrivalSpot(stall) || { i: stall.i, j: stall.j };
+        this.merchantVisit++;
+        this.merchant = {
+            state: 'arriving', pos: { i: arrive.i + 0.5, j: arrive.j + 0.5 },
+            stall, arrive, target: stall, path: null, pi: 0,
+            facing: 0, frame: 0, animT: 0, stock: MERCHANT_ORE_STOCK, traded: 0, leaveTime: 0,
+            visit: this.merchantVisit,
+        };
+        this.addLog('A traveling merchant is approaching the market...', '#e8c860');
+    }
+
+    // an open, revealed plaza-adjacent tile for the stall (not on the well/board/statue/a plot)
+    #merchantStallSpot() {
+        const a0 = this.day % 8;   // vary the corner of the plaza per visit, deterministically
+        for (let r = 5; r <= 12; r++) {
+            for (let a = 0; a < 8; a++) {
+                const ang = ((a + a0) % 8) / 8 * Math.PI * 2;
+                const i = Math.round(CENTER + Math.cos(ang) * r), j = Math.round(CENTER + Math.sin(ang) * r);
+                if (this.isRevealed(i, j) && !this.pathBlocked(i, j) && this.get(i, j) === T.GRASS &&
+                    !this.plots.some(p => p.cells.has(pkey(i, j)))) return { i, j };
+            }
+        }
+        return null;
+    }
+
+    // a revealed, walkable spot further out for the merchant to walk IN from (and back out to)
+    #merchantArrivalSpot(stall) {
+        const ang = Math.atan2(stall.j - CENTER, stall.i - CENTER);
+        for (let d = 26; d >= 14; d -= 2) {
+            const i = Math.round(CENTER + Math.cos(ang) * d), j = Math.round(CENTER + Math.sin(ang) * d);
+            if (this.isRevealed(i, j) && !this.pathBlocked(i, j)) return { i, j };
+        }
+        return null;
+    }
+
+    // step the merchant along a path toward its target; returns true on arrival
+    #moveMerchant(dt) {
+        const m = this.merchant;
+        if (!m.path || m.pi >= m.path.length) {
+            m.path = this.findPath(m.pos, m.target) || [];
+            m.pi = 0;
+            if (!m.path.length) { m.pos = { i: m.target.i + 0.5, j: m.target.j + 0.5 }; return true; }
+        }
+        const wp = m.path[m.pi];
+        const dx = (wp.i + 0.5) - m.pos.i, dy = (wp.j + 0.5) - m.pos.j;
+        const dist = Math.hypot(dx, dy), step = MERCHANT_SPEED * dt;
+        if (dist <= step) { m.pos = { i: wp.i + 0.5, j: wp.j + 0.5 }; m.pi++; }
+        else { m.pos.i += dx / dist * step; m.pos.j += dy / dist * step; }
+        if (Math.abs(dx) > Math.abs(dy)) m.facing = dx > 0 ? 2 : 1; else m.facing = dy > 0 ? 0 : 3;
+        m.animT += dt; if (m.animT > 0.13) { m.animT = 0; m.frame = (m.frame + 1) % 6; }
+        return m.pi >= m.path.length;
+    }
+
+    // Execute a trade: the farmer spends their most-plentiful surplus goods (RATE per ore) to top
+    // up toward a comfortable ore reserve, bounded by the merchant's remaining stock.
+    doTrade(f) {
+        const m = this.merchant;
+        if (!m || m.state !== 'trading' || m.stock <= 0) return false;
+        const g = f.sheet.goods || {};
+        let total = 0; for (const k in g) total += g[k];
+        // how much ore they can get: capped by the merchant's stock, a comfortable reserve, and
+        // what their surplus can actually pay for (RATE goods each)
+        const oreWant = Math.min(m.stock, Math.max(0, 12 - f.ore), Math.floor(total / MERCHANT_RATE));
+        if (oreWant <= 0) return false;
+        let toSpend = oreWant * MERCHANT_RATE, paid = 0;
+        const pools = Object.keys(g).filter(k => g[k] > 0).sort((a, b) => g[b] - g[a]);   // spend the most-plentiful first
+        for (const k of pools) { while (toSpend > 0 && g[k] > 0) { g[k]--; toSpend--; paid++; } if (toSpend <= 0) break; }
+        f.ore += oreWant; m.stock -= oreWant; m.traded += oreWant;
+        f.gainXP(2);
+        f.remember('event', `Traded ${paid} surplus goods to the merchant for ${oreWant} ore`, null, 0.85);
+        this.addLog(`${f.sheet.name} traded ${paid} goods to the merchant for ${oreWant} ore`, '#e8c860');
+        f.say('a fair trade!', '#e8c860'); f.sparkle = 1.2;
+        return true;
     }
 }
 
@@ -2677,6 +2786,15 @@ const MIN_WELL_DIST = 20;
 const COOP_WELL = { needWood: 10, needOre: 4, needed: 40 };
 const COOP_RALLY_DAYS = 2;
 const COOP_STALL_DAYS = 8;
+
+// A wandering MERCHANT visits every so often, sets up a stall by the plaza, and swaps ORE (the
+// finite frontier resource) for the surplus GOODS the farms churn out — an economic alternative
+// to trekking the highlands for stone. RATE goods buy one ore.
+const MERCHANT_INTERVAL = 6;      // days between visits (plus a jitter)
+const MERCHANT_STAY_DAYS = 1.3;   // how long the stall lingers before packing up
+const MERCHANT_ORE_STOCK = 30;    // ore the merchant brings to sell each visit
+const MERCHANT_SPEED = 2.6;       // travel speed (tiles/sec)
+const MERCHANT_RATE = 2;          // surplus goods paid per ore bought
 
 // episodic-journal tuning: cap per bot, and nightly decay per memory kind — hard
 // lessons stick for a season+, relationship/job episodes for weeks, small talk for days
@@ -2779,6 +2897,7 @@ export class Farmer {
         this.exploreHeading = ((sheet.seed % 628) / 100);   // a personal compass bearing (radians)
         this.exploreCooldown = 20 + (sheet.seed % 30);      // staggered first treks
         this.oreExpedCooldown = 0;                           // paces ore expeditions (need-driven treks for stone)
+        this.tradeCooldown = 0;                              // paces trips to the merchant's stall
         this.discovered = 0;                                 // lifetime tiles personally uncovered
         this.annexCooldown = 0;                              // gates frontier-field scouting
         this.pendingAnnex = null;                            // the staked claim being walked to
@@ -3612,6 +3731,10 @@ export class Farmer {
             if (ob && this.rand() < 0.85) { this.#clearObstacle(ob); return; }
         }
 
+        // 1b.5 the merchant's in town: swapping a surplus of goods for ore beats trekking the
+        //      highlands for it, so a farmer short on stone makes the trip to the stall.
+        if (this.#pursueMerchant()) return;
+
         // 1c. grow the homestead: gather wood, clear land, fence/build. This is a FINITE goal
         //     (expand once, then wantExpand clears until the next harvest milestone), so it must
         //     sit ABOVE the endless facility-collection treadmill or it never gets a turn —
@@ -3920,6 +4043,30 @@ export class Farmer {
         this.think('MY STONE IS SPENT — OFF TO THE HIGHLANDS FOR ORE');
         this.remember('event', `Set out for the highlands seeking ore for a ${name.toLowerCase()}`, null, 0.7);
         return this.#goTo(tgt.i + 0.5, tgt.j + 0.5, 'explore');
+    }
+
+    // total surplus goods (facility/forage produce, stashed for barter) this bot could trade away
+    #tradeableGoods() { let s = 0; const g = this.sheet.goods || {}; for (const k in g) s += g[k]; return s; }
+
+    // The merchant's in town: rather than trek the highlands for stone, a farmer sitting on a
+    // pile of surplus goods (eggs, wool, lilies…) and short on ore walks over to swap for it.
+    #pursueMerchant() {
+        const w = this.world, m = w.merchant;
+        if (!m || m.state !== 'trading' || m.stock <= 0) return false;
+        if (w.isNight() || this.energy < 0.35 || this.tradeCooldown > 0) return false;
+        if (this.ore >= 10) return false;                              // already well-stocked on stone
+        if (this.#tradeableGoods() < MERCHANT_RATE * 2) return false;  // nothing much to spare
+        if (Math.abs(this.pos.i - m.stall.i) + Math.abs(this.pos.j - m.stall.j) <= 1.8) { this.#completeTrade(); return true; }
+        this.think('THE MERCHANT IS IN TOWN — GOODS FOR ORE');
+        if (this.#goTo(m.stall.i + 0.5, m.stall.j + 1.3, 'trade')) return true;
+        this.tradeCooldown = 20;   // couldn't route there — don't re-probe every tick
+        return false;
+    }
+
+    #completeTrade() {
+        this.world.doTrade(this);
+        this.tradeCooldown = 60 + this.rand() * 60;
+        this.state = 'decide';
     }
 
     // Like #frontierTarget, but the bearing is biased OUTWARD from the valley centre — rising
@@ -4463,6 +4610,7 @@ export class Farmer {
         this.wellAskCooldown = Math.max(0, this.wellAskCooldown - dt);
         this.exploreCooldown = Math.max(0, this.exploreCooldown - dt);
         this.oreExpedCooldown = Math.max(0, this.oreExpedCooldown - dt);
+        this.tradeCooldown = Math.max(0, this.tradeCooldown - dt);
         this.annexCooldown = Math.max(0, this.annexCooldown - dt);
         // every farmer lifts the fog around wherever they walk — the map grows with the town
         {
@@ -4547,6 +4695,7 @@ export class Farmer {
                     else if (then === 'projdrop') { this.world.depositProject(this); this.state = 'decide'; }
                     else if (then === 'care') { this.state = 'care'; this.careTimer = 1.2; }
                     else if (then === 'explore') this.#completeExplore();
+                    else if (then === 'trade') this.#completeTrade();
                     else if (then === 'annex') this.#completeAnnex();
                     else if (then === 'treasure') { this.world.openTreasure(this); this.state = 'decide'; }
                     else { this.state = 'idle'; this.wanderTimer = 1 + this.rand() * 2.5; }

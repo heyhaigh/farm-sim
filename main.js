@@ -257,6 +257,12 @@ const CHEST_OPEN_SRC = { x: 276, y: 358, w: 23, h: 20 };
 const crateSheet = new Image(); let crateReady = false; crateSheet.onload = () => { crateReady = true; }; crateSheet.onerror = () => {};
 crateSheet.src = './assets/craftpix-net-654184-main-characters-home-free-top-down-pixel-art-asset/Tiled_files/Interior.png';
 const CRATES_SRC = { x: 69, y: 60, w: 26, h: 29 };   // just the two crates — stop before the next sprite
+// the wandering merchant (guild-hall Citizen sprite: 32x32 frames, 6-col walk / 12-col idle, 4 dir rows)
+const GUILD_BASE = './assets/craftpix-net-189780-free-top-down-pixel-art-guild-hall-asset-pack/PNG/';
+const merchantWalk = new Image(); merchantWalk.onerror = () => {}; merchantWalk.src = GUILD_BASE + 'Citizen1_Walk.png';
+const merchantIdle = new Image(); merchantIdle.onerror = () => {}; merchantIdle.src = GUILD_BASE + 'Citizen1_Idle.png';
+// facing (0=down,1=left,2=right,3=up) -> sheet row. The Citizen sheet rows run [down, up, left, right].
+const MERCHANT_ROW = [0, 2, 3, 1];
 const WELL_SRC = { x: 48, y: 498, w: 38, h: 38 };    // grass-base stone well in exterior.png
 const SCARECROW_SRC = { x: 4, y: 547, w: 52, h: 53 };   // scarecrow in exterior.png
 const SMOKE_ENABLED = false;   // chimney smoke off until per-house (sheet-row) alignment is nailed
@@ -1320,7 +1326,54 @@ function collectDrawables() {
         list.push({ y: sy + TILE_H * 0.5 + 0.1, draw: () => drawFarmer(f, sx, sy) });
     }
 
+    // wandering merchant + their market stall (both y-sorted into the scene)
+    const m = world.merchant;
+    if (m) {
+        if (m.state === 'trading') {
+            const ssx = cam.x + isoX(m.stall.i, m.stall.j), ssy = cam.y + isoY(m.stall.i, m.stall.j);
+            list.push({ y: ssy + TILE_H * 0.5 - 0.1, draw: () => drawStall(ssx, ssy) });
+        }
+        const sx = cam.x + isoX(m.pos.i, m.pos.j), sy = cam.y + isoY(m.pos.i, m.pos.j);
+        list.push({ y: sy + TILE_H * 0.5 + 0.12, draw: () => drawMerchant(m, sx, sy) });
+    }
+
     return list;
+}
+
+// the merchant's stall: the crate stack with a little striped awning + a coin banner above
+function drawStall(sx, sy) {
+    if (crateReady && imageLoaded(crateSheet)) {
+        const dw = Math.round(CRATES_SRC.w * ASSET_SCALE), dh = Math.round(CRATES_SRC.h * ASSET_SCALE);
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(crateSheet, CRATES_SRC.x, CRATES_SRC.y, CRATES_SRC.w, CRATES_SRC.h, Math.floor(sx - dw / 2), Math.floor(sy + TILE_H - dh), dw, dh);
+    }
+    // a striped awning above the crates
+    const ax = Math.floor(sx - 12), ay = Math.floor(sy + TILE_H - 30);
+    for (let k = 0; k < 6; k++) { ctx.fillStyle = k % 2 ? '#d05a48' : '#f0e8d8'; ctx.fillRect(ax + k * 4, ay, 4, 5); }
+    ctx.fillStyle = '#8a5a3a'; ctx.fillRect(ax, ay + 5, 24, 1);
+    // a small floating coin so the player spots the market
+    const bob = Math.round(Math.sin(performance.now() / 300) * 1.5);
+    ctx.fillStyle = '#f0c850'; ctx.fillRect(Math.floor(sx - 2), ay - 9 + bob, 4, 4);
+    ctx.fillStyle = '#c89830'; ctx.fillRect(Math.floor(sx - 1), ay - 8 + bob, 1, 2);
+}
+
+function drawMerchant(m, sx, sy) {
+    const walking = m.state === 'arriving' || m.state === 'leaving';
+    const img = walking ? merchantWalk : (imageLoaded(merchantIdle) ? merchantIdle : merchantWalk);
+    if (!img || !imageLoaded(img)) {   // sprite not loaded — a small stand-in figure
+        ctx.fillStyle = '#7a5a8a'; ctx.fillRect(Math.floor(sx - 3), Math.floor(sy + TILE_H / 2 - 12), 6, 12);
+        return;
+    }
+    const cols = Math.max(1, Math.round(img.naturalWidth / 32)), rows = 4;
+    const fw = img.naturalWidth / cols, fh = img.naturalHeight / rows;
+    const row = MERCHANT_ROW[m.facing] ?? 0;
+    const col = walking ? (m.frame % cols) : (Math.floor(performance.now() / 240) % cols);
+    const disp = Math.round(fh * ASSET_SCALE);
+    const px = Math.floor(sx - disp / 2), py = Math.floor(sy + TILE_H / 2 - disp + 2);
+    ctx.fillStyle = 'rgba(10,14,10,0.35)';
+    ctx.fillRect(Math.floor(px + disp * 0.25), py + disp - 3, Math.floor(disp * 0.5), 2);
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(img, col * fw, row * fh, fw, fh, px, py, disp, disp);
 }
 
 function fillDiamondAlpha(sx, sy, color) {
@@ -1793,6 +1846,14 @@ function drawUI() {
     const wcol = { sun: '#f0d060', cloud: '#9aa0b4', rain: '#6a9ade', storm: '#e05840', blizzard: '#bcd8ec', drought: '#e0a03c' }[world.weather];
     if (!blink) drawText(ctx, wl, hx, 7, wcol);
     hx += textWidth(wl) + 8;
+
+    // merchant-in-town banner (blinks coin-gold) so the player heads over to trade
+    if (world.merchant) {
+        const ml = world.merchant.state === 'trading' ? 'MERCHANT IN TOWN' : 'MERCHANT ARRIVING';
+        const mblink = Math.floor(performance.now() / 420) % 2 === 0;
+        drawText(ctx, ml, hx, 7, mblink ? '#f0c850' : '#b8902f');
+        hx += textWidth(ml) + 8;
+    }
 
     // (help requests now surface on the Town Board, not the top bar)
 
