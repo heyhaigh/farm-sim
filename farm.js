@@ -86,12 +86,18 @@ function facilityUnlocked(type, houseLevel, farmerLevel) {
 
 // The TOWN levels like a farmer, but on DONATED surplus rather than personal graft — and steeper,
 // so a thriving town is a long communal haul. townXpForLevel(L) = XP to go from town level L→L+1.
-const TOWN_XP_BASE = 45, TOWN_XP_GROWTH = 1.5;
+const TOWN_XP_BASE = 170, TOWN_XP_GROWTH = 1.5;
 export function townXpForLevel(level) { return Math.round(TOWN_XP_BASE * Math.pow(TOWN_XP_GROWTH, Math.max(0, level - 1))); }
 const TOWN_MAX_LEVEL = 10;                       // the town is "built out" here; donations ease off
-const DONATE_XP = { wood: 2, crops: 1, ore: 3 }; // town XP per donated unit (wood is the workhorse)
-const DONATE_BATCH = 15;                         // how much surplus a farmer carries to the silo per trip
-const DONATE_KEEP = 8;                           // wood a farmer keeps for themselves before giving
+// Town XP per donated unit — the town grows on EVERYTHING a farm makes, not just timber. Livestock
+// and facility produce (eggs/milk/wool/truffles/fish/lilies) are worth more than raw wood/forage
+// since they take a built facility to yield. Unknown goods fall back to DONATE_XP_DEFAULT.
+const DONATE_XP = { wood: 2, ore: 3, crops: 1, egg: 3, milk: 3, fish: 3, lily: 2, truffle: 4, wool: 4,
+                    wheat: 1, flower: 1, 'wild wheat': 1, wildflowers: 1 };
+const DONATE_XP_DEFAULT = 2;
+const DONATE_BATCH = 15;                          // how much surplus a farmer carries to the silo per trip
+const DONATE_KEEP = 8;                            // wood a farmer keeps for themselves before giving
+const DONATE_KEEP_CROPS = 6;                      // crops kept back (for well tolls / their own needs)
 
 // Longer days so the world breathes slowly while the (now faster) farmers bustle.
 export const DAY_LENGTH = 300;
@@ -3623,21 +3629,40 @@ export class Farmer {
         return true;
     }
 
-    // Growing the TOWN: a public-spirited settler hauls surplus timber to the silo, which is the
-    // town's XP. Only when they've no pressing personal build to save for (or genuine surplus over
-    // it), and only every few days. This is ALSO the wood demand that keeps the stumps grubbed:
-    // the most civic farmers go cut timber expressly to give when the town's still young.
+    // Everything a farm makes I can spare — timber beyond what my ambition is saving toward, crops
+    // over a small reserve, and ALL of my facility/forage goods (eggs, wool, lilies, fish, milk...).
+    // Each carries its own town-XP value. Returned biggest-pile first so a spread gets given.
+    #donatableSurplus() {
+        const out = [];
+        const woodSave = this.wantUpgrade ? (HOUSE_TIERS[this.plot.built.level + 1]?.wood || 0)
+                       : (this.wantExpand || this.wantFacility) ? FENCE_WOOD : DONATE_KEEP;
+        if (this.wood - woodSave > 0) out.push({ good: 'wood', n: this.wood - woodSave });
+        const crops = (this.sheet.produce || 0) - DONATE_KEEP_CROPS;
+        if (crops > 0) out.push({ good: 'crops', n: crops });
+        const g = this.sheet.goods || {};
+        for (const k in g) if (g[k] > 0) out.push({ good: k, n: g[k] });   // facility + forage goods: all spare
+        out.sort((a, b) => b.n - a.n);
+        return out;
+    }
+    #spendGood(good, n) {
+        if (good === 'wood') this.wood = Math.max(0, this.wood - n);
+        else if (good === 'ore') this.ore = Math.max(0, this.ore - n);
+        else if (good === 'crops') this.sheet.produce = Math.max(0, (this.sheet.produce || 0) - n);
+        else { this.sheet.goods[good] = Math.max(0, (this.sheet.goods[good] || 0) - n); }
+    }
+
+    // Growing the TOWN: a public-spirited settler hauls a basket of surplus — timber, crops AND
+    // livestock/facility produce — to the silo, which is the town's XP. Only when they've no pressing
+    // personal build to save for, and only every few days. When the town's young and they've nothing
+    // spare, the most civic go CUT timber expressly to give (the demand that keeps stumps grubbed).
     #pursueDonation() {
         const w = this.world;
         if (w.townLevel >= TOWN_MAX_LEVEL) return false;                       // town's built out
         if (this.donateCooldown > 0 || this.p.collaboration < 0.3) return false;
         if (w.isNight() || this.energy < 0.4) return false;
-        // timber I can spare beyond what my current ambition is saving toward
-        const saving = this.wantUpgrade ? (HOUSE_TIERS[this.plot.built.level + 1]?.wood || 0)
-                     : (this.wantExpand || this.wantFacility) ? FENCE_WOOD : DONATE_KEEP;
-        if (this.wood - saving >= DONATE_BATCH) {
-            this.donateTarget = { wood: DONATE_BATCH };
-            this.think('SURPLUS TIMBER FOR THE TOWN SILO');
+        const spare = this.#donatableSurplus().reduce((s, x) => s + x.n, 0);
+        if (spare >= DONATE_BATCH) {
+            this.think('SURPLUS GOODS FOR THE TOWN SILO');
             return this.#goTo(w.silo.i + 0.5, w.silo.j + 1.2, 'donate');
         }
         // young town, no personal ambition pending, strongly collaborative -> cut timber to GIVE
@@ -3650,17 +3675,40 @@ export class Farmer {
 
     #completeDonate() {
         const w = this.world;
-        const give = Math.min(this.wood, (this.donateTarget && this.donateTarget.wood) || 0);
-        this.donateTarget = null;
-        if (give <= 0) return;
-        this.wood -= give;
-        w.coffers.wood += give;
-        w.addTownXP(give * DONATE_XP.wood);
+        const surplus = this.#donatableSurplus().filter(s => s.n > 0);
+        if (!surplus.length) return;
+        // round-robin a few units from each good in turn so the basket is a genuine MIX (crops,
+        // timber AND livestock/facility produce) instead of one big pile swamping the whole batch
+        let budget = DONATE_BATCH; const taken = {};
+        let progressed = true;
+        while (budget > 0 && progressed) {
+            progressed = false;
+            for (const s of surplus) {
+                if (budget <= 0) break;
+                const remain = s.n - (taken[s.good] || 0);
+                if (remain <= 0) continue;
+                const step = Math.min(remain, 3, budget);   // up to 3 of each per round
+                taken[s.good] = (taken[s.good] || 0) + step;
+                budget -= step; progressed = true;
+            }
+        }
+        let given = 0, xp = 0;
+        const parts = [];
+        for (const good in taken) {
+            const take = taken[good];
+            this.#spendGood(good, take);
+            w.coffers[good] = (w.coffers[good] || 0) + take;
+            xp += take * (DONATE_XP[good] ?? DONATE_XP_DEFAULT);
+            given += take;
+            parts.push(`${take} ${good}`);
+        }
+        if (given <= 0) return;
+        w.addTownXP(xp);
         this.gainXP(2);
         this.mood = Math.min(1, this.mood + 0.08);
         this.sparkle = 1.5;
-        this.say(`+${give} to the silo`, '#f0d060');
-        this.remember('event', `Gave ${give} timber to the town silo — we grow this place together`, null, 0.8);
+        this.say(`+${given} to the silo`, '#f0d060');
+        this.remember('event', `Gave ${parts.join(', ')} to the town silo — we grow this place together`, null, 0.8);
         this.donateCooldown = 2 + Math.floor(this.rand() * 3);   // days before the itch to give returns
     }
 

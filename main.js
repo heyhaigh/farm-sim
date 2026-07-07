@@ -2206,7 +2206,7 @@ function buildingUnder(mx, my) {
       const maxed = world.townLevel >= 10;
       push(Math.floor(sx - 9), Math.floor(sy + TILE_H - 22), 18, 24,
         [{ t: `TOWN SILO — LV ${world.townLevel}`, c: TT_G }, { t: 'The town levels on donations', c: TT_L },
-         { t: 'Settlers give surplus timber here', c: TT_GR },
+         { t: 'Settlers give surplus goods here', c: TT_GR },
          { t: maxed ? 'The town is fully grown' : `${world.townXP} / ${world.townXpNeed()} to level ${world.townLevel + 1}`, c: TT_B }]); }
     if (world.board && boardScreen.w) push(boardScreen.x, boardScreen.y, boardScreen.w, boardScreen.h,
         [{ t: 'BULLETIN BOARD', c: TT_G }, { t: 'Town structure', c: TT_L }, { t: 'Farmers post & take jobs', c: TT_GR }]);
