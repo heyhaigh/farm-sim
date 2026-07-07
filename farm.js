@@ -1915,13 +1915,15 @@ export class World {
         // a guardian statue waits for a master hand: nobody carves the stone until someone
         // in town has the level for it
         if (def.lvlReq && !this.farmers.some(f => f.sheet.level >= def.lvlReq)) return;
-        // a statue UPGRADE rises on the existing monument's spot if the bigger footprint fits
-        // there (so it visibly replaces the old tier); otherwise it finds fresh ground and the
-        // old one is torn down on completion — either way, only ever one statue stands.
+        // A statue UPGRADE ALWAYS rises in place, right over the standing monument — the scaffold
+        // appears on the existing tier as it's rebuilt (old one torn down on completion), never as
+        // an orphan scaffold on empty ground before it. The FIRST guardian reserves room for its
+        // grandest 3x3 form up front, so every later tier fits at the same anchor.
         let site;
-        if (def.type.startsWith('statue') && this.statue && this.#statueFits(this.statue.i, this.statue.j, def.size, this.statue))
-            site = { i: this.statue.i, j: this.statue.j };
-        else site = this.#findStructureSpot(def.size || 1);
+        if (def.type.startsWith('statue')) {
+            site = this.statue ? { i: this.statue.i, j: this.statue.j }
+                               : (this.#findStructureSpot(3) || this.#findStructureSpot(def.size || 1));
+        } else site = this.#findStructureSpot(def.size || 1);
         if (!site) return;
         this.projectIndex++;
         this.project = {
