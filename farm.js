@@ -1103,8 +1103,80 @@ export class World {
             this.addLog(`${wanderer.sheet.name} keeps one eye on the horizon.`, '#40c8c0');
         }
 
+        // 4) a lone wolf — genuinely low collaboration, so they strike out to farm the far wilds
+        //    alone (see #resettleByPersonality). Guaranteed so every town has that isolated outlier.
+        let loner = fs.find(f => f !== chaos && f !== moody && f !== wanderer && P(f).collaboration < 0.3);
+        if (!loner) {
+            loner = [...fs].filter(f => f !== chaos && f !== moody && f !== wanderer)
+                .sort((a, b) => P(a).collaboration - P(b).collaboration)[0];
+            if (loner) { P(loner).collaboration = 0.14; relabel(loner); }
+        }
+        if (loner) {
+            loner.sheet.name = 'Nomad Ry';
+            this.addLog(`${loner.sheet.name} would sooner farm alone at the edge of the world.`, '#9a8fb0');
+        }
+
         // the chaos-agent's drive was bumped and the wanderer's curiosity nudged — refresh their wanderlust
         for (const f of fs) f.recomputeWanderlust();
+
+        // FREE-WILL SETTLEMENT: now that every founder's personality is final, let them choose where
+        // to homestead. The sociable hug the plaza; lone wolves (and the curious) strike out into the
+        // far, fogged corners of the valley to farm in isolation. Plots are still pristine (no ticks
+        // yet), so this is a clean reposition. See #resettleByPersonality.
+        this.#resettleByPersonality();
+    }
+
+    // venture factor 0..1: how far from the plaza a farmer wants to settle. Centered on the ~0.54
+    // collaboration the founders tend to roll and amplified, so the narrow natural spread still reads
+    // as a DRAMATIC one — lone wolves (low collaboration) and the curious strike out for the far
+    // corners; the sociable hug the plaza.
+    #ventureOf(f) { return Math.max(0, Math.min(1, 0.5 + (0.54 - f.p.collaboration) * 2.6 + (f.p.curiosity - 0.45) * 0.55)); }
+
+    #resettleByPersonality() {
+        const B = World.BASE_PLOT;
+        // the sociable claim their plaza-side spots first; the venturesome then pick their distant
+        // ground around the settled core (deterministic order: venture asc, seed as tiebreak)
+        const order = [...this.farmers].sort((a, b) => (this.#ventureOf(a) - this.#ventureOf(b)) || (a.sheet.seed - b.sheet.seed));
+        let idx = 0;
+        for (const f of order) {
+            const v = this.#ventureOf(f);
+            const desiredR = 14 + v * 50;                                   // ~14 (plaza-side) .. ~64 (far fogged corners)
+            const baseAng = idx * 2.399963 + ((f.sheet.seed >>> 7) % 628) / 100;   // golden-angle fan + seed jitter
+            idx++;
+            const spot = this.#findHomestead(f.plot, desiredR, baseAng, B);
+            if (spot) this.#relocatePlot(f, spot.i, spot.j, B);
+        }
+    }
+
+    // Search for a valid BxB homestead near a desired radius/bearing from the plaza, widening the
+    // radius and sweeping bearings until a spot clears every other farm / the commons / valley edge.
+    #findHomestead(plot, desiredR, baseAng, B) {
+        for (let dr = 0; dr <= 52; dr += 2) {
+            const radii = dr === 0 ? [desiredR] : [desiredR + dr, Math.max(11, desiredR - dr)];
+            for (const rr of radii) {
+                for (let da = 0; da <= 14; da++) {
+                    const ang = baseAng + (da % 2 ? 1 : -1) * Math.ceil(da / 2) * 0.42;
+                    const ci = Math.round(CENTER + Math.cos(ang) * rr), cj = Math.round(CENTER + Math.sin(ang) * rr);
+                    const i = ci - (B >> 1), j = cj - (B >> 1);
+                    if (this.#candidateBlockers(plot, i, j, B, B) !== null) return { i, j };
+                }
+            }
+        }
+        return null;
+    }
+
+    // Move a (still-pristine) plot to a new spot: reposition the rect, rebuild its cell-set + fields,
+    // move the settler, and reveal the fog around their new homestead.
+    #relocatePlot(f, i, j, B) {
+        const plot = f.plot;
+        plot.x = i; plot.y = j; plot.w = B; plot.h = B;
+        plot.house = { i: i + 5, j: j + 5 };
+        plot.cells = new Set();
+        for (let jj = j; jj < j + B; jj++) for (let ii = i; ii < i + B; ii++) plot.cells.add(pkey(ii, jj));
+        plot.rev++; plot._fenceRing = null;
+        this.#rebuildFields(plot);
+        f.pos = { i: i + B / 2, j: j + B };
+        this.reveal(i + (B >> 1), j + (B >> 1), 13);   // light up the homestead + a resource margin
     }
 
     #initLlmChat() {
@@ -2241,6 +2313,29 @@ export class World {
         return coop;
     }
 
+    // Truly alone out on the frontier — no neighbour close enough to share a dig. A settler this
+    // isolated (the lone wolves who struck out into the wilds) sinks a PRIVATE well of their own.
+    soloCandidate(farmer) {
+        const h = farmer.plot.house;
+        return !this.farmers.some(o => o !== farmer && Math.abs(o.plot.house.i - h.i) + Math.abs(o.plot.house.j - h.j) <= 34);
+    }
+    digSoloWell(farmer) {
+        if (this.coops.length) return null;                    // one well plan at a time, town-wide
+        const site = this.#findCoopWellSite(farmer, []);       // near their own homestead
+        if (!site) return null;
+        const coop = {
+            type: 'well', label: 'PRIVATE WELL', site, proposer: farmer, solo: true,
+            members: new Set([farmer]), stage: 'gather', bornDay: this.day,   // no rally — dig alone
+            needWood: COOP_WELL.needWood, needOre: COOP_WELL.needOre, wood: 0, ore: 0,
+            points: 0, needed: COOP_WELL.needed, builders: new Set(),
+        };
+        this.coops.push(coop);
+        farmer.think("NO NEIGHBORS OUT HERE — I'LL SINK MY OWN WELL");
+        farmer.say('a well of my own!', '#8fc7e8');
+        this.addLog(`${farmer.sheet.name} began sinking a private well out on the frontier`, '#8fc7e8');
+        return coop;
+    }
+
     // a neighbor with the same long haul signs on; the plan activates at 2 members
     joinCoop(farmer) {
         const coop = this.coops[0];
@@ -2297,10 +2392,12 @@ export class World {
         // the crew OWNS this well — outsiders must negotiate drawing rights (see negotiateWellAccess).
         // ready is set ONLY here, at completion: an in-progress dig is never a water source.
         this.wells.push({ i: site.i, j: site.j, ready: true, owners: new Set([...crew].map(f => f.sheet.seed)) });
-        this.addLog(`The neighbors' shared well is finished - shorter hauls for ${coop.members.size} farms!`, '#f0d060');
+        if (coop.solo) this.addLog(`${coop.proposer.sheet.name} finished a private well out on the frontier.`, '#f0d060');
+        else this.addLog(`The neighbors' shared well is finished - shorter hauls for ${coop.members.size} farms!`, '#f0d060');
         for (const f of crew) {
-            f.gainXP(8); f.say('OUR WELL!', '#f0d060'); f.sparkle = 3;
-            f.remember('event', 'We dug our own well - no more long hauls to the plaza', null, 1.1);
+            f.gainXP(8); f.say(coop.solo ? 'MY OWN WELL!' : 'OUR WELL!', '#f0d060'); f.sparkle = 3;
+            f.remember('event', coop.solo ? 'Sank my own well out here - no more hauling to the distant plaza'
+                                          : 'We dug our own well - no more long hauls to the plaza', null, 1.1);
             for (const g of crew) if (g !== f && this.rand() < 0.75) { this.addBond(f, g); f.adjustOpinion(g, 0.2, 'dug our well together'); }
         }
     }
@@ -4517,19 +4614,28 @@ export class Farmer {
     // dig together. Returns true when it started an action (walk/chop/mine/build).
     #pursueCoop() {
         const w = this.world;
-        if (this.goal === 'lone wolf') return false;   // digs alone or not at all
         let coop = w.farmerCoop(this);
         if (!coop) {
             if (w.coops.length) {
+                if (this.goal === 'lone wolf') return false;   // won't sign onto a shared dig
                 if (!w.joinCoop(this)) return false;       // not my side of town / haul is fine
                 coop = w.farmerCoop(this);
             } else {
-                if (this.coopCooldown > 0 || this.effCollab() < 0.3) return false;
-                if (w.waterHaul(this) < FAR_WATER) return false;
-                if (this.rand() > 0.3) return false;       // the idea strikes now and then, not every pass
-                this.coopCooldown = 45 + this.rand() * 60; // even a failed pitch isn't retried right away
-                w.proposeCoop(this);
-                return false;                              // keep farming while the plan rallies
+                if (this.coopCooldown > 0) return false;
+                if (w.waterHaul(this) < FAR_WATER) return false;   // haul's fine — no reason to dig
+                if (w.soloCandidate(this)) {
+                    // nobody near enough to share with -> sink a private well (self-reliance is what
+                    // makes striking out into the wilds survivable)
+                    this.coopCooldown = 30 + this.rand() * 45;
+                    coop = w.digSoloWell(this);
+                    if (!coop) return false;
+                } else {
+                    if (this.goal === 'lone wolf' || this.effCollab() < 0.3) return false;
+                    if (this.rand() > 0.3) return false;   // the idea strikes now and then, not every pass
+                    this.coopCooldown = 45 + this.rand() * 60; // even a failed pitch isn't retried right away
+                    w.proposeCoop(this);
+                    return false;                          // keep farming while the plan rallies
+                }
             }
         }
         if (!coop || coop.stage === 'rally') return false; // waiting on a second pair of hands
