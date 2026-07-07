@@ -278,7 +278,7 @@ export function growFarmer(memory, mutation = 0) {
         harvested: 0,
         crop: arch.crop,
         hat: arch.hat,
-        // every farmer can raise a sheep flock once they're a seasoned hand (LV18) with a yurt —
+        // every farmer can raise a sheep flock once they're a seasoned hand (LV15) with a yurt —
         // slot it right after the coop (chickens) so it's an early livestock reward, ahead of the
         // cottage-gated pond/pen. (Copy first — arch.facilities is a shared constant.)
         facilityPrefs: (() => { const p = [...arch.facilities]; const c = p.indexOf('coop'); p.splice(c >= 0 ? c + 1 : p.length, 0, 'sheeppen'); return p; })(),
