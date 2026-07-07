@@ -257,6 +257,8 @@ export class World {
         this.growthMult = 1;
         this.lightningMult = 1;
         this.rainBoost = 1;   // guardian statues call the rains: more rain weather, deeper soak
+        this.stormLosses = 0;   // crops the town has lost to lightning while under-warded — the
+                                // collective memory that pulls the guardian monument forward
         this.leader = null;
         this.llmChat = this.#initLlmChat();
 
@@ -1882,7 +1884,12 @@ export class World {
     #maybeStartProject() {
         if (this.project || this.projectIndex >= PROJECT_DEFS.length) return;
         const def = PROJECT_DEFS[this.projectIndex];
-        if (this.harvestTotal < def.at) return;
+        // a storm-battered town rushes its guardian: each crop lost to lightning pulls the
+        // monument's harvest gate forward (down to half — the level gate below still stands, so
+        // it never rises before someone can carve it). Other projects keep their normal pacing.
+        let at = def.at;
+        if (def.type.startsWith('statue')) at = Math.max(def.at - this.stormLosses * 6, def.at * 0.5);
+        if (this.harvestTotal < at) return;
         // a guardian statue waits for a master hand: nobody carves the stone until someone
         // in town has the level for it
         if (def.lvlReq && !this.farmers.some(f => f.sheet.level >= def.lvlReq)) return;
@@ -1994,6 +2001,10 @@ export class World {
                 this.statue = st;
                 this.lightningMult = pr.lightning;
                 this.rainBoost = pr.rain;
+                // the ward is up — the immediate crisis eases. Keep some memory of the storms so
+                // a still-battered town still leans toward the next upgrade, but calm the urgency.
+                this.stormLosses = Math.floor(this.stormLosses * 0.4);
+                for (const f of this.farmers) f.stormLosses = Math.floor(f.stormLosses * 0.4);
             }
             else if (type === 'well2') this.wells.push({ i: site.i, j: site.j, ready: true });
         }
@@ -2664,6 +2675,14 @@ export class World {
                     crop.stage = Math.max(0, crop.stage - 1);
                     if (this.rand() < 0.3) crop.withered = true;
                     this.addLog(`Lightning hit ${crop.owner.sheet.name}'s ${crop.type}! (save ${save.total} vs 12)`, '#c05840');
+                    // the town learns from the storms just as a farmer learns from an illness:
+                    // every crop lost while no full guardian wards the sky is remembered, and it
+                    // pulls the monument forward + sends the struck farmer to help raise it.
+                    if (this.lightningMult > 0.25) {
+                        this.stormLosses++;
+                        crop.owner.stormLosses++;
+                        crop.owner.recordStormLoss(crop.type);
+                    }
                 }
             }
         }
@@ -2720,6 +2739,9 @@ export class World {
                 else if (f.sleepDebt >= 2 || f.strain >= 5) this.addLog(`${f.sheet.name} looks worn out but powers through (CON ${save.total} vs ${dc})`, '#e0a03c');
             }
             f.strain = Math.max(0, f.strain - 4);   // a night's rest works off most of the strain
+            // a personal run of storm losses fades if the sky stops singling them out (the town's
+            // collective tally persists until the guardian actually goes up)
+            if (f.stormLosses > 0) f.stormLosses = f.stormLosses > 0.4 ? f.stormLosses * 0.85 : 0;
             // opinions fade toward neutral over time — old grudges soften, gratitude cools
             for (const [k, v] of f.opinions) { const nv = v * 0.9; if (Math.abs(nv) < 0.03) { f.opinions.delete(k); f.opinionReasons && f.opinionReasons.delete(k); } else f.opinions.set(k, nv); }
             // journal decay: each memory fades at its kind's rate; the faint are forgotten
@@ -2970,6 +2992,8 @@ export class Farmer {
         this.wellAskCooldown = 0; // gates asking a neighbor for well rights
         this.fetchWellRef = null; // the well this water run is drawing from (for tolls)
         this.birdLosses = 0;      // crops lost to crows — enough and a scarecrow goes up
+        this.stormLosses = 0;     // crops this farmer lost to lightning — drives them to help
+                                  // raise the guardian (decays slowly, like a fading grudge)
         this.scarecrowTarget = null;
 
         // episodic memory: a day-stamped journal of what happened to THIS bot — who helped,
@@ -3382,6 +3406,55 @@ export class Farmer {
         this.remember('lesson', this.illnesses > 1
             ? `Sick AGAIN from ${cause} (${this.illnesses}x now) - I keep making this mistake`
             : `Fell ill from ${cause} - ${days} days lost. Must pace myself`, null, 1.2);
+    }
+
+    // Contribute to the active town project: haul stored materials, gather what's missing, or
+    // carve once the stock is in. Returns true if it committed to an action this tick.
+    #pursueProject() {
+        const w = this.world, pr = w.project;
+        if (!pr) return false;
+        const site = pr.site;
+        if (w.projectNeedsMaterials(pr)) {
+            const canGive = (pr.wood < pr.needWood && this.wood > 0) || (pr.ore < pr.needOre && this.ore > 0);
+            if (canGive) { this.think(`HAULING STONE FOR THE ${pr.label}`); if (this.#goTo(site.i + 0.5, site.j + 1.6, 'projdrop')) return true; }
+            else if (pr.wood < pr.needWood) {
+                const src = w.nearestWood(this.pos);
+                if (src) { this.think(`TIMBER FOR THE ${pr.label}`); if (this.#goToWood(src)) return true; }
+            } else if (pr.ore < pr.needOre) {
+                const rock = w.nearestRock(this.pos, 60);
+                if (rock) { this.think(`STONE FOR THE ${pr.label}`); this.mineTarget = rock; if (this.#goTo(rock.i + 0.5, rock.j + 0.5, 'mine')) return true; }
+                else if (this.#seekOreAfar(pr.label)) return true;   // valley tapped out → expedition
+            }
+            return false;   // nothing haulable/gatherable right now — get on with the farm
+        }
+        this.think(`RAISING THE ${pr.label}!`);
+        // already at the site? build in place — don't re-walk on every redecide (the jitter)
+        if (Math.abs(this.pos.i - (site.i + 0.5)) + Math.abs(this.pos.j - (site.j + 1.6)) < 2.2 + (pr.size || 1)) { this.state = 'build'; return true; }
+        const off = (this.sheet.seed % 3) - 1;
+        if (!this.#goTo(site.i + 0.5 + off, site.j + 1.6 + (pr.size || 1) - 1, 'build')) this.#goTo(site.i + 0.5, site.j + 1.6, 'build');
+        return true;
+    }
+
+    // True when a lightning-battered farmer should drop routine chores to raise the guardian: the
+    // active project IS the monument, the sky isn't fully warded yet, and either they took a
+    // personal loss or the town as a whole has been hit hard. This is the "learned from the
+    // storms, act on it tomorrow" behavior — it lifts guardian-raising above facility busywork.
+    #stormDrivenStatue() {
+        const pr = this.world.project;
+        return !!pr && typeof pr.type === 'string' && pr.type.startsWith('statue') &&
+            this.world.lightningMult > 0.25 && (this.stormLosses >= 1 || this.world.stormLosses >= 4);
+    }
+
+    // Losing a crop to lightning is a lesson too: the storms keep taking the harvest while no
+    // guardian wards the sky, so the farmer resolves (in the journal, and in tomorrow's chores)
+    // to help raise the monument. Throttled so a bad storm leaves one lingering memory, not spam.
+    recordStormLoss(cropType) {
+        this.think('THE STORMS KEEP TAKING MY CROPS');
+        if (this.stormLosses === 1 || this.stormLosses % 3 === 0) {
+            this.remember('lesson', this.world.statue
+                ? `The storms still bite - we should raise the guardian higher`
+                : `Lightning took my ${cropType} - the town needs a guardian to ward the sky`, null, 1.2);
+        }
     }
 
     #shouldSleepNow() {
@@ -3823,6 +3896,15 @@ export class Farmer {
         const urgentCrop = this.#nextTaskOnPlot(this.plot, thirstThreshold, true, true);
         if (urgentCrop) { this.#thinkTask(urgentCrop); this.#pursue(urgentCrop, this.plot, false); return; }
 
+        // 1a. LEARNED FROM THE STORMS: with crops safe for now, a town the lightning keeps
+        //     blasting drops routine chores to raise/upgrade the guardian — the whole struck
+        //     town converging on the monument the day after a bad storm. Sits above expansion,
+        //     facility busywork and the housing treadmill; only urgent crop care outranks it.
+        if (!w.isNight() && this.energy > 0.3 && this.#stormDrivenStatue()) {
+            if (this.stormLosses >= 1) this.think('THE GUARDIAN WILL WARD THESE STORMS');
+            if (this.#pursueProject()) return;
+        }
+
         // 1b. keep the plot tidy: a farmer whose fields are choking with brush/trees clears them
         //     before collecting the umpteenth egg or chopping wood for MORE land. Encroachment
         //     creeps in daily, so this runs ahead of facility busywork and growth.
@@ -3882,29 +3964,8 @@ export class Farmer {
 
         // 1d. town project: shared infrastructure beats low-priority fill work. Statues
         //     want their stone and timber HAULED first; the carving starts once it's all in.
-        if (w.project && this.p.collaboration > 0.35 && this.energy > 0.3) {
-            const pr = w.project, site = pr.site;
-            if (w.projectNeedsMaterials(pr)) {
-                const canGive = (pr.wood < pr.needWood && this.wood > 0) || (pr.ore < pr.needOre && this.ore > 0);
-                if (canGive) { this.think(`HAULING STONE FOR THE ${pr.label}`); if (this.#goTo(site.i + 0.5, site.j + 1.6, 'projdrop')) return; }
-                else if (pr.wood < pr.needWood) {
-                    const src = w.nearestWood(this.pos);
-                    if (src) { this.think(`TIMBER FOR THE ${pr.label}`); if (this.#goToWood(src)) return; }
-                } else if (pr.ore < pr.needOre) {
-                    const rock = w.nearestRock(this.pos, 60);
-                    if (rock) { this.think(`STONE FOR THE ${pr.label}`); this.mineTarget = rock; if (this.#goTo(rock.i + 0.5, rock.j + 0.5, 'mine')) return; }
-                    else if (this.#seekOreAfar(pr.label)) return;   // valley tapped out → expedition for the monument's stone
-                }
-                // nothing haulable/gatherable right now — get on with the farm
-            } else {
-                this.think(`RAISING THE ${pr.label}!`);
-                // already at the site? build in place — don't re-walk on every redecide (the jitter)
-                if (Math.abs(this.pos.i - (site.i + 0.5)) + Math.abs(this.pos.j - (site.j + 1.6)) < 2.2 + (pr.size || 1)) { this.state = 'build'; return; }
-                const off = (this.sheet.seed % 3) - 1;
-                if (!this.#goTo(site.i + 0.5 + off, site.j + 1.6 + (pr.size || 1) - 1, 'build')) this.#goTo(site.i + 0.5, site.j + 1.6, 'build');
-                return;
-            }
-        }
+        //     (Storm-driven guardian-raising already ran far higher up, right after crop care.)
+        if (w.project && this.p.collaboration > 0.35 && this.energy > 0.3 && this.#pursueProject()) return;
 
         // 1e. fill work: sow seeds, till new ground
         const fill = this.#nextTaskOnPlot(this.plot, thirstThreshold, false);
