@@ -354,6 +354,21 @@ export class World {
     // covers a meaningful chunk of a homestead's fields)
     #scarecrowNear(i, j) { return this.scarecrows.some(s => Math.abs(s.i - i) + Math.abs(s.j - j) <= 9); }
     scarecrowOnPlot(plot) { return this.scarecrows.some(s => plot.cells.has(pkey(s.i, s.j))); }
+    scarecrowCountOnPlot(plot) { return this.scarecrows.filter(s => plot.cells.has(pkey(s.i, s.j))).length; }
+    // a big farm needs more than one scarecrow: allow roughly one per ~90 tiles of land (capped)
+    scarecrowCapFor(plot) { return Math.max(1, Math.min(6, 1 + Math.floor(plot.cells.size / 90))); }
+    // the open field tile best placed for a NEW scarecrow — the centroid of the plot's tiles that
+    // AREN'T already inside a scarecrow's scare radius. null once the whole plot is covered.
+    exposedScarecrowSpot(plot) {
+        const fields = plot.fields.filter(f => { const t = this.get(f.i, f.j); return t === T.GRASS || t === T.TILLED; });
+        const exposed = fields.filter(f => !this.#scarecrowNear(f.i, f.j));
+        if (!exposed.length) return null;
+        let ci = 0, cj = 0; for (const f of exposed) { ci += f.i; cj += f.j; }
+        ci /= exposed.length; cj /= exposed.length;
+        let best = null, bd = 1e9;
+        for (const f of exposed) { if (this.cropAt(f.i, f.j)) continue; const d = Math.abs(f.i - ci) + Math.abs(f.j - cj); if (d < bd) { bd = d; best = f; } }
+        return best || exposed.find(f => !this.cropAt(f.i, f.j)) || null;
+    }
     #birdCropTarget(i, j, maxD) {
         let best = null, bestD = maxD * maxD + 1;
         for (const c of this.crops.values()) {
@@ -4020,25 +4035,16 @@ export class Farmer {
     // it's the LOSSES that drive it). Gathers timber first if short.
     #pursueScarecrow() {
         const w = this.world, p = this.plot;
-        if (w.scarecrowOnPlot(p)) { this.birdLosses = 0; return false; }   // already guarded
+        // a plot can hold SEVERAL scarecrows (a big farm needs them) — build another only while
+        // some field is still exposed AND we're under the plot's size-based cap.
+        if (w.scarecrowCountOnPlot(p) >= w.scarecrowCapFor(p)) { this.birdLosses = 0; return false; }
+        const spot = w.exposedScarecrowSpot(p);
+        if (!spot) { this.birdLosses = 0; return false; }   // the whole plot is already guarded
         if (this.wood < SCARECROW_WOOD) {
             const src = w.nearestWood(this.pos);
             if (!src) return false;
             this.think('TIMBER FOR A SCARECROW');
             return this.#goToWood(src);
-        }
-        // plant it mid-field: the interior field tile closest to the plot's field centroid,
-        // on open ground (its 6-tile scare radius covers the crops around it)
-        let ci = 0, cj = 0;
-        const fields = p.fields.filter(f => { const t = w.get(f.i, f.j); return t === T.GRASS || t === T.TILLED; });
-        if (!fields.length) return false;
-        for (const f of fields) { ci += f.i; cj += f.j; }
-        ci /= fields.length; cj /= fields.length;
-        let spot = fields[0], bd = 1e9;
-        for (const f of fields) {
-            if (w.cropAt(f.i, f.j)) continue;
-            const d = Math.abs(f.i - ci) + Math.abs(f.j - cj);
-            if (d < bd) { bd = d; spot = f; }
         }
         this.scarecrowTarget = spot;
         this.think('THESE CROWS HAVE HAD THEIR LAST FREE MEAL');
@@ -4052,7 +4058,8 @@ export class Farmer {
         const w = this.world, t = this.scarecrowTarget;
         this.scarecrowTarget = null;
         this.#laborDrain('scarecrow');
-        if (t && this.wood >= SCARECROW_WOOD && !w.scarecrowOnPlot(this.plot)) {
+        if (t && this.wood >= SCARECROW_WOOD && !w.cropAt(t.i, t.j) && w.get(t.i, t.j) !== T.STRUCT &&
+            w.scarecrowCountOnPlot(this.plot) < w.scarecrowCapFor(this.plot)) {
             this.wood -= SCARECROW_WOOD;
             w.set(t.i, t.j, T.STRUCT);
             w.scarecrows.push({ i: t.i, j: t.j, ownerSeed: this.sheet.seed });
