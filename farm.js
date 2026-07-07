@@ -106,9 +106,9 @@ export const PROD = {
     pad:     { rate: 0.0038, feedDecay: 0.0035, yieldLo: 1, yieldHi: 2, collectT: 2.2, feedT: 1.8, wander: false },
     fish:    { rate: 0.0036, feedDecay: 0.0035, yieldLo: 1, yieldHi: 3, collectT: 2.4, feedT: 1.6, wander: true, aquatic: true },
     chicken: { rate: 0.0037, feedDecay: 0.0040, yieldLo: 1, yieldHi: 1, collectT: 1.8, feedT: 1.4, wander: true },
-    cow:     { rate: 0.0037, feedDecay: 0.0035, yieldLo: 1, yieldHi: 2, collectT: 2.6, feedT: 2.0, wander: true },
+    cow:     { rate: 0.0033, feedDecay: 0.0035, yieldLo: 1, yieldHi: 1, collectT: 2.6, feedT: 2.0, wander: true },   // milked once a day
     pig:     { rate: 0.0038, feedDecay: 0.0038, yieldLo: 1, yieldHi: 2, collectT: 2.2, feedT: 1.8, wander: true },
-    goat:    { rate: 0.0038, feedDecay: 0.0038, yieldLo: 1, yieldHi: 2, collectT: 2.0, feedT: 1.6, wander: true },
+    goat:    { rate: 0.0011, feedDecay: 0.0038, yieldLo: 1, yieldHi: 1, collectT: 2.0, feedT: 1.6, wander: true },   // sheep: shorn for wool once every ~3 days
     // the rooster produces nothing but attitude — rate 0 means never collectable; he
     // struts the coop, wants the odd feeding, and crows at dawn (see audio.js)
     rooster: { rate: 0, feedDecay: 0.004, yieldLo: 0, yieldHi: 0, collectT: 1.8, feedT: 1.4, wander: true },
@@ -220,6 +220,7 @@ export class World {
         this.revealRect = { i0: CENTER, j0: CENTER, i1: CENTER, j1: CENTER };
         this.exploredTiles = 0;
         this.crops = new Map();
+        this.tilledAt = new Map();   // "i,j" -> day tilled; unused broken ground reverts after ~5 days
         this.plots = [];
         this.farmers = [];
         this.log = [];
@@ -327,7 +328,10 @@ export class World {
         for (let dj = -maxD; dj <= maxD; dj++) for (let di = -maxD; di <= maxD; di++) {
             if (!di && !dj) continue;
             const ni = ci + di, nj = cj + dj;
-            if (this.get(ni, nj) === T.TREE) out.push({ i: ni, j: nj });
+            // isRevealed FIRST — never read (or generate) fog tiles. Without this, the wilderness
+            // is so full of trees that birds always found a "near" tree out in the fog and hopped
+            // ever outward, force-generating chunks forever (Opus review: chunks.size ~+40/day).
+            if (this.isRevealed(ni, nj) && this.get(ni, nj) === T.TREE) out.push({ i: ni, j: nj });
         }
         return out;
     }
@@ -771,6 +775,12 @@ export class World {
             const cx = Math.floor(i / CHUNK), cy = Math.floor(j / CHUNK);
             this.#chunk(cx, cy)[(j - cy * CHUNK) * CHUNK + (i - cx * CHUNK)] = t;
         }
+        // the 5-day "use it or lose it" clock on broken ground: (re)start it whenever a tile
+        // becomes freshly-tilled dirt, drop it the moment it becomes anything else. (A planted
+        // crop keeps the tile TILLED and is exempted in #decayTilled by the cropAt check, so the
+        // clock effectively pauses under a growing crop and restarts when the tile empties again.)
+        if (t === T.TILLED) this.tilledAt.set(i + ',' + j, this.day);
+        else if (this.tilledAt.size) this.tilledAt.delete(i + ',' + j);
         this.dirtyChunks.add(World.chunkKey(i, j));
         this._tilesChanged = true;
     }
@@ -1561,7 +1571,11 @@ export class World {
         // blocked tile (escaping). From open ground you can never step back into a blocker,
         // so normal paths still route around ponds/buildings — but a farmer stranded inside
         // one (e.g. a pond carved under them) can always walk to the nearest shore.
-        const okTile = (i, j, fromBlocked) => (i === gi && j === gj) || fromBlocked || !this.pathBlocked(i, j);
+        // `blk` treats UNREVEALED wilderness as impassable and — crucially — short-circuits on
+        // isRevealed BEFORE calling get(), so A* fanning toward a far/fog goal never generates
+        // chunks nobody has explored (Codex #1: a failed far path used to spawn hundreds).
+        const blk = (i, j) => !this.isRevealed(i, j) || this.pathBlocked(i, j);
+        const okTile = (i, j, fromBlocked) => (i === gi && j === gj) || fromBlocked || !blk(i, j);
         const key = (i, j) => i + ',' + j;   // string keys — coordinates are unbounded (and can be negative)
         // search window: the start/goal bounding box plus a generous detour margin. The world
         // is infinite, so the window (plus the node cap) is what keeps A* sane.
@@ -1580,12 +1594,12 @@ export class World {
                 path.reverse(); path.shift(); return path;
             }
             if (++expansions > 1800) break;
-            const curBlocked = this.pathBlocked(cur.i, cur.j);
+            const curBlocked = blk(cur.i, cur.j);
             for (const [di, dj] of dirs) {
                 const ni = cur.i + di, nj = cur.j + dj;
                 if (ni < wi0 || nj < wj0 || ni > wi1 || nj > wj1 || !okTile(ni, nj, curBlocked)) continue;
                 // no corner-cut past an obstacle edge — but a bot escaping blocked terrain may cut freely
-                if (di && dj && !curBlocked && (this.pathBlocked(cur.i + di, cur.j) || this.pathBlocked(cur.i, cur.j + dj))) continue;
+                if (di && dj && !curBlocked && (blk(cur.i + di, cur.j) || blk(cur.i, cur.j + dj))) continue;
                 const ng = cur.g + (di && dj ? 1.4 : 1), kk = key(ni, nj);
                 if (best.has(kk) && best.get(kk) <= ng) continue;
                 best.set(kk, ng);
@@ -1603,7 +1617,7 @@ export class World {
             for (let dj = -r; dj <= r; dj++) for (let di = -r; di <= r; di++) {
                 if (Math.max(Math.abs(di), Math.abs(dj)) !== r) continue;   // ring perimeter only
                 const i = ci + di, j = cj + dj;
-                if (!this.pathBlocked(i, j)) return { i, j };
+                if (this.isRevealed(i, j) && !this.pathBlocked(i, j)) return { i, j };   // don't probe (or generate) fog
             }
         }
         return null;
@@ -2261,7 +2275,10 @@ export class World {
     #tickCrops(dt) {
         const growthBonus = { sun: 1.15, cloud: 1, rain: 1.2, storm: 0.6, drought: 0.55 }[this.weather];
         const season = this.seasonDef;
-        const waterDecay = { sun: 0.014, cloud: 0.007, rain: 0, storm: 0, drought: 0.045 }[this.weather] * season.waterMul;
+        // tuned so a crop watered to full dries out over ~1 in-game day (≈380s) under clear
+        // spring skies — hotter summer sun dries faster, cloud holds moisture longer, drought
+        // fastest, rain never. So a tended field wants watering about once a day.
+        const waterDecay = { sun: 0.0028, cloud: 0.0015, rain: 0, storm: 0, drought: 0.0058 }[this.weather] * season.waterMul;
         const night = this.isNight();
         const raining = this.weather === 'rain' || this.weather === 'storm';
         for (const crop of this.crops.values()) {
@@ -2454,6 +2471,24 @@ export class World {
         }
     }
 
+    // Broken ground is an investment — use it or lose it. Tilled dirt that's sat empty (no crop)
+    // for 5+ days reverts to plain grass (the season re-colors it), so a farmer who tills more
+    // than they sow doesn't leave a permanent scar of bare dirt. Iterates only the tilled tiles
+    // we're tracking (bounded — they only exist on plots), never the infinite plane.
+    #decayTilled() {
+        if (!this.tilledAt.size) return;
+        const toRevert = [], toDrop = [];   // collect first — don't mutate the map mid-iteration
+        for (const [k, day] of this.tilledAt) {
+            const c = k.indexOf(','), i = +k.slice(0, c), j = +k.slice(c + 1);
+            if (this.get(i, j) !== T.TILLED) { toDrop.push(k); continue; }   // tile became something else
+            if (this.cropAt(i, j)) continue;                                 // a crop is using it — clock paused
+            if (this.day - day >= 5) toRevert.push({ i, j });
+        }
+        for (const k of toDrop) this.tilledAt.delete(k);
+        for (const { i, j } of toRevert) this.set(i, j, T.GRASS);            // set() drops the entry + redraws
+        if (toRevert.length) for (const p of this.plots) this.#rebuildFields(p);
+    }
+
     #dailyHealthCheck() {
         for (const f of this.farmers) {
             if (f.health === 'sick') {
@@ -2504,6 +2539,7 @@ export class World {
             this.clock = 0; this.day++;
             this.#dailyHealthCheck();
             this.#advanceSeason();
+            this.#decayTilled();
             this.#regrowWild();
             this.#encroach();
             this.#maybeSpawnTreasure();
@@ -2580,7 +2616,7 @@ const IDLE_THOUGHTS = [
     'A GOOD FENCE MAKES A GOOD FARM',
 ];
 
-const FACILITY_YIELD_NAME = { pad: 'lily', fish: 'fish', chicken: 'egg', cow: 'milk', pig: 'truffle', goat: 'milk' };
+const FACILITY_YIELD_NAME = { pad: 'lily', fish: 'fish', chicken: 'egg', cow: 'milk', pig: 'truffle', goat: 'wool' };
 
 export class Farmer {
     constructor(sheet, plot, world) {
@@ -3502,8 +3538,10 @@ export class Farmer {
             if (wild) { this.think(wild.tile === T.FLOWER ? 'WILDFLOWERS! WORTH GATHERING.' : 'WILD WHEAT! A FREE FORAGE.'); this.forageTarget = wild; this.#goTo(wild.i + 0.5, wild.j + 0.5, 'forage'); return; }
         }
 
-        // 5c. mine a nearby rock for ore — diligent/strong bots do this on downtime
-        if (!w.isNight() && this.energy > 0.35 && this.rand() < 0.3 + this.p.diligence * 0.4 + Math.max(0, mod(s.stats.str)) * 0.05) {
+        // 5c. mine a nearby rock for ore — diligent/strong bots do this on downtime (but not
+        //     when the store's already full: over-cap ore is discarded, so it'd be a wasted swing)
+        if (!w.isNight() && this.energy > 0.35 && this.ore < this.storageCap().ore &&
+            this.rand() < 0.3 + this.p.diligence * 0.4 + Math.max(0, mod(s.stats.str)) * 0.05) {
             const rock = w.nearestRock(this.pos, 9);
             if (rock) { this.think('GOOD STONE HERE — ORE FOR BUILDING.'); this.mineTarget = rock; this.#goTo(rock.i + 0.5, rock.j + 0.5, 'mine'); return; }
         }
@@ -4041,6 +4079,7 @@ export class Farmer {
         if (yieldN > 0 && !check.crit) this.say(`+${yieldN} ${c.type}`);
         if (yieldN > 0) this.carryCrop = { type: c.type, t: 2.2 };   // hold the picked produce up
         w.crops.delete(`${crop.i},${crop.j}`);
+        w.tilledAt.set(`${crop.i},${crop.j}`, w.day);   // harvested soil is empty dirt again — restart its 5-day clock
         this.gainXP(3 + yieldN);
         this.#milestones(helping && owner ? owner : this);
     }
@@ -4173,20 +4212,6 @@ export class Farmer {
         this.wellAskCooldown = Math.max(0, this.wellAskCooldown - dt);
         this.exploreCooldown = Math.max(0, this.exploreCooldown - dt);
         this.annexCooldown = Math.max(0, this.annexCooldown - dt);
-        // storage is bounded by the home (tipi cart -> yurt shed -> cottage barn); overflow
-        // simply can't be kept — a full store is one more reason to build the bigger house
-        {
-            const cap = this.storageCap();
-            if (this.wood > cap.wood || this.ore > cap.ore) {
-                this.wood = Math.min(this.wood, cap.wood);
-                this.ore = Math.min(this.ore, cap.ore);
-                if (this._storeFullT === undefined || this._storeFullT <= 0) {
-                    this._storeFullT = 60;
-                    if (this.plot.built.level < 3) { this.think('MY STORES ARE FULL - A BIGGER HOME WOULD HOLD MORE'); this.wantUpgrade = true; }
-                }
-            }
-            if (this._storeFullT > 0) this._storeFullT -= dt;
-        }
         // every farmer lifts the fog around wherever they walk — the map grows with the town
         {
             const fi = Math.floor(this.pos.i), fj = Math.floor(this.pos.j);
@@ -4339,6 +4364,21 @@ export class Farmer {
             case 'sick': if (this.health !== 'sick') this.state = 'decide'; break;
             case 'shelter': if (this.world.weather !== 'storm' && this.world.weather !== 'blizzard') this.state = 'decide'; break;
         }
+
+        // Storage clamp runs LAST, so mid-tick gains (a mined rock, a chopped tree, a collected
+        // good) are caught the same tick — resources can never exceed the home's cap AFTER a tick
+        // (Codex #2: mining used to push ore past cap until the next tick's start-of-tick clamp).
+        // Overflow can't be kept — a full store is one more reason to build the bigger house.
+        const cap = this.storageCap();
+        if (this.wood > cap.wood || this.ore > cap.ore) {
+            this.wood = Math.min(this.wood, cap.wood);
+            this.ore = Math.min(this.ore, cap.ore);
+            if (this._storeFullT === undefined || this._storeFullT <= 0) {
+                this._storeFullT = 60;
+                if (this.plot.built.level < 3) { this.think('MY STORES ARE FULL - A BIGGER HOME WOULD HOLD MORE'); this.wantUpgrade = true; }
+            }
+        }
+        if (this._storeFullT > 0) this._storeFullT -= dt;
     }
 
     #startPoachAction() { this.poachTimer = 2.2 / this.workSpeed(); this.state = 'poach'; }
