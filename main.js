@@ -1925,6 +1925,7 @@ function wrapText(str, maxChars) {
 
 const TRAIT_COLORS = {
     collaboration: '#7dd069', competitiveness: '#e0803c', honesty: '#6a9ade', diligence: '#f0d060',
+    volatility: '#c87ad0', curiosity: '#40c8c0',
 };
 const FAC_SHORT = { pond: 'pond', coop: 'coop', pen: 'pen' };
 const ACT_WORD = { collect: 'gathering', tend: 'tending', harvest: 'harvesting', water: 'watering', plant: 'planting', till: 'tilling', clear: 'clearing' };

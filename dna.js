@@ -156,7 +156,7 @@ export function fmtMod(score) {
 // they sleep), independent of the D&D stats (which decide how WELL they act).
 // ---------------------------------------------------------------------------
 
-export const TRAIT_NAMES = ['collaboration', 'competitiveness', 'honesty', 'diligence', 'volatility'];
+export const TRAIT_NAMES = ['collaboration', 'competitiveness', 'honesty', 'diligence', 'volatility', 'curiosity'];
 
 export const TRAIT_LABELS = {
     collaboration: 'TEAMWORK',
@@ -164,6 +164,7 @@ export const TRAIT_LABELS = {
     honesty: 'HONESTY',
     diligence: 'WORK ETHIC',
     volatility: 'TEMPER',
+    curiosity: 'CURIOSITY',
 };
 
 // keywords that push a trait UP (+) or DOWN (-)
@@ -189,6 +190,11 @@ const TRAIT_KEYWORDS = {
         up: ['passion', 'emotion', 'intense', 'dramatic', 'impulsive', 'restless', 'creative', 'artist', 'chaos', 'mood', 'spark', 'volatile', 'burnout'],
         down: ['calm', 'steady', 'patient', 'balanced', 'reliable', 'consistent', 'zen', 'grounded', 'measured'],
     },
+    // curiosity = the itch to explore, discover and venture out (vs stay close to home)
+    curiosity: {
+        up: ['explore', 'curious', 'discover', 'adventure', 'travel', 'wander', 'frontier', 'journey', 'question', 'learn', 'experiment', 'venture', 'roam', 'wonder', 'seek', 'novel', 'unknown'],
+        down: ['home', 'routine', 'settle', 'comfort', 'familiar', 'roots', 'homebody', 'cozy'],
+    },
 };
 
 function rollTrait(name, rand, text) {
@@ -203,7 +209,7 @@ function rollTrait(name, rand, text) {
 
 // Turn the four axes into a human-readable identity + a one-line creed.
 export function personalityLabel(p) {
-    const { collaboration: co, competitiveness: cm, honesty: ho, diligence: di, volatility: vo = 0.5 } = p;
+    const { collaboration: co, competitiveness: cm, honesty: ho, diligence: di, volatility: vo = 0.5, curiosity: cu = 0.5 } = p;
     // the manipulator: a genuinely low honesty reads first — an agent of chaos who works the town
     if (ho < 0.2) return { label: 'Agent of Chaos', creed: 'Thrives where others squabble.' };
     if (ho < 0.3 && cm > 0.55) return { label: 'Cutthroat', creed: 'Wins by any means necessary.' };
@@ -212,6 +218,8 @@ export function personalityLabel(p) {
     // the mercurial: a strong temper rules the read — warm then cold, quick to bristle
     if (vo > 0.72) return { label: 'Mercurial', creed: 'Warm one day, gone the next.' };
     if (vo > 0.58 && co < 0.52) return { label: 'Moody', creed: 'Helps when the mood takes them.' };
+    // the wanderer: an explorer's itch that pulls them past the fog line
+    if (cu > 0.72) return { label: 'Wanderer', creed: 'Always over the next hill.' };
     if (co > 0.66 && ho > 0.6) return { label: 'Pillar', creed: 'The heart of the town.' };
     if (co > 0.62 && cm < 0.45) return { label: 'Team Player', creed: 'Happiest lending a hand.' };
     if (cm > 0.66 && co < 0.45) return { label: 'Lone Wolf', creed: 'Runs their own race.' };
@@ -219,6 +227,7 @@ export function personalityLabel(p) {
     if (di > 0.7) return { label: 'Workaholic', creed: 'Burns the midnight oil.' };
     if (di < 0.32) return { label: 'Free Spirit', creed: 'Works to live, not the reverse.' };
     if (ho > 0.68) return { label: 'Straight Shooter', creed: 'Says it like it is.' };
+    if (cu < 0.24) return { label: 'Homebody', creed: 'Never happier than at home.' };
     if (vo < 0.3) return { label: 'Steady Hand', creed: 'Unshakeable, even-keeled, kind.' };
     return { label: 'Steady Hand', creed: 'Reliable, even-keeled, kind enough.' };
 }

@@ -1047,6 +1047,21 @@ export class World {
             moody.sheet.name = 'Mercurial Ry';
             this.addLog(`${moody.sheet.name} runs hot and cold — hard to read.`, '#c8a060');
         }
+
+        // 3) a wanderer — high curiosity, pulled past the fog line more than anyone
+        let wanderer = fs.find(f => f !== chaos && f !== moody && (P(f).curiosity ?? 0) > 0.72);
+        if (!wanderer) {
+            wanderer = [...fs].filter(f => f !== chaos && f !== moody)
+                .sort((a, b) => (P(b).curiosity ?? 0) - (P(a).curiosity ?? 0))[0];
+            if (wanderer) { P(wanderer).curiosity = 0.86; relabel(wanderer); }
+        }
+        if (wanderer) {
+            wanderer.sheet.name = 'Rover Ry';
+            this.addLog(`${wanderer.sheet.name} keeps one eye on the horizon.`, '#40c8c0');
+        }
+
+        // the chaos-agent's drive was bumped and the wanderer's curiosity nudged — refresh their wanderlust
+        for (const f of fs) f.recomputeWanderlust();
     }
 
     #initLlmChat() {
@@ -2951,10 +2966,10 @@ export class Farmer {
         this.nextFacility = 12 + (sheet.seed % 6);
         this.targetProd = null;
 
-        // the pull of the horizon: how strongly this bot itches to walk past the fog line.
-        // Competitive loners feel it hardest; content collaborators mostly stay home.
-        this.wanderlust = Math.max(0.08, Math.min(0.9,
-            0.18 + this.p.competitiveness * 0.35 + (1 - this.p.collaboration) * 0.3 + ((sheet.seed >>> 3) % 20) / 100));
+        // the pull of the horizon: how strongly this bot itches to walk past the fog line (see
+        // recomputeWanderlust — CURIOSITY is the main driver, so it must be recomputed if a founder's
+        // curiosity is later nudged).
+        this.recomputeWanderlust();
         this.exploreHeading = ((sheet.seed % 628) / 100);   // a personal compass bearing (radians)
         this.exploreCooldown = 20 + (sheet.seed % 30);      // staggered first treks
         this.oreExpedCooldown = 0;                           // paces ore expeditions (need-driven treks for stone)
@@ -3014,6 +3029,12 @@ export class Farmer {
     // gates who they help, visit, and dig wells with, so their generosity visibly runs hot/cold.
     get volatility() { return this.p.volatility ?? 0.5; }
     effCollab() { return Math.max(0, Math.min(1, this.p.collaboration + this.mood * this.volatility * 0.6)); }
+    // CURIOSITY is the main pull toward the fog line; a competitive streak adds restlessness. Recomputed
+    // (not just set once) so a founder whose curiosity is nudged in ensureFounderVariety updates too.
+    recomputeWanderlust() {
+        this.wanderlust = Math.max(0.05, Math.min(0.95,
+            0.05 + (this.p.curiosity ?? 0.5) * 0.7 + this.p.competitiveness * 0.15 + ((this.sheet.seed >>> 3) % 16) / 100));
+    }
 
     opinionOf(other) { return other ? (this.opinions.get(other.sheet.seed) || 0) : 0; }
     adjustOpinion(other, d, reason) {
