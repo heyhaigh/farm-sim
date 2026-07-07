@@ -595,40 +595,66 @@ function pickLoadedImage(store, names, i, j, seed = 0) {
     }
     return null;
 }
+// Group a variant set into size buckets (ascending) by the loaded sprites' NATURAL width — the assets
+// ship at 16/32/64/128 px, so this recovers small/medium/big classes with no hard-coded tables.
+const _sizeBucketCache = new Map();
+function sizeBuckets(store, names) {
+    const loadedNames = names.filter(n => imageLoaded(store[n]));
+    const key = names.join(',');
+    const cached = _sizeBucketCache.get(key);
+    if (cached && cached._n === loadedNames.length) return cached;
+    const bySize = {};
+    for (const n of loadedNames) { const px = store[n].naturalWidth; (bySize[px] = bySize[px] || []).push(n); }
+    const groups = Object.keys(bySize).map(Number).sort((a, z) => a - z).map(px => bySize[px]);
+    const b = { groups, _n: loadedNames.length };
+    _sizeBucketCache.set(key, b);
+    return b;
+}
+// Pick a variant whose NATURAL size matches an obstacle's size tier (0/1/2) — the sim's tier chooses
+// which real sprite is drawn (a big tile gets the big boulder/old tree), so the size you SEE is the
+// size the sim charges energy for, with every sprite at the one shared ASSET_SCALE (no scaling).
+function pickTieredImage(store, names, i, j, seed, tier) {
+    const b = sizeBuckets(store, names);
+    if (!b.groups.length) return null;
+    const gi = Math.floor(tier * (b.groups.length - 1) / 2);   // 3-size sets map 0/1/2; 2-size sets: big only at tier 2
+    const group = b.groups[Math.min(gi, b.groups.length - 1)];
+    const start = hash2(i * 31 + j * 17, j * 29 - i * 13, seed) % group.length;
+    for (let n = 0; n < group.length; n++) {
+        const img = store[group[(start + n) % group.length]];
+        if (imageLoaded(img)) return img;
+    }
+    return pickLoadedImage(store, names, i, j, seed);
+}
 // Wild billboards use the shared ASSET_SCALE (defined up top) like everything else.
 function wildDims(img) { return { w: Math.round(img.naturalWidth * ASSET_SCALE), h: Math.round(img.naturalHeight * ASSET_SCALE) }; }
 function wildSpec(i, j, t, season) {
-    const tsz = obstacleTier(i, j);   // size tier (0/1/2) — bigger obstacle = bigger sprite + more work to clear
     if (t === T.TREE) {
-        const sc = 1 + tsz * 0.13;   // old-growth trees loom taller (they take more chops)
         const treeSet = TREE_SETS[season.name] || TREE_SETS.SUMMER;
-        const img = pickLoadedImage(treeImg, treeSet, i, j, 61);
+        const img = pickTieredImage(treeImg, treeSet, i, j, 61, obstacleTier(i, j));
         if (img) {
-            const d = wildDims(img);
-            return { img, w: Math.round(d.w * sc), h: Math.round(d.h * sc), anchor: 0.82, depth: 0.4, leaves: season.name === 'FALL', seed: hash2(i, j, 73) };
+            const { w, h } = wildDims(img);
+            return { img, w, h, anchor: 0.82, depth: 0.4, leaves: season.name === 'FALL', seed: hash2(i, j, 73) };
         }
         const species = TREE_SPECIES[hash2(i, j, 63) % TREE_SPECIES.length];
         const spr = treeSprite(species, season.name);
-        return { img: spr, w: Math.round(spr.width * sc), h: Math.round(spr.height * sc), anchor: 1, nudgeY: 2, depth: 0.4, leaves: season.name === 'FALL', seed: hash2(i, j, 73) };
+        return { img: spr, w: spr.width, h: spr.height, anchor: 1, nudgeY: 2, depth: 0.4, leaves: season.name === 'FALL', seed: hash2(i, j, 73) };
     }
     if (t === T.FLOWER) {
-        const sc = 1 + tsz * 0.26;   // a big flowering thicket
         const bushSet = BUSH_SETS[season.name] || BUSH_SETS.SUMMER;
-        const img = pickLoadedImage(bushImg, bushSet, i, j, 64);
+        const img = pickTieredImage(bushImg, bushSet, i, j, 64, obstacleTier(i, j));
         if (img) {
-            const d = wildDims(img);
-            return { img, w: Math.round(d.w * sc), h: Math.round(d.h * sc), anchor: 0.74, depth: -1 };
+            const { w, h } = wildDims(img);
+            return { img, w, h, anchor: 0.74, depth: -1 };
         }
-        return { img: flowerSprite, w: Math.round(flowerSprite.width * sc), h: Math.round(flowerSprite.height * sc), anchor: 1, nudgeY: 2, depth: -1 };
+        return { img: flowerSprite, w: flowerSprite.width, h: flowerSprite.height, anchor: 1, nudgeY: 2, depth: -1 };
     }
     if (t === T.WHEAT) {
-        const sc = 1 + tsz * 0.26;
-        const img = pickLoadedImage(bushImg, FERN_NAMES, i, j, 66);
+        const img = pickTieredImage(bushImg, FERN_NAMES, i, j, 66, obstacleTier(i, j));
         if (img) {
-            const d = wildDims(img);
-            return { img, w: Math.round(d.w * sc), h: Math.round(d.h * sc), anchor: 0.72, depth: -1 };
+            const { w, h } = wildDims(img);
+            return { img, w, h, anchor: 0.72, depth: -1 };
         }
-        return { img: wheatSprite, w: Math.round(wheatSprite.width * sc), h: Math.round(wheatSprite.height * sc), anchor: 1, nudgeY: 2, depth: -1 };
+        return { img: wheatSprite, w: wheatSprite.width, h: wheatSprite.height, anchor: 1, nudgeY: 2, depth: -1 };
     }
     if (t === T.STUMP) {
         const img = pickLoadedImage(stumpImg, STUMP_NAMES, i, j, 26);
@@ -636,10 +662,10 @@ function wildSpec(i, j, t, season) {
         return { img: stumpSprite, w: stumpSprite.width, h: stumpSprite.height, anchor: 1, nudgeY: 2, depth: -0.5 };
     }
     if (t === T.ROCK) {
-        const img = pickLoadedImage(rockImg, ROCK_NAMES, i, j, 68);
+        const img = pickTieredImage(rockImg, ROCK_NAMES, i, j, 68, obstacleTier(i, j));
         if (!img) return null;
-        const d = wildDims(img), scale = 1 + obstacleTier(i, j) * 0.3;   // big boulders loom larger
-        return { img, w: Math.round(d.w * scale), h: Math.round(d.h * scale), anchor: 0.86, depth: -0.25 };
+        const { w, h } = wildDims(img);
+        return { img, w, h, anchor: 0.86, depth: -0.25 };
     }
     return null;
 }
