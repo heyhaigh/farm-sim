@@ -246,6 +246,7 @@ export class World {
         this.waterDeals = new Map();   // negotiated drawing rights at private wells: farmer@well -> { ownerSeed, per, count }
         this.shareDeals = [];          // harvest-share promises (join my dig for a cut): { payerSeed, payeeSeed, per, count, untilDay }
         this.structures = [];
+        this.statue = null;   // the single guardian monument (upgraded in place tier by tier)
         this.bonds = new Map();
         this.workMult = 1;
         this.growthMult = 1;
@@ -1727,7 +1728,13 @@ export class World {
         // a guardian statue waits for a master hand: nobody carves the stone until someone
         // in town has the level for it
         if (def.lvlReq && !this.farmers.some(f => f.sheet.level >= def.lvlReq)) return;
-        const site = this.#findStructureSpot(def.size || 1);
+        // a statue UPGRADE rises on the existing monument's spot if the bigger footprint fits
+        // there (so it visibly replaces the old tier); otherwise it finds fresh ground and the
+        // old one is torn down on completion — either way, only ever one statue stands.
+        let site;
+        if (def.type.startsWith('statue') && this.statue && this.#statueFits(this.statue.i, this.statue.j, def.size, this.statue))
+            site = { i: this.statue.i, j: this.statue.j };
+        else site = this.#findStructureSpot(def.size || 1);
         if (!site) return;
         this.projectIndex++;
         this.project = {
@@ -1757,6 +1764,24 @@ export class World {
             if (clear) return { i, j };
         }
         return null;
+    }
+
+    // Can the upgraded (bigger) statue sit at the old anchor? Its own current tiles are fine
+    // (they get torn down on completion); everything else in the footprint must be clear plaza.
+    #statueFits(x, y, size, oldStatue) {
+        const osz = oldStatue ? (oldStatue.size || 1) : 0;
+        for (let dj = 0; dj < size; dj++) for (let di = 0; di < size; di++) {
+            const i = x + di, j = y + dj;
+            const isOld = oldStatue && i >= oldStatue.i && i < oldStatue.i + osz && j >= oldStatue.j && j < oldStatue.j + osz;
+            if (isOld) continue;
+            if (this.get(i, j) !== T.GRASS) return false;
+        }
+        const pad = 1 + size;
+        for (const p of this.plots) if (x >= p.x - pad && x <= p.x + p.w + pad && y >= p.y - pad && y <= p.y + p.h + pad) return false;
+        if (Math.abs(this.well.i - x) + Math.abs(this.well.j - y) < 6 + size) return false;
+        if (this.board && Math.abs(this.board.i - x) + Math.abs(this.board.j - y) < 5 + size) return false;
+        for (const s of this.structures) { if (s === oldStatue) continue; if (Math.abs(s.i - x) + Math.abs(s.j - y) < 5 + size) return false; }
+        return true;
     }
 
     // statues gather materials FIRST (hauled by the town), then the carving starts
@@ -1794,12 +1819,21 @@ export class World {
             this.board = { i: site.i, j: site.j };
         } else {
             const size = pr.size || 1;
-            this.structures.push({ type, i: site.i, j: site.j, size });
+            // ONE guardian statue per town: a higher tier is an UPGRADE, not a new monument —
+            // tear the previous tier's sprite + footprint down before raising the new one.
+            if (type.startsWith('statue') && this.statue) {
+                const o = this.statue, osz = o.size || 1;
+                for (let dj = 0; dj < osz; dj++) for (let di = 0; di < osz; di++) this.set(o.i + di, o.j + dj, T.GRASS);
+                const oi = this.structures.indexOf(o); if (oi >= 0) this.structures.splice(oi, 1);
+            }
+            const st = { type, i: site.i, j: site.j, size };
+            this.structures.push(st);
             for (let dj = 0; dj < size; dj++) for (let di = 0; di < size; di++) this.set(site.i + di, site.j + dj, T.STRUCT);
             if (type === 'toolshed') this.workMult *= 1.12;
             else if (type === 'windmill') this.growthMult *= 1.15;
             else if (type.startsWith('statue')) {
                 // each tier SUPERSEDES the last: exponentially calmer skies, richer rains
+                this.statue = st;
                 this.lightningMult = pr.lightning;
                 this.rainBoost = pr.rain;
             }

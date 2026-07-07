@@ -840,6 +840,10 @@ function drawTerrainChunks() {
 const rain = [];
 for (let i = 0; i < 140; i++) rain.push({ x: Math.random() * GW, y: Math.random() * GH, s: 2.4 + Math.random() * 2 });
 
+// fireflies: warm blinking motes that drift the fields on summer nights (render-only ambience)
+const fireflies = [];
+for (let i = 0; i < 64; i++) fireflies.push({ x: Math.random() * GW, y: Math.random() * GH, ph: Math.random() * 6.28, sp: 0.5 + Math.random() * 0.8, drift: Math.random() * 6.28 });
+
 // season particles: drifting snow / leaves
 const drift = [];
 for (let i = 0; i < 90; i++) drift.push({ x: Math.random() * GW, y: Math.random() * GH, s: 0.5 + Math.random(), ph: Math.random() * 6.28 });
@@ -917,6 +921,31 @@ function drawWeather(dt, t) {
     if (nightA > 0) {
         ctx.fillStyle = `rgba(16,22,60,${nightA})`;
         ctx.fillRect(0, 0, GW, GH);
+    }
+
+    // fireflies drift and blink over the fields on warm SUMMER nights (drawn over the night
+    // tint so they read as little glows). Clear/cloud only — no fireflies out in a storm.
+    if (sName === 'SUMMER' && nightA > 0.12 && w !== 'storm' && w !== 'blizzard') {
+        const glow = Math.min(1, (nightA - 0.12) / 0.28);   // fade in as dusk deepens into night
+        const now = performance.now() / 1000;
+        for (let i = 0; i < fireflies.length; i++) {
+            const f = fireflies[i];
+            f.drift += dt * 0.7;
+            f.x += Math.cos(f.drift) * dt * 9;
+            f.y += Math.sin(f.drift * 0.7) * dt * 5 - dt * 3.5;   // gentle upward wander
+            if (f.y < -4) f.y = GH + 4; if (f.y > GH + 4) f.y = -4;
+            if (f.x < -4) f.x = GW + 4; if (f.x > GW + 4) f.x = -4;
+            const blink = 0.5 + 0.5 * Math.sin(now * f.sp * 3 + f.ph);
+            const a = blink * blink * glow * 0.85;
+            if (a < 0.06) continue;
+            const fx = Math.floor(f.x), fy = Math.floor(f.y);
+            ctx.fillStyle = `rgba(206,255,150,${a})`;
+            ctx.fillRect(fx, fy, 1, 1);
+            if (blink > 0.72) {   // a soft glow cross at peak brightness
+                ctx.fillStyle = `rgba(180,255,120,${a * 0.4})`;
+                ctx.fillRect(fx - 1, fy, 3, 1); ctx.fillRect(fx, fy - 1, 1, 3);
+            }
+        }
     }
 }
 
@@ -1885,6 +1914,114 @@ function drawSlotTooltip(slot) {
     for (const l of lines) { drawText(ctx, l.t, bx + pad, ty, l.c); ty += lh; }
 }
 
+// ---------------------------------------------------------------------------
+// Building hover tooltips — hover any structure to read its name, tier, and what
+// it does for the town, mirroring the inventory item tooltips.
+// ---------------------------------------------------------------------------
+const TT_G = '#ffe08a', TT_L = '#8f8570', TT_GR = '#7dd069', TT_B = '#8ad0e0';
+function drawInfoBox(ax, ay, lines) {
+    const pad = 3, lh = 7;
+    const w = Math.max(...lines.map(l => textWidth(l.t))) + pad * 2;
+    const h = lines.length * lh + pad * 2 - 1;
+    let bx = ax + 11, by = ay + 6;
+    if (bx + w > GW - 2) bx = ax - w - 8;
+    bx = Math.max(2, Math.min(GW - w - 2, bx));
+    by = Math.max(2, Math.min(GH - h - 2, by));
+    ctx.fillStyle = 'rgba(0,0,0,0.85)'; ctx.fillRect(bx - 1, by - 1, w + 2, h + 2);
+    ctx.fillStyle = '#2b2016'; ctx.fillRect(bx, by, w, h);
+    ctx.fillStyle = '#c9a45a'; ctx.fillRect(bx, by, w, 1); ctx.fillRect(bx, by + h - 1, w, 1);
+    let ty = by + pad;
+    for (const l of lines) { drawText(ctx, l.t, bx + pad, ty, l.c); ty += lh; }
+}
+function houseLines(f, lvl) {
+    const name = lvl >= 3 ? 'COTTAGE' : lvl >= 2 ? 'YURT' : 'TIPI';
+    const who = f.sheet.name.split(' ')[0];
+    const lines = [{ t: name, c: TT_G }, { t: `${who}'s home - tier ${lvl}`, c: TT_L }];
+    if (lvl >= 3) { lines.push({ t: 'Estate: up to 560 tiles', c: TT_GR }, { t: 'Livestock + frontier fields', c: TT_GR }, { t: 'Big stores (160 wood / 80 ore)', c: TT_GR }); }
+    else if (lvl >= 2) { lines.push({ t: 'Bigger farm (up to 360 tiles)', c: TT_GR }, { t: 'Bigger stores (80 wood / 40 ore)', c: TT_GR }, { t: 'Upgrade unlocks livestock', c: TT_L }); }
+    else { lines.push({ t: 'Small yard (up to 200 tiles)', c: TT_GR }, { t: 'Upgrade for more land + stores', c: TT_L }); }
+    return lines;
+}
+const STRUCT_INFO = {
+    toolshed: ['TOOLSHED', 'Town structure', 'All farm work +12% faster', TT_GR],
+    windmill: ['WINDMILL', 'Town structure', 'Crops grow +15% faster', TT_GR],
+    well2: ['WELL', 'Water source', 'Shorter water runs', TT_B],
+    statue1: ['GUARDIAN HEAD', 'Guardian statue - tier 1', 'Lightning -45% - Rain +20%', TT_B],
+    statue2: ['FOX SENTINEL', 'Guardian statue - tier 2', 'Lightning -70% - Rain +45%', TT_B],
+    statue3: ['STONE MOTHER', 'Guardian statue - tier 3', 'Lightning -88% - Rain +75%', TT_B],
+};
+function structLines(s) {
+    const m = STRUCT_INFO[s.type] || [String(s.type).toUpperCase(), 'Structure', '', TT_GR];
+    const lines = [{ t: m[0], c: TT_G }, { t: m[1], c: TT_L }];
+    if (m[2]) lines.push({ t: m[2], c: m[3] });
+    return lines;
+}
+const FAC_INFO = {
+    coop: ['CHICKEN COOP', 'Hens lay an egg a day'],
+    pen: ['LIVESTOCK PEN', 'Cows milked daily - sheep shorn for wool'],
+    pond: ['WATER GARDEN', 'Fish & lilies (frozen in winter)'],
+};
+function facLines(fac, owner) {
+    const m = FAC_INFO[fac.type] || [String(fac.type).toUpperCase(), ''];
+    const who = owner ? owner.sheet.name.split(' ')[0] + "'s " : '';
+    const lines = [{ t: m[0], c: TT_G }, { t: `${who}facility`, c: TT_L }];
+    if (m[1]) lines.push({ t: m[1], c: TT_GR });
+    return lines;
+}
+// Screen-space hit test against each building's DRAWN sprite box (accurate for tall
+// iso sprites, where the ground tile under the cursor isn't the building's tile).
+function buildingUnder(mx, my) {
+    const rects = [];
+    const push = (x, y, w, h, lines) => rects.push({ x, y, w, h, lines });
+    for (const f of world.farmers) {
+        if (f.plot.built.level < 1) continue;
+        const h = f.plot.house, lvl = f.plot.built.level;
+        const sx = cam.x + isoX(h.i + 1, h.j + 1), sy = cam.y + isoY(h.i + 1, h.j + 1);
+        const art = buildingArt(lvl);
+        if (art && art.ready) {
+            const S = art.src, bw = Math.round(S.w * ASSET_SCALE), bh = Math.round(bw * S.h / S.w);
+            push(Math.floor(sx - bw / 2), Math.floor(sy + TILE_H - bh + 3), bw, bh, houseLines(f, lvl));
+        } else push(Math.floor(sx - 17), Math.floor(sy - 22), 34, 30, houseLines(f, lvl));
+    }
+    for (const s of world.structures) {
+        const sx = cam.x + isoX(s.i, s.j), sy = cam.y + isoY(s.i, s.j);
+        if (String(s.type).startsWith('statue') && imageLoaded(statueImgs[s.type])) {
+            const img = statueImgs[s.type], size = s.size || 1;
+            const bx0 = cam.x + isoX(s.i + size / 2 - 0.5, s.j + size / 2 - 0.5);
+            const by0 = cam.y + isoY(s.i + size - 1, s.j + size - 1) + TILE_H;
+            const dw = STATUE_DRAW_W[s.type] || 46, dh = Math.round(dw * img.naturalHeight / img.naturalWidth);
+            push(Math.floor(bx0 - dw / 2), Math.floor(by0 - dh + 4), dw, dh, structLines(s));
+        } else if (s.type === 'well2') {
+            const wdw = Math.round(WELL_SRC.w * ASSET_SCALE), wdh = Math.round(WELL_SRC.h * ASSET_SCALE);
+            push(Math.floor(sx + TILE_W / 2 - wdw / 2 - 10), Math.floor(sy + TILE_H - wdh + 2), wdw, wdh, structLines(s));
+        } else {
+            const spr = structSprites[s.type], sp = Array.isArray(spr) ? spr[0] : spr;
+            if (sp) push(Math.floor(sx - sp.width / 2), Math.floor(sy + TILE_H - sp.height), sp.width, sp.height, structLines(s));
+        }
+    }
+    { const wl = world.well, sx = cam.x + isoX(wl.i, wl.j), sy = cam.y + isoY(wl.i, wl.j);
+      const wdw = Math.round(WELL_SRC.w * ASSET_SCALE), wdh = Math.round(WELL_SRC.h * ASSET_SCALE);
+      push(Math.floor(sx + TILE_W / 2 - wdw / 2 - 10), Math.floor(sy + TILE_H - wdh + 2), wdw, wdh,
+        [{ t: 'TOWN WELL', c: TT_G }, { t: 'Water source', c: TT_L }, { t: 'Water for the whole town', c: TT_B }]); }
+    if (world.board && boardScreen.w) push(boardScreen.x, boardScreen.y, boardScreen.w, boardScreen.h,
+        [{ t: 'BULLETIN BOARD', c: TT_G }, { t: 'Town structure', c: TT_L }, { t: 'Farmers post & take jobs', c: TT_GR }]);
+    for (const p of world.plots) for (const fac of p.facilities) {
+        const cxT = fac.x + fac.w / 2 - 0.5, cyT = fac.y + fac.h / 2 - 0.5;
+        const sx = cam.x + isoX(cxT, cyT), sy = cam.y + isoY(cxT, cyT);
+        const halfw = (fac.w + fac.h) * (TILE_W / 4), halfh = (fac.w + fac.h) * (TILE_H / 4);
+        push(Math.floor(sx - halfw), Math.floor(sy - halfh + TILE_H / 2), Math.floor(halfw * 2), Math.floor(halfh * 2),
+            facLines(fac, world.farmers.find(fm => fm.plot === p)));
+    }
+    // most specific match = the drawn box whose center is nearest the cursor
+    let best = null, bestD = Infinity;
+    for (const r of rects) {
+        if (mx < r.x || mx > r.x + r.w || my < r.y || my > r.y + r.h) continue;
+        const d = (mx - (r.x + r.w / 2)) ** 2 + (my - (r.y + r.h / 2)) ** 2;
+        if (d < bestD) { bestD = d; best = r; }
+    }
+    return best ? best.lines : null;
+}
+
 const SHEET_LABEL = '#8f8570', SHEET_VAL = '#e8e0cc', SHEET_GOLD = '#c9a45a';
 function drawSheet(f) {
     const s = f.sheet, p = s.personality;
@@ -2430,6 +2567,14 @@ function frame(now) {
     drawWeather(dt, t);
     drawUI();
 
+    // building hover tooltip — only when hovering the world (not over a panel, not dragging,
+    // and not while an inventory-slot tooltip is already showing on the open sheet)
+    if (booted && mouse.x >= 0 && !mouse.dragging && !rosterOpen && !boardOpen && mouse.y > 18 &&
+        !(selected && inRect(mouse, SHEET_RECT)) && !inRect(mouse, MINIMAP)) {
+        const info = buildingUnder(mouse.x, mouse.y);
+        if (info) drawInfoBox(mouse.x, mouse.y, info);
+    }
+
     crt.setPalette(hexPalette(world.seasonDef.dmg));
     crt.render(t);
 }
@@ -2509,5 +2654,7 @@ function drawBootScreen(t) {
         // math can only guess GW/GH from the window aspect and lands wide of the mark)
         goTo: (i, j) => { cam.x = GW / 2 - isoX(i, j); cam.y = GH / 2 - isoY(i, j); },
         get GW() { return GW; }, get GH() { return GH; },
+        get mouse() { return { x: mouse.x, y: mouse.y, drag: mouse.dragging }; },
+        buildingUnder: (x, y) => buildingUnder(x ?? mouse.x, y ?? mouse.y),
     };
 })();
