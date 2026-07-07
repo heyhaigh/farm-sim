@@ -2186,6 +2186,19 @@ function drawSheet(f) {
         }
         y += 3;
     }
+    // --- Town gossip: rumors this farmer has OVERHEARD about others (who warned them off
+    //     whom), separate from their own first-hand memories. Fades with the rumor's strength.
+    if (f.gossip && f.gossip.length) {
+        y = sectionBand(IX, y, IW, `TOWN GOSSIP (${f.gossip.length})`);
+        const heard = [...f.gossip].reverse().slice(0, 5);
+        for (const g of heard) {
+            const col = g.strength > 0.6 ? '#c8a86a' : g.strength > 0.4 ? '#9a8a5a' : '#6a5f45';
+            drawText(ctx, `d${g.day}`, IX, y, '#a08050');
+            for (const line of wrapText(`${g.from}: don't trust ${g.about}`, 27).slice(0, 2)) { drawText(ctx, line, IX + 17, y, col); y += 7; }
+            y += 1;
+        }
+        y += 3;
+    }
     // --- Memories: the bot's episodic journal, newest first, paginated. Entry text
     //     fades with the memory's decayed strength — old faint memories literally dim.
     MEM_PREV.w = 0; MEM_NEXT.w = 0;

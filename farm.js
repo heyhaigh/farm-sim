@@ -2803,6 +2803,17 @@ export class Farmer {
         // real events (help, pay, welching, poaching, soup). Grudges + gratitude are personal
         // and decay toward neutral over time. Drives who they help / trade with (see takeHelp).
         this.opinions = new Map();
+        // TOWN GOSSIP: rumors this bot has OVERHEARD about OTHER people (distinct from `journal`,
+        // which is their own first-hand memories). Each fades over the days and is forgotten.
+        this.gossip = [];
+    }
+
+    // File away a rumor just heard: `from` warned against `about`. Kept newest-first-ish,
+    // decayed nightly (see reflect), capped so a long game doesn't hoard chatter.
+    hearGossip(from, about) {
+        if (!from || !about || from === this || about === this) return;
+        this.gossip.push({ day: this.world.day, from: shortName(from), about: shortName(about), strength: 1 });
+        if (this.gossip.length > 16) this.gossip.shift();
     }
 
     // how collaborative this bot is ACTING today: their base teamwork, shifted by today's mood
@@ -3160,6 +3171,8 @@ export class Farmer {
         // a new day's mood: an emotional random walk, its amplitude the `volatility` trait.
         // Even-keeled bots barely move; the mercurial can wake up transformed.
         this.mood = Math.max(-1, Math.min(1, this.mood * 0.55 + (this.world.rand() - 0.5) * 2 * this.volatility));
+        // yesterday's rumors fade — town gossip is short-lived; the faintest is forgotten
+        if (this.gossip.length) { for (const g of this.gossip) g.strength *= 0.8; this.gossip = this.gossip.filter(g => g.strength > 0.22); }
         // the moody's slow burn: a genuine plea for help still hanging a day later stings —
         // they sour and quietly blame the town's most able hand for leaving them to it
         if (this.volatility > 0.5 && this.world.day - this.helpPostedDay >= 1 &&
@@ -3326,9 +3339,6 @@ export class Farmer {
         } else if (grudge && grudge.v < -0.3 && grudge.who !== other && this.rand() < 0.4) {
             speakerLine = `DON'T TRUST ${shortName(grudge.who).toUpperCase()}...`;
             speakerColor = '#c9a45a';
-            // a manipulator's poison actually LANDS: the listener's regard for the badmouthed
-            // farmer slips — that's the chaos-agent quietly turning the town against each other.
-            if (this.p.honesty < 0.35 && other !== grudge.who) other.adjustOpinion(grudge.who, -0.1, `heard unsettling things about them`);
         } else if (w.weather === 'storm') {
             speakerLine = this.#pickLine(['SKY SOUNDS ANGRY TODAY.', 'COUNT YOUR ROOF BEAMS.']);
             speakerColor = '#8a9ade';
@@ -3387,6 +3397,14 @@ export class Farmer {
         for (const m of this.journal) if (m.who === other.sheet.seed && m.kind !== 'chat' && m.strength > 0.5 && (!vivid || m.strength > vivid.strength)) vivid = m;
         // the neighbour answers, tone set by THEIR regard for us
         const rop = other.opinionOf(this);
+        // GOSSIP — an independent aside, whatever pleasantry they exchange: a farmer with a real
+        // grudge will sometimes warn this (still-neutral) neighbour off the one they resent. A
+        // manipulator (low honesty) poisons the well far more readily, AND it lands (opinion drop).
+        if (grudge && grudge.v < -0.3 && grudge.who !== other && other.opinionOf(grudge.who) > -0.35 &&
+            this.rand() < (this.p.honesty < 0.35 ? 0.6 : 0.18)) {
+            other.hearGossip(this, grudge.who);
+            if (this.p.honesty < 0.35) other.adjustOpinion(grudge.who, -0.1, 'heard unsettling things about them');
+        }
         const fallback = this.#scriptedChat(other, op, rop, grudge, vivid);
         if (w.tryLlmChat(this, other, { op, rop, grudge, vivid, fallback })) return true;
         w.applyChatLines(this, other, fallback, { weight: fallback.weight });
