@@ -75,7 +75,14 @@ export function xpForLevel(level) { return Math.round(XP_BASE * Math.pow(XP_GROW
 
 // Which house tier a facility needs: chickens (coop) come with the yurt; ponds and livestock pens
 // (cows/pigs/goats) are a cottage privilege — the herd is what pulls a farmer up the last rung.
-const FACILITY_MIN_LEVEL = { coop: 2, pond: 3, pen: 3 };
+// A SHEEP pen also unlocks at the yurt, but only for a seasoned hand (personal level 15) — an
+// early reward for a veteran who hasn't yet raised a cottage.
+const FACILITY_MIN_LEVEL = { coop: 2, pond: 3, pen: 3, sheeppen: 2 };
+const FACILITY_MIN_FARMER_LEVEL = { sheeppen: 15 };
+// True if a farmer's house tier AND personal level unlock this facility right now.
+function facilityUnlocked(type, houseLevel, farmerLevel) {
+    return houseLevel >= (FACILITY_MIN_LEVEL[type] || 3) && farmerLevel >= (FACILITY_MIN_FARMER_LEVEL[type] || 0);
+}
 
 // The TOWN levels like a farmer, but on DONATED surplus rather than personal graft — and steeper,
 // so a thriving town is a long communal haul. townXpForLevel(L) = XP to go from town level L→L+1.
@@ -133,7 +140,8 @@ export const PROD = {
     chicken: { rate: 0.0037, feedDecay: 0.0040, yieldLo: 1, yieldHi: 1, collectT: 1.8, feedT: 1.4, wander: true },
     cow:     { rate: 0.0033, feedDecay: 0.0035, yieldLo: 1, yieldHi: 1, collectT: 2.6, feedT: 2.0, wander: true },   // milked once a day
     pig:     { rate: 0.0038, feedDecay: 0.0038, yieldLo: 1, yieldHi: 2, collectT: 2.2, feedT: 1.8, wander: true },
-    goat:    { rate: 0.0011, feedDecay: 0.0038, yieldLo: 1, yieldHi: 1, collectT: 2.0, feedT: 1.6, wander: true },   // sheep: shorn for wool once every ~3 days
+    goat:    { rate: 0.0011, feedDecay: 0.0038, yieldLo: 1, yieldHi: 1, collectT: 2.0, feedT: 1.6, wander: true },   // shorn for wool once every ~3 days
+    sheep:   { rate: 0.0012, feedDecay: 0.0036, yieldLo: 1, yieldHi: 2, collectT: 2.0, feedT: 1.6, wander: true },   // a flock, shorn for wool every ~3 days
     // the rooster produces nothing but attitude — rate 0 means never collectable; he
     // struts the coop, wants the odd feeding, and crows at dawn (see audio.js)
     rooster: { rate: 0, feedDecay: 0.004, yieldLo: 0, yieldHi: 0, collectT: 1.8, feedT: 1.4, wander: true },
@@ -167,6 +175,7 @@ const FACILITY_DEFS = {
     pond: { label: 'water garden', w: 3, h: 3, produce: 'lily & fish' },
     coop: { label: 'chicken coop', w: 3, h: 3, produce: 'eggs' },
     pen:  { label: 'livestock pen', w: 3, h: 3, produce: 'milk' },
+    sheeppen: { label: 'sheep pen', w: 3, h: 3, produce: 'wool' },
 };
 
 // energy / health tuning
@@ -1686,9 +1695,9 @@ export class World {
     buildNextFacility(farmer) {
         const plot = farmer.plot;
         const built = new Set(plot.facilities.map(f => f.type));
-        // the first preferred facility that's unbuilt AND unlocked by the current house tier
+        // the first preferred facility that's unbuilt AND unlocked (house tier + personal level)
         const nextType = (farmer.sheet.facilityPrefs || ['pond', 'coop', 'pen'])
-            .find(t => !built.has(t) && plot.built.level >= (FACILITY_MIN_LEVEL[t] || 3));
+            .find(t => !built.has(t) && facilityUnlocked(t, plot.built.level, farmer.sheet.level));
         if (!nextType) return false;
         const region = this.#findFacilityRegion(plot, nextType);
         if (!region) return false;
@@ -1699,15 +1708,15 @@ export class World {
         return true;
     }
 
-    // an unbuilt facility the farmer's CURRENT house tier already unlocks (buildable right now)
+    // an unbuilt facility the farmer's CURRENT house tier + level already unlock (buildable now)
     farmerHasUnbuiltFacility(farmer) {
         const built = new Set(farmer.plot.facilities.map(f => f.type));
-        return (farmer.sheet.facilityPrefs || []).some(t => !built.has(t) && farmer.plot.built.level >= (FACILITY_MIN_LEVEL[t] || 3));
+        return (farmer.sheet.facilityPrefs || []).some(t => !built.has(t) && facilityUnlocked(t, farmer.plot.built.level, farmer.sheet.level));
     }
-    // an unbuilt facility LOCKED behind a higher house tier (the dream that pulls them up the ladder)
+    // an unbuilt facility still LOCKED (higher house tier or personal level) — the dream that pulls them up
     farmerHasLockedFacility(farmer) {
         const built = new Set(farmer.plot.facilities.map(f => f.type));
-        return (farmer.sheet.facilityPrefs || []).some(t => !built.has(t) && farmer.plot.built.level < (FACILITY_MIN_LEVEL[t] || 3));
+        return (farmer.sheet.facilityPrefs || []).some(t => !built.has(t) && !facilityUnlocked(t, farmer.plot.built.level, farmer.sheet.level));
     }
 
     // Spiral ring search over KNOWN (revealed) territory — the world is infinite now, so
@@ -1883,11 +1892,11 @@ export class World {
             fac.trough = { i: region.x + region.w - 1, j: region.y + region.h - 1 };
             const n = 4 + Math.floor(rand() * 3);
             for (let k = 0; k < n; k++) fac.producers.push(this.#makeProducer('chicken', cx + (rand() - 0.5) * region.w * 0.6, cy + (rand() - 0.5) * region.h * 0.6, region));
-        } else if (type === 'pen') {
+        } else if (type === 'pen' || type === 'sheeppen') {
             fac.struct = { i: region.x, j: region.y, kind: 'barn' };
             this.set(region.x, region.y, T.BARN);
             fac.trough = { i: region.x + region.w - 1, j: region.y + region.h - 1 };
-            const kind = sheet.penAnimal || 'cow';
+            const kind = type === 'sheeppen' ? 'sheep' : (sheet.penAnimal || 'cow');
             const n = 3 + Math.floor(rand() * 2);
             for (let k = 0; k < n; k++) fac.producers.push(this.#makeProducer(kind, cx + (rand() - 0.5) * region.w * 0.6, cy + (rand() - 0.5) * region.h * 0.6, region));
         }
@@ -3032,7 +3041,7 @@ const IDLE_THOUGHTS = [
     'A GOOD FENCE MAKES A GOOD FARM',
 ];
 
-const FACILITY_YIELD_NAME = { pad: 'lily', fish: 'fish', chicken: 'egg', cow: 'milk', pig: 'truffle', goat: 'wool' };
+const FACILITY_YIELD_NAME = { pad: 'lily', fish: 'fish', chicken: 'egg', cow: 'milk', pig: 'truffle', goat: 'wool', sheep: 'wool' };
 
 export class Farmer {
     constructor(sheet, plot, world) {

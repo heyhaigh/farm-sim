@@ -7,7 +7,7 @@ import {
     TILE_W, TILE_H, makeCanvas, drawText, textWidth,
     makeFarmerSprites, makeCropSprites, makeHouse, makeWell, makeBoard, makeFencePost,
     makeScaffold, makeToolshed, makeWindmill, makeTower, makeLantern,
-    makeLilyPad, makeFish, makeChicken, makeCow, makePig, makeGoat, makeCoop, makeBarn, makeTrough,
+    makeLilyPad, makeFish, makeChicken, makeCow, makePig, makeGoat, makeSheep, makeCoop, makeBarn, makeTrough,
     makeTree, makeStump, makeWildWheat, makeWildFlowers,
     fillDiamond, strokeDiamond,
 } from './pixel.js';
@@ -469,9 +469,10 @@ const producerSprites = {
     cow: [makeCow(0), makeCow(1)],
     pig: [makePig(0), makePig(1)],
     goat: [makeGoat(0), makeGoat(1)],
+    sheep: [makeSheep(0), makeSheep(1)],
 };
 // bobbing "ready to collect" product icon colors
-const PRODUCT_ICON = { pad: '#e880a8', fish: '#e08040', chicken: '#f4f0e8', cow: '#ffffff', pig: '#d8b088', goat: '#ffffff', rooster: '#e05840' };
+const PRODUCT_ICON = { pad: '#e880a8', fish: '#e08040', chicken: '#f4f0e8', cow: '#ffffff', pig: '#d8b088', goat: '#ffffff', sheep: '#f0eee6', rooster: '#e05840' };
 
 // ---- Real character sprites (CraftPix swordsman: body + head layers, sword skipped) -------
 // Every farmer is the same character, differentiated by hue-shifting the non-skin pixels
@@ -2055,7 +2056,7 @@ const TRAIT_COLORS = {
     collaboration: '#7dd069', competitiveness: '#e0803c', honesty: '#6a9ade', diligence: '#f0d060',
     volatility: '#c87ad0', curiosity: '#40c8c0',
 };
-const FAC_SHORT = { pond: 'pond', coop: 'coop', pen: 'pen' };
+const FAC_SHORT = { pond: 'pond', coop: 'coop', pen: 'pen', sheeppen: 'sheep' };
 const ACT_WORD = { collect: 'gathering', tend: 'tending', harvest: 'harvesting', water: 'watering', plant: 'planting', till: 'tilling', clear: 'clearing' };
 
 function barFill(x, y, w, frac, color, bg = '#20242f') {
@@ -2155,7 +2156,8 @@ function structLines(s) {
 }
 const FAC_INFO = {
     coop: ['CHICKEN COOP', 'Hens lay an egg a day'],
-    pen: ['LIVESTOCK PEN', 'Cows milked daily - sheep shorn for wool'],
+    pen: ['LIVESTOCK PEN', 'Cows/pigs/goats, tended daily'],
+    sheeppen: ['SHEEP PEN', 'A flock shorn for wool'],
     pond: ['WATER GARDEN', 'Fish & lilies (frozen in winter)'],
 };
 function facLines(fac, owner) {
