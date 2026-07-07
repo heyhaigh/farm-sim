@@ -1942,6 +1942,25 @@ function drawBoard() {
     }
 }
 
+// A small pixel speaker for the sound toggle: driver + cone pointing right, green sound-waves when
+// on, a red X when muted. Drawn in a ~8x8 area at (x,y).
+function drawSpeakerIcon(x, y, on) {
+    ctx.fillStyle = '#c8ccd8';
+    ctx.fillRect(x, y + 2, 2, 4);        // driver/neck
+    ctx.fillRect(x + 2, y + 1, 1, 6);    // cone mid
+    ctx.fillRect(x + 3, y, 1, 8);        // cone mouth (tallest)
+    if (on) {
+        ctx.fillStyle = '#7dd069';
+        ctx.fillRect(x + 5, y + 3, 1, 2);
+        ctx.fillRect(x + 6, y + 2, 1, 1); ctx.fillRect(x + 6, y + 5, 1, 1);
+        ctx.fillRect(x + 7, y + 1, 1, 1); ctx.fillRect(x + 7, y + 6, 1, 1);
+    } else {
+        ctx.fillStyle = '#c05840';       // muted: a small X
+        ctx.fillRect(x + 5, y + 2, 1, 1); ctx.fillRect(x + 6, y + 3, 1, 1); ctx.fillRect(x + 7, y + 4, 1, 1);
+        ctx.fillRect(x + 7, y + 2, 1, 1); ctx.fillRect(x + 5, y + 4, 1, 1);
+    }
+}
+
 function drawUI() {
     // top bar
     ctx.fillStyle = 'rgba(12,14,22,0.92)';
@@ -2003,6 +2022,17 @@ function drawUI() {
         ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
         drawText(ctx, label, rect.x + BPAD, rect.y + 4, active ? activeFg : '#c8ccd8');
     };
+    // a small icon-only button in the same right-to-left strip (used for the sound toggle)
+    const barIconBtn = (rect, w, drawIcon) => {
+        rect.w = w; rect.h = 12; rect.y = 3;
+        bx -= rect.w; rect.x = bx; bx -= BGAP;
+        ctx.fillStyle = 'rgba(255,255,255,0.08)';
+        ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+        drawIcon(rect.x, rect.y);
+    };
+
+    // sound toggle — RIGHTMOST (drawn first), a speaker icon (with an X when muted), no text
+    barIconBtn(SND_BTN, 15, (x, y) => drawSpeakerIcon(x + 3, y + 2, audio.enabled));
 
     // speed controls in the corner: > = 5x, >> = 20x; a 1X revert appears while sped up
     const spd = world._speedMult || 1;
@@ -2020,7 +2050,6 @@ function drawUI() {
         if (postCount > 0 && !boardOpen) { ctx.fillStyle = '#e0a03c'; ctx.fillRect(BOARD_BTN.x + BOARD_BTN.w - 4, BOARD_BTN.y - 1, 4, 4); }
     }
 
-    barBtn(SND_BTN, audio.enabled ? 'SND' : 'MUTE', !audio.enabled, 'rgba(255,255,255,0.04)', '#6a6f7c');
 
     // bottom log
     ctx.fillStyle = 'rgba(12,14,22,0.92)';
