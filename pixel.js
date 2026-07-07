@@ -1282,15 +1282,17 @@ export function makeBush(variant = 0) {
 
 export function makeLantern() {
     const [c, ctx] = makeCanvas(6, 8);
-    ctx.fillStyle = '#584838';
+    ctx.fillStyle = '#6a5844';
     ctx.fillRect(2, 0, 2, 1);      // handle top
     ctx.fillRect(1, 1, 1, 1); ctx.fillRect(4, 1, 1, 1);
-    ctx.fillStyle = '#6a5844';
+    ctx.fillStyle = '#7c6a50';
     ctx.fillRect(1, 2, 4, 1);      // cap
-    ctx.fillStyle = '#f0d040';
-    ctx.fillRect(1, 3, 4, 4);      // glass glow
-    ctx.fillStyle = '#fff2b0';
-    ctx.fillRect(2, 4, 2, 2);      // flame
+    ctx.fillStyle = '#ffb020';
+    ctx.fillRect(1, 3, 4, 4);      // glass glow (hot amber)
+    ctx.fillStyle = '#ffe07a';
+    ctx.fillRect(1, 3, 4, 1); ctx.fillRect(1, 3, 1, 4); ctx.fillRect(4, 3, 1, 4);  // bright rim
+    ctx.fillStyle = '#fffbe8';
+    ctx.fillRect(2, 4, 2, 2);      // white-hot flame core
     ctx.fillStyle = '#584838';
     ctx.fillRect(1, 7, 4, 1);      // base
     return c;

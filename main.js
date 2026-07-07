@@ -1289,15 +1289,32 @@ function drawFarmer(f, sx, sy) {
     const py = Math.floor(sy + TILE_H / 2 - fh + 2);
     const footY = py + fh - 2;
 
-    // lantern glow for anyone up and about at night
+    // lantern glow for anyone up and about at night — a warm pool of light cast additively
+    // over the scene (reads as EMITTED light, not a flat overlay) with a hot flickering core.
     const awakeAtNight = world.isNight() && f.state !== 'sleep' && f.state !== 'shelter';
     if (awakeAtNight) {
-        const flick = 0.5 + 0.12 * Math.sin(f.animTime * 9);
-        const g = ctx.createRadialGradient(sx, py + 10, 2, sx, py + 10, 22);
-        g.addColorStop(0, `rgba(245,215,90,${0.45 * flick})`);
-        g.addColorStop(1, 'rgba(245,215,90,0)');
+        const carrying = f.state === 'work' || f.state === 'walk' || f.state === 'build';
+        const flick = 0.82 + 0.18 * Math.sin(f.animTime * 9) + 0.06 * Math.sin(f.animTime * 23);
+        const lx = sx + (carrying ? (f.facing < 0 ? -3 : 3) : 0);   // anchor on the held lantern
+        const ly = py + (carrying ? 12 : 10);
+        const R = carrying ? 34 : 26;
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        // wide warm falloff
+        const g = ctx.createRadialGradient(lx, ly, 1, lx, ly, R);
+        g.addColorStop(0, `rgba(255,244,200,${0.55 * flick})`);
+        g.addColorStop(0.35, `rgba(250,200,90,${0.34 * flick})`);
+        g.addColorStop(0.7, `rgba(230,150,50,${0.14 * flick})`);
+        g.addColorStop(1, 'rgba(230,150,50,0)');
         ctx.fillStyle = g;
-        ctx.fillRect(sx - 22, py - 12, 44, 44);
+        ctx.fillRect(lx - R, ly - R, R * 2, R * 2);
+        // tight hot core
+        const core = ctx.createRadialGradient(lx, ly, 0, lx, ly, 7);
+        core.addColorStop(0, `rgba(255,252,235,${0.75 * flick})`);
+        core.addColorStop(1, 'rgba(255,240,180,0)');
+        ctx.fillStyle = core;
+        ctx.fillRect(lx - 7, ly - 7, 14, 14);
+        ctx.restore();
     }
 
     // tiny shadow
