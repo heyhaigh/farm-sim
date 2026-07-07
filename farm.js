@@ -2162,6 +2162,10 @@ export class World {
 
     #tickLightning(dt) {
         this.lightningFlash = Math.max(0, this.lightningFlash - dt * 3);
+        // Always fade out an active strike bolt, no matter the current weather. (This used to
+        // live after the `weather !== 'storm'` early-return, so a bolt set just before a storm
+        // cleared would hang on screen as a stuck vertical line until the next storm.)
+        if (this.struckTile) { this.struckTile.t -= dt * 1.5; if (this.struckTile.t <= 0) this.struckTile = null; }
         // blizzard: frequent soft whiteout gusts instead of lightning strikes (no crop damage)
         if (this.weather === 'blizzard') {
             this.lightningTimer -= dt;
@@ -2189,7 +2193,6 @@ export class World {
                 }
             }
         }
-        if (this.struckTile) { this.struckTile.t -= dt * 1.5; if (this.struckTile.t <= 0) this.struckTile = null; }
     }
 
     #dailyHealthCheck() {
