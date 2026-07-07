@@ -69,14 +69,18 @@ const MAX_FARMERS = 8;   // the original map maxes out at the first ring's 8 hom
 export const DAY_LENGTH = 300;
 export const NIGHT_LENGTH = 80;
 
+// Durations are in seconds and a day is DAY_LENGTH+NIGHT_LENGTH (380s) — the ranges are WIDE and
+// span whole days, so weather actually settles in: a passing shower one time, rain for two-plus
+// days the next, a multi-day drought, a blizzard that holds. Each state also carries a self-weight
+// in `next`, so a spell can renew itself into a genuine streak rather than always flipping away.
 const WEATHER_STATES = {
-    sun: { label: 'SUNNY', next: { sun: 2, cloud: 3, drought: 0.6 }, dur: [26, 54] },
-    cloud: { label: 'CLOUDY', next: { sun: 2, rain: 3, storm: 0.8, blizzard: 0.8 }, dur: [16, 34] },
-    rain: { label: 'RAIN', next: { cloud: 2, sun: 1, storm: 1, blizzard: 1 }, dur: [16, 36] },
-    storm: { label: 'STORM!', next: { rain: 2, cloud: 2 }, dur: [12, 22] },
+    sun: { label: 'SUNNY', next: { sun: 2.5, cloud: 3, drought: 0.6 }, dur: [220, 950] },
+    cloud: { label: 'CLOUDY', next: { cloud: 1, sun: 2, rain: 3, storm: 0.8, blizzard: 0.8 }, dur: [130, 480] },
+    rain: { label: 'RAIN', next: { rain: 1.4, cloud: 2, sun: 1, storm: 1, blizzard: 1 }, dur: [160, 820] },
+    storm: { label: 'STORM!', next: { rain: 2, cloud: 2 }, dur: [55, 200] },
     // winter's answer to the thunderstorm: a whiteout the farmers hunker down through
-    blizzard: { label: 'BLIZZARD!', next: { cloud: 2, sun: 1 }, dur: [12, 22] },
-    drought: { label: 'DROUGHT', next: { sun: 1.5, cloud: 1 }, dur: [22, 40] },
+    blizzard: { label: 'BLIZZARD!', next: { blizzard: 0.5, cloud: 2, sun: 1 }, dur: [130, 400] },
+    drought: { label: 'DROUGHT', next: { drought: 1.5, sun: 1.5, cloud: 1 }, dur: [520, 1500] },
 };
 
 // Each season also carries a `dmg` 4-shade Game Boy palette (darkest -> lightest)
@@ -2707,7 +2711,8 @@ export class World {
             this.#tickCoops();
             this.#maybeHatchRooster();
             this.addLog(`Day ${this.day} begins on Ry Farms`, '#f0d060');
-            if (this.rand() < 0.5) this.#rollWeather();
+            // NB: weather is NOT force-rerolled at the day boundary any more — it changes only when
+            // its (now day-spanning) timer runs out, so spells can persist across several days.
         }
         this.weatherTimer -= dt;
         if (this.weatherTimer <= 0) this.#rollWeather();
