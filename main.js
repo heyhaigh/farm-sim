@@ -56,6 +56,7 @@ let rosterScroll = 0;
 let sheetScroll = 0;              // scroll offset for the selected-farmer detail card
 let sheetContentH = 0;           // measured content height (for clamping the scroll)
 let maxSheetScroll = 0;          // clamp bound, set each draw
+let sheetTab = 0;                // active detail-sheet tab: 0 STATS, 1 ACTIVITY, 2 TIES, 3 MEMORY
 
 // Reusable RPG-menu panel (wood frame + dark interior + corner rivets), styled after the
 // craftpix basic-UI kit, so cards read as framed panels instead of floating text.
@@ -81,6 +82,7 @@ const SHEET_RECT = { x: 0, y: 0, w: 0, h: 0 };     // detail-card bounds, set in
 const SHEET_CLOSE = { x: 0, y: 0, w: 0, h: 0 };    // card close (X) button, set in drawSheet
 const MEM_PREV = { x: 0, y: 0, w: 0, h: 0 };       // memories pager arrows, set in drawSheet
 const MEM_NEXT = { x: 0, y: 0, w: 0, h: 0 };
+let SHEET_TABS = [];                               // tab-bar hit-rects {x,y,w,h,tab}, rebuilt in drawSheet
 let sheetMemPage = 0;                              // current MEMORIES page (0 = newest)
 let sheetLastSel = null;                           // reset pager when the selection changes
 let sheetSlots = [];                               // inventory/tool slot hit-rects+tooltips, rebuilt each drawSheet
@@ -2142,133 +2144,150 @@ function drawSheet(f) {
     const hStr = f.health === 'sick' ? 'SICK' : f.tired ? 'TIRED' : 'WELL';
     drawText(ctx, hStr, IX + IW - textWidth(hStr), PY + 28, eCol);
 
-    // --- scrollable body ---
-    const bodyY = PY + 41, bodyH = PH - 41 - 5;
+    // --- tab bar (fixed, below the title band) — the long scroll is now split into four
+    //     views so nothing important stays buried below the fold ---
+    const TAB_LABELS = ['STATS', 'ACTIVITY', 'TIES', 'MEMORY'];
+    const tabY = PY + 39, tabH = 12, tseg = (IW + 4) / TAB_LABELS.length;
+    SHEET_TABS = [];
+    for (let t = 0; t < TAB_LABELS.length; t++) {
+        const tx0 = Math.round(IX - 2 + t * tseg), tw = Math.round(IX - 2 + (t + 1) * tseg) - tx0;
+        const active = sheetTab === t;
+        ctx.fillStyle = active ? '#3a2c1e' : '#20180f';
+        ctx.fillRect(tx0, tabY, tw - 1, tabH);
+        if (active) { ctx.fillStyle = SHEET_GOLD; ctx.fillRect(tx0, tabY, tw - 1, 1); }
+        else { ctx.fillStyle = '#4a3824'; ctx.fillRect(tx0, tabY + tabH - 1, tw - 1, 1); }
+        const lbl = TAB_LABELS[t];
+        drawText(ctx, lbl, tx0 + Math.max(1, Math.floor((tw - 1 - textWidth(lbl)) / 2)), tabY + 3, active ? '#ffe08a' : SHEET_LABEL);
+        SHEET_TABS.push({ x: tx0, y: tabY, w: tw - 1, h: tabH, tab: t });
+    }
+
+    // --- scrollable body (per active tab) ---
+    const bodyY = PY + 41 + tabH, bodyH = PH - (41 + tabH) - 5;
     sheetBodyY = bodyY; sheetBodyH = bodyH;
+    if (sheetLastSel !== f) { sheetLastSel = f; sheetMemPage = 0; sheetTab = 0; sheetScroll = 0; }
     ctx.save();
     ctx.beginPath(); ctx.rect(IX - 3, bodyY, IW + 6, bodyH); ctx.clip();
     let y = bodyY - Math.round(sheetScroll);   // integer offset keeps bars/icons crisp while scrolling
 
-    if (sheetLastSel !== f) { sheetLastSel = f; sheetMemPage = 0; }
-    for (const line of wrapText(p.creed, 32).slice(0, 2)) { drawText(ctx, `"${line}"`, IX, y, SHEET_LABEL); y += 7; }
-    if (f.goal) { drawText(ctx, `> course: ${f.goal.toUpperCase()}`, IX, y, '#d08cc8'); y += 7; }
-    y += 2;
-    drawText(ctx, 'ENERGY', IX, y, SHEET_LABEL); barFill(IX + 42, y, IW - 42, f.energy, eCol); y += 6;
-    drawText(ctx, 'XP', IX, y, SHEET_LABEL); barFill(IX + 42, y, IW - 42, Math.min(s.xp / (s.level * 12), 1), '#5a8ac8'); y += 10;
-
-    y = sectionBand(IX, y, IW, 'PERSONALITY');
-    TRAIT_NAMES.forEach((tn) => { drawText(ctx, TRAIT_LABELS[tn], IX, y, SHEET_LABEL); barFill(IX + 58, y, IW - 58, p[tn], TRAIT_COLORS[tn]); y += 7; });
-    y += 4;
-
-    y = sectionBand(IX, y, IW, 'ABILITIES');
-    const cols = [IX, IX + 74];
-    STAT_NAMES.forEach((st, i) => {
-        const cxp = cols[i % 2], cyp = y + Math.floor(i / 2) * 8;
-        drawText(ctx, st.toUpperCase(), cxp, cyp, SHEET_LABEL);
-        drawText(ctx, String(s.stats[st]).padStart(2), cxp + 20, cyp, SHEET_VAL);
-        drawText(ctx, fmtMod(s.stats[st]), cxp + 33, cyp, mod(s.stats[st]) >= 0 ? '#7dd069' : '#e05840');
-    });
-    y += 28;
-
-    y = sectionBand(IX, y, IW, 'FARM');
-    const kv = (lx, label, val, vcol = SHEET_VAL) => { drawText(ctx, label, lx, y, SHEET_LABEL); drawText(ctx, String(val), lx + 32, y, vcol); };
-    kv(IX, 'CROP', s.crop); y += 7;
-    const facs = ['crops', ...f.plot.facilities.map(fc => FAC_SHORT[fc.type] || fc.type)];
-    drawText(ctx, 'HAS', IX, y, SHEET_LABEL); drawText(ctx, facs.join(', ').slice(0, 26), IX + 32, y, SHEET_VAL); y += 7;
-    kv(IX, 'LAND', `${f.plot.cells.size}t`); drawText(ctx, 'YIELD', IX + 76, y, SHEET_LABEL); drawText(ctx, String(s.harvested), IX + 108, y, SHEET_VAL); y += 7;
-    kv(IX, 'REP', Math.round(f.reputation * 100)); drawText(ctx, 'BONDS', IX + 76, y, SHEET_LABEL); drawText(ctx, String(world.bondCount(f)), IX + 108, y, SHEET_VAL); y += 8;
-    if (f.wantExpand || f.wantFacility) { drawText(ctx, f.wantExpand ? '> wants more land' : '> wants to build', IX, y, SHEET_GOLD); y += 8; }
-    y += 2;
-
-    sheetSlots = [];   // rebuilt every frame for hover/click (hit-tested in screen space)
+    sheetSlots = [];   // rebuilt every frame for hover/click (STATS tab only); tested in screen space
+    MEM_PREV.w = 0; MEM_NEXT.w = 0;
     const SZ = 18, PITCH = 20, PER_ROW = 7;
     const addSlot = (sx, sy, key, tip) => sheetSlots.push({ x: sx, y: sy, w: SZ, h: SZ, key, tip });
 
-    y = sectionBand(IX, y, IW, 'INVENTORY');
-    // item grid: one beveled slot per non-empty stack, 7 across
-    const items = f.inventoryItems();
-    const emptySlots = 7;   // always show at least one row of slots even when empty
-    const slotCount = Math.max(items.length, emptySlots);
-    for (let k = 0; k < slotCount; k++) {
-        const col = k % PER_ROW, row = Math.floor(k / PER_ROW);
-        const sx = IX + col * PITCH, sy = y + row * PITCH;
-        const it = items[k];
-        if (it) {
-            const key = `inv:${it.id}`;
-            drawItemSlot(sx, sy, SZ, itemIcon(it.icon), it.count, { sel: selectedSlotKey === key });
-            addSlot(sx, sy, key, { title: it.name, body: it.cap ? `you have ${it.count} / ${it.cap} storage` : `you have ${it.count}` });
-        } else drawItemSlot(sx, sy, SZ, null, null);
-    }
-    y += Math.ceil(slotCount / PER_ROW) * PITCH + 2;
+    if (sheetTab === 0) {
+        // ===== STATS: who they are — creed, energy, personality, abilities, farm, gear =====
+        for (const line of wrapText(p.creed, 32).slice(0, 2)) { drawText(ctx, `"${line}"`, IX, y, SHEET_LABEL); y += 7; }
+        if (f.goal) { drawText(ctx, `> course: ${f.goal.toUpperCase()}`, IX, y, '#d08cc8'); y += 7; }
+        y += 2;
+        drawText(ctx, 'ENERGY', IX, y, SHEET_LABEL); barFill(IX + 42, y, IW - 42, f.energy, eCol); y += 6;
+        drawText(ctx, 'XP', IX, y, SHEET_LABEL); barFill(IX + 42, y, IW - 42, Math.min(s.xp / (s.level * 12), 1), '#5a8ac8'); y += 10;
 
-    // tools: owned crafted tools as bright slots, then the next locked unlock with its
-    // level/ore requirement so the player can see what a farmer is working toward.
-    y = sectionBand(IX, y, IW, 'TOOLS');
-    let tx = IX;
-    let drewTool = false;
-    for (const r of CRAFTABLES) {
-        if (!f.hasTool(r.id)) continue;
-        const key = `tool:${r.id}`;
-        drawItemSlot(tx, y, SZ, itemIcon(r.icon), null, { hi: true, sel: selectedSlotKey === key });
-        addSlot(tx, y, key, { title: r.name, body: r.desc });
-        tx += PITCH; drewTool = true;
-    }
-    const next = f.nextUnlock();
-    if (next) {
-        const locked = f.sheet.level < next.reqLevel || f.ore < next.ore || f.wood < next.wood;
-        const key = `tool:${next.id}`;
-        drawItemSlot(tx, y, SZ, itemIcon(next.icon), null, { locked, sel: selectedSlotKey === key });
-        const reqParts = [];
-        if (f.sheet.level < next.reqLevel) reqParts.push(`LV${next.reqLevel}`);
-        reqParts.push(`${next.ore}ore`, `${next.wood}wd`);
-        addSlot(tx, y, key, { title: `${next.name} (locked)`, body: next.desc, req: `needs ${reqParts.join(' ')}` });
-        tx += PITCH;
-        drawText(ctx, next.name, tx + 3, y + 1, locked ? SHEET_LABEL : '#8ad0e0');
-        drawText(ctx, reqParts.join(' '), tx + 3, y + 8, locked ? '#c07050' : '#7dd069');
-        y += PITCH;
-    } else if (drewTool) {
-        drawText(ctx, 'all tools crafted', tx + 3, y + 6, SHEET_LABEL); y += PITCH;
-    } else {
-        drawText(ctx, 'no tools yet', tx, y + 6, SHEET_LABEL); y += PITCH;
-    }
-    // clicked-slot label line + a hover/selected tooltip drawn on top at the very end of drawSheet
-    if (selectedSlotKey) {
-        const sel = sheetSlots.find(s => s.key === selectedSlotKey);
-        if (sel) { drawText(ctx, `> ${sel.tip.title}`, IX, y, '#ffe08a'); y += 8; }
-        else selectedSlotKey = null;   // the selected stack emptied out
-    }
-    y += 2;
+        y = sectionBand(IX, y, IW, 'PERSONALITY');
+        TRAIT_NAMES.forEach((tn) => { drawText(ctx, TRAIT_LABELS[tn], IX, y, SHEET_LABEL); barFill(IX + 58, y, IW - 58, p[tn], TRAIT_COLORS[tn]); y += 7; });
+        y += 4;
 
-    y = sectionBand(IX, y, IW, 'ACTIVITY');
-    const helping = f.helpTask ? ` ${f.helpTask.requester.sheet.name.split(' ')[0]}` : '';
-    const actWord = f.action ? (ACT_WORD[f.action.task?.act] || f.action.task?.act || 'working') : '';
-    const doing = f.state === 'work' ? actWord + helping
-        : f.state === 'chop' ? 'chopping wood' : f.state === 'break' ? 'clearing a stump'
-        : f.state === 'forage' ? 'foraging wheat' : f.state === 'poach' ? 'sneaking'
-        : f.state === 'build' ? 'building' : f.state === 'care' ? 'tending sick'
-        : f.state === 'sick' ? 'recovering' : f.state === 'rest' ? 'napping'
-        : f.state === 'decide-help' || (f.state === 'walk' && f.helpTask) ? 'helping' + helping
-        : f.state === 'sleep' ? 'sleeping' : f.state === 'shelter' ? 'sheltering'
-        : f.state === 'walk' ? 'walking' : 'thinking';
-    drawText(ctx, 'NOW', IX, y, SHEET_LABEL); drawText(ctx, doing, IX + 32, y, SHEET_VAL); y += 9;
-    drawText(ctx, 'THINKING', IX, y, SHEET_LABEL); y += 7;
-    for (const line of wrapText(f.thought, 32).slice(0, 2)) { drawText(ctx, `"${line}"`, IX + 2, y, '#c8ccd8'); y += 7; }
-    y += 3;
-    if (f.illnesses > 0) {
-        y = sectionBand(IX, y, IW, 'LESSONS LEARNED');
-        const lesson = f.caution >= 3 ? `Fell ill ${f.illnesses}x - now paces carefully, won't overwork.`
-            : f.caution >= 1 ? `Fell ill ${f.illnesses}x - learning to rest before burning out.`
-            : `Fell ill ${f.illnesses}x.`;
-        for (const line of wrapText(lesson, 32).slice(0, 3)) { drawText(ctx, line, IX + 2, y, '#c9a45a'); y += 7; }
+        y = sectionBand(IX, y, IW, 'ABILITIES');
+        const cols = [IX, IX + 74];
+        STAT_NAMES.forEach((st, i) => {
+            const cxp = cols[i % 2], cyp = y + Math.floor(i / 2) * 8;
+            drawText(ctx, st.toUpperCase(), cxp, cyp, SHEET_LABEL);
+            drawText(ctx, String(s.stats[st]).padStart(2), cxp + 20, cyp, SHEET_VAL);
+            drawText(ctx, fmtMod(s.stats[st]), cxp + 33, cyp, mod(s.stats[st]) >= 0 ? '#7dd069' : '#e05840');
+        });
+        y += 28;
+
+        y = sectionBand(IX, y, IW, 'FARM');
+        const kv = (lx, label, val, vcol = SHEET_VAL) => { drawText(ctx, label, lx, y, SHEET_LABEL); drawText(ctx, String(val), lx + 32, y, vcol); };
+        kv(IX, 'CROP', s.crop); y += 7;
+        const facs = ['crops', ...f.plot.facilities.map(fc => FAC_SHORT[fc.type] || fc.type)];
+        drawText(ctx, 'HAS', IX, y, SHEET_LABEL); drawText(ctx, facs.join(', ').slice(0, 26), IX + 32, y, SHEET_VAL); y += 7;
+        kv(IX, 'LAND', `${f.plot.cells.size}t`); drawText(ctx, 'YIELD', IX + 76, y, SHEET_LABEL); drawText(ctx, String(s.harvested), IX + 108, y, SHEET_VAL); y += 7;
+        kv(IX, 'REP', Math.round(f.reputation * 100)); drawText(ctx, 'BONDS', IX + 76, y, SHEET_LABEL); drawText(ctx, String(world.bondCount(f)), IX + 108, y, SHEET_VAL); y += 8;
+        if (f.wantExpand || f.wantFacility) { drawText(ctx, f.wantExpand ? '> wants more land' : '> wants to build', IX, y, SHEET_GOLD); y += 8; }
+        y += 2;
+
+        y = sectionBand(IX, y, IW, 'INVENTORY');
+        // item grid: one beveled slot per non-empty stack, 7 across
+        const items = f.inventoryItems();
+        const slotCount = Math.max(items.length, 7);   // always show at least one row of slots
+        for (let k = 0; k < slotCount; k++) {
+            const col = k % PER_ROW, row = Math.floor(k / PER_ROW);
+            const sx = IX + col * PITCH, sy = y + row * PITCH;
+            const it = items[k];
+            if (it) {
+                const key = `inv:${it.id}`;
+                drawItemSlot(sx, sy, SZ, itemIcon(it.icon), it.count, { sel: selectedSlotKey === key });
+                addSlot(sx, sy, key, { title: it.name, body: it.cap ? `you have ${it.count} / ${it.cap} storage` : `you have ${it.count}` });
+            } else drawItemSlot(sx, sy, SZ, null, null);
+        }
+        y += Math.ceil(slotCount / PER_ROW) * PITCH + 2;
+
+        // tools: owned crafted tools as bright slots, then the next locked unlock with its
+        // level/ore requirement so the player can see what a farmer is working toward.
+        y = sectionBand(IX, y, IW, 'TOOLS');
+        let tx = IX, drewTool = false;
+        for (const r of CRAFTABLES) {
+            if (!f.hasTool(r.id)) continue;
+            const key = `tool:${r.id}`;
+            drawItemSlot(tx, y, SZ, itemIcon(r.icon), null, { hi: true, sel: selectedSlotKey === key });
+            addSlot(tx, y, key, { title: r.name, body: r.desc });
+            tx += PITCH; drewTool = true;
+        }
+        const next = f.nextUnlock();
+        if (next) {
+            const locked = f.sheet.level < next.reqLevel || f.ore < next.ore || f.wood < next.wood;
+            const key = `tool:${next.id}`;
+            drawItemSlot(tx, y, SZ, itemIcon(next.icon), null, { locked, sel: selectedSlotKey === key });
+            const reqParts = [];
+            if (f.sheet.level < next.reqLevel) reqParts.push(`LV${next.reqLevel}`);
+            reqParts.push(`${next.ore}ore`, `${next.wood}wd`);
+            addSlot(tx, y, key, { title: `${next.name} (locked)`, body: next.desc, req: `needs ${reqParts.join(' ')}` });
+            tx += PITCH;
+            drawText(ctx, next.name, tx + 3, y + 1, locked ? SHEET_LABEL : '#8ad0e0');
+            drawText(ctx, reqParts.join(' '), tx + 3, y + 8, locked ? '#c07050' : '#7dd069');
+            y += PITCH;
+        } else if (drewTool) {
+            drawText(ctx, 'all tools crafted', tx + 3, y + 6, SHEET_LABEL); y += PITCH;
+        } else {
+            drawText(ctx, 'no tools yet', tx, y + 6, SHEET_LABEL); y += PITCH;
+        }
+        // clicked-slot label line + a hover/selected tooltip drawn on top at the very end of drawSheet
+        if (selectedSlotKey) {
+            const sel = sheetSlots.find(s => s.key === selectedSlotKey);
+            if (sel) { drawText(ctx, `> ${sel.tip.title}`, IX, y, '#ffe08a'); y += 8; }
+            else selectedSlotKey = null;   // the selected stack emptied out
+        }
+        y += 2;
+    } else if (sheetTab === 1) {
+        // ===== ACTIVITY: what they're doing right now, and the lessons that shape it =====
+        y = sectionBand(IX, y, IW, 'ACTIVITY');
+        const helping = f.helpTask ? ` ${f.helpTask.requester.sheet.name.split(' ')[0]}` : '';
+        const actWord = f.action ? (ACT_WORD[f.action.task?.act] || f.action.task?.act || 'working') : '';
+        const doing = f.state === 'work' ? actWord + helping
+            : f.state === 'chop' ? 'chopping wood' : f.state === 'break' ? 'clearing a stump'
+            : f.state === 'forage' ? 'foraging wheat' : f.state === 'poach' ? 'sneaking'
+            : f.state === 'build' ? 'building' : f.state === 'care' ? 'tending sick'
+            : f.state === 'sick' ? 'recovering' : f.state === 'rest' ? 'napping'
+            : f.state === 'decide-help' || (f.state === 'walk' && f.helpTask) ? 'helping' + helping
+            : f.state === 'sleep' ? 'sleeping' : f.state === 'shelter' ? 'sheltering'
+            : f.state === 'walk' ? 'walking' : 'thinking';
+        drawText(ctx, 'NOW', IX, y, SHEET_LABEL); drawText(ctx, doing, IX + 32, y, SHEET_VAL); y += 9;
+        drawText(ctx, 'THINKING', IX, y, SHEET_LABEL); y += 7;
+        for (const line of wrapText(f.thought, 32).slice(0, 3)) { drawText(ctx, `"${line}"`, IX + 2, y, '#c8ccd8'); y += 7; }
         y += 3;
-    }
-    // TOWN TIES: every meaningful relationship, not just the strongest. Trust in a town
-    // that helps, trades and digs wells together is rarely singular — list them all
-    // (strongest first), each with its remembered reason. The wary list only appears
-    // when a grudge actually exists.
-    const friends = f.allRegard(1), grudges = f.allRegard(-1);
-    if (friends.length || grudges.length) {
+        if (f.illnesses > 0) {
+            y = sectionBand(IX, y, IW, 'LESSONS LEARNED');
+            const lesson = f.caution >= 3 ? `Fell ill ${f.illnesses}x - now paces carefully, won't overwork.`
+                : f.caution >= 1 ? `Fell ill ${f.illnesses}x - learning to rest before burning out.`
+                : `Fell ill ${f.illnesses}x.`;
+            for (const line of wrapText(lesson, 32).slice(0, 3)) { drawText(ctx, line, IX + 2, y, '#c9a45a'); y += 7; }
+            y += 3;
+        }
+    } else if (sheetTab === 2) {
+        // ===== TIES: every meaningful relationship (strongest first) + overheard gossip =====
+        const friends = f.allRegard(1), grudges = f.allRegard(-1);
         y = sectionBand(IX, y, IW, 'TOWN TIES');
+        if (!friends.length && !grudges.length) { drawText(ctx, 'no strong ties yet', IX + 2, y, SHEET_LABEL); y += 8; }
         for (const fr of friends) {
             drawText(ctx, `Trusts ${fr.who.sheet.name.split(' ')[0]}`, IX + 2, y, '#7dd069'); y += 7;
             const r = f.opinionReasons && f.opinionReasons.get(fr.who.sheet.seed);
@@ -2281,56 +2300,54 @@ function drawSheet(f) {
             if (r) for (const line of wrapText(`- ${r}`, 30).slice(0, 1)) { drawText(ctx, line, IX + 6, y, SHEET_LABEL); y += 7; }
         }
         y += 3;
-    }
-    // --- Town gossip: rumors this farmer has OVERHEARD about others (who warned them off
-    //     whom), separate from their own first-hand memories. Fades with the rumor's strength.
-    if (f.gossip && f.gossip.length) {
-        y = sectionBand(IX, y, IW, `TOWN GOSSIP (${f.gossip.length})`);
-        const heard = [...f.gossip].reverse().slice(0, 5);
-        for (const g of heard) {
-            const col = g.strength > 0.6 ? '#c8a86a' : g.strength > 0.4 ? '#9a8a5a' : '#6a5f45';
-            drawText(ctx, `d${g.day}`, IX, y, '#a08050');
-            for (const line of wrapText(`${g.from}: don't trust ${g.about}`, 27).slice(0, 2)) { drawText(ctx, line, IX + 17, y, col); y += 7; }
-            y += 1;
-        }
-        y += 3;
-    }
-    // --- Memories: the bot's episodic journal, newest first, paginated. Entry text
-    //     fades with the memory's decayed strength — old faint memories literally dim.
-    MEM_PREV.w = 0; MEM_NEXT.w = 0;
-    if (f.journal.length) {
-        const perPage = 6;
-        const pages = Math.ceil(f.journal.length / perPage);
-        if (sheetMemPage >= pages) sheetMemPage = pages - 1;
-        y = sectionBand(IX, y, IW, `MEMORIES (${f.journal.length})`);
-        const entries = [...f.journal].reverse().slice(sheetMemPage * perPage, (sheetMemPage + 1) * perPage);
-        for (const m of entries) {
-            const col = m.strength > 0.8 ? '#c8ccd8' : m.strength > 0.45 ? '#8a8fa0' : '#5a5f6e';
-            drawText(ctx, `d${m.day}`, IX, y, MEM_KIND_COLORS[m.kind] || SHEET_LABEL);
-            for (const line of wrapText(m.text, 27).slice(0, 2)) { drawText(ctx, line, IX + 17, y, col); y += 7; }
-            y += 1;
-        }
-        if (pages > 1) {
-            const rowY = y;
-            const lbl = `PAGE ${sheetMemPage + 1}/${pages}`;
-            drawText(ctx, lbl, IX + Math.floor((IW - textWidth(lbl)) / 2), rowY, SHEET_LABEL);
-            const visible = rowY >= bodyY - 2 && rowY <= bodyY + bodyH - 6;
-            if (sheetMemPage > 0) {
-                drawText(ctx, '<<', IX + 2, rowY, SHEET_GOLD);
-                if (visible) { MEM_PREV.x = IX - 2; MEM_PREV.y = rowY - 3; MEM_PREV.w = 16; MEM_PREV.h = 11; }
+        // rumors this farmer has OVERHEARD about others, separate from first-hand memories
+        if (f.gossip && f.gossip.length) {
+            y = sectionBand(IX, y, IW, `TOWN GOSSIP (${f.gossip.length})`);
+            const heard = [...f.gossip].reverse().slice(0, 5);
+            for (const g of heard) {
+                const col = g.strength > 0.6 ? '#c8a86a' : g.strength > 0.4 ? '#9a8a5a' : '#6a5f45';
+                drawText(ctx, `d${g.day}`, IX, y, '#a08050');
+                for (const line of wrapText(`${g.from}: don't trust ${g.about}`, 27).slice(0, 2)) { drawText(ctx, line, IX + 17, y, col); y += 7; }
+                y += 1;
             }
-            if (sheetMemPage < pages - 1) {
-                drawText(ctx, '>>', IX + IW - 10, rowY, SHEET_GOLD);
-                if (visible) { MEM_NEXT.x = IX + IW - 14; MEM_NEXT.y = rowY - 3; MEM_NEXT.w = 16; MEM_NEXT.h = 11; }
-            }
-            y += 8;
+            y += 3;
         }
-        y += 3;
-    }
+    } else {
+        // ===== MEMORY: the episodic journal (newest first, paginated) + the source doc =====
+        if (f.journal.length) {
+            const perPage = 6;
+            const pages = Math.ceil(f.journal.length / perPage);
+            if (sheetMemPage >= pages) sheetMemPage = pages - 1;
+            y = sectionBand(IX, y, IW, `MEMORIES (${f.journal.length})`);
+            const entries = [...f.journal].reverse().slice(sheetMemPage * perPage, (sheetMemPage + 1) * perPage);
+            for (const m of entries) {
+                const col = m.strength > 0.8 ? '#c8ccd8' : m.strength > 0.45 ? '#8a8fa0' : '#5a5f6e';
+                drawText(ctx, `d${m.day}`, IX, y, MEM_KIND_COLORS[m.kind] || SHEET_LABEL);
+                for (const line of wrapText(m.text, 27).slice(0, 2)) { drawText(ctx, line, IX + 17, y, col); y += 7; }
+                y += 1;
+            }
+            if (pages > 1) {
+                const rowY = y;
+                const lbl = `PAGE ${sheetMemPage + 1}/${pages}`;
+                drawText(ctx, lbl, IX + Math.floor((IW - textWidth(lbl)) / 2), rowY, SHEET_LABEL);
+                const visible = rowY >= bodyY - 2 && rowY <= bodyY + bodyH - 6;
+                if (sheetMemPage > 0) {
+                    drawText(ctx, '<<', IX + 2, rowY, SHEET_GOLD);
+                    if (visible) { MEM_PREV.x = IX - 2; MEM_PREV.y = rowY - 3; MEM_PREV.w = 16; MEM_PREV.h = 11; }
+                }
+                if (sheetMemPage < pages - 1) {
+                    drawText(ctx, '>>', IX + IW - 10, rowY, SHEET_GOLD);
+                    if (visible) { MEM_NEXT.x = IX + IW - 14; MEM_NEXT.y = rowY - 3; MEM_NEXT.w = 16; MEM_NEXT.h = 11; }
+                }
+                y += 8;
+            }
+            y += 3;
+        } else { y = sectionBand(IX, y, IW, 'MEMORIES (0)'); drawText(ctx, 'no memories yet', IX + 2, y, SHEET_LABEL); y += 8; }
 
-    drawText(ctx, 'FROM MEMORY', IX, y, SHEET_LABEL); y += 7;
-    for (const line of wrapText(s.memory.title, 32).slice(0, 3)) { drawText(ctx, line, IX + 2, y, '#8a9ade'); y += 7; }
-    y += 5;
+        drawText(ctx, 'FROM MEMORY', IX, y, SHEET_LABEL); y += 7;
+        for (const line of wrapText(s.memory.title, 32).slice(0, 3)) { drawText(ctx, line, IX + 2, y, '#8a9ade'); y += 7; }
+        y += 5;
+    }
 
     ctx.restore();
 
@@ -2528,6 +2545,8 @@ out.addEventListener('pointerup', (e) => {
     // detail card: X closes it; clicks anywhere inside it are consumed. Checked BEFORE the
     // minimap because the full-height card is drawn OVER it (Codex: don't click through).
     if (selected && inRect(p, SHEET_CLOSE)) { selected = null; selectedSlotKey = null; return; }
+    // tab bar: switch view (reset scroll so the new view starts at the top)
+    if (selected) { for (const tb of SHEET_TABS) if (inRect(p, tb)) { if (sheetTab !== tb.tab) { sheetTab = tb.tab; sheetScroll = 0; selectedSlotKey = null; } return; } }
     if (selected && MEM_PREV.w && inRect(p, MEM_PREV)) { sheetMemPage = Math.max(0, sheetMemPage - 1); return; }
     if (selected && MEM_NEXT.w && inRect(p, MEM_NEXT)) { sheetMemPage++; return; }
     if (selected && inRect(p, SHEET_RECT)) {
