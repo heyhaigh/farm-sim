@@ -49,7 +49,7 @@ export const CRAFTABLES = [
 
 // wood economy
 const WOOD_TREE = 3;       // wood from felling a tree
-const WOOD_STUMP = 1;      // wood from grubbing out the stump
+const WOOD_STUMP = 3;      // grubbing the stump (roots included) yields as much as the trunk did
 const ORE_ROCK = 2;        // iron ore from breaking a rock
 const FACILITY_WOOD = 6;   // wood to raise a facility
 const FENCE_WOOD = 8;      // wood to fence the new homestead
@@ -158,12 +158,13 @@ const REST_RESTORE = 0.045;   // recover faster, so a short breather is enough �
 // mining, breaking stumps, fencing and raising scarecrows drain via the LABOR table below.
 const ACTION_ENERGY = { till: 0, plant: 0, water: 0.006, harvest: 0, clear: 0, build: 0.04, collect: 0, tend: 0 };
 // Clearing/building labor by effort: a shrub is quick and light, a tree is a long hard fell,
-// a stump is grubbing work, a rock is the heaviest, a fence post is medium. { time, energy }.
+// a stump is grubbing work (roots and all — just as heavy as the fell), a rock is the heaviest,
+// a fence post is medium. { time, energy }.
 // Costs kept modest so a settler can clear + fence + build without collapsing every day.
 const LABOR = {
     forage: { time: 1.6, energy: 0.02 },     // clear a shrub / brush
     fencepost: { time: 1.8, energy: 0.028 }, // set a fence post
-    break: { time: 2.8, energy: 0.038 },     // grub out a stump
+    break: { time: 4.6, energy: 0.055 },     // grub out a stump — as much work as felling the tree
     chop: { time: 4.6, energy: 0.055 },      // fell a tree
     mine: { time: 4.2, energy: 0.07 },       // smash a rock
     scarecrow: { time: 3.5, energy: 0.04 },  // raise a scarecrow
@@ -1668,24 +1669,26 @@ export class World {
         return null;
     }
 
-    // nearest fellable tile (TREE preferred), optionally restricted to a set
+    // nearest fellable tile — TREE or STUMP, whichever is closest. A stump is now worth as much
+    // wood as a standing tree, so there's no reason to march past one to a fresh trunk; taking the
+    // nearest of either kind means the stumps a fell leaves behind actually get grubbed out.
     nearestWood(pos, restrict) {
         if (restrict) {
             let best = null, bestD = 1e9;
-            const scan = (wantStump) => {
-                for (const rt of restrict) {
-                    const t = this.get(rt.i, rt.j);
-                    if (wantStump ? t !== T.STUMP : t !== T.TREE) continue;
-                    const d = Math.abs(rt.i - pos.i) + Math.abs(rt.j - pos.j);
-                    if (d < bestD) { bestD = d; best = { i: rt.i, j: rt.j, kind: wantStump ? 'stump' : 'tree' }; }
-                }
-            };
-            scan(false); if (!best) scan(true);
+            for (const rt of restrict) {
+                const t = this.get(rt.i, rt.j);
+                if (t !== T.TREE && t !== T.STUMP) continue;
+                const d = Math.abs(rt.i - pos.i) + Math.abs(rt.j - pos.j);
+                if (d < bestD) { bestD = d; best = { i: rt.i, j: rt.j, kind: t === T.STUMP ? 'stump' : 'tree' }; }
+            }
             return best;
         }
-        const tree = this.#spiralFind(pos, 48, (i, j) => this.get(i, j) === T.TREE ? { i, j, kind: 'tree' } : null);
-        if (tree) return tree;
-        return this.#spiralFind(pos, 48, (i, j) => this.get(i, j) === T.STUMP ? { i, j, kind: 'stump' } : null);
+        return this.#spiralFind(pos, 48, (i, j) => {
+            const t = this.get(i, j);
+            if (t === T.TREE) return { i, j, kind: 'tree' };
+            if (t === T.STUMP) return { i, j, kind: 'stump' };
+            return null;
+        });
     }
 
     // nearest breakable rock within reach (for ore)
@@ -4638,11 +4641,15 @@ export class Farmer {
                 this.wood += WOOD_TREE;
                 this.say(`+${WOOD_TREE} wood`, '#c8a060');
                 this.gainXP(1);
+                // The stump is left standing — grubbing it is the farmer's own call. It's worth as
+                // much wood as the trunk was (WOOD_STUMP), so when they next need wood nearestWood
+                // may well send them back for it; the DEMAND is what drives the choice, not a script.
             } else if (t === T.STUMP) {
-                this.#laborDrain('break');          // grubbing the stump is a bit lighter
+                this.#laborDrain('break');          // grubbing the stump — same graft as the fell
                 w.set(tgt.i, tgt.j, T.GRASS);
                 this.wood += WOOD_STUMP;
                 this.say(`+${WOOD_STUMP} wood`, '#c8a060');
+                this.gainXP(1);
             } else this.#laborDrain('break');
         }
         this.state = 'decide';
