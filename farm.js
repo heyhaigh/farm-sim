@@ -21,6 +21,28 @@ export const T = { GRASS: 0, PATH: 1, TILLED: 2, HOUSE: 3, WELL: 4, SIGN: 5, STR
 export const FORAGE_TILES = [T.WHEAT, T.FLOWER];
 export const FORAGE_NAME = { [T.WHEAT]: 'wild wheat', [T.FLOWER]: 'wildflowers' };
 
+// Canonical item catalog for the inventory UI. `icon` indexes the fantasy 16x16 icon
+// pack (assets/.../Separately/Icon{icon}_1.png), resolved to an <img> in main.js.
+// These are the resources a farmer genuinely owns and can spend/trade — no phantom
+// double-counting: crops == the spendable produce stockpile, goods are forage stash.
+export const ITEMS = {
+    wood:   { name: 'WOOD',   icon: 75 },
+    ore:    { name: 'ORE',    icon: 47 },
+    crops:  { name: 'CROPS',  icon: 73 },
+    wheat:  { name: 'WHEAT',  icon: 45 },
+    flower: { name: 'FLOWER', icon: 79 },
+};
+
+// Craftable tools, unlocked by level and paid for in ore + wood (mined/chopped).
+// `waters` = how many thirsty crops one watering action now serves (the tedium fix the
+// player asked for). `requires` chains an upgrade off an earlier tool. Ordered easiest-first.
+export const CRAFTABLES = [
+    { id: 'wateringCan', name: 'WATERING CAN', icon: 105, reqLevel: 10, ore: 6, wood: 2, waters: 3,
+      desc: 'Waters 3 crops per trip' },
+    { id: 'sprinkler', name: 'IRRIGATION RIG', icon: 113, reqLevel: 15, ore: 12, wood: 4, waters: 5,
+      requires: 'wateringCan', desc: 'Waters a line of 5 crops' },
+];
+
 // wood economy
 const WOOD_TREE = 3;       // wood from felling a tree
 const WOOD_STUMP = 1;      // wood from grubbing out the stump
@@ -44,9 +66,11 @@ export const NIGHT_LENGTH = 80;
 
 const WEATHER_STATES = {
     sun: { label: 'SUNNY', next: { sun: 2, cloud: 3, drought: 0.6 }, dur: [26, 54] },
-    cloud: { label: 'CLOUDY', next: { sun: 2, rain: 3, storm: 0.8 }, dur: [16, 34] },
-    rain: { label: 'RAIN', next: { cloud: 2, sun: 1, storm: 1 }, dur: [16, 36] },
+    cloud: { label: 'CLOUDY', next: { sun: 2, rain: 3, storm: 0.8, blizzard: 0.8 }, dur: [16, 34] },
+    rain: { label: 'RAIN', next: { cloud: 2, sun: 1, storm: 1, blizzard: 1 }, dur: [16, 36] },
     storm: { label: 'STORM!', next: { rain: 2, cloud: 2 }, dur: [12, 22] },
+    // winter's answer to the thunderstorm: a whiteout the farmers hunker down through
+    blizzard: { label: 'BLIZZARD!', next: { cloud: 2, sun: 1 }, dur: [12, 22] },
     drought: { label: 'DROUGHT', next: { sun: 1.5, cloud: 1 }, dur: [22, 40] },
 };
 
@@ -55,16 +79,17 @@ const WEATHER_STATES = {
 export const SEASONS = [
     { name: 'SPRING', growth: 1.15, waterMul: 1.0, ground: ['#6e8f4d', '#658447'], tilled: '#6a4c30', accent: '#7dd069',
       dmg: ['#0f2110', '#35602f', '#84a52c', '#e2f2b0'],
-      weather: { sun: 3, cloud: 3, rain: 3, storm: 1, drought: 0.3 } },
+      weather: { sun: 3, cloud: 3, rain: 3, storm: 1, blizzard: 0, drought: 0.3 } },
     { name: 'SUMMER', growth: 1.3, waterMul: 1.5, ground: ['#5f8a38', '#578235'], tilled: '#6e4e2e', accent: '#f0d060',
       dmg: ['#12240c', '#3a6a22', '#9ab52e', '#eef8bc'],
-      weather: { sun: 5, cloud: 2, rain: 1.5, storm: 1.5, drought: 2.5 } },
+      weather: { sun: 5, cloud: 2, rain: 1.5, storm: 1.5, blizzard: 0, drought: 2.5 } },
     { name: 'FALL', growth: 0.8, waterMul: 0.8, ground: ['#8a7038', '#7c6634'], tilled: '#5e4228', accent: '#e0803c',
       dmg: ['#201606', '#5c451c', '#b48a2c', '#f2e2a0'],
-      weather: { sun: 3, cloud: 4, rain: 3, storm: 1.5, drought: 0.5 } },
+      weather: { sun: 3, cloud: 4, rain: 3, storm: 1.5, blizzard: 0, drought: 0.5 } },
+    // winter: no thunderstorms (storm:0) — blizzards take their place; nothing grows
     { name: 'WINTER', growth: 0.4, waterMul: 0.4, ground: ['#c6ced6', '#bac2ca'], tilled: '#8a7a68', accent: '#a8c8e8',
       dmg: ['#101c22', '#385158', '#82a0a6', '#e6f2f2'],
-      weather: { sun: 2, cloud: 4, rain: 1, storm: 2, drought: 0 } },
+      weather: { sun: 2, cloud: 4, rain: 1, storm: 0, blizzard: 2.5, drought: 0 } },
 ];
 export const SEASON_LENGTH = 15;
 
@@ -587,6 +612,7 @@ export class World {
             const r = Math.hypot(i - CENTER, j - CENTER);
             if (r > 24) {
                 // near the forest: stumps sprout saplings, gaps refill with wild growth
+                // (rocks are a finite resource — they never regrow, only plants do)
                 if (this.rand() < 0.18 && this.#treeFits(i, j, 48, 28)) { this.set(i, j, T.TREE); treesGrown++; }
                 else if (this.rand() < 0.4) { this.set(i, j, this.rand() < 0.6 ? T.WHEAT : T.FLOWER); wheatGrown++; }
             } else if (r > 10 && this.rand() < 0.16) { this.set(i, j, this.rand() < 0.5 ? T.WHEAT : T.FLOWER); wheatGrown++; }
@@ -695,6 +721,10 @@ export class World {
     nightProgress() { return this.isNight() ? (this.clock - DAY_LENGTH) / NIGHT_LENGTH : 0; }
     get seasonDef() { return SEASONS[this.season]; }
     get seasonName() { return SEASONS[this.season].name; }
+    // winter is the fallow season: no tilling/planting/watering, the ground is frozen.
+    // Farmers pivot to livestock, foraging, chopping, crafting and helping instead.
+    canGarden() { return this.season !== 3; }
+    isWinter() { return this.season === 3; }
 
     #advanceSeason() {
         this.seasonDay++;
@@ -704,6 +734,13 @@ export class World {
             if (this.season === 0) { this.year++; this.addLog(`A new year dawns on Ry Farms — Year ${this.year}!`, '#f0d060'); }
             const def = SEASONS[this.season];
             this.addLog(`${def.name} has arrived.`, def.accent);
+            // winter kills the garden: standing crops die back so the fields go dead, and the
+            // pond freezes over (fish/lilies dormant — handled in #tickProducers).
+            if (this.season === 3) {
+                let killed = 0;
+                for (const c of this.crops.values()) if (!c.withered) { c.withered = true; killed++; }
+                if (killed) this.addLog(`The frost takes the fields — ${killed} crops die back for winter.`, '#a8c8e8');
+            }
             this._tilesChanged = true;
             this._seasonChanged = true;
         }
@@ -1884,16 +1921,21 @@ export class World {
         const table = WEATHER_STATES[this.weather].next;
         const seasonBias = this.seasonDef.weather;
         const blended = {}; let sum = 0;
-        for (const [state, w] of Object.entries(table)) { const v = w * (0.4 + (seasonBias[state] ?? 1)); blended[state] = v; sum += v; }
+        for (const [state, w] of Object.entries(table)) {
+            const bias = seasonBias[state];
+            if (bias === 0) continue;   // season hard-excludes it (no storms in winter, no blizzards otherwise)
+            const v = w * (0.4 + (bias ?? 1)); blended[state] = v; sum += v;
+        }
         let r = this.rand() * sum;
         for (const [state, w] of Object.entries(blended)) { r -= w; if (r <= 0) { this.#setWeather(state); return; } }
+        this.#setWeather('cloud');   // fallback if everything was excluded
     }
 
     #setWeather(state) {
         this.weather = state;
         const [lo, hi] = WEATHER_STATES[state].dur;
         this.weatherTimer = lo + this.rand() * (hi - lo);
-        const colors = { sun: '#f0d060', cloud: '#9aa0b4', rain: '#6a9ade', storm: '#c05840', drought: '#e0a03c' };
+        const colors = { sun: '#f0d060', cloud: '#9aa0b4', rain: '#6a9ade', storm: '#c05840', blizzard: '#bcd8ec', drought: '#e0a03c' };
         this.addLog(`Weather: ${WEATHER_STATES[state].label}`, colors[state]);
     }
 
@@ -1934,10 +1976,10 @@ export class World {
                     continue;
                 }
             } else crop.dryTime = 0;
-            if (!night && crop.stage < 3) {
+            if (!night && crop.stage < 3 && this.canGarden()) {
                 // ~1 stage per day of daylight -> seed -> sprout -> plant -> ripe
                 // takes several days (Stardew-style), so farmers do other things
-                // (forage, chop, build, help) while crops mature.
+                // (forage, chop, build, help) while crops mature. Nothing grows in winter.
                 const greenThumb = 1 + mod(crop.owner.sheet.stats.int) * 0.06;
                 const waterFactor = 0.35 + 0.65 * crop.water;
                 crop.growth += (dt / DAY_LENGTH) * waterFactor * growthBonus * greenThumb * this.growthMult * season.growth;
@@ -1952,10 +1994,15 @@ export class World {
         const season = this.seasonDef;
         const stormy = this.weather === 'storm';
         const night = this.isNight();
+        const winter = this.isWinter();
         for (const plot of this.plots) {
             for (const fac of plot.facilities) {
                 for (const p of fac.producers) {
                     const cfg = PROD[p.kind];
+                    // the pond freezes in winter: fish + lily pads go dormant under the ice —
+                    // no yield, no movement, and anything mid-ready is locked away until spring.
+                    const frozen = winter && (cfg.aquatic || p.kind === 'pad' || p.kind === 'fish');
+                    if (frozen) { p.ready = false; p.prod = Math.min(p.prod, 0.9); p.vx = 0; p.vy = 0; continue; }
                     p.anim += dt;
                     p.fed = Math.max(0, p.fed - cfg.feedDecay * dt);
                     if (!p.ready) {
@@ -1963,34 +2010,71 @@ export class World {
                         p.prod += dt * rate;
                         if (p.prod >= 1) { p.prod = 1; p.ready = true; }
                     }
-                    // gentle wandering within the facility region
+                    // Movement. Land animals (poultry/livestock) roam the WHOLE fenced yard by
+                    // day and retire into their coop/barn at night; pond life stays in the water.
+                    const landAnimal = cfg.wander && p.kind !== 'fish' && p.kind !== 'pad';
                     if (cfg.wander && !p.busy && !(stormy && p.kind !== 'fish')) {
-                        p.wanderT -= dt;
-                        if (p.wanderT <= 0) {
-                            p.wanderT = 0.6 + this.rand() * 1.8;
-                            const ang = this.rand() * Math.PI * 2;
-                            const spd = (p.kind === 'chicken' || p.kind === 'rooster' ? 0.5 : p.kind === 'fish' ? 0.35 : 0.28);
-                            p.vx = Math.cos(ang) * spd; p.vy = Math.sin(ang) * spd;
-                            if (Math.abs(p.vx) > 0.02) p.flip = p.vx > 0 ? 1 : -1;
-                            if (p.kind === 'chicken' || p.kind === 'rooster') p.hop = 0.35;
+                        if (landAnimal && fac.struct && night) {
+                            // dusk: walk back to the building's doorway and tuck in for the night
+                            const tx = fac.struct.i + 0.5, ty = fac.struct.j + 1.1;
+                            const dx = tx - p.fx, dy = ty - p.fy, d = Math.hypot(dx, dy) || 1;
+                            if (p.inside || d < 0.45) { p.inside = true; p.fx = tx; p.fy = ty; p.vx = 0; p.vy = 0; }
+                            else { const spd = 0.7; p.fx += (dx / d) * spd * dt; p.fy += (dy / d) * spd * dt; p.flip = dx > 0 ? 1 : -1; }
+                        } else {
+                            if (p.inside) { p.inside = false; p.fy += 0.5; }   // morning: step out of the building
+                            p.wanderT -= dt;
+                            if (p.wanderT <= 0) {
+                                p.wanderT = 0.6 + this.rand() * 1.8;
+                                const ang = this.rand() * Math.PI * 2;
+                                const spd = (p.kind === 'chicken' || p.kind === 'rooster' ? 0.5 : p.kind === 'fish' ? 0.35 : 0.28);
+                                p.vx = Math.cos(ang) * spd; p.vy = Math.sin(ang) * spd;
+                                if (Math.abs(p.vx) > 0.02) p.flip = p.vx > 0 ? 1 : -1;
+                                if (p.kind === 'chicken' || p.kind === 'rooster') p.hop = 0.35;
+                            }
+                            const px = p.fx, py = p.fy;
+                            p.fx += p.vx * dt; p.fy += p.vy * dt;
+                            if (landAnimal) {
+                                // stay inside the fenced yard, off water/buildings/rocks
+                                const bx0 = plot.x + 0.4, bx1 = plot.x + plot.w - 0.4, by0 = plot.y + 0.4, by1 = plot.y + plot.h - 0.4;
+                                if (p.fx < bx0) { p.fx = bx0; p.vx = Math.abs(p.vx); }
+                                if (p.fx > bx1) { p.fx = bx1; p.vx = -Math.abs(p.vx); }
+                                if (p.fy < by0) { p.fy = by0; p.vy = Math.abs(p.vy); }
+                                if (p.fy > by1) { p.fy = by1; p.vy = -Math.abs(p.vy); }
+                                if (!this.#producerCanStand(plot, p.fx, p.fy)) { p.fx = px; p.fy = py; p.vx = -p.vx; p.vy = -p.vy; }
+                            } else {
+                                const r = p.region, pad = 0.35;   // pond life stays in the water
+                                if (p.fx < r.x + pad) { p.fx = r.x + pad; p.vx = Math.abs(p.vx); }
+                                if (p.fx > r.x + r.w - pad) { p.fx = r.x + r.w - pad; p.vx = -Math.abs(p.vx); }
+                                if (p.fy < r.y + pad) { p.fy = r.y + pad; p.vy = Math.abs(p.vy); }
+                                if (p.fy > r.y + r.h - pad) { p.fy = r.y + r.h - pad; p.vy = -Math.abs(p.vy); }
+                            }
+                            if (p.hop > 0) p.hop = Math.max(0, p.hop - dt);
                         }
-                        p.fx += p.vx * dt; p.fy += p.vy * dt;
-                        const r = p.region, pad = 0.35;
-                        if (p.fx < r.x + pad) { p.fx = r.x + pad; p.vx = Math.abs(p.vx); }
-                        if (p.fx > r.x + r.w - pad) { p.fx = r.x + r.w - pad; p.vx = -Math.abs(p.vx); }
-                        if (p.fy < r.y + pad) { p.fy = r.y + pad; p.vy = Math.abs(p.vy); }
-                        if (p.fy > r.y + r.h - pad) { p.fy = r.y + r.h - pad; p.vy = -Math.abs(p.vy); }
-                        if (p.hop > 0) p.hop = Math.max(0, p.hop - dt);
                     }
                 }
             }
         }
     }
 
+    // a roaming animal may stand on an owned yard tile that isn't water/a building/a rock
+    #producerCanStand(plot, fx, fy) {
+        const i = Math.floor(fx), j = Math.floor(fy);
+        return plot.cells.has(pkey(i, j)) && !this.pathBlocked(i, j);
+    }
+
     plotOwnerOf(plot) { return this.farmers.find(f => f.plot === plot); }
 
     #tickLightning(dt) {
         this.lightningFlash = Math.max(0, this.lightningFlash - dt * 3);
+        // blizzard: frequent soft whiteout gusts instead of lightning strikes (no crop damage)
+        if (this.weather === 'blizzard') {
+            this.lightningTimer -= dt;
+            if (this.lightningTimer <= 0) {
+                this.lightningTimer = 1.4 + this.rand() * 2.6;
+                this.lightningFlash = Math.max(this.lightningFlash, 0.5);
+            }
+            return;
+        }
         if (this.weather !== 'storm') return;
         this.lightningTimer -= dt;
         if (this.lightningTimer <= 0) {
@@ -2181,6 +2265,8 @@ export class Farmer {
         this.wantExpand = false;
         this.wantFacility = false;
         this.woodTarget = null;
+        this.tools = new Set();   // crafted tools owned (see CRAFTABLES) — unlock at level, cost ore
+        this.craftTarget = null;  // the recipe a farmer has walked home to build
 
         this.energy = 0.8 + this.rand() * 0.2;
         this.sleepDebt = 0;
@@ -2310,6 +2396,80 @@ export class Farmer {
         return L && L !== this && L.sheet.harvested > this.sheet.harvested + 2;
     }
 
+    // ---- crafting & inventory ---------------------------------------------------
+    hasTool(id) { return this.tools.has(id); }
+    // how many crops one 'water' action serves — a can/rig waters several at once
+    waterReach() { return this.hasTool('sprinkler') ? 5 : this.hasTool('wateringCan') ? 3 : 1; }
+
+    // the next recipe this bot is both leveled-for and stocked-for (materials in hand)
+    #nextCraftable() {
+        for (const r of CRAFTABLES) {
+            if (this.tools.has(r.id)) continue;
+            if (this.sheet.level < r.reqLevel) continue;
+            if (r.requires && !this.tools.has(r.requires)) continue;
+            if (this.ore < r.ore || this.wood < r.wood) continue;
+            return r;
+        }
+        return null;
+    }
+    // the next recipe they're STILL WORKING TOWARD (leveled or not) — for the UI hint
+    nextUnlock() {
+        for (const r of CRAFTABLES) {
+            if (this.tools.has(r.id)) continue;
+            if (r.requires && !this.tools.has(r.requires)) continue;
+            return r;
+        }
+        return null;
+    }
+
+    // walk home and build a tool when eligible. Rare (once per tool), so the trip home
+    // is fine — crafting is a homestead investment like upgrading the house.
+    #maybeCraft() {
+        if (this.world.isNight()) return false;
+        const r = this.#nextCraftable();
+        if (r) {   // materials in hand — walk home and forge it
+            this.craftTarget = r;
+            this.think(`ENOUGH ORE — TIME TO FORGE A ${r.name}`);
+            const h = this.plot.house;
+            return this.#goTo(h.i + 0.5, h.j + 2.5, 'craft');
+        }
+        // leveled for the next tool but short on ore? go mine toward it — an intentional goal,
+        // the way farmers gather wood to expand. Only once the home is built (no ore rivalry).
+        const next = this.nextUnlock();
+        if (next && this.plot.built.level >= 1 && this.sheet.level >= next.reqLevel &&
+            this.wood >= next.wood && this.ore < next.ore && this.energy > 0.35) {
+            const rock = this.world.nearestRock(this.pos, 34);
+            if (rock) { this.think(`MINING ORE FOR A ${next.name}`); this.mineTarget = rock; return this.#goTo(rock.i + 0.5, rock.j + 0.5, 'mine'); }
+        }
+        return false;
+    }
+
+    #completeCraft() {
+        const r = this.craftTarget; this.craftTarget = null;
+        const w = this.world, s = this.sheet;
+        // eligibility can lapse between deciding and arriving (materials spent elsewhere)
+        if (!r || this.tools.has(r.id) || this.ore < r.ore || this.wood < r.wood) { this.state = 'decide'; return; }
+        this.ore -= r.ore; this.wood -= r.wood;
+        this.tools.add(r.id);
+        this.sparkle = 2.5; this.say('CRAFTED!', '#7dd069');
+        w.addLog(`${s.name} crafted a ${r.name}! (${r.desc})`, '#8ad0e0');
+        this.remember('lesson', `forged a ${r.name.toLowerCase()} - ${r.desc.toLowerCase()}`, null, 1.1);
+        this.gainXP(4);
+        this.state = 'decide';
+    }
+
+    // items this bot actually holds, for the inventory grid. Only non-zero stacks.
+    inventoryItems() {
+        const out = [];
+        const push = (id, count) => { if (count > 0 && ITEMS[id]) out.push({ id, name: ITEMS[id].name, icon: ITEMS[id].icon, count }); };
+        push('wood', this.wood);
+        push('ore', this.ore);
+        push('crops', this.sheet.produce || 0);
+        const g = this.sheet.goods || {};
+        for (const key of ['wheat', 'flower']) push(key, g[key] || 0);
+        return out;
+    }
+
     // ---- perception -------------------------------------------------------------
 
     #findCrop(pred, plot = this.plot) {
@@ -2364,7 +2524,9 @@ export class Farmer {
         const hungry = skipFacilities ? null : this.#findProducer(p => p.fed < 0.35, plot);
         if (hungry) return { act: 'tend', prod: hungry };
         if (urgentOnly) return null;
-        // 4. sow + till (crop farms only) — lowest priority "fill" work
+        // 4. sow + till (crop farms only) — lowest priority "fill" work. Frozen out in winter:
+        //    the ground won't take seed, so farmers spend the season on livestock and other work.
+        if (!this.world.canGarden()) return null;
         const emptyTilled = this.#findField(f => this.world.get(f.i, f.j) === T.TILLED && !this.world.cropAt(f.i, f.j), plot);
         if (emptyTilled) return { act: 'plant', field: emptyTilled };
         const untilled = this.#findField(f => this.world.get(f.i, f.j) === T.GRASS, plot);
@@ -2765,6 +2927,10 @@ export class Farmer {
             if (ripe && s.stats.wis >= 13) { this.think("STORM'S HERE. SAVE THE CROPS!"); this.#pursue({ act: 'harvest', crop: ripe }, this.plot, false); return; }
             if (s.stats.con < 13) { this.think('I HATE THUNDER. HIDING.'); this.#goHome('shelter'); return; }
         }
+        if (w.weather === 'blizzard') {
+            // a whiteout is no place to work — all but the hardiest hunker down at home
+            if (s.stats.con < 15) { this.think('WHITEOUT! GET INSIDE.'); this.#goHome('shelter'); return; }
+        }
 
         // a rare treasure chest is worth dropping everything for — the nearest free farmer claims it
         if (w.treasure && !w.treasure.opened && !w.treasure.claimant && !w.isNight() && this.energy > 0.2) {
@@ -2816,6 +2982,10 @@ export class Farmer {
             if (grew) return;
         }
 
+        // 1c.5 craft an unlocked tool (watering can etc.) — a finite one-off investment that
+        //      pays back in efficiency, so it sits above the endless facility treadmill.
+        if (this.#maybeCraft()) return;
+
         // 1d. facility collection/tending (eggs/milk/lily/fish — ready produce keeps, so it
         //     waits behind crop care, clearing, and the finite expansion goal)
         const urgentFac = this.#nextTaskOnPlot(this.plot, thirstThreshold, true, false);
@@ -2866,7 +3036,7 @@ export class Farmer {
 
         // 5. competitive & behind: grind — but a bot that's been burned by overwork needs more in
         //    the tank before it pushes (learned restraint scales with how often it's fallen ill).
-        if ((this.isBehindLeader() && this.p.competitiveness > 0.55 || this.goal === 'harvest king') && this.energy > 0.4 + this.caution * 0.1) {
+        if (w.canGarden() && (this.isBehindLeader() && this.p.competitiveness > 0.55 || this.goal === 'harvest king') && this.energy > 0.4 + this.caution * 0.1) {
             const anyField = this.#findField(f => w.get(f.i, f.j) === T.GRASS) || this.#findField(f => w.get(f.i, f.j) === T.TILLED && !w.cropAt(f.i, f.j));
             if (anyField) { this.think(this.caution >= 2 ? "I'LL CATCH UP — BUT NOT AT ANY COST" : 'I WILL NOT FALL BEHIND'); this.#pursue({ act: w.get(anyField.i, anyField.j) === T.GRASS ? 'till' : 'plant', field: anyField }, this.plot, false); return; }
         }
@@ -3188,6 +3358,7 @@ export class Farmer {
                 if (c) {
                     c.water = 1; c.wateredAt = w.time; c.dryTime = 0;
                     this.carryWater = Math.max(0, this.carryWater - 1); this.gainXP(1);
+                    this.#waterExtra(c);   // a crafted can/rig sprinkles nearby thirsty crops in the same trip
                 }
                 break;
             }
@@ -3199,6 +3370,24 @@ export class Farmer {
         this.targetProd = null;
         if (helping && this.helpTask) { this.helpTask.didWork = true; this.helpTask.actionsLeft--; this.state = 'decide-help'; }
         else this.state = 'decide';
+    }
+
+    // A watering can (reach 3) / irrigation rig (reach 5) makes one watering trip go
+    // further: the surplus reach also tops up the nearest thirsty crops on the plot for
+    // free. The rig prefers crops in a straight line with the target (a sprinkler row).
+    #waterExtra(center) {
+        const reach = this.waterReach();
+        if (reach <= 1) return;
+        const w = this.world, straight = this.hasTool('sprinkler');
+        const cand = [];
+        for (const f of this.plot.fields) {
+            if (f.i === center.i && f.j === center.j) continue;
+            const c = w.cropAt(f.i, f.j);
+            if (c && !c.withered && c.stage < 3 && c.water < 0.6) cand.push(c);
+        }
+        const key = (c) => Math.abs(c.i - center.i) + Math.abs(c.j - center.j) + (straight && c.i !== center.i && c.j !== center.j ? 100 : 0);
+        cand.sort((a, b) => key(a) - key(b));
+        for (const c of cand.slice(0, reach - 1)) { c.water = 1; c.wateredAt = w.time; c.dryTime = 0; }
     }
 
     #doCollect(p, owner, helping) {
@@ -3424,6 +3613,7 @@ export class Farmer {
                     else if (then === 'rest') this.state = 'rest';
                     else if (then === 'sick') this.state = 'sick';
                     else if (then === 'shelter') { this.state = 'shelter'; this.say('yikes!'); }
+                    else if (then === 'craft') { this.craftTimer = 2.6 / this.workSpeed(); this.state = 'craft'; }
                     else if (then === 'build') this.state = 'build';
                     else if (then === 'coopbuild') this.state = 'coopbuild';
                     else if (then === 'coopdrop') {
@@ -3466,6 +3656,7 @@ export class Farmer {
             case 'poach': this.poachTimer -= dt; if (this.poachTimer <= 0) this.#completePoach(); break;
             case 'chop': case 'break': this.chopTimer -= dt; if (this.chopTimer <= 0) this.#completeChop(); break;
             case 'mine': this.chopTimer -= dt; if (this.chopTimer <= 0) this.#completeMine(); break;
+            case 'craft': this.craftTimer -= dt; if (this.craftTimer <= 0) this.#completeCraft(); break;
             case 'forage': this.forageTimer -= dt; if (this.forageTimer <= 0) this.#completeForage(); break;
             case 'fencepost': this.fenceTimer -= dt; if (this.fenceTimer <= 0) this.#completeFencePost(); break;
             case 'scarecrow': this.chopTimer -= dt; if (this.chopTimer <= 0) this.#completeScarecrow(); break;
@@ -3508,7 +3699,7 @@ export class Farmer {
             case 'sleep': if (!this.world.isNight()) { this.state = 'decide'; this.say('good morning!'); this.visitedSick.clear(); } break;
             case 'rest': if (this.energy > 0.5) { this.state = 'decide'; this.say('back to it'); } break;
             case 'sick': if (this.health !== 'sick') this.state = 'decide'; break;
-            case 'shelter': if (this.world.weather !== 'storm') this.state = 'decide'; break;
+            case 'shelter': if (this.world.weather !== 'storm' && this.world.weather !== 'blizzard') this.state = 'decide'; break;
         }
     }
 

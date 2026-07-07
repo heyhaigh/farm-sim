@@ -2,7 +2,7 @@
 
 import { fetchMemories, mod, fmtMod, STAT_NAMES, TRAIT_NAMES, TRAIT_LABELS, hashString } from './dna.js';
 import { audio } from './audio.js';
-import { World, GRID, CENTER, T, DAY_LENGTH, NIGHT_LENGTH } from './farm.js';
+import { World, GRID, CENTER, T, DAY_LENGTH, NIGHT_LENGTH, ITEMS, CRAFTABLES } from './farm.js';
 import {
     TILE_W, TILE_H, makeCanvas, drawText, textWidth,
     makeFarmerSprites, makeCropSprites, makeHouse, makeWell, makeBoard, makeFencePost,
@@ -83,6 +83,9 @@ const MEM_PREV = { x: 0, y: 0, w: 0, h: 0 };       // memories pager arrows, set
 const MEM_NEXT = { x: 0, y: 0, w: 0, h: 0 };
 let sheetMemPage = 0;                              // current MEMORIES page (0 = newest)
 let sheetLastSel = null;                           // reset pager when the selection changes
+let sheetSlots = [];                               // inventory/tool slot hit-rects+tooltips, rebuilt each drawSheet
+let selectedSlotKey = null;                        // clicked item/tool slot (persists a name label + border)
+let sheetBodyY = 0, sheetBodyH = 0;                // scrollable-body bounds, for slot hit-testing
 const MEM_KIND_COLORS = { lesson: '#c9a45a', chat: '#8a9ade', job: '#e8c860', person: '#d08cc8', event: '#7dd069' };
 let boardOpen = false;                             // town bulletin board panel
 let boardScroll = 0, boardMaxScroll = 0;
@@ -221,6 +224,20 @@ function buildingArt(level) {
     return { img: yurtL1, src: YURT_L1_SRC, ready: yurtL1Ready };
 }
 // Town bulletin board (guild-hall pack): empty when no postings, papered when jobs are up.
+// Fantasy 16x16 item icons for the inventory grid — one tiny PNG per icon index,
+// loaded lazily for the handful of indices ITEMS/CRAFTABLES actually reference.
+const ITEM_ICON_BASE = './assets/craftpix-net-994534-free-basic-pixel-art-fantasy-icons-16x16-for-ui/PNG/Separately/Icon';
+const itemIcons = {};   // icon index -> <img>
+function itemIcon(idx) {
+    if (!idx) return null;
+    let img = itemIcons[idx];
+    if (!img) { img = new Image(); img.onerror = () => {}; img.src = `${ITEM_ICON_BASE}${idx}_1.png`; itemIcons[idx] = img; }
+    return img;
+}
+// preload the icons we know we'll draw
+for (const it of Object.values(ITEMS)) itemIcon(it.icon);
+for (const r of CRAFTABLES) itemIcon(r.icon);
+
 const boardSheet = new Image(); let boardReady = false; boardSheet.onload = () => { boardReady = true; }; boardSheet.onerror = () => {};
 boardSheet.src = './assets/craftpix-net-189780-free-top-down-pixel-art-guild-hall-asset-pack/PNG/Interior_objects.png';
 const BOARD_EMPTY_SRC = { x: 0, y: 156, w: 41, h: 62 };
@@ -781,9 +798,21 @@ function drawWeather(dt, t) {
         }
     }
 
-    // seasonal drift particles (skip during rain to avoid clutter)
+    // blizzard: a driving whiteout — dense wind-blown snow streaking sideways
+    if (w === 'blizzard') {
+        ctx.fillStyle = 'rgba(244,250,255,0.95)';
+        for (let i = 0; i < 140; i++) {
+            const p = rain[i];
+            p.y += p.s * dt * 60 * 0.85;
+            p.x -= dt * 95;   // hard wind
+            if (p.y > GH || p.x < -4) { p.y = -Math.random() * GH * 0.5; p.x = GW + Math.random() * 40; }
+            ctx.fillRect(Math.floor(p.x), Math.floor(p.y), 2, 1);
+        }
+    }
+
+    // seasonal drift particles (skip during rain/blizzard to avoid clutter)
     const sName = world.seasonName;
-    if ((sName === 'WINTER' || sName === 'FALL') && w !== 'rain' && w !== 'storm') {
+    if ((sName === 'WINTER' || sName === 'FALL') && w !== 'rain' && w !== 'storm' && w !== 'blizzard') {
         const isSnow = sName === 'WINTER';
         const n = isSnow ? 90 : 55;
         for (let i = 0; i < n; i++) {
@@ -798,6 +827,7 @@ function drawWeather(dt, t) {
 
     // tints
     if (w === 'storm') { ctx.fillStyle = 'rgba(30,34,60,0.32)'; ctx.fillRect(0, 0, GW, GH); }
+    else if (w === 'blizzard') { ctx.fillStyle = 'rgba(188,210,238,0.30)'; ctx.fillRect(0, 0, GW, GH); }
     else if (w === 'cloud') { ctx.fillStyle = 'rgba(60,66,80,0.16)'; ctx.fillRect(0, 0, GW, GH); }
     else if (w === 'drought') { ctx.fillStyle = 'rgba(230,150,50,0.12)'; ctx.fillRect(0, 0, GW, GH); }
     // gentle cool cast over winter
@@ -1149,8 +1179,9 @@ function collectDrawables() {
                 const tx = cam.x + isoX(tr.i + 0.5, tr.j + 0.5), ty = cam.y + isoY(tr.i + 0.5, tr.j + 0.5);
                 list.push({ y: ty + TILE_H * 0.4, draw: () => ctx.drawImage(troughSprite, Math.floor(tx - 6), Math.floor(ty - 1)) });
             }
-            // producers
+            // producers (animals tucked inside their coop/barn at night aren't drawn)
             for (const p of fac.producers) {
+                if (p.inside) continue;
                 const px = cam.x + isoX(p.fx, p.fy), py = cam.y + isoY(p.fx, p.fy);
                 list.push({ y: py + TILE_H * 0.5, draw: () => drawProducer(p, px, py) });
             }
@@ -1588,10 +1619,10 @@ function drawUI() {
     const season = world.seasonDef;
     hx += drawText(ctx, season.name, hx, 7, season.accent) + 8;
 
-    // weather (blink on storm)
+    // weather (blink on storm/blizzard)
     const wl = world.weatherLabel;
-    const blink = world.weather === 'storm' && Math.floor(performance.now() / 300) % 2 === 0;
-    const wcol = { sun: '#f0d060', cloud: '#9aa0b4', rain: '#6a9ade', storm: '#e05840', drought: '#e0a03c' }[world.weather];
+    const blink = (world.weather === 'storm' || world.weather === 'blizzard') && Math.floor(performance.now() / 300) % 2 === 0;
+    const wcol = { sun: '#f0d060', cloud: '#9aa0b4', rain: '#6a9ade', storm: '#e05840', blizzard: '#bcd8ec', drought: '#e0a03c' }[world.weather];
     if (!blink) drawText(ctx, wl, hx, 7, wcol);
     hx += textWidth(wl) + 8;
 
@@ -1669,6 +1700,52 @@ function barFill(x, y, w, frac, color, bg = '#20242f') {
     ctx.fillRect(x, y, Math.max(0, Math.floor(w * Math.min(frac, 1))), 3);
 }
 
+// One inventory/tool cell: beveled dark slot + 16px icon + count/lock badge. Matches the
+// wood panel look rather than the lighter RPG parchment so it stays cohesive with the sheet.
+function drawItemSlot(x, y, sz, iconImg, count, opts = {}) {
+    ctx.fillStyle = '#0e0b08'; ctx.fillRect(x, y, sz, sz);
+    ctx.fillStyle = opts.locked ? '#1c160f' : '#241a11'; ctx.fillRect(x + 1, y + 1, sz - 2, sz - 2);
+    ctx.fillStyle = '#3a2c1c'; ctx.fillRect(x + 1, y + 1, sz - 2, 1);   // top bevel
+    if (opts.hi) { ctx.fillStyle = '#c9a45a'; ctx.fillRect(x, y, sz, 1); ctx.fillRect(x, y, 1, sz); ctx.fillRect(x + sz - 1, y, 1, sz); ctx.fillRect(x, y + sz - 1, sz, 1); }
+    if (opts.sel) {   // clicked/selected: a bright white ring so it reads as "picked"
+        ctx.fillStyle = '#fff4d0';
+        ctx.fillRect(x, y, sz, 1); ctx.fillRect(x, y, 1, sz); ctx.fillRect(x + sz - 1, y, 1, sz); ctx.fillRect(x, y + sz - 1, sz, 1);
+    }
+    if (iconImg && iconImg.complete && iconImg.naturalWidth) {
+        const s = sz - 2, off = 1;
+        ctx.save();
+        if (opts.locked) ctx.globalAlpha = 0.35;
+        ctx.drawImage(iconImg, x + off, y + off, s, s);
+        ctx.restore();
+    }
+    if (count != null) {
+        const str = String(count);
+        const bw = textWidth(str) + 2;
+        ctx.fillStyle = 'rgba(0,0,0,0.75)'; ctx.fillRect(x + sz - bw - 1, y + sz - 7, bw + 1, 7);
+        drawText(ctx, str, x + sz - bw, y + sz - 6, '#ffe08a');
+    }
+    if (opts.lockText) drawText(ctx, opts.lockText, x + 2, y + 2, '#c9a45a');
+}
+
+// A small floating label for a hovered/selected inventory slot — since the icons carry
+// no text, this is how the player learns what each one is. Clamped to stay on screen.
+function drawSlotTooltip(slot) {
+    const lines = [{ t: slot.tip.title, c: '#ffe08a' }, { t: slot.tip.body, c: '#c8ccd8' }];
+    if (slot.tip.req) lines.push({ t: slot.tip.req, c: '#e0a860' });
+    const pad = 3, lh = 7;
+    const w = Math.max(...lines.map(l => textWidth(l.t))) + pad * 2;
+    const h = lines.length * lh + pad * 2 - 1;
+    let bx = slot.x + slot.w + 3, by = slot.y - 2;
+    if (bx + w > GW - 2) bx = slot.x - w - 3;        // flip to the left if it would overflow
+    if (bx < 2) bx = Math.max(2, Math.min(GW - w - 2, slot.x));
+    by = Math.max(2, Math.min(GH - h - 2, by));
+    ctx.fillStyle = 'rgba(0,0,0,0.85)'; ctx.fillRect(bx - 1, by - 1, w + 2, h + 2);
+    ctx.fillStyle = '#2b2016'; ctx.fillRect(bx, by, w, h);
+    ctx.fillStyle = '#c9a45a'; ctx.fillRect(bx, by, w, 1); ctx.fillRect(bx, by + h - 1, w, 1);
+    let ty = by + pad;
+    for (const l of lines) { drawText(ctx, l.t, bx + pad, ty, l.c); ty += lh; }
+}
+
 const SHEET_LABEL = '#8f8570', SHEET_VAL = '#e8e0cc', SHEET_GOLD = '#c9a45a';
 function drawSheet(f) {
     const s = f.sheet, p = s.personality;
@@ -1695,6 +1772,7 @@ function drawSheet(f) {
 
     // --- scrollable body ---
     const bodyY = PY + 41, bodyH = PH - 41 - 5;
+    sheetBodyY = bodyY; sheetBodyH = bodyH;
     ctx.save();
     ctx.beginPath(); ctx.rect(IX - 3, bodyY, IW + 6, bodyH); ctx.clip();
     let y = bodyY - sheetScroll;
@@ -1730,12 +1808,63 @@ function drawSheet(f) {
     if (f.wantExpand || f.wantFacility) { drawText(ctx, f.wantExpand ? '> wants more land' : '> wants to build', IX, y, SHEET_GOLD); y += 8; }
     y += 2;
 
+    sheetSlots = [];   // rebuilt every frame for hover/click (hit-tested in screen space)
+    const SZ = 18, PITCH = 20, PER_ROW = 7;
+    const addSlot = (sx, sy, key, tip) => sheetSlots.push({ x: sx, y: sy, w: SZ, h: SZ, key, tip });
+
     y = sectionBand(IX, y, IW, 'INVENTORY');
-    drawText(ctx, 'WOOD', IX, y, SHEET_LABEL); drawText(ctx, String(f.wood), IX + 34, y, SHEET_VAL);
-    drawText(ctx, 'ORE', IX + 76, y, SHEET_LABEL); drawText(ctx, String(f.ore || 0), IX + 108, y, SHEET_VAL); y += 7;
-    const goods = Object.entries(s.goods || {}).filter(([, n]) => n > 0);
-    if (goods.length) { for (const [g, n] of goods) { drawText(ctx, g.slice(0, 20), IX, y, SHEET_LABEL); drawText(ctx, String(n), IX + 118, y, SHEET_VAL); y += 7; } }
-    else { drawText(ctx, 'no goods stored yet', IX, y, SHEET_LABEL); y += 7; }
+    // item grid: one beveled slot per non-empty stack, 7 across
+    const items = f.inventoryItems();
+    const emptySlots = 7;   // always show at least one row of slots even when empty
+    const slotCount = Math.max(items.length, emptySlots);
+    for (let k = 0; k < slotCount; k++) {
+        const col = k % PER_ROW, row = Math.floor(k / PER_ROW);
+        const sx = IX + col * PITCH, sy = y + row * PITCH;
+        const it = items[k];
+        if (it) {
+            const key = `inv:${it.id}`;
+            drawItemSlot(sx, sy, SZ, itemIcon(it.icon), it.count, { sel: selectedSlotKey === key });
+            addSlot(sx, sy, key, { title: it.name, body: `you have ${it.count}` });
+        } else drawItemSlot(sx, sy, SZ, null, null);
+    }
+    y += Math.ceil(slotCount / PER_ROW) * PITCH + 2;
+
+    // tools: owned crafted tools as bright slots, then the next locked unlock with its
+    // level/ore requirement so the player can see what a farmer is working toward.
+    y = sectionBand(IX, y, IW, 'TOOLS');
+    let tx = IX;
+    let drewTool = false;
+    for (const r of CRAFTABLES) {
+        if (!f.hasTool(r.id)) continue;
+        const key = `tool:${r.id}`;
+        drawItemSlot(tx, y, SZ, itemIcon(r.icon), null, { hi: true, sel: selectedSlotKey === key });
+        addSlot(tx, y, key, { title: r.name, body: r.desc });
+        tx += PITCH; drewTool = true;
+    }
+    const next = f.nextUnlock();
+    if (next) {
+        const locked = f.sheet.level < next.reqLevel || f.ore < next.ore || f.wood < next.wood;
+        const key = `tool:${next.id}`;
+        drawItemSlot(tx, y, SZ, itemIcon(next.icon), null, { locked, sel: selectedSlotKey === key });
+        const reqParts = [];
+        if (f.sheet.level < next.reqLevel) reqParts.push(`LV${next.reqLevel}`);
+        reqParts.push(`${next.ore}ore`, `${next.wood}wd`);
+        addSlot(tx, y, key, { title: `${next.name} (locked)`, body: next.desc, req: `needs ${reqParts.join(' ')}` });
+        tx += PITCH;
+        drawText(ctx, next.name, tx + 3, y + 1, locked ? SHEET_LABEL : '#8ad0e0');
+        drawText(ctx, reqParts.join(' '), tx + 3, y + 8, locked ? '#c07050' : '#7dd069');
+        y += PITCH;
+    } else if (drewTool) {
+        drawText(ctx, 'all tools crafted', tx + 3, y + 6, SHEET_LABEL); y += PITCH;
+    } else {
+        drawText(ctx, 'no tools yet', tx, y + 6, SHEET_LABEL); y += PITCH;
+    }
+    // clicked-slot label line + a hover/selected tooltip drawn on top at the very end of drawSheet
+    if (selectedSlotKey) {
+        const sel = sheetSlots.find(s => s.key === selectedSlotKey);
+        if (sel) { drawText(ctx, `> ${sel.tip.title}`, IX, y, '#ffe08a'); y += 8; }
+        else selectedSlotKey = null;   // the selected stack emptied out
+    }
     y += 2;
 
     y = sectionBand(IX, y, IW, 'ACTIVITY');
@@ -1814,6 +1943,14 @@ function drawSheet(f) {
     y += 5;
 
     ctx.restore();
+
+    // item tooltip (drawn unclipped, on top): hovered slot wins, else the clicked/selected one.
+    // Only slots currently within the scrollable body are eligible.
+    const inBody = (s) => s.y >= bodyY - 2 && s.y + s.h <= bodyY + bodyH + 2;
+    let tipSlot = sheetSlots.find(s => inBody(s) && inRect(mouse, s));
+    if (!tipSlot && selectedSlotKey) tipSlot = sheetSlots.find(s => s.key === selectedSlotKey && inBody(s));
+    if (tipSlot) drawSlotTooltip(tipSlot);
+
     sheetContentH = (y + sheetScroll) - bodyY;
     maxSheetScroll = Math.max(0, sheetContentH - bodyH);
     if (sheetScroll > maxSheetScroll) sheetScroll = maxSheetScroll;
@@ -2000,10 +2137,16 @@ out.addEventListener('pointerup', (e) => {
 
     // detail card: X closes it; clicks anywhere inside it are consumed. Checked BEFORE the
     // minimap because the full-height card is drawn OVER it (Codex: don't click through).
-    if (selected && inRect(p, SHEET_CLOSE)) { selected = null; return; }
+    if (selected && inRect(p, SHEET_CLOSE)) { selected = null; selectedSlotKey = null; return; }
     if (selected && MEM_PREV.w && inRect(p, MEM_PREV)) { sheetMemPage = Math.max(0, sheetMemPage - 1); return; }
     if (selected && MEM_NEXT.w && inRect(p, MEM_NEXT)) { sheetMemPage++; return; }
-    if (selected && inRect(p, SHEET_RECT)) return;
+    if (selected && inRect(p, SHEET_RECT)) {
+        // click an inventory/tool slot to pin its name label + select ring; click empty space to clear
+        const hit = sheetSlots.find(s => s.y >= sheetBodyY - 2 && s.y + s.h <= sheetBodyY + sheetBodyH + 2 && inRect(p, s));
+        if (hit) selectedSlotKey = selectedSlotKey === hit.key ? null : hit.key;
+        else selectedSlotKey = null;
+        return;
+    }
 
     // minimap: jump the camera (only interactive when visible — hidden under the card)
     if (!selected && inRect(p, MINIMAP)) {
@@ -2024,7 +2167,7 @@ out.addEventListener('pointerup', (e) => {
         const d = Math.hypot(f.pos.i - tile.i + 0.0, f.pos.j - tile.j);
         if (d < bestD) { bestD = d; best = f; }
     }
-    if (best !== selected) sheetScroll = 0;
+    if (best !== selected) { sheetScroll = 0; selectedSlotKey = null; }
     selected = best;
 });
 

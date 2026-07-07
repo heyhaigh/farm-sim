@@ -137,10 +137,10 @@ class FarmAudio {
         this.nightMix += (target - this.nightMix) * 0.01;
         this.musicGain.gain.setTargetAtTime(0.9 * (1 - this.nightMix), t, 0.5);
         this.cricketGain.gain.setTargetAtTime(0.5 * this.nightMix, t, 0.5);
-        // rain bed by weather
-        this.rainTarget = weather === 'storm' ? 0.24 : weather === 'rain' ? 0.13 : 0;
+        // rain/wind bed by weather (blizzard drives the noise bed as howling wind)
+        this.rainTarget = weather === 'storm' ? 0.24 : weather === 'blizzard' ? 0.2 : weather === 'rain' ? 0.13 : 0;
         this.rainGain.gain.setTargetAtTime(this.rainTarget, t, 1.2);
-        // thunder on the rising edge of a lightning flash
+        // thunder on the rising edge of a lightning flash (blizzard gusts stay below the 0.9 threshold)
         if (flash > 0.9 && this.lastFlash <= 0.9) this.#thunder();
         this.lastFlash = flash;
     }
