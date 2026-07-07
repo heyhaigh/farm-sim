@@ -1205,6 +1205,12 @@ function collectDrawables() {
                 } else ctx.drawImage(wellSprite, Math.floor(sx - 10 + TILE_W / 2 - 10), Math.floor(sy - 14));
             }
         });
+        // town silo — donation heart of the plaza, present from day one; shows the town level
+        {
+            const s = world.silo;
+            const ssx = cam.x + isoX(s.i, s.j), ssy = cam.y + isoY(s.i, s.j);
+            list.push({ y: ssy + TILE_H, draw: () => drawSilo(ssx, ssy) });
+        }
         if (world.board) {   // only once the town has built the bulletin board
             const b = world.board;
             const bx = cam.x + isoX(b.i, b.j), by = cam.y + isoY(b.i, b.j);
@@ -1450,6 +1456,25 @@ function drawStall(sx, sy) {
     const bob = Math.round(Math.sin(performance.now() / 300) * 1.5);
     ctx.fillStyle = '#f0c850'; ctx.fillRect(Math.floor(sx - 2), ay - 9 + bob, 4, 4);
     ctx.fillStyle = '#c89830'; ctx.fillRect(Math.floor(sx - 1), ay - 8 + bob, 1, 2);
+}
+
+// The town silo — a grain bin at the plaza where settlers donate surplus to level the town.
+// Procedural (no asset): tan cylinder + hooped bands + conical roof, with a floating TOWN LV tag.
+function drawSilo(sx, sy) {
+    const w = 16, h = 22;
+    const x = Math.floor(sx - w / 2), footY = Math.floor(sy + TILE_H), topY = footY - h;
+    ctx.fillStyle = 'rgba(10,14,10,0.30)'; ctx.fillRect(x - 1, footY - 1, w + 2, 3);            // shadow
+    ctx.fillStyle = '#c9a24e'; ctx.fillRect(x, topY + 6, w, h - 6);                              // body
+    ctx.fillStyle = '#e0c072'; ctx.fillRect(x + 1, topY + 6, 3, h - 6);                          // left highlight
+    ctx.fillStyle = '#b3893c'; ctx.fillRect(x + w - 5, topY + 6, 5, h - 6);                      // right shade
+    ctx.fillStyle = '#8a6a34'; for (let k = 0; k < 3; k++) ctx.fillRect(x, topY + 10 + k * 4, w, 1); // hoops
+    for (let r = 0; r <= 6; r++) { ctx.fillStyle = '#7a5230'; ctx.fillRect(x + r, topY + 6 - r, w - r * 2, 1);   // conical roof
+        ctx.fillStyle = '#93643a'; ctx.fillRect(x + r, topY + 6 - r, Math.max(1, (w - r * 2) >> 1), 1); }        // roof highlight
+    ctx.fillStyle = '#5a3c22'; ctx.fillRect(Math.floor(sx) - 1, topY - 1, 2, 2);                 // cap
+    ctx.fillStyle = '#3a2814'; ctx.fillRect(x - 1, topY + 6, 1, h - 6); ctx.fillRect(x + w, topY + 6, 1, h - 6); ctx.fillRect(x - 1, footY, w + 2, 1); // outline
+    const tag = `LV ${world.townLevel}`, tw = textWidth(tag);                                    // town-level tag
+    ctx.fillStyle = 'rgba(20,16,8,0.78)'; ctx.fillRect(Math.floor(sx - tw / 2) - 2, topY - 12, tw + 4, 9);
+    drawText(ctx, tag, Math.floor(sx - tw / 2), topY - 11, '#f0d060');
 }
 
 function drawMerchant(m, sx, sy) {
@@ -1918,6 +1943,12 @@ function drawUI() {
     let hx = 74;
     hx += drawText(ctx, `DAY ${world.day}`, hx, 7, '#c8ccd8') + 8;
 
+    // town level — a shared progress badge (pulses gold briefly on a level-up)
+    {
+        const flash = (world.townLevelFlash || 0) > 0 && Math.floor(performance.now() / 160) % 2 === 0;
+        hx += drawText(ctx, `TOWN LV ${world.townLevel}`, hx, 7, flash ? '#ffffff' : '#e0b84a') + 8;
+    }
+
     // time of day — always shown (morning / afternoon / evening / night)
     {
         let tod, tcol;
@@ -2160,6 +2191,12 @@ function buildingUnder(mx, my) {
       const wdw = Math.round(WELL_SRC.w * ASSET_SCALE), wdh = Math.round(WELL_SRC.h * ASSET_SCALE);
       push(Math.floor(sx + TILE_W / 2 - wdw / 2 - 10), Math.floor(sy + TILE_H - wdh + 2), wdw, wdh,
         [{ t: 'TOWN WELL', c: TT_G }, { t: 'Water source', c: TT_L }, { t: 'Water for the whole town', c: TT_B }]); }
+    { const s = world.silo, sx = cam.x + isoX(s.i, s.j), sy = cam.y + isoY(s.i, s.j);
+      const maxed = world.townLevel >= 10;
+      push(Math.floor(sx - 9), Math.floor(sy + TILE_H - 22), 18, 24,
+        [{ t: `TOWN SILO — LV ${world.townLevel}`, c: TT_G }, { t: 'The town levels on donations', c: TT_L },
+         { t: 'Settlers give surplus timber here', c: TT_GR },
+         { t: maxed ? 'The town is fully grown' : `${world.townXP} / ${world.townXpNeed()} to level ${world.townLevel + 1}`, c: TT_B }]); }
     if (world.board && boardScreen.w) push(boardScreen.x, boardScreen.y, boardScreen.w, boardScreen.h,
         [{ t: 'BULLETIN BOARD', c: TT_G }, { t: 'Town structure', c: TT_L }, { t: 'Farmers post & take jobs', c: TT_GR }]);
     for (const p of world.plots) for (const fac of p.facilities) {

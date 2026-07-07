@@ -77,6 +77,15 @@ export function xpForLevel(level) { return Math.round(XP_BASE * Math.pow(XP_GROW
 // (cows/pigs/goats) are a cottage privilege — the herd is what pulls a farmer up the last rung.
 const FACILITY_MIN_LEVEL = { coop: 2, pond: 3, pen: 3 };
 
+// The TOWN levels like a farmer, but on DONATED surplus rather than personal graft — and steeper,
+// so a thriving town is a long communal haul. townXpForLevel(L) = XP to go from town level L→L+1.
+const TOWN_XP_BASE = 45, TOWN_XP_GROWTH = 1.5;
+export function townXpForLevel(level) { return Math.round(TOWN_XP_BASE * Math.pow(TOWN_XP_GROWTH, Math.max(0, level - 1))); }
+const TOWN_MAX_LEVEL = 10;                       // the town is "built out" here; donations ease off
+const DONATE_XP = { wood: 2, crops: 1, ore: 3 }; // town XP per donated unit (wood is the workhorse)
+const DONATE_BATCH = 15;                         // how much surplus a farmer carries to the silo per trip
+const DONATE_KEEP = 8;                           // wood a farmer keeps for themselves before giving
+
 // Longer days so the world breathes slowly while the (now faster) farmers bustle.
 export const DAY_LENGTH = 300;
 export const NIGHT_LENGTH = 80;
@@ -276,6 +285,16 @@ export class World {
 
         this.well = { i: CENTER, j: CENTER, ready: true };
         this.sign = null;                                 // (RY sign removed)
+        // The town itself LEVELS UP like a farmer: settlers haul surplus to the silo, and those
+        // donations are the town's XP. A level-1 town is a ghost town — just a well — and its
+        // level (exponentially harder each rung) is what unlocks communal builds and draws a
+        // merchant, so nobody throws up a board + windmill + toolshed on day one.
+        this.townLevel = 1;
+        this.townXP = 0;
+        this.coffers = { wood: 0, crops: 0, ore: 0 };     // lifetime donations to the silo (accounting + flavor)
+        this.townLevelFlash = 0;                          // brief UI pulse on a town level-up
+        this.silo = { i: CENTER - 4, j: CENTER - 1 };     // the donation heart of the plaza (present from day one)
+        this.set(this.silo.i, this.silo.j, T.STRUCT);
         this.board = null;    // no bulletin board until the town builds one together (first communal project)
         this.merchant = null;                             // the wandering trader, present only during a visit
         this.merchantNextDay = 4 + Math.floor(this.rand() * 3);   // first caravan rolls in around day 4-6
@@ -1901,11 +1920,33 @@ export class World {
         return out;
     }
 
+    // ---- town level: donations to the silo grow the town ------------------------
+
+    // Credit donated town XP and roll any level-ups (exponential thresholds). Levelling the town
+    // is what unlocks the next communal build / draws a merchant — a shared, visible milestone.
+    addTownXP(n) {
+        if (this.townLevel >= TOWN_MAX_LEVEL) return;
+        this.townXP += n;
+        let need = townXpForLevel(this.townLevel);
+        while (this.townLevel < TOWN_MAX_LEVEL && this.townXP >= need) {
+            this.townXP -= need; this.townLevel++;
+            this.townLevelFlash = 2.5;
+            this.addLog(`RY FARMS GREW TO TOWN LEVEL ${this.townLevel}! The settlement is thriving.`, '#f0d060');
+            need = townXpForLevel(this.townLevel);
+        }
+        if (this.townLevel >= TOWN_MAX_LEVEL) this.townXP = 0;
+    }
+    townXpNeed() { return townXpForLevel(this.townLevel); }
+
     // ---- communal projects -------------------------------------------------------
 
     #maybeStartProject() {
         if (this.project || this.projectIndex >= PROJECT_DEFS.length) return;
         const def = PROJECT_DEFS[this.projectIndex];
+        // TOWN LEVEL is the primary unlock gate: a ghost town can't raise a board, and a young
+        // town can't rush a windmill — the settlers must first grow the town (donations to the
+        // silo) to the tier this build belongs to. This is what stops a day-one build spree.
+        if (this.townLevel < (def.townLvl || 1)) return;
         // a storm-battered town rushes its guardian: each crop lost to lightning pulls the
         // monument's harvest gate forward (down to half — the level gate below still stands, so
         // it never rises before someone can carve it). Other projects keep their normal pacing.
@@ -1949,6 +1990,7 @@ export class World {
             for (const p of this.plots) if (i >= p.x - pad && i <= p.x + p.w + pad && j >= p.y - pad && j <= p.y + p.h + pad) { clear = false; break; }
             for (const s of this.structures) if (Math.abs(s.i - i) + Math.abs(s.j - j) < 5 + size) { clear = false; break; }
             if (Math.abs(this.well.i - i) + Math.abs(this.well.j - j) < 6 + size) clear = false;   // keep well clear (sprites are big)
+            if (this.silo && Math.abs(this.silo.i - i) + Math.abs(this.silo.j - j) < 5 + size) clear = false;
             if (this.board && Math.abs(this.board.i - i) + Math.abs(this.board.j - j) < 5 + size) clear = false;
             if (clear) return { i, j };
         }
@@ -2766,6 +2808,7 @@ export class World {
             // a personal run of storm losses fades if the sky stops singling them out (the town's
             // collective tally persists until the guardian actually goes up)
             if (f.stormLosses > 0) f.stormLosses = f.stormLosses > 0.4 ? f.stormLosses * 0.85 : 0;
+            if (f.donateCooldown > 0) f.donateCooldown -= 1;   // the itch to give the town a hand returns
             // opinions fade toward neutral over time — old grudges soften, gratitude cools
             for (const [k, v] of f.opinions) { const nv = v * 0.9; if (Math.abs(nv) < 0.03) { f.opinions.delete(k); f.opinionReasons && f.opinionReasons.delete(k); } else f.opinions.set(k, nv); }
             // journal decay: each memory fades at its kind's rate; the faint are forgotten
@@ -2795,6 +2838,7 @@ export class World {
         }
         this.weatherTimer -= dt;
         if (this.weatherTimer <= 0) this.#rollWeather();
+        if (this.townLevelFlash > 0) this.townLevelFlash -= dt;   // UI-only level-up pulse
         this.#tickCrops(dt);
         this.#tickProducers(dt);
         this.#tickLightning(dt);
@@ -2809,6 +2853,8 @@ export class World {
     // ---- Wandering merchant: schedule, travel in/out, and the goods-for-ore trade ----
     #tickMerchant(dt) {
         if (!this.merchant) {
+            // a trader only bothers with a town that's grown enough to be worth the trip
+            if (this.townLevel < MERCHANT_TOWN_LVL) return;
             if (this.day >= this.merchantNextDay && !this.isNight()) this.#spawnMerchant();
             return;
         }
@@ -2924,6 +2970,7 @@ const COOP_STALL_DAYS = 8;
 // A wandering MERCHANT visits every so often, sets up a stall by the plaza, and swaps ORE (the
 // finite frontier resource) for the surplus GOODS the farms churn out — an economic alternative
 // to trekking the highlands for stone. RATE goods buy one ore.
+const MERCHANT_TOWN_LVL = 3;      // the town must be this established before a trader detours here
 const MERCHANT_INTERVAL = 6;      // days between visits (plus a jitter)
 const MERCHANT_STAY_DAYS = 1.3;   // how long the stall lingers before packing up
 const MERCHANT_SPEED = 2.6;       // travel speed (tiles/sec)
@@ -2956,16 +3003,18 @@ const GOAL_CREEDS = {
 // stone and timber, claiming a bigger square footprint — and bending the sky harder:
 // lightning falls off exponentially while the rains come oftener and soak deeper (less
 // hand-watering). Farmers haul the materials together, then carve together.
+// `townLvl` is the town-level rung each build unlocks at (see World.townLevel) — the town must
+// grow (silo donations) before its settlers can raise these, so a level-1 ghost town has only a well.
 const PROJECT_DEFS = [
-    { type: 'board', label: 'BULLETIN BOARD', at: 8, needed: 22, perk: 'FARMERS CAN POST JOBS' },
-    { type: 'toolshed', label: 'TOOLSHED', at: 20, needed: 30, perk: 'ALL WORK +12% FASTER' },
-    { type: 'windmill', label: 'WINDMILL', at: 55, needed: 45, perk: 'CROPS GROW +15% FASTER' },
-    { type: 'statue1', label: 'GUARDIAN HEAD', at: 100, needed: 55, lvlReq: 8, wood: 14, ore: 8, size: 1,
+    { type: 'board', label: 'BULLETIN BOARD', townLvl: 2, at: 8, needed: 22, perk: 'FARMERS CAN POST JOBS' },
+    { type: 'toolshed', label: 'TOOLSHED', townLvl: 3, at: 20, needed: 30, perk: 'ALL WORK +12% FASTER' },
+    { type: 'windmill', label: 'WINDMILL', townLvl: 4, at: 55, needed: 45, perk: 'CROPS GROW +15% FASTER' },
+    { type: 'statue1', label: 'GUARDIAN HEAD', townLvl: 5, at: 100, needed: 55, lvlReq: 8, wood: 14, ore: 8, size: 1,
       lightning: 0.82, rain: 1.1, perk: 'LIGHTNING -18%, RAIN +10%' },
-    { type: 'well2', label: 'SECOND WELL', at: 160, needed: 65, perk: 'SHORTER WATER RUNS' },
-    { type: 'statue2', label: 'FOX SENTINEL', at: 260, needed: 110, lvlReq: 16, wood: 35, ore: 20, size: 2,
+    { type: 'well2', label: 'SECOND WELL', townLvl: 5, at: 160, needed: 65, perk: 'SHORTER WATER RUNS' },
+    { type: 'statue2', label: 'FOX SENTINEL', townLvl: 6, at: 260, needed: 110, lvlReq: 16, wood: 35, ore: 20, size: 2,
       lightning: 0.55, rain: 1.3, perk: 'LIGHTNING -45%, RAIN +30%' },
-    { type: 'statue3', label: 'STONE MOTHER', at: 480, needed: 220, lvlReq: 26, wood: 88, ore: 50, size: 3,
+    { type: 'statue3', label: 'STONE MOTHER', townLvl: 7, at: 480, needed: 220, lvlReq: 26, wood: 88, ore: 50, size: 3,
       lightning: 0.25, rain: 1.6, perk: 'LIGHTNING -75%, RAIN +60%' },
 ];
 
@@ -3018,6 +3067,8 @@ export class Farmer {
         this.birdLosses = 0;      // crops lost to crows — enough and a scarecrow goes up
         this.stormLosses = 0;     // crops this farmer lost to lightning — drives them to help
                                   // raise the guardian (decays slowly, like a fading grudge)
+        this.donateCooldown = 1 + Math.floor((sheet.seed >>> 5) % 3);  // days between silo donations
+        this.donateTarget = null; // pending surplus a farmer is hauling to the town silo
         this.scarecrowTarget = null;
 
         // episodic memory: a day-stamped journal of what happened to THIS bot — who helped,
@@ -3463,6 +3514,47 @@ export class Farmer {
         const off = (this.sheet.seed % 3) - 1;
         if (!this.#goTo(site.i + 0.5 + off, site.j + 1.6 + (pr.size || 1) - 1, 'build')) this.#goTo(site.i + 0.5, site.j + 1.6, 'build');
         return true;
+    }
+
+    // Growing the TOWN: a public-spirited settler hauls surplus timber to the silo, which is the
+    // town's XP. Only when they've no pressing personal build to save for (or genuine surplus over
+    // it), and only every few days. This is ALSO the wood demand that keeps the stumps grubbed:
+    // the most civic farmers go cut timber expressly to give when the town's still young.
+    #pursueDonation() {
+        const w = this.world;
+        if (w.townLevel >= TOWN_MAX_LEVEL) return false;                       // town's built out
+        if (this.donateCooldown > 0 || this.p.collaboration < 0.3) return false;
+        if (w.isNight() || this.energy < 0.4) return false;
+        // timber I can spare beyond what my current ambition is saving toward
+        const saving = this.wantUpgrade ? (HOUSE_TIERS[this.plot.built.level + 1]?.wood || 0)
+                     : (this.wantExpand || this.wantFacility) ? FENCE_WOOD : DONATE_KEEP;
+        if (this.wood - saving >= DONATE_BATCH) {
+            this.donateTarget = { wood: DONATE_BATCH };
+            this.think('SURPLUS TIMBER FOR THE TOWN SILO');
+            return this.#goTo(w.silo.i + 0.5, w.silo.j + 1.2, 'donate');
+        }
+        // young town, no personal ambition pending, strongly collaborative -> cut timber to GIVE
+        if (!this.wantUpgrade && !this.wantExpand && !this.wantFacility && this.p.collaboration > 0.5) {
+            this.think('TIMBER TO GROW THE TOWN');
+            return this.#goChop();
+        }
+        return false;
+    }
+
+    #completeDonate() {
+        const w = this.world;
+        const give = Math.min(this.wood, (this.donateTarget && this.donateTarget.wood) || 0);
+        this.donateTarget = null;
+        if (give <= 0) return;
+        this.wood -= give;
+        w.coffers.wood += give;
+        w.addTownXP(give * DONATE_XP.wood);
+        this.gainXP(2);
+        this.mood = Math.min(1, this.mood + 0.08);
+        this.sparkle = 1.5;
+        this.say(`+${give} to the silo`, '#f0d060');
+        this.remember('event', `Gave ${give} timber to the town silo — we grow this place together`, null, 0.8);
+        this.donateCooldown = 2 + Math.floor(this.rand() * 3);   // days before the itch to give returns
     }
 
     // True when a lightning-battered farmer should drop routine chores to raise the guardian: the
@@ -3996,6 +4088,10 @@ export class Farmer {
         //     want their stone and timber HAULED first; the carving starts once it's all in.
         //     (Storm-driven guardian-raising already ran far higher up, right after crop care.)
         if (w.project && this.p.collaboration > 0.35 && this.energy > 0.3 && this.#pursueProject()) return;
+
+        // 1d.5 grow the TOWN: with no build to fund, a civic settler hauls surplus timber to the
+        //      silo (levelling the town toward its next unlock) — or cuts some expressly to give.
+        if (!w.project && this.#pursueDonation()) return;
 
         // 1e. fill work: sow seeds, till new ground
         const fill = this.#nextTaskOnPlot(this.plot, thirstThreshold, false);
@@ -4891,6 +4987,7 @@ export class Farmer {
                         this.state = 'decide';
                     }
                     else if (then === 'projdrop') { this.world.depositProject(this); this.state = 'decide'; }
+                    else if (then === 'donate') { this.#completeDonate(); this.state = 'decide'; }
                     else if (then === 'care') { this.state = 'care'; this.careTimer = 1.2; }
                     else if (then === 'explore') this.#completeExplore();
                     else if (then === 'trade') this.#completeTrade();
