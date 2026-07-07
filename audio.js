@@ -292,27 +292,67 @@ class FarmAudio {
         }
     }
 
-    // cock-a-doodle-doo: four sawtooth squawks with pitch bends, through a throaty bandpass
+    // debug/preview hook — RYFARMS.audio.playCrow() triggers a crow on demand
+    playCrow() { if (this.ctx) this.#crow(); }
+
+    // cock-a-doodle-doo: the real thing is bright and reedy with vocal-tract FORMANTS, a WARBLE on
+    // the long notes, and a raspy attack — not a clean tone. Each syllable = detuned saws + a square
+    // (nasal harmonics) fed through three parallel bandpass formants, warbled by an LFO on the
+    // sustained notes, with a filtered noise rasp on the onset. Contour: two short calls, a rising
+    // warbled note, then the long falling finish.
     #crow() {
-        const t0 = this.ctx.currentTime + 0.5;   // let the dawn light land first
+        const ctx = this.ctx, t0 = ctx.currentTime + 0.4;   // let the dawn light land first
+        // "cock-a-DOO-dle-DOOO" — FIVE articulated syllables with clear gaps between them (the
+        // rhythm is what makes it read as a rooster). The "doo-dle" is an up-then-down pair, and the
+        // finish is one long note that starts high and slides down with a warble. Bright & piercing.
         const syll = [
-            [0.00, 587, 784, 0.14],    // cock
-            [0.18, 659, 880, 0.12],    // a
-            [0.34, 784, 1175, 0.30],   // DOO
-            [0.72, 880, 523, 0.34],    // dle-doo (falling)
+            { off: 0.00, f0: 430, f1: 470, dur: 0.11, warble: 0, gain: 0.20 },   // cock
+            { off: 0.17, f0: 520, f1: 545, dur: 0.09, warble: 0, gain: 0.20 },   // a
+            { off: 0.31, f0: 640, f1: 740, dur: 0.14, warble: 0, gain: 0.24 },   // DOO  (up)
+            { off: 0.49, f0: 570, f1: 545, dur: 0.10, warble: 0, gain: 0.20 },   // dle  (down)
+            { off: 0.63, f0: 780, f1: 430, dur: 0.60, warble: 10, gain: 0.26 },  // DOOO (long, sliding down, warbled)
         ];
-        for (const [off, f0, f1, dur] of syll) {
-            const t = t0 + off;
-            const o = this.ctx.createOscillator(); o.type = 'sawtooth';
-            o.frequency.setValueAtTime(f0, t);
-            o.frequency.exponentialRampToValueAtTime(f1, t + dur * 0.7);
-            const bp = this.ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1300; bp.Q.value = 1.6;
-            const g = this.ctx.createGain();
+        // vocal-tract formants pushed BRIGHT — a cockerel's crow is piercing, energy up past 3 kHz
+        const formants = [[720, 5, 1.0], [1550, 7, 0.85], [2900, 8, 0.6], [3900, 9, 0.32]];
+        for (const s of syll) {
+            const t = t0 + s.off;
+            const mix = ctx.createGain();
+            const oscs = [];
+            // a reedy, buzzy stack: two detuned saws + two detuned squares (strong odd-harmonic buzz)
+            for (const [type, det] of [['sawtooth', -9], ['sawtooth', 9], ['square', -5], ['square', 6]]) {
+                const o = ctx.createOscillator(); o.type = type; o.detune.value = det;
+                o.frequency.setValueAtTime(s.f0, t);
+                o.frequency.exponentialRampToValueAtTime(Math.max(90, s.f1), t + s.dur * 0.85);
+                o.connect(mix); oscs.push(o);
+            }
+            // warble/yodel on the long finish — the rooster's characteristic waver
+            if (s.warble) {
+                const lfo = ctx.createOscillator(); lfo.type = 'triangle'; lfo.frequency.value = s.warble;
+                const lg = ctx.createGain(); lg.gain.value = s.f0 * 0.055;
+                lfo.connect(lg); for (const o of oscs) lg.connect(o.frequency);
+                lfo.start(t); lfo.stop(t + s.dur + 0.05);
+            }
+            const g = ctx.createGain();
             g.gain.setValueAtTime(0.0001, t);
-            g.gain.linearRampToValueAtTime(0.22, t + 0.02);
-            g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-            o.connect(bp); bp.connect(g); g.connect(this.master);
-            o.start(t); o.stop(t + dur + 0.05);
+            g.gain.linearRampToValueAtTime(s.gain, t + 0.01);   // sharp attack
+            g.gain.setValueAtTime(s.gain, t + s.dur * 0.55);
+            g.gain.exponentialRampToValueAtTime(0.0001, t + s.dur);
+            for (const [ff, q, amp] of formants) {
+                const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = ff; bp.Q.value = q;
+                const fa = ctx.createGain(); fa.gain.value = amp;
+                mix.connect(bp); bp.connect(fa); fa.connect(g);
+            }
+            g.connect(this.master);
+            for (const o of oscs) { o.start(t); o.stop(t + s.dur + 0.05); }
+            // a rasp of filtered noise right on the onset (the throaty crack of each squawk)
+            const nlen = Math.min(0.05, s.dur * 0.32);
+            const ns = ctx.createBufferSource(); ns.buffer = this.#noiseBuffer(nlen);
+            const nbp = ctx.createBiquadFilter(); nbp.type = 'bandpass'; nbp.frequency.value = 1900; nbp.Q.value = 0.9;
+            const ng = ctx.createGain();
+            ng.gain.setValueAtTime(s.gain * 0.55, t);
+            ng.gain.exponentialRampToValueAtTime(0.0001, t + nlen);
+            ns.connect(nbp); nbp.connect(ng); ng.connect(this.master);
+            ns.start(t); ns.stop(t + nlen + 0.02);
         }
     }
 }
