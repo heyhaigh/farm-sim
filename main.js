@@ -2946,7 +2946,13 @@ function drawBootScreen(t) {
     memories = result.memories;
     memorySource = result.source;
 
-    world = new World(20260705);
+    // A RANDOM seed each page load, so every visit lays the town out differently (the cast is the
+    // same — grown from the same memories — but who settles where, and the weather, vary). Pass
+    // ?seed=N in the URL to reproduce a specific town (handy for sharing / debugging).
+    const urlSeed = new URLSearchParams(location.search).get('seed');
+    const worldSeed = urlSeed != null && urlSeed !== '' ? (parseInt(urlSeed, 10) >>> 0) : Math.floor(Math.random() * 0x7fffffff);
+    world = new World(worldSeed);
+    world.addLog(`Ry Farms — seed ${worldSeed}`, '#5a6672');
     // hook tile changes to terrain redraw
     const origSet = world.set.bind(world);
     world.set = (i, j, t) => { origSet(i, j, t); world._tilesChanged = true; };

@@ -1145,20 +1145,23 @@ export class World {
         // the sociable claim their plaza-side spots first; the venturesome then pick their distant
         // ground around the settled core (deterministic order: venture asc, seed as tiebreak)
         const order = [...this.farmers].sort((a, b) => (this.#ventureOf(a) - this.#ventureOf(b)) || (a.sheet.seed - b.sheet.seed));
-        let idx = 0;
         for (const f of order) {
             const v = this.#ventureOf(f);
-            const desiredR = 14 + v * 50;                                   // ~14 (plaza-side) .. ~64 (far fogged corners)
-            const baseAng = idx * 2.399963 + ((f.sheet.seed >>> 7) % 628) / 100;   // golden-angle fan + seed jitter
-            idx++;
+            // distance is personality-driven, with a per-game random jitter; the BEARING is fully
+            // random (world.rand) so the same cast lays out DIFFERENTLY every refresh (seed varies at
+            // page load — see main.js). Headless tests pass a fixed seed, so they stay deterministic.
+            const desiredR = 14 + v * 50 + (this.rand() - 0.5) * 12;        // ~plaza .. ~far fogged corner
+            const baseAng = this.rand() * Math.PI * 2;
             const spot = this.#findHomestead(f.plot, desiredR, baseAng, B);
             if (spot) this.#relocatePlot(f, spot.i, spot.j, B);
         }
     }
 
-    // Search for a valid BxB homestead near a desired radius/bearing from the plaza, widening the
-    // radius and sweeping bearings until a spot clears every other farm / the commons / valley edge.
+    // Search for a valid BxB homestead near a desired radius/bearing, sweeping bearings + widening
+    // the radius. Among the candidates it finds, it prefers ground with TIMBER nearby and shuns
+    // water — a settler assessing the resources around them — before settling for the first valid one.
     #findHomestead(plot, desiredR, baseAng, B) {
+        let fallback = null;
         for (let dr = 0; dr <= 52; dr += 2) {
             const radii = dr === 0 ? [desiredR] : [desiredR + dr, Math.max(11, desiredR - dr)];
             for (const rr of radii) {
@@ -1166,25 +1169,52 @@ export class World {
                     const ang = baseAng + (da % 2 ? 1 : -1) * Math.ceil(da / 2) * 0.42;
                     const ci = Math.round(CENTER + Math.cos(ang) * rr), cj = Math.round(CENTER + Math.sin(ang) * rr);
                     const i = ci - (B >> 1), j = cj - (B >> 1);
-                    if (this.#candidateBlockers(plot, i, j, B, B) !== null) return { i, j };
+                    if (this.#candidateBlockers(plot, i, j, B, B) === null) continue;
+                    if (!fallback) fallback = { i, j };
+                    if (this.#homesteadScore(i, j, B) >= 3) return { i, j };   // good timber, little water — settle here
                 }
             }
         }
-        return null;
+        return fallback;   // nowhere ideal — take the first that fit
+    }
+    // A rough "is this good ground?" score: +1 per nearby stand of timber (up to 3), -2 if the plot
+    // sits on water. Cheap sampling of the plot + a ring around it.
+    #homesteadScore(x, y, B) {
+        let trees = 0, water = 0;
+        for (let s = 0; s < 9; s++) {
+            const i = x - 2 + ((s * 5 + 1) % (B + 4)), j = y - 2 + ((s * 7 + 3) % (B + 4));
+            const t = this.get(i, j);
+            if (t === T.TREE) trees++; else if (t === T.WATER) water++;
+        }
+        return Math.min(3, trees) - water * 2;
     }
 
-    // Move a (still-pristine) plot to a new spot: reposition the rect, rebuild its cell-set + fields,
-    // move the settler, and reveal the fog around their new homestead.
+    // Move a (still-pristine) plot to a new spot: reposition the rect, rebuild fields, reveal the
+    // homestead patch + a corridor back to the plaza, and MUSTER the settler at the plaza — the
+    // founders all gather at the well and then set out for the ground they chose (homesteading
+    // pulls them there along the revealed corridor).
     #relocatePlot(f, i, j, B) {
         const plot = f.plot;
         plot.x = i; plot.y = j; plot.w = B; plot.h = B;
-        plot.house = { i: i + 4, j: j + 4 };   // 5x5 footprint centred in the plot
+        plot.house = { i: i + 4, j: j + 4 };   // footprint centred in the plot
         plot.cells = new Set();
         for (let jj = j; jj < j + B; jj++) for (let ii = i; ii < i + B; ii++) plot.cells.add(pkey(ii, jj));
         plot.rev++; plot._fenceRing = null;
         this.#rebuildFields(plot);
-        f.pos = { i: i + B / 2, j: j + B };
-        this.reveal(i + (B >> 1), j + (B >> 1), 13);   // light up the homestead + a resource margin
+        const pci = i + (B >> 1), pcj = j + (B >> 1);
+        this.reveal(pci, pcj, 13);                          // the homestead + a resource margin
+        this.#revealCorridor(CENTER, CENTER, pci, pcj, 4);  // a trail from the plaza so they can walk out
+        // spawn at the plaza, angled toward their claim, so the opening reads as founders dispersing
+        const bearing = Math.atan2(pcj - CENTER, pci - CENTER), r = 4 + this.rand() * 2.5;
+        f.pos = { i: CENTER + Math.cos(bearing) * r, j: CENTER + Math.sin(bearing) * r };
+    }
+    // Reveal a straight trail of fog between two points so a settler can path along it.
+    #revealCorridor(i0, j0, i1, j1, r) {
+        const dist = Math.hypot(i1 - i0, j1 - j0), steps = Math.max(1, Math.ceil(dist / (r * 0.8)));
+        for (let s = 0; s <= steps; s++) {
+            const t = s / steps;
+            this.reveal(Math.round(i0 + (i1 - i0) * t), Math.round(j0 + (j1 - j0) * t), r);
+        }
     }
 
     #initLlmChat() {
