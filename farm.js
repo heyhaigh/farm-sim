@@ -48,8 +48,9 @@ export const CRAFTABLES = [
 ];
 
 // wood economy
-const WOOD_TREE = 3;       // wood from felling a tree
+const WOOD_TREE = 3;       // BASE wood from felling a tree (scaled by growth stage: sapling x1 .. mature x3)
 const WOOD_STUMP = 3;      // grubbing the stump (roots included) yields as much as the trunk did
+const TREE_GROW_DAYS = 9;  // days a tree spends in each growth stage (sapling -> young -> mature)
 const ORE_ROCK = 2;        // iron ore from breaking a rock
 const FACILITY_WOOD = 6;   // wood to raise a facility
 const FENCE_WOOD = 8;      // wood to fence the new homestead
@@ -173,6 +174,20 @@ export function obstacleTier(i, j) {
     const r = tileHash(i, j, 0x517e) % 100;
     return r < 62 ? 0 : r < 88 ? 1 : 2;   // ~62% small / 26% medium / 12% big
 }
+// A tree's TYPE index (which species sprite), stable per tile — for the render to pick consistently.
+export function treeVariant(i, j, n) { return tileHash(i, j, 0x73ee) % n; }
+// ~1 in 6 trees is an APPLE tree (stable per tile): it renders as a fruit tree and, when felled, drops
+// apples along with its timber — a more valuable tree, a reason to seek them out.
+export function treeIsFruit(i, j) { return tileHash(i, j, 0x9f13) % 6 === 0; }
+// A tree's GROWTH STAGE at a given day (0 sapling, 1 young, 2 mature). Regrown trees (in `planted`)
+// start as saplings the day they sprout; the founding forest is seeded at MIXED ages via a birth-day
+// hash, so it isn't uniform. Pure function of position + day (+ the planting map) — deterministic.
+export function treeStageAt(i, j, day, planted) {
+    const k = i + ',' + j;
+    const birth = planted && planted.has(k) ? planted.get(k)
+        : -(tileHash(i, j, 0x7ea1) % (Math.round(2.6 * TREE_GROW_DAYS)));   // founding forest: spread of ages
+    return Math.max(0, Math.min(2, Math.floor((day - birth) / TREE_GROW_DAYS)));
+}
 function lerp(a, b, t) { return a + (b - a) * t; }
 function smooth(t) { return t * t * (3 - 2 * t); }
 function tileNoise(i, j, scale, seed = 0) {
@@ -270,6 +285,7 @@ export class World {
         this.rand = mulberry32(seed);
         this.tiles = new Uint8Array(GRID * GRID).fill(T.GRASS);
         this.rockWork = new Map();   // tilekey -> mining shifts landed on a big rock (persists till it breaks)
+        this.treePlanted = new Map();// tilekey -> world.day a REGROWN tree sprouted (so it starts a sapling + grows)
         // Infinite wilderness beyond the founding valley: chunk key "cx,cy" -> Uint8Array of
         // tiles, generated on first touch from PURE hash noise (never world.rand — generation
         // order must not affect determinism). Fog of war: matching per-chunk reveal bitmaps.
@@ -801,7 +817,7 @@ export class World {
             if (r > 24) {
                 // near the forest: stumps sprout saplings, gaps refill with wild growth
                 // (rocks are a finite resource — they never regrow, only plants do)
-                if (this.rand() < 0.18 && this.#treeFits(i, j, 48, 28)) { this.set(i, j, T.TREE); treesGrown++; }
+                if (this.rand() < 0.18 && this.#treeFits(i, j, 48, 28)) { this.set(i, j, T.TREE); this.treePlanted.set(i + ',' + j, this.day); treesGrown++; }
                 else if (this.rand() < 0.4) { this.set(i, j, this.rand() < 0.6 ? T.WHEAT : T.FLOWER); wheatGrown++; }
             } else if (r > 10 && this.rand() < 0.16) { this.set(i, j, this.rand() < 0.5 ? T.WHEAT : T.FLOWER); wheatGrown++; }
         }
@@ -3264,6 +3280,8 @@ export class World {
         for (const p of this.plots) if (p.sited && p.built.fence && p.cells.has(k)) return true;
         return false;
     }
+    // A tree's current growth stage (0 sapling / 1 young / 2 mature) — rises over the days.
+    treeStage(i, j) { return treeStageAt(i, j, this.day, this.treePlanted); }
     // Is this farmer standing on their OWN fenced homestead — their true refuge from a threat?
     #onOwnFencedPlot(f) {
         const p = f.plot;
@@ -5638,17 +5656,22 @@ export class Farmer {
             const t = w.get(tgt.i, tgt.j);
             if (t === T.TREE) {
                 this.#laborDrain('chop');           // felling a tree is heavy work
-                const tier = obstacleTier(tgt.i, tgt.j), key = pkey(tgt.i, tgt.j);   // a big old tree takes more
+                const tier = w.treeStage(tgt.i, tgt.j), key = pkey(tgt.i, tgt.j);   // a mature tree takes more chops
                 const hits = (w.rockWork.get(key) || 0) + 1;
                 if (hits < tier + 1 && this.energy > 0.12) {   // still standing — keep chopping in place
                     w.rockWork.set(key, hits);
                     this.chopTimer = this.#laborTime('chop'); this.state = 'chop'; return;
                 }
-                w.rockWork.delete(key);
+                w.rockWork.delete(key); w.treePlanted.delete(key);   // it's a stump now — forget its growth clock
                 w.set(tgt.i, tgt.j, T.STUMP);
-                const wood = WOOD_TREE * (tier + 1);   // a bigger trunk yields more timber
+                const wood = WOOD_TREE * (tier + 1);   // a bigger trunk yields more timber (sapling 3 .. mature 9)
                 this.wood += wood;
                 this.say(`+${wood} wood`, '#c8a060');
+                if (treeIsFruit(tgt.i, tgt.j)) {       // an apple tree drops fruit too — for the larder + trade
+                    const apples = 2 + tier, s = this.sheet;
+                    s.goods = s.goods || {}; s.goods.apple = (s.goods.apple || 0) + apples;
+                    this.say(`+${apples} apples`, '#e04838');
+                }
                 this.gainXP(1 + tier);
                 this.woodTarget = null;
                 // The stump is left standing — grubbing it is the farmer's own call. It's worth as

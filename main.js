@@ -2,7 +2,7 @@
 
 import { fetchMemories, mod, fmtMod, STAT_NAMES, TRAIT_NAMES, TRAIT_LABELS, hashString } from './dna.js';
 import { audio } from './audio.js';
-import { World, CHUNK, T, DAY_LENGTH, NIGHT_LENGTH, ITEMS, CRAFTABLES, xpForLevel, obstacleTier } from './farm.js';
+import { World, CHUNK, T, DAY_LENGTH, NIGHT_LENGTH, ITEMS, CRAFTABLES, xpForLevel, obstacleTier, treeVariant, treeIsFruit } from './farm.js';
 import {
     TILE_W, TILE_H, makeCanvas, drawText, textWidth,
     makeFarmerSprites, makeCropSprites, makeHouse, makeWell, makeBoard, makeFencePost,
@@ -199,13 +199,22 @@ const flowerSprite = makeWildFlowers();
 // Real hi-res tree art (CraftPix, iso billboards) — loaded async, with the
 // procedural trees below as fallback until the images arrive.
 // ---------------------------------------------------------------------------
-const TREE_ART_BASE = './assets/craftpix-net-385863-free-top-down-trees-pixel-art/PNG/Assets_separately/Trees/';
-const TREE_SETS = {
-    SPRING: ['Tree1', 'Tree2', 'Tree3', 'Flower_tree1', 'Flower_tree2', 'Fruit_tree1'],
-    SUMMER: ['Tree1', 'Tree2', 'Tree3', 'Fruit_tree2', 'Moss_tree1', 'Moss_tree2'],
-    FALL: ['Autumn_tree1', 'Tree1', 'Autumn_tree2', 'Moss_tree1', 'Autumn_tree3', 'Tree2', 'Tree3'],
-    WINTER: ['Snow_tree1', 'Snow_tree2', 'Snow_tree3', 'Snow_tree1', 'Snow_tree2', 'Snow_tree3', 'Snow_christmass_tree1', 'Christmas_tree1'],
+// WITH-SHADOW tree variants. Trees GROW over time: each TYPE ships 3 sizes — _3 sapling, _2 young,
+// _1 mature — chosen by the tree's growth stage (world.treeStage). Only types with all three sizes.
+const TREE_ART_BASE = './assets/craftpix-net-385863-free-top-down-trees-pixel-art/PNG/Assets_separately/Trees_shadow/';
+const TREE_TYPES = {
+    SPRING: ['Tree', 'Fruit_tree', 'Moss_tree'],
+    SUMMER: ['Tree', 'Fruit_tree', 'Moss_tree'],
+    FALL:   ['Tree', 'Autumn_tree', 'Moss_tree'],
+    WINTER: ['Snow_tree'],
 };
+const TREE_STAGE_SUFFIX = ['3', '2', '1'];   // growth stage 0 sapling -> _3, 1 young -> _2, 2 mature -> _1
+// every tree sprite name to preload (all sizes of every type, all seasons)
+const TREE_SETS = (() => {
+    const out = {};
+    for (const s of Object.keys(TREE_TYPES)) out[s] = TREE_TYPES[s].flatMap(b => ['1', '2', '3'].map(n => b + n));
+    return out;
+})();
 const BUSH_ART_BASE = './assets/craftpix-net-141354-free-top-down-bushes-pixel-art/PNG/Assets/';
 const BUSH_SETS = {
     SPRING: ['Bush_pink_flowers1', 'Bush_pink_flowers2', 'Bush_blue_flowers1', 'Bush_pink_flowers3'],
@@ -643,8 +652,15 @@ function pickTieredImage(store, names, i, j, seed, tier) {
 function wildDims(img) { return { w: Math.round(img.naturalWidth * ASSET_SCALE), h: Math.round(img.naturalHeight * ASSET_SCALE) }; }
 function wildSpec(i, j, t, season) {
     if (t === T.TREE) {
-        const treeSet = TREE_SETS[season.name] || TREE_SETS.SUMMER;
-        const img = pickTieredImage(treeImg, treeSet, i, j, 61, obstacleTier(i, j));
+        // pick this tree's species (stable) + current growth SIZE (rises over time); fall back to a
+        // smaller loaded size, then any loaded, then the procedural tree.
+        const bases = TREE_TYPES[season.name] || TREE_TYPES.SUMMER;
+        let base;
+        if (treeIsFruit(i, j) && bases.includes('Fruit_tree')) base = 'Fruit_tree';   // apple trees show fruit
+        else { const nf = bases.filter(b => b !== 'Fruit_tree'); const pool = nf.length ? nf : bases; base = pool[treeVariant(i, j, pool.length)]; }
+        const stage = world.treeStage(i, j);
+        let img = null;
+        for (let s = stage; s >= 0 && !img; s--) { const c = treeImg[base + TREE_STAGE_SUFFIX[s]]; if (imageLoaded(c)) img = c; }
         if (img) {
             const { w, h } = wildDims(img);
             return { img, w, h, anchor: 0.82, depth: 0.4, leaves: season.name === 'FALL', seed: hash2(i, j, 73) };
