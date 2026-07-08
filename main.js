@@ -2293,7 +2293,14 @@ function drawItemSlot(x, y, sz, iconImg, count, opts = {}) {
         ctx.fillStyle = '#fff4d0';
         ctx.fillRect(x, y, sz, 1); ctx.fillRect(x, y, 1, sz); ctx.fillRect(x + sz - 1, y, 1, sz); ctx.fillRect(x, y + sz - 1, sz, 1);
     }
-    if (iconImg && iconImg.complete && iconImg.naturalWidth) {
+    if (opts.sprite && opts.sprite.sheet && opts.sprite.sheet.complete && opts.sprite.sheet.naturalWidth) {
+        // a sprite-sheet sub-rect (e.g. a harvested-crop icon from Supplies.png) fitted into the slot
+        const sp = opts.sprite, fit = sz - 3, sc = fit / Math.max(sp.sw, sp.sh);   // scale to fill the slot (crop icons are small)
+        const dw = Math.max(1, Math.round(sp.sw * sc)), dh = Math.max(1, Math.round(sp.sh * sc));
+        const savedSmooth = ctx.imageSmoothingEnabled; ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(sp.sheet, sp.sx, sp.sy, sp.sw, sp.sh, x + Math.round((sz - dw) / 2), y + Math.round((sz - dh) / 2), dw, dh);
+        ctx.imageSmoothingEnabled = savedSmooth;
+    } else if (iconImg && iconImg.complete && iconImg.naturalWidth) {
         const s = sz - 2, off = 1;
         ctx.save();
         if (opts.locked) ctx.globalAlpha = 0.35;
@@ -2570,8 +2577,20 @@ function drawSheet(f) {
             const it = items[k];
             if (it) {
                 const key = `inv:${it.id}`;
-                drawItemSlot(sx, sy, SZ, itemIcon(it.icon), it.count, { sel: selectedSlotKey === key });
-                addSlot(sx, sy, key, { title: it.name, body: it.cap ? `you have ${it.count} / ${it.cap} storage` : `you have ${it.count}` });
+                if (it.crop) {
+                    // a crop stack: draw its Supplies.png produce icon and tag WHERE it came from
+                    const pi = PRODUCE_ICONS[it.crop];
+                    const sprite = (pi && imageLoaded(suppliesSheet)) ? { sheet: suppliesSheet, sx: pi[0], sy: pi[1], sw: pi[2], sh: pi[3] } : null;
+                    drawItemSlot(sx, sy, SZ, null, it.count, { sel: selectedSlotKey === key, sprite });
+                    const src = it.sources, parts = [];
+                    if (src.grown) parts.push(`${src.grown} grown`);
+                    if (src.stolen) parts.push(`${src.stolen} stolen`);
+                    if (src.found) parts.push(`${src.found} found`);
+                    addSlot(sx, sy, key, { title: it.name, body: parts.join(', ') || `you have ${it.count}` });
+                } else {
+                    drawItemSlot(sx, sy, SZ, itemIcon(it.icon), it.count, { sel: selectedSlotKey === key });
+                    addSlot(sx, sy, key, { title: it.name, body: it.cap ? `you have ${it.count} / ${it.cap} storage` : `you have ${it.count}` });
+                }
             } else drawItemSlot(sx, sy, SZ, null, null);
         }
         y += Math.ceil(slotCount / PER_ROW) * PITCH + 2;

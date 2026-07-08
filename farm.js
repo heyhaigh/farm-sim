@@ -257,6 +257,16 @@ export function d20(rand, modifier) {
     return { roll, mod: modifier, total: roll + modifier, crit: roll === 20, fumble: roll === 1 };
 }
 
+// Provenance tally of a farm's crops by TYPE and how each was obtained (grown / stolen / found).
+// Increment-only, like sheet.harvested — a lifetime record for the inventory breakout, kept
+// separate from the spendable `produce` wallet so trades/donations never desync the story.
+function addCropStock(sheet, type, n, source) {
+    if (!type || n <= 0) return;
+    const cs = sheet.cropStock || (sheet.cropStock = {});
+    const e = cs[type] || (cs[type] = { grown: 0, stolen: 0, found: 0 });
+    e[source] = (e[source] || 0) + n;
+}
+
 function cleanChatText(text, max = CHAT_LINE_MAX) {
     let s = String(text || '')
         .replace(/[\u2018\u2019]/g, "'")
@@ -605,6 +615,7 @@ export class World {
         } else {   // mixed homestead cache — the old reliable
             const crops = Math.round(rnd(8, 16) * mult);
             s.produce = (s.produce || 0) + crops;
+            addCropStock(s, s.crop, crops, 'found');   // provenance: a windfall from the wilds (their staple crop)
             farmer.wood += rnd(4, 8); farmer.ore += rnd(2, 4);
             const g = ['wild wheat', 'wildflowers'][Math.floor(this.rand() * 2)];
             s.goods[g] = (s.goods[g] || 0) + rnd(2, 4);
@@ -4102,7 +4113,12 @@ export class Farmer {
         const push = (id, count, cap) => { if (count > 0 && ITEMS[id]) out.push({ id, name: ITEMS[id].name, icon: ITEMS[id].icon, count, cap }); };
         push('wood', this.wood, caps.wood);
         push('ore', this.ore, caps.ore);
-        push('crops', this.sheet.produce || 0);
+        // crops broken out by TYPE with their provenance (grown on the farm / stolen / found in the wilds)
+        const cs = this.sheet.cropStock || {};
+        for (const type of Object.keys(cs)) {
+            const e = cs[type], count = (e.grown || 0) + (e.stolen || 0) + (e.found || 0);
+            if (count > 0) out.push({ id: 'crop:' + type, crop: type, name: type.charAt(0).toUpperCase() + type.slice(1), count, sources: e });
+        }
         const g = this.sheet.goods || {};
         for (const key of ['wheat', 'flower']) push(key, g[key] || 0);
         return out;
@@ -5733,6 +5749,7 @@ export class Farmer {
         const ownerSheet = (helping && owner) ? owner.sheet : s;
         ownerSheet.harvested += yieldN; w.harvestTotal += yieldN;
         ownerSheet.produce = (ownerSheet.produce || 0) + yieldN;   // spendable stockpile (harvested is lifetime-only)
+        addCropStock(ownerSheet, c.type, yieldN, 'grown');          // provenance: grown on the farm
         w.payHarvestShares(helping && owner ? owner : this, yieldN);
         if (yieldN > 0 && !check.crit) this.say(`+${yieldN} ${c.type}`);
         if (yieldN > 0) this.carryCrop = { type: c.type, t: 2.2 };   // hold the picked produce up
@@ -5765,7 +5782,7 @@ export class Farmer {
         let name = 'crop', pos, victim = null;
         if (loot.crop) {
             const c = w.cropAt(loot.crop.i, loot.crop.j);
-            if (c && c.stage === 3 && !c.withered) { name = c.type; victim = c.owner; this.carryCrop = { type: c.type, t: 2.2 }; w.crops.delete(`${loot.crop.i},${loot.crop.j}`); s.harvested += 1; w.harvestTotal += 1; pos = loot.crop; }
+            if (c && c.stage === 3 && !c.withered) { name = c.type; victim = c.owner; this.carryCrop = { type: c.type, t: 2.2 }; w.crops.delete(`${loot.crop.i},${loot.crop.j}`); s.harvested += 1; w.harvestTotal += 1; addCropStock(s, c.type, 1, 'stolen'); pos = loot.crop; }
         } else if (loot.prod && loot.prod.ready) {
             name = FACILITY_YIELD_NAME[loot.prod.kind] || 'produce'; loot.prod.ready = false; loot.prod.prod = 0; s.harvested += 1; w.harvestTotal += 1;
             victim = w.farmers.find(f => f.plot === loot.plot);
