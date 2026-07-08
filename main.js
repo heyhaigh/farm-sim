@@ -456,9 +456,13 @@ const CROP_FRAMES = {
 };
 const CROP_SCALE = ASSET_SCALE;   // crops share the one global asset scale
 // Harvested-produce icons in Supplies.png (loose items), shown when a crop is picked / carried.
+// Individual harvested-crop sprites from Supplies.png, matched to each crop (pepper=chili,
+// grapes, pumpkin=orange gourd, beanstalk=green bean are true matches; carrot/sunflower/wheat
+// borrow the nearest produce since the pack has no carrot/sunflower/loose-wheat).
 const PRODUCE_ICONS = {
-    pepper: [195, 147, 9, 9], carrot: [147, 210, 11, 11], grapes: [242, 209, 11, 14],
-    pumpkin: [85, 166, 20, 17], wheat: [1, 176, 13, 15], sunflower: [244, 132, 10, 9],
+    pepper: [191, 161, 15, 9], grapes: [242, 209, 11, 14], pumpkin: [49, 205, 15, 13],
+    beanstalk: [93, 204, 17, 11], carrot: [245, 177, 16, 16],   // carrot borrows the pineapple
+    sunflower: [263, 132, 14, 10], wheat: [244, 131, 18, 11],   // sunflower/wheat borrow the yellow squash/lemon
 };
 
 function loadAssetArt() {
