@@ -1392,10 +1392,7 @@ function collectDrawables() {
                     ctx.drawImage(scaffoldSprite, Math.floor(sx - 12), Math.floor(sy + TILE_H - 22));
                 }
                 const p = Math.min(pr.points / pr.needed, 1);
-                ctx.fillStyle = '#20222c';
-                ctx.fillRect(Math.floor(sx - 13), Math.floor(sy - 14), 26, 4);
-                ctx.fillStyle = '#f0d060';
-                ctx.fillRect(Math.floor(sx - 12), Math.floor(sy - 13), Math.floor(24 * p), 2);
+                drawProgressBar(sx, Math.floor(sy - 14), 26, p, '#f0d060');
                 const lbl = pr.label;
                 drawText(ctx, lbl, Math.floor(sx - textWidth(lbl) / 2), Math.floor(sy - 22), '#f0d060');
             }
@@ -1418,10 +1415,7 @@ function collectDrawables() {
                 const building = coop.stage === 'build';
                 const p = building ? Math.min(coop.points / coop.needed, 1)
                     : Math.min((coop.wood + coop.ore) / (coop.needWood + coop.needOre), 1);
-                ctx.fillStyle = '#20222c';
-                ctx.fillRect(Math.floor(sx - 13), Math.floor(sy - 14), 26, 4);
-                ctx.fillStyle = building ? '#f0d060' : '#8fc7e8';
-                ctx.fillRect(Math.floor(sx - 12), Math.floor(sy - 13), Math.floor(24 * p), 2);
+                drawProgressBar(sx, Math.floor(sy - 14), 26, p, building ? '#f0d060' : '#8fc7e8');
                 const lbl = coop.stage === 'rally' ? `${coop.label}?` : coop.label;
                 drawText(ctx, lbl, Math.floor(sx - textWidth(lbl) / 2), Math.floor(sy - 22), building ? '#f0d060' : '#8fc7e8');
             }
@@ -1775,15 +1769,16 @@ function drawFarmer(f, sx, sy) {
         ctx.fillRect(px + 2, py - 4, Math.floor(12 * p), 2);
     }
 
-    // status icon: sleeping outside (animated Z), sick (+) or worn out (~), unless a bubble shows
+    // status icon: sleeping outside (animated Z), sick (+) or worn out / catching breath (~). A
+    // RESTING farmer is WAITING for their energy, not asleep — so they get the '~', never the sleep Z.
     if (!f.bubble) {
-        if (f.state === 'sleep' || f.state === 'rest') {
+        if (f.state === 'sleep') {
             const zt = Math.floor(f.animTime * 2) % 3;   // Z rising + fading, like the roof sleepers
             drawText(ctx, 'Z', px + 6, py - 8 - zt * 3, `rgba(200,210,255,${1 - zt * 0.25})`);
         } else if (f.health === 'sick') {
             const bob = Math.floor(Math.sin(performance.now() / 400) * 1);
             drawText(ctx, '+', px + 6, py - 8 + bob, '#c05840');
-        } else if (f.tired) {
+        } else if (f.tired || f.state === 'rest') {
             drawText(ctx, '~', px + 6, py - 7, '#e0a03c');
         }
     }
@@ -2069,6 +2064,14 @@ function drawBoard() {
     }
 }
 
+// The ONE progress bar used everywhere (build sites, foundations, co-ops): a near-black outer stroke
+// with the fill inset 1px inside it — so every bar in the game reads the same.
+function drawProgressBar(cx, y, w, prog, fill = '#c9a45a') {
+    const x = Math.floor(cx - w / 2), p = Math.max(0, Math.min(1, prog));
+    ctx.fillStyle = '#0d0f15'; ctx.fillRect(x, y, w, 4);                              // outer black stroke + track
+    ctx.fillStyle = fill; ctx.fillRect(x + 1, y + 1, Math.round((w - 2) * p), 2);     // inset fill
+}
+
 // A dwelling under construction: a gray foundation pad staked over the 5x5 footprint, with the
 // house sprite RISING from the ground (revealed bottom-up by build progress) + a progress bar.
 function drawFoundation(h, sx, sy, art, prog, ft = 5) {
@@ -2086,9 +2089,7 @@ function drawFoundation(h, sx, sy, art, prog, ft = 5) {
         ctx.imageSmoothingEnabled = false;
         ctx.drawImage(art.img, S.x, srcY, S.w, srcH, hx, dY, dispW, dH);
     }
-    const barY = Math.floor(sy - 10), bw = 26;   // progress bar floating above the pad
-    ctx.fillStyle = '#20222c'; ctx.fillRect(Math.floor(sx - bw / 2), barY, bw, 4);
-    ctx.fillStyle = '#c9a45a'; ctx.fillRect(Math.floor(sx - bw / 2), barY, Math.round(bw * prog), 4);
+    drawProgressBar(sx, Math.floor(sy - 10), 26, prog, '#c9a45a');   // floating above the pad
 }
 
 // A small pixel speaker for the sound toggle: driver + cone pointing right, green sound-waves when
@@ -2120,12 +2121,6 @@ function drawUI() {
     drawText(ctx, 'RY FARMS', 4, 4, '#7dd069', 2);
     let hx = 74;
     hx += drawText(ctx, `DAY ${world.day}`, hx, 7, '#c8ccd8') + 8;
-
-    // town level — a shared progress badge (pulses gold briefly on a level-up)
-    {
-        const flash = (world.townLevelFlash || 0) > 0 && Math.floor(performance.now() / 160) % 2 === 0;
-        hx += drawText(ctx, `TOWN LV ${world.townLevel}`, hx, 7, flash ? '#ffffff' : '#e0b84a') + 8;
-    }
 
     // time of day — always shown (morning / afternoon / evening / night)
     {
@@ -2188,7 +2183,9 @@ function drawUI() {
     barBtn(FF_BTN, '>>', spd === 20, '#e0a03c', '#221a0e');
     barBtn(FWD_BTN, '>', spd === 5, '#e0a03c', '#221a0e');
     SPEED1_BTN.w = 0;
-    if (spd !== 1) barBtn(SPEED1_BTN, '1X', true, '#c05840', '#ffffff');
+    // the 1X revert is an ACTION, not the current speed — so it wears the plain ROSTER-style button
+    // look (not the red 'selected' fill), which is reserved for the >/>> that IS active.
+    if (spd !== 1) barBtn(SPEED1_BTN, '1X', false);
 
     barBtn(ROSTER_BTN, 'ROSTER', rosterOpen, '#7dd069', '#10240c');
 

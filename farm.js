@@ -4733,7 +4733,13 @@ export class Farmer {
             this.#goHome('rest'); return;
         }
         if (w.isNight()) {
-            if (this.#shouldSleepNow()) { this.think(this.p.diligence > 0.6 ? 'ONE MORE THING... OK, BED.' : 'TIME TO SLEEP'); this.#goHome('sleepwalk'); return; }
+            if (this.#shouldSleepNow()) {
+                // NO ROOF, NO SLEEPING OUT IN THE OPEN: a settler without even a tipi doesn't bed down —
+                // they catch their breath (rest, energy trickling back) and keep at it. Sleep is earned
+                // with a roof.
+                if (this.plot.built.level < 1) { this.think("NO ROOF YET — I'LL REST, NOT SLEEP"); this.#goHome('rest'); return; }
+                this.think(this.p.diligence > 0.6 ? 'ONE MORE THING... OK, BED.' : 'TIME TO SLEEP'); this.#goHome('sleepwalk'); return;
+            }
             this.awakeAtNight = true;
             if (w.nightProgress() > 0.4) this.workedLate = true;
         }
