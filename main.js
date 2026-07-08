@@ -3161,6 +3161,16 @@ window.addEventListener('keydown', (e) => {
             if (f) { selected = f; sheetScroll = 0; sheetTab = 0; followMode = true; rosterOpen = false; chronOpen = false; boardOpen = false; }
         }
     }
+    // ← / → — cycle the selected farmer through the whole cast (keeps following, if active)
+    if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && world && booted && selected) {
+        const arr = world.farmers, idx = arr.indexOf(selected);
+        if (arr.length && idx >= 0) {
+            selected = arr[(idx + (e.key === 'ArrowRight' ? 1 : -1) + arr.length) % arr.length];
+            sheetScroll = 0; selectedSlotKey = null;
+            rosterOpen = false; chronOpen = false; boardOpen = false;
+            e.preventDefault();
+        }
+    }
 });
 
 // ---------------------------------------------------------------------------
@@ -3273,7 +3283,15 @@ function frame(now) {
     // a quiet indicator while the camera is trailing someone (F, or the sheet's crosshair, toggles it)
     if (followMode && selected && world.farmers.includes(selected) && !rosterOpen && !chronOpen && !boardOpen) {
         const lbl = `FOLLOWING ${selected.sheet.name.split(' ')[0].toUpperCase()} - F TO STOP`;
-        drawText(ctx, lbl, Math.floor((GW - textWidth(lbl)) / 2), GH - 30, '#7dd069');
+        const tw = textWidth(lbl), bx = Math.floor((GW - tw) / 2), cy = GH - 27;
+        const pad = 12, bxL = bx - pad, bxW = tw + pad * 2;
+        ctx.fillStyle = 'rgba(12,14,22,0.82)';   // legibility: dark plate behind the label (like the bars)
+        ctx.fillRect(bxL, GH - 32, bxW, 11);
+        drawText(ctx, lbl, bx, GH - 29, '#7dd069');
+        // ◄ / ► cycle affordances (3x5, matched to the font height), flanking the label inside the plate
+        ctx.fillStyle = '#7dd069';
+        for (let c = 0; c < 3; c++) ctx.fillRect(bxL + 4 + c, cy - c, 1, c * 2 + 1);              // ◄ tip points left
+        for (let c = 0; c < 3; c++) ctx.fillRect(bxL + bxW - 5 - c, cy - c, 1, c * 2 + 1);        // ► tip points right
     }
 
     // building hover tooltip — only when hovering the world (not over a panel, not dragging,
