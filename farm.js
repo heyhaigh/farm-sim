@@ -2112,10 +2112,24 @@ export class World {
     buildNextFacility(farmer) {
         const plot = farmer.plot;
         const built = new Set(plot.facilities.map(f => f.type));
-        // the first preferred facility that's unbuilt AND unlocked (house tier + personal level)
-        const nextType = (farmer.sheet.facilityPrefs || ['pond', 'coop', 'pen'])
-            .find(t => !built.has(t) && facilityUnlocked(t, plot.built.level, farmer.sheet.level));
-        if (!nextType) return false;
+        // candidate facilities: the farmer's unbuilt preferences their house tier + level already unlock
+        const prefs = farmer.sheet.facilityPrefs || ['pond', 'coop', 'pen'];
+        const candidates = prefs.filter(t => !built.has(t) && facilityUnlocked(t, plot.built.level, farmer.sheet.level));
+        if (!candidates.length) return false;
+        // SPECIALISE INTO A GAP: bias toward a facility whose good FEW other farms make, so the town
+        // spreads across niches (poultry / dairy / wool / fishery) instead of all making the same thing —
+        // that spread is what gives the barter layer something to trade. The farmer's own taste (pref
+        // order) still weighs in, and a competitive bot leans harder into an open market.
+        const facGood = { coop: 'egg', pond: 'fish', sheeppen: 'wool',
+                          pen: farmer.sheet.penAnimal === 'pig' ? 'truffle' : farmer.sheet.penAnimal === 'goat' ? 'wool' : 'milk' };
+        const producers = {};
+        for (const f of this.farmers) if (f.plot) for (const g of f.producedGoods()) producers[g] = (producers[g] || 0) + 1;
+        let nextType = candidates[0], bestScore = -1e9;
+        candidates.forEach((t, idx) => {
+            const glut = producers[facGood[t]] || 0;
+            const score = -glut * (1 + farmer.p.competitiveness * 0.8) - idx * 0.6;   // fewer producers + own taste
+            if (score > bestScore) { bestScore = score; nextType = t; }
+        });
         const region = this.#findFacilityRegion(plot, nextType);
         if (!region) return false;
         this.#buildFacility(plot, farmer.sheet, nextType, region);
@@ -3959,6 +3973,7 @@ export class Farmer {
         this.exploreCooldown = 20 + (sheet.seed % 30);      // staggered first treks
         this.oreExpedCooldown = 0;                           // paces ore expeditions (need-driven treks for stone)
         this.tradeCooldown = 0;                              // paces trips to the merchant's stall
+        this.barterCooldown = 8 + (sheet.seed >>> 7) % 12;   // paces neighbour-to-neighbour barter trips
         this.discovered = 0;                                 // lifetime tiles personally uncovered
         this.annexCooldown = 0;                              // gates frontier-field scouting
         this.pendingAnnex = null;                            // the staked claim being walked to
@@ -3974,6 +3989,7 @@ export class Farmer {
         this.fishTarget = null;   // { i, j (shore), water:{i,j} } — a wild lake being walked to
         this.huntTarget = null;   // a world.prey animal this bot is running down (see the 'hunt' state)
         this.huntTimer = 0;       // how much longer they'll keep up a chase before giving up
+        this.barterDeal = null;   // a pending goods-for-goods swap being walked to (see #findBarter/#completeBarter)
         this.tools = new Set();   // crafted tools owned (see CRAFTABLES) — unlock at level, cost ore
         this.craftTarget = null;  // the recipe a farmer has walked home to build
 
@@ -4082,7 +4098,29 @@ export class Farmer {
         if (good === 'wood') return this.wood < 8 ? 1.7 : this.wood < 20 ? 1.1 : 0.65;   // fences/houses/facilities burn wood
         if (good === 'ore') return (lvl < 3 && this.ore < 8) ? 1.8 : this.ore < 4 ? 1.2 : 0.9;   // house upgrades need stone
         if (good === 'crops') return 1.0;   // food, always somewhat wanted
-        return 0.7;   // forage goods = surplus to trade
+        // barterable goods: value FALLS as your own stock rises (a pile you can spare) — a good you MAKE
+        // starts cheaper, one you lack starts dearer, and meat is prized either way. This is the exchange
+        // rate the barter layer trades on: you give what's worth little to you for what's worth more.
+        const have = (this.sheet.goods && this.sheet.goods[good]) || 0;
+        const base = MEAT_GOODS.includes(good) ? 1.5 : this.producedGoods().has(good) ? 0.7 : 1.15;
+        return Math.max(0.4, base - Math.min(0.5, have * 0.03));
+    }
+
+    // The set of goods this farm actually CHURNS OUT — its facilities' yields plus its crops. Cached
+    // (rebuilt only when a facility is added). This is what it can spare in a barter; anything NOT here
+    // it must trade for. Coop->eggs, pond->fish+lily, sheeppen->wool, pen->milk/truffle/wool by animal.
+    producedGoods() {
+        const facs = this.plot.facilities || [];
+        if (this._prodGoods && this._prodGoodsN === facs.length) return this._prodGoods;
+        const out = new Set(['crops']);
+        for (const fac of facs) {
+            if (fac.type === 'coop') out.add('egg');
+            else if (fac.type === 'pond') { out.add('fish'); out.add('lily'); }
+            else if (fac.type === 'sheeppen') out.add('wool');
+            else if (fac.type === 'pen') out.add(this.sheet.penAnimal === 'pig' ? 'truffle' : this.sheet.penAnimal === 'goat' ? 'wool' : 'milk');
+        }
+        this._prodGoods = out; this._prodGoodsN = facs.length;
+        return out;
     }
 
     // The farm's IDENTITY — what it's known for, derived from its facilities + crops. A built
@@ -5352,6 +5390,20 @@ export class Farmer {
             }
         }
 
+        // 5b-4. BARTER surplus with a neighbour — a collaborative / sharp-trading bot swaps what it makes
+        //       plenty of for what it lacks (see #findBarter). Reward x risk x personality all fold into
+        //       the pick's score; a cooldown keeps trips occasional.
+        if (!w.isNight() && this.energy > 0.35 && this.barterCooldown <= 0 &&
+            this.rand() < 0.08 + this.effCollab() * 0.22 + this.p.curiosity * 0.1 + (this.goal === 'sharp trader' ? 0.35 : 0)) {
+            const deal = this.#findBarter();
+            if (deal) {
+                this.think(`TRADE MY ${deal.give.toUpperCase()} FOR ${deal.partner.sheet.name.split(' ')[0].toUpperCase()}'S ${deal.get.toUpperCase()}`);
+                this.barterDeal = deal; this.barterCooldown = 45 + this.rand() * 45;
+                if (this.#goTo(deal.partner.pos.i + 0.5, deal.partner.pos.j + 0.5, 'barter')) return;
+                this.barterDeal = null;
+            } else this.barterCooldown = 12;   // nothing worth trading right now — don't re-scan every tick
+        }
+
         // 5c. mine a nearby rock for ore — diligent/strong bots do this on downtime (but not
         //     when the store's already full: over-cap ore is discarded, so it'd be a wasted swing)
         if (!w.isNight() && this.energy > 0.35 && this.ore < this.storageCap().ore &&
@@ -5551,6 +5603,59 @@ export class Farmer {
         this.world.doTrade(this);
         this.tradeCooldown = 60 + this.rand() * 60;
         this.state = 'decide';
+    }
+
+    // BARTER: find the best goods-for-goods swap with a nearby neighbour. A mutually-good deal is one
+    // where I'm sitting on a surplus of something I MAKE that they lack + value, and they're sitting on
+    // a surplus of something I lack + value. Score = how much both sides gain (reward), softened by
+    // distance (risk), lifted by my collaboration + any warmth between us (personality). Returns the
+    // pick, or null. O(neighbours x their goods x my surplus) — small; only run occasionally from #decide.
+    #findBarter() {
+        const w = this.world, mine = this.sheet.goods || {}, myProd = this.producedGoods();
+        const mySurplus = [];   // anything I'm sitting on plenty of AND value little (so I can spare it)
+        for (const g in mine) if (mine[g] >= 4 && this.goodValue(g) <= 0.85) mySurplus.push(g);
+        if ((this.produce || 0) >= 8) mySurplus.push('crops');
+        if (!mySurplus.length) return null;
+        let best = null, bestScore = 0.4;
+        for (const B of w.farmers) {
+            if (B === this || !B.plot || B.downed || B.plot.built.level < 1 || B.health === 'sick') continue;
+            const d = Math.hypot(B.pos.i - this.pos.i, B.pos.j - this.pos.j);
+            if (d > 26) continue;
+            const bg = B.sheet.goods || {}, warmth = Math.max(0, this.opinionOf(B));
+            for (const gY in bg) {                                   // something B has plenty of that I want
+                if ((bg[gY] || 0) < 4 || this.goodValue(gY) < 1.0 || myProd.has(gY)) continue;
+                for (const gX of mySurplus) {                        // ...for something I have that B wants
+                    if (gX === gY || B.goodValue(gX) < 1.0) continue;
+                    const gain = (this.goodValue(gY) - 0.5) + (B.goodValue(gX) - 0.5);
+                    const score = gain * (0.55 + this.effCollab() * 0.6 + warmth * 0.5) / (1 + d * 0.05);
+                    if (score > bestScore) { bestScore = score; best = { partner: B, give: gX, get: gY }; }
+                }
+            }
+        }
+        return best;
+    }
+
+    // Meet the neighbour and make the swap — a fair 3-for-3 (each values what they GET above what they
+    // GIVE, so both come out ahead). Seals a small bond + a chronicle beat, and both remember it.
+    #completeBarter() {
+        const w = this.world, deal = this.barterDeal; this.barterDeal = null;
+        this.state = 'decide';
+        if (!deal || !w.farmers.includes(deal.partner)) return;
+        const B = deal.partner;
+        if (B.downed || Math.hypot(B.pos.i - this.pos.i, B.pos.j - this.pos.j) > 3.5) { this.say('...gone', '#9a9a8a'); return; }
+        const gave = w.transferGood(this, B, deal.give, 3);
+        const got = deal.get === 'crops' ? w.transferGood(B, this, 'crops', 3) : w.transferGood(B, this, deal.get, 3);
+        if (gave > 0 && got > 0) {
+            this.facing = B.pos.i > this.pos.i ? 1 : -1;
+            this.say(`${deal.give}↔${deal.get}`, '#e0c060'); B.say('deal!', '#e0c060'); this.sparkle = 0.6;
+            w.addBond(this, B);
+            this.adjustOpinion(B, 0.12, 'a fair trade'); B.adjustOpinion(this, 0.12, 'a fair trade');
+            this.gainXP(2); B.gainXP(1);
+            this.remember('event', `Bartered ${gave} ${deal.give} for ${got} ${deal.get} with ${B.sheet.name.split(' ')[0]}`, B, 0.5);
+            w.addChronicle('trade', `${this.sheet.name.split(' ')[0]} bartered ${deal.give} for ${B.sheet.name.split(' ')[0]}'s ${deal.get}.`, this, B, '#e0c060');
+        } else if (gave > 0 && got === 0) {
+            w.transferGood(B, this, deal.give, gave);   // they had nothing to give back — hand mine back
+        }
     }
 
     // Like #frontierTarget, but the bearing is biased OUTWARD from the valley centre — rising
@@ -6193,6 +6298,7 @@ export class Farmer {
         this.exploreCooldown = Math.max(0, this.exploreCooldown - dt);
         this.oreExpedCooldown = Math.max(0, this.oreExpedCooldown - dt);
         this.tradeCooldown = Math.max(0, this.tradeCooldown - dt);
+        this.barterCooldown = Math.max(0, this.barterCooldown - dt);
         this.annexCooldown = Math.max(0, this.annexCooldown - dt);
         // every farmer lifts the fog around wherever they walk — the map grows with the town
         {
@@ -6295,6 +6401,7 @@ export class Farmer {
                     else if (then === 'care') { this.state = 'care'; this.careTimer = 1.2; }
                     else if (then === 'explore') this.#completeExplore();
                     else if (then === 'trade') this.#completeTrade();
+                    else if (then === 'barter') this.#completeBarter();
                     else if (then === 'annex') this.#completeAnnex();
                     else if (then === 'treasure') { this.world.openTreasure(this); this.state = 'decide'; }
                     else { this.state = 'idle'; this.wanderTimer = 1 + this.rand() * 2.5; }
