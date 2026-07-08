@@ -478,8 +478,11 @@ const CROP_SCALE = ASSET_SCALE;   // crops share the one global asset scale
 // borrow the nearest produce since the pack has no carrot/sunflower/loose-wheat).
 const PRODUCE_ICONS = {
     pepper: [191, 161, 15, 9], grapes: [242, 209, 11, 14], pumpkin: [49, 205, 15, 13],
-    beanstalk: [93, 204, 17, 11], carrot: [245, 177, 16, 16],   // carrot borrows the pineapple
-    sunflower: [263, 132, 14, 10], wheat: [244, 131, 18, 11],   // sunflower/wheat borrow the yellow squash/lemon
+    beanstalk: [93, 204, 17, 11],                              // beanstalk borrows the green bean
+    sunflower: [263, 132, 14, 10],                             // sunflower borrows the yellow squash
+    // carrot + wheat deliberately OMITTED: their Supplies.png borrows were mis-cropped (cut off + bled
+    // into a neighbour sprite), so they fall back to their own PROCEDURAL ripe sprite (makeCropSprites)
+    // like bean stalks do — self-contained and a true match (orange carrot / golden wheat).
 };
 
 function loadAssetArt() {
@@ -808,12 +811,12 @@ function wildJitter(i, j, t) {
 function treeSway(spec) {
     const now = performance.now() / 1000;
     if (choppingTiles.has(spec.chopKey)) return 0.022 * Math.sin(now * 15);   // an axe biting: a small quiver
-    const period = 27, phase = (spec.seed % 1000) / 1000;                    // ~once every 27s, per tree
+    const period = 19, phase = (spec.seed % 1000) / 1000;                    // ~once every 19s, per tree (desynced)
     const cyc = ((now / period) + phase) % 1;
-    const RUSTLE = 0.085;                                                     // rustle fills ~8.5% of the cycle (~2.3s)
+    const RUSTLE = 0.14;                                                      // rustle fills ~14% of the cycle (~2.7s)
     if (cyc >= RUSTLE) return 0;                                             // the rest of the time: perfectly still
     const local = cyc / RUSTLE, envelope = Math.sin(local * Math.PI);        // ease in/out
-    return 0.03 * envelope * Math.sin(local * Math.PI * 4);                  // a couple of soft sways
+    return 0.06 * envelope * Math.sin(local * Math.PI * 4);                  // a visible-but-gentle few sways
 }
 function drawWild(spec, x, baseY) {
     ctx.imageSmoothingEnabled = false;
