@@ -198,6 +198,8 @@ const AWAKE_DRAIN = 0;        // no passive drain — merely being awake and far
                              // only real labor (below) costs energy, so farms stay productive
 const SLEEP_RESTORE = 0.04;
 const REST_RESTORE = 0.045;   // recover faster, so a short breather is enough — less time slumped, more time about
+const HP_REST = 0.55;         // HP knit back per second of rest (a full night mends most wounds)
+const HP_SICK_DRAIN = 0.05;   // HP an untreated illness gnaws away per second on your feet
 // Tending crops and animals is free — tilling a patch, sowing, watering, harvesting, collecting
 // eggs/milk, feeding. Only heavy construction (build) drains here; the rest is 0. Chopping,
 // mining, breaking stumps, fencing and raising scarecrows drain via the LABOR table below.
@@ -3010,7 +3012,7 @@ export class World {
         for (const f of this.farmers) {
             if (f.downed) {   // felled by a foe — back on their feet at home after 3 days (NOT sickness)
                 if (this.day >= f.reviveDay) {
-                    f.downed = false; f.health = 'healthy'; f.energy = 0.6; f.state = 'decide';
+                    f.downed = false; f.health = 'healthy'; f.energy = 0.6; f.hp = f.maxHp; f.state = 'decide';
                     const home = f.plot && f.plot.sited ? this.houseDoor(f.plot) : { i: CENTER, j: CENTER };
                     f.pos = { i: home.i, j: home.j };
                     this.addLog(`${f.sheet.name} picked themselves back up and is home, wiser for it.`, '#7dd069');
@@ -3022,7 +3024,7 @@ export class World {
                 f.sickDays -= 1;
                 f.nightsExposed = Math.max(0, f.nightsExposed - 1);   // recovering eases the exposure count
                 if (f.sickDays <= 0) {
-                    f.health = 'healthy'; f.energy = Math.max(f.energy, 0.5);
+                    f.health = 'healthy'; f.energy = Math.max(f.energy, 0.5); f.hp = Math.max(f.hp, f.maxHp * 0.6);
                     this.addLog(`${f.sheet.name} recovered and is back on their feet.`, '#7dd069');
                     f.say('ALL BETTER!', '#7dd069');
                 }
@@ -3193,17 +3195,18 @@ export class World {
     }
 
     #threatHits(e, f) {
-        f.energy = Math.max(0, f.energy - 0.17);
+        f.hp = Math.max(0, f.hp - (e.def.dmg + Math.floor(this.rand() * 2)));   // a solid blow bleeds HP
+        f.energy = Math.max(0, f.energy - 0.05);                                 // and scuffling tires you
         f.hurtFlash = 1; f.say('argh!', '#e05040');
         if (e.def.loot === 'ore' && f.ore > 0 && this.rand() < 0.35) f.ore = Math.max(0, f.ore - 2);       // raider grabs loot
         else if (e.def.loot === 'goods' && this.rand() < 0.35) this.#stealGood(f);
-        if (f.energy <= 0.08) {
-            if (e.def.kind === 'foe') this.#downFarmer(f, e);   // a FOE can put you DOWN (a hard reset, not sickness)
-            else {                                              // a beast just gores you — break and flee home hurt
-                f.combatStance = 'flee';
-                this.recordEncounter(f, e.def, 'beaten');
-                this.#endEncounter(e, `${f.sheet.name} was gored by ${e.def.name} and fled home hurt!`, '#e05040');
-            }
+        // a BEAST breaks you off before it kills — you flee at low HP; a FOE can put you DOWN at 0 HP.
+        if (e.def.kind === 'beast' && f.hp <= 3) {
+            f.hp = Math.max(f.hp, 2); f.combatStance = 'flee';
+            this.recordEncounter(f, e.def, 'beaten');
+            this.#endEncounter(e, `${f.sheet.name} was gored by ${e.def.name} and fled home hurt!`, '#e05040');
+        } else if (e.def.kind === 'foe' && f.hp <= 0) {
+            this.#downFarmer(f, e);   // struck down (a hard reset, not sickness)
         }
     }
 
@@ -3220,6 +3223,17 @@ export class World {
         this.#endEncounter(e, null);   // clean up helpers/stance (state is 'downed', so it isn't reset)
         this.addLog(`${f.sheet.name} was struck down by ${e.def.name}! They'll recover at home in 3 days (lost ${lost} crop).`, '#e03828');
         f.say('...', '#e03828');
+    }
+
+    // Collapsed on their feet — HP bled to nothing from an untreated illness (not a foe): the same
+    // downed reset (recover at home), but no crop is stolen and no combat lesson is learned.
+    collapse(f) {
+        if (f.downed) return;
+        f.downed = true; f.reviveDay = this.day + 2; f.state = 'downed'; f.hp = 0; f.combatStance = null;
+        const home = f.plot && f.plot.sited ? this.houseDoor(f.plot) : { i: f.pos.i, j: f.pos.j };
+        f.pos = { i: home.i, j: home.j };
+        f.remember('lesson', `I pushed on through sickness till I dropped — I must rest when I'm ill.`, null, 1.2);
+        this.addLog(`${f.sheet.name} collapsed from untreated illness — they'll mend at home.`, '#c05840');
     }
 
     // A settler comes away from an encounter WISER — logging what they learned about the foe, where
@@ -3408,10 +3422,10 @@ const MERCHANT_TYPES = [
 // settler answers by their nature: the bold + strong stand and FIGHT (d20 + STR/CON vs difficulty),
 // the timid FLEE for the plaza, the outmatched CALL FOR HELP — and brave neighbours come running.
 const ENCOUNTER_DEFS = {
-    fox:      { name: 'a fox',             kind: 'beast', diff: 9,  hp: 1, speed: 1.5,  menace: 0.5, color: '#d0803c' },
-    boar:     { name: 'a wild boar',       kind: 'beast', diff: 12, hp: 2, speed: 1.2,  menace: 0.9, color: '#8a6a4a' },
-    orc:      { name: 'an orc raider',     kind: 'foe',   diff: 14, hp: 3, speed: 1.05, menace: 1.1, loot: 'ore',   color: '#6a8a4a' },
-    assassin: { name: 'a hooded assassin', kind: 'foe',   diff: 16, hp: 3, speed: 1.45, menace: 1.5, loot: 'goods', color: '#6a5a7a' },
+    fox:      { name: 'a fox',             kind: 'beast', diff: 9,  hp: 1, dmg: 2, speed: 1.5,  menace: 0.5, color: '#d0803c' },
+    boar:     { name: 'a wild boar',       kind: 'beast', diff: 12, hp: 2, dmg: 3, speed: 1.2,  menace: 0.9, color: '#8a6a4a' },
+    orc:      { name: 'an orc raider',     kind: 'foe',   diff: 14, hp: 3, dmg: 4, speed: 1.05, menace: 1.1, loot: 'ore',   color: '#6a8a4a' },
+    assassin: { name: 'a hooded assassin', kind: 'foe',   diff: 16, hp: 3, dmg: 5, speed: 1.45, menace: 1.5, loot: 'goods', color: '#6a5a7a' },
 };
 const ENCOUNTER_INTERVAL = 130, ENCOUNTER_JITTER = 130;   // game-seconds between spawn attempts (~1-2/day)
 const MAX_ENCOUNTERS = 3, WILD_RADIUS = 30;             // the wilds begin ~this far from the plaza
@@ -3548,7 +3562,8 @@ export class Farmer {
         this.tools = new Set();   // crafted tools owned (see CRAFTABLES) — unlock at level, cost ore
         this.craftTarget = null;  // the recipe a farmer has walked home to build
 
-        this.energy = 0.8 + this.rand() * 0.2;
+        this.energy = 0.8 + this.rand() * 0.2;   // stamina for WORK (drains laboring, restored by sleep)
+        this.hp = this.maxHp;                     // LIFE: bled by combat + untreated illness, knit back by REST
         this.sleepDebt = 0;
         this.strain = 0;   // accumulates when laboring while exhausted -> sickness risk
         this.health = 'healthy';
@@ -3666,6 +3681,9 @@ export class Farmer {
     }
 
     get tired() { return this.energy < 0.35; }
+
+    // Life pool: a hardy (high-CON) and seasoned (higher-level) hand can take more punishment.
+    get maxHp() { return 12 + mod(this.sheet.stats.con) * 3 + Math.floor((this.sheet.level || 1) / 2); }
 
     get speed() {
         // V3: farmers bustle at ~2x
@@ -3922,6 +3940,7 @@ export class Farmer {
         this.health = 'sick';
         this.sickDays = days;
         this.energy = Math.min(this.energy, 0.3);
+        this.hp = Math.min(this.hp, this.maxHp * 0.7);   // illness saps your strength; rest mends it, neglect drains more
         this.strain = 0;
         this.illnesses++;
         this.caution = Math.min(4, this.caution + 1);
@@ -4165,8 +4184,8 @@ export class Farmer {
             if (this.combatStance === 'fight') this.say('COME ON THEN!', '#e0c040');
             else { this.say(powerGap < -3 ? `NO CHANCE ALONE — HELP!` : `HELP! ${def.name.toUpperCase()}!`, '#e05040'); e.helpWanted = true; }
         }
-        // badly hurt mid-fight? break off and run rather than fight to collapse (unless help's at hand)
-        if (this.combatStance === 'fight' && this.energy < 0.28 && e.helpers.size === 0) {
+        // bloodied mid-fight? break off and run rather than fight to the ground (unless help's at hand)
+        if (this.combatStance === 'fight' && this.hp < this.maxHp * 0.35 && e.helpers.size === 0) {
             this.combatStance = 'flee'; this.say('TOO STRONG — FALL BACK!', '#e05040'); e.helpWanted = true;
         }
         if (this.combatStance === 'fight') {
@@ -5568,6 +5587,13 @@ export class Farmer {
         else if (this.state === 'rest') this.energy = Math.min(1, this.energy + REST_RESTORE * dt);
         else if (this.state === 'sick') this.energy = Math.min(1, this.energy + REST_RESTORE * 0.6 * dt);
         else this.energy = Math.max(0, this.energy - AWAKE_DRAIN * dt);
+
+        // HP: REST knits you back together (sleeping/resting/recovering), while an untreated illness
+        // gnaws at it if you stay on your feet. Bleed out entirely and you COLLAPSE (a downed reset).
+        const resting = this.state === 'sleep' || this.state === 'rest' || this.state === 'sick';
+        if (resting) this.hp = Math.min(this.maxHp, this.hp + HP_REST * dt);
+        else if (this.health === 'sick') this.hp = Math.max(0, this.hp - HP_SICK_DRAIN * dt);
+        if (this.hp <= 0 && this.state !== 'fight' && this.state !== 'flee') this.world.collapse(this);
 
         switch (this.state) {
             case 'decide': this.#decide(); break;

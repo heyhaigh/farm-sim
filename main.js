@@ -223,12 +223,15 @@ const ROCK_ART_BASE = './assets/craftpix-net-974061-free-rocks-and-stones-top-do
 const ROCK_NAMES = ['Rock4_1', 'Rock4_2', 'Rock4_3', 'Rock4_4', 'Rock4_5'];
 
 // The Dungeon Master's wilderness threats. Each sheet is a directional frame GRID; we slice one
-// side-profile frame (row 2, like the farm-animal pack). Frame size divides the sheet evenly.
+// side-profile frame per sprite (`row`), which in these packs faces LEFT — so it's mirrored to face
+// RIGHT when moving right. The assassin uses the lvl-3 swordsman (the lvl-1 looks like our farmers).
 const THREAT_ART = {
-    fox:      { base: './assets/craftpix-net-789196-free-top-down-hunt-animals-pixel-sprite-pack/Tiled/', file: 'Fox_Idle_with_shadow',  fw: 32 },
-    boar:     { base: './assets/craftpix-net-789196-free-top-down-hunt-animals-pixel-sprite-pack/Tiled/', file: 'Boar_Idle_with_shadow', fw: 32 },
-    orc:      { base: './assets/craftpix-net-363992-free-top-down-orc-game-character-pixel-art/Tiled_files/', file: 'orc1_idle_with_shadow', fw: 64 },
-    assassin: { base: './assets/craftpix-net-180537-free-swordsman-1-3-level-pixel-top-down-sprite-character/PNG/Swordsman_lvl1/Without_shadow/', file: 'Swordsman_lvl1_Idle_without_shadow', fw: 64 },
+    // beasts have clean L/R side profiles (side:true — mirrored by movement); the humanoid foes don't,
+    // so they face the camera front-on (side:false — always menacing, never mis-facing).
+    fox:      { base: './assets/craftpix-net-789196-free-top-down-hunt-animals-pixel-sprite-pack/Tiled/', file: 'Fox_Idle_with_shadow',  fw: 32, row: 2, side: true },
+    boar:     { base: './assets/craftpix-net-789196-free-top-down-hunt-animals-pixel-sprite-pack/Tiled/', file: 'Boar_Idle_with_shadow', fw: 32, row: 2, side: true },
+    orc:      { base: './assets/craftpix-net-363992-free-top-down-orc-game-character-pixel-art/Tiled_files/', file: 'orc1_idle_with_shadow', fw: 64, row: 2, side: false },
+    assassin: { base: './assets/craftpix-net-180537-free-swordsman-1-3-level-pixel-top-down-sprite-character/Tiled_files/Swordsman3/', file: 'Swordsman_lvl3_Idle_without_shadow', fw: 64, row: 0, side: false },
 };
 const threatImg = {};
 for (const [k, c] of Object.entries(THREAT_ART)) { const im = new Image(); im.src = c.base + c.file + '.png'; threatImg[k] = im; }
@@ -1516,10 +1519,10 @@ function drawThreat(e, sx, sy) {
     ctx.imageSmoothingEnabled = false;
     if (img && img.complete && img.naturalWidth > 0) {
         const fw = c.fw, rows = Math.max(1, Math.round(img.naturalHeight / fw));
-        const row = Math.min(2, rows - 1);
+        const row = Math.min(c.row ?? 2, rows - 1);
         const disp = Math.round(fw * ASSET_SCALE * 1.15);
         const dx = Math.round(sx - disp / 2), dy = Math.round(sy - disp * 0.82);
-        if (e.facing < 0) {   // the side-profile source frame faces RIGHT; mirror it to face left
+        if (c.side && e.facing > 0) {   // side-profile source frame faces LEFT; mirror it to face right
             ctx.save(); ctx.translate(dx + disp, dy); ctx.scale(-1, 1);
             ctx.drawImage(img, 0, row * fw, fw, fw, 0, 0, disp, disp);
             ctx.restore();
@@ -1919,7 +1922,36 @@ function drawMinimap() {
         if (f === selected) { ctx.fillStyle = '#000'; ctx.fillRect(Math.floor(px) - 1, Math.floor(py) - 1, 4, 4); }
         ctx.fillStyle = col; ctx.fillRect(Math.floor(px), Math.floor(py), 2, 2);
     }
+
+    // active battles = pulsing red. In view: a red dot on the threat. Off view: a red arrow pinned to
+    // the minimap edge, pointing the way to the fight (its position along the border shows the bearing).
+    const blink = Math.floor(performance.now() / 350) % 2;
+    for (const e of world.encounters) {
+        if (e.done) continue;
+        if (inWin(e.i, e.j)) {
+            if (blink) { const [px, py] = t2m(e.i, e.j); ctx.fillStyle = '#ff3020'; ctx.fillRect(Math.floor(px) - 1, Math.floor(py) - 1, 3, 3); }
+        } else {
+            drawMiniEdgeArrow(mx, my, mw, mh, e.i - ci, e.j - cj);
+        }
+    }
     ctx.restore();
+}
+// A red arrow pinned inside the minimap's border, pointing toward an off-window battle. Where the ray
+// from centre toward the fight exits the box sets the arrow's spot (corners / mid-edges), and the edge
+// it lands on sets its cardinal direction (up/down/left/right).
+function drawMiniEdgeArrow(mx, my, mw, mh, dx, dy) {
+    const cx = mx + mw / 2, cy = my + mh / 2, inset = 5;
+    const halfW = mw / 2 - inset, halfH = mh / 2 - inset;
+    const adx = Math.abs(dx) || 1e-6, ady = Math.abs(dy) || 1e-6;
+    const onVert = halfW / adx < halfH / ady;            // ray exits a left/right edge first?
+    const scale = onVert ? halfW / adx : halfH / ady;
+    const ax = Math.round(cx + dx * scale), ay = Math.round(cy + dy * scale);
+    ctx.fillStyle = '#ff3020';
+    ctx.beginPath();
+    const s = 3;
+    if (onVert) { const d = dx > 0 ? 1 : -1; ctx.moveTo(ax + d * s, ay); ctx.lineTo(ax - d * s, ay - s); ctx.lineTo(ax - d * s, ay + s); }
+    else { const d = dy > 0 ? 1 : -1; ctx.moveTo(ax, ay + d * s); ctx.lineTo(ax - s, ay - d * s); ctx.lineTo(ax + s, ay - d * s); }
+    ctx.closePath(); ctx.fill();
 }
 
 // Derive what a farmer most needs a hand with, for the board postings.
@@ -2447,6 +2479,10 @@ function drawSheet(f) {
         for (const line of wrapText(p.creed, 32).slice(0, 2)) { drawText(ctx, `"${line}"`, IX, y, SHEET_LABEL); y += 7; }
         if (f.goal) { drawText(ctx, `> course: ${f.goal.toUpperCase()}`, IX, y, '#d08cc8'); y += 7; }
         y += 2;
+        const hpFrac = Math.max(0, Math.min(1, f.hp / f.maxHp));
+        const hpCol = hpFrac > 0.5 ? '#d05450' : hpFrac > 0.25 ? '#e0a03c' : '#e83828';
+        drawText(ctx, 'HP', IX, y, SHEET_LABEL); barFill(IX + 42, y, IW - 42, hpFrac, hpCol);
+        drawText(ctx, `${Math.ceil(f.hp)}/${f.maxHp}`, IX + IW - textWidth(`${Math.ceil(f.hp)}/${f.maxHp}`), y, '#8a8f9c'); y += 6;
         drawText(ctx, 'ENERGY', IX, y, SHEET_LABEL); barFill(IX + 42, y, IW - 42, f.energy, eCol); y += 6;
         drawText(ctx, 'XP', IX, y, SHEET_LABEL); barFill(IX + 42, y, IW - 42, Math.min(s.xp / xpForLevel(s.level), 1), '#5a8ac8'); y += 10;
 
