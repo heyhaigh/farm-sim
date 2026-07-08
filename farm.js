@@ -50,7 +50,9 @@ export const CRAFTABLES = [
 // wood economy
 const WOOD_TREE = 3;       // BASE wood from felling a tree (scaled by growth stage: sapling x1 .. mature x3)
 const WOOD_STUMP = 3;      // grubbing the stump (roots included) yields as much as the trunk did
-const TREE_GROW_DAYS = 9;  // days a tree spends in each growth stage (sapling -> young -> mature)
+const TREE_STAGE_DAYS = [8, 12];   // sapling->young takes 8 days; young->mature takes 12 (20 days to mature)
+const CROP_STAGE_DAYS = [3, 4.5, 1.5]; // calibrated so a well-tended crop in good weather sprouts ~day 2 (48h),
+                                       // reaches its next stage ~day 5, and ripens ~day 6 from sowing
 const ORE_ROCK = 2;        // iron ore from breaking a rock
 const FACILITY_WOOD = 6;   // wood to raise a facility
 const FENCE_WOOD = 8;      // wood to fence the new homestead
@@ -185,8 +187,9 @@ export function treeIsFruit(i, j) { return tileHash(i, j, 0x9f13) % 6 === 0; }
 export function treeStageAt(i, j, day, planted) {
     const k = i + ',' + j;
     const birth = planted && planted.has(k) ? planted.get(k)
-        : -(tileHash(i, j, 0x7ea1) % (Math.round(2.6 * TREE_GROW_DAYS)));   // founding forest: spread of ages
-    return Math.max(0, Math.min(2, Math.floor((day - birth) / TREE_GROW_DAYS)));
+        : -(tileHash(i, j, 0x7ea1) % 32);   // founding forest: ages 0..31 -> a mix of saplings/young/mature
+    const age = day - birth;
+    return age < TREE_STAGE_DAYS[0] ? 0 : age < TREE_STAGE_DAYS[0] + TREE_STAGE_DAYS[1] ? 1 : 2;
 }
 function lerp(a, b, t) { return a + (b - a) * t; }
 function smooth(t) { return t * t * (3 - 2 * t); }
@@ -2904,13 +2907,14 @@ export class World {
                 }
             } else crop.dryTime = 0;
             if (!night && crop.stage < 3 && this.canGarden()) {
-                // ~1 stage per day of daylight -> seed -> sprout -> plant -> ripe
-                // takes several days (Stardew-style), so farmers do other things
-                // (forage, chop, build, help) while crops mature. Nothing grows in winter.
+                // paced timeline from sowing: seed->sprout ~2 days (48h), sprout->grow ~3 days,
+                // grow->ripe ~1 day, so a crop ripens about day 6 under good care. BEAN STALKS grow
+                // in half the time (crop.fastGrow). Water/weather/int/season modulate around this.
                 const greenThumb = 1 + mod(crop.owner.sheet.stats.int) * 0.06;
                 const waterFactor = 0.35 + 0.65 * crop.water;
                 crop.growth += (dt / DAY_LENGTH) * waterFactor * growthBonus * greenThumb * this.growthMult * season.growth;
-                if (crop.growth >= 1) { crop.growth = 0; crop.stage++; }
+                const need = CROP_STAGE_DAYS[crop.stage] * (crop.fastGrow || 1);
+                if (crop.growth >= need) { crop.growth = 0; crop.stage++; }
             }
         }
     }
