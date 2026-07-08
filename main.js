@@ -2045,6 +2045,14 @@ function drawFarmer(f, sx, sy) {
         const spr = CROP_ICON_CANVAS[f.carryCrop.type] || makeCropSprites(f.carryCrop.type)[3];
         const bob = Math.round(Math.sin(performance.now() / 200));
         ctx.drawImage(spr, Math.floor(px + fw / 2 - spr.width / 2), Math.floor(py - spr.height - 3 + bob));
+    } else if (f.carryTrophy && fantasyIconsReady && MEAT_ICONS[f.carryTrophy.meat]) {
+        // B5: a hunter holds their kill aloft on the way home — a little trophy of the catch
+        const [ix, iy, iw, ih] = MEAT_ICONS[f.carryTrophy.meat];
+        const sc = Math.min(1, 12 / Math.max(iw, ih));
+        const dw = Math.max(1, Math.round(iw * sc)), dh = Math.max(1, Math.round(ih * sc));
+        const bob = Math.round(Math.sin(performance.now() / 200));
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(fantasyIcons, ix, iy, iw, ih, Math.floor(px + fw / 2 - dw / 2), Math.floor(py - dh - 3 + bob), dw, dh);
     }
 
     // work progress pips
@@ -2732,6 +2740,31 @@ function buildingUnder(mx, my) {
 }
 
 const SHEET_LABEL = '#8f8570', SHEET_VAL = '#e8e0cc', SHEET_GOLD = '#c9a45a';
+// A one-line "what they're doing + why" for the card — EXPLAINS the symbol hovering over their head on
+// the map (wound bar / hunt paw / barter coin / help plus / grudge-scowl or bond-heart / kill trophy),
+// falling back to a plain description of their current activity.
+function currentStatus(f) {
+    if (f.downed) return 'RECOVERING AT HOME';
+    if (f.carryTrophy) return 'CARRYING HOME A FRESH KILL';
+    if (f.state === 'hunt' || f.huntTarget) return 'STALKING WILD GAME FOR MEAT';
+    if (f.barterDeal || (f.path && f.path.then === 'barter')) {
+        const p = f.barterDeal && f.barterDeal.partner;
+        return p ? `OFF TO BARTER WITH ${p.sheet.name.split(' ')[0].toUpperCase()}` : 'OFF TO BARTER GOODS';
+    }
+    if (f.helpTask) return 'LENDING A NEIGHBOR A HAND';
+    if (f.emote === 'grudge') return 'STEERING CLEAR OF SOMEONE THEY DISLIKE';
+    if (f.emote === 'bond') return 'WARMING TO A NEIGHBOR';
+    const hpFrac = f.maxHp ? f.hp / f.maxHp : 1;
+    if (hpFrac < 0.35) return 'BADLY WOUNDED - LIMPING IT OFF';
+    if (hpFrac < 0.9) return 'NURSING A WOUND';
+    const map = { work: 'TENDING THE FARM', walk: 'ON THE MOVE', chop: 'CHOPPING TIMBER', break: 'GRUBBING A STUMP',
+        mine: 'MINING STONE', forage: 'FORAGING THE WILDS', fish: 'FISHING A WILD LAKE', build: 'BUILDING WITH THE TOWN',
+        housebuild: 'RAISING THEIR HOME', coopbuild: 'RAISING A COOP', fencepost: 'RAISING A FENCE', craft: 'CRAFTING',
+        sleep: 'ASLEEP', rest: 'RESTING UP', sick: 'LAID UP SICK', shelter: 'SHELTERING FROM THE STORM',
+        care: 'TENDING A SICK NEIGHBOR', fight: 'STANDING AND FIGHTING', flee: 'FLEEING DANGER',
+        donate: 'HAULING SURPLUS TO THE SILO', scarecrow: 'RAISING A SCARECROW' };
+    return map[f.state] || (f.thought ? f.thought : 'GOING ABOUT THEIR DAY');
+}
 function drawSheet(f) {
     const s = f.sheet, p = s.personality;
     const PW = 154, PX = GW - PW - 4, PY = 22;
@@ -2800,6 +2833,8 @@ function drawSheet(f) {
         // ===== STATS: who they are — creed, energy, personality, abilities, farm, gear =====
         for (const line of wrapText(p.creed, 32).slice(0, 2)) { drawText(ctx, `"${line}"`, IX, y, SHEET_LABEL); y += 7; }
         if (f.goal) { drawText(ctx, `> course: ${f.goal.toUpperCase()}`, IX, y, '#d08cc8'); y += 7; }
+        // NOW: their current driver — explains whatever symbol is hovering over their head on the map
+        for (const line of wrapText(`NOW: ${currentStatus(f)}`, 30).slice(0, 2)) { drawText(ctx, line, IX, y, '#8fd0c0'); y += 7; }
         y += 2;
         const hpFrac = Math.max(0, Math.min(1, f.hp / f.maxHp));
         const hpCol = hpFrac > 0.5 ? '#d05450' : hpFrac > 0.25 ? '#e0a03c' : '#e83828';

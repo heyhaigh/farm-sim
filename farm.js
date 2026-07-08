@@ -3970,6 +3970,8 @@ export class Farmer {
         this.hurtFlash = 0;       // render pulse when struck
         this.emote = null;        // transient social tell ('grudge' | 'bond') shown over the head (B3)
         this.emoteT = 0;          // seconds left on the current emote (dt-decremented — deterministic)
+        this.carryTrophy = null;  // { meat, t } — a hunter holds up their kill on the way home (B5)
+        this._wasHurt = false;    // was recently badly wounded — arms the "good as new" recovery beat (B5)
         this.fightTimer = 0; this.fleeTimer = 0;
         this.downed = false;      // felled by a FOE — reviving at home over a few days (NOT sickness)
         this.reviveDay = 0;       // world.day this bot gets back on their feet
@@ -6215,6 +6217,7 @@ export class Farmer {
             this.gainXP(a.def.xp);
             this.say(`+${MEAT_NAME[a.def.meat]}`, '#e07868'); this.sparkle = roll.crit ? 1.2 : 0.8;
             this.remember('event', `Ran down ${a.def.name} in the wilds — good hunting`, null, 0.6);
+            this.carryTrophy = { meat: a.def.meat, t: 3.2 };   // hold the kill up on the way home (B5)
             w.addLog(`${s.name} bagged ${a.def.name} — ${MEAT_NAME[a.def.meat]} for the pot.`, '#d0a060');
             w.addChronicle('hunt', `${s.name.split(' ')[0]} ran down ${a.def.name} out in the wilds.`, this, null, '#d0a060');
             a.done = true; a.hunter = null; this.huntTarget = null; this.state = 'decide';
@@ -6348,6 +6351,12 @@ export class Farmer {
         this.threatAlert = Math.max(0, this.threatAlert - dt);
         this.hurtFlash = Math.max(0, this.hurtFlash - dt * 2.5);
         if (this.emoteT > 0) { this.emoteT -= dt; if (this.emoteT <= 0) this.emote = null; }
+        if (this.carryTrophy) { this.carryTrophy.t -= dt; if (this.carryTrophy.t <= 0) this.carryTrophy = null; }
+        // recovery beat (B5): a badly-wounded farmer who mends back to full gives a visible perk-up
+        if (this.maxHp) {
+            if (this.hp <= this.maxHp * 0.4) this._wasHurt = true;
+            else if (this._wasHurt && this.hp >= this.maxHp) { this._wasHurt = false; this.sparkle = Math.max(this.sparkle, 1); this.say('good as new', '#7dd069'); }
+        }
 
         if (this.state === 'sleep') this.energy = Math.min(1, this.energy + SLEEP_RESTORE * dt);
         else if (this.state === 'rest') this.energy = Math.min(1, this.energy + REST_RESTORE * dt);
