@@ -3302,12 +3302,39 @@ export class World {
     #downFarmer(f, e) {
         const lost = Math.floor(f.sheet.harvested * 0.25);
         f.sheet.harvested = Math.max(0, f.sheet.harvested - lost);
+        const downI = f.pos.i, downJ = f.pos.j;   // where they fell (recorded before they're carried home)
+
+        // --- SOCIAL FALLOUT: being cut down reshapes the web, and it's all VISIBLE ---
+        const rescuers = [...e.helpers].filter(h => this.farmers.includes(h) && !h.downed);
+        if (rescuers.length) {
+            for (const h of rescuers) {
+                f.adjustOpinion(h, 0.3, `stood with me when ${e.def.name} had me`);
+                h.adjustOpinion(f, 0.12, `pulled them back from ${e.def.name}`);
+                this.addBond(f, h, 2);
+                f.remember('person', `${h.sheet.name.split(' ')[0]} stood with me when ${e.def.name} had me — I owe them`, h, 1.4);
+            }
+            this.addLog(`${f.sheet.name} owes their life to ${rescuers.map(h => h.sheet.name.split(' ')[0]).join(' & ')}.`, '#7dd069');
+        } else {
+            // no one came: resent the able-bodied who were near enough to have helped
+            const bystanders = this.farmers.filter(x => x !== f && !x.downed && x.plot?.sited && x.state !== 'sleep'
+                && x.sheet.stats.str >= 11 && Math.hypot(x.pos.i - downI, x.pos.j - downJ) < 30).slice(0, 2);
+            for (const b of bystanders) {
+                f.adjustOpinion(b, -0.22, `left me to ${e.def.name} out in the wilds`);
+                f.remember('person', `${b.sheet.name.split(' ')[0]} was near enough to help and left me to ${e.def.name}`, b, 1.3);
+            }
+            if (bystanders.length) this.addLog(`${f.sheet.name} won't forget that no one came.`, '#c05840');
+        }
+        // shun the ground where they fell — a scar on the map they'll avoid and speak of
+        (f.dangerZones ||= []).push({ i: downI, j: downJ, kind: e.def.kind });
+        if (f.dangerZones.length > 4) f.dangerZones.shift();
+
+        // --- the reset ---
         f.downed = true; f.reviveDay = this.day + 3; f.state = 'downed';
-        const home = f.plot && f.plot.sited ? this.houseDoor(f.plot) : { i: f.pos.i, j: f.pos.j };
+        const home = f.plot && f.plot.sited ? this.houseDoor(f.plot) : { i: downI, j: downJ };
         f.pos = { i: home.i, j: home.j };
         this.recordEncounter(f, e.def, 'downed');
         this.#endEncounter(e, null);   // clean up helpers/stance (state is 'downed', so it isn't reset)
-        this.addLog(`${f.sheet.name} was struck down by ${e.def.name}! They'll recover at home in 3 days (lost ${lost} crop).`, '#e03828');
+        this.addLog(`${f.sheet.name} was struck down by ${e.def.name}! Recovering at home (lost ${lost} crop).`, '#e03828');
         f.say('...', '#e03828');
     }
 
@@ -3615,6 +3642,7 @@ export class Farmer {
         this.downed = false;      // felled by a FOE — reviving at home over a few days (NOT sickness)
         this.reviveDay = 0;       // world.day this bot gets back on their feet
         this.threatWary = {};     // foe-kind -> how many times it's bested me (raises my urge to flee/rally)
+        this.dangerZones = [];    // spots where a foe once cut me down — ground I now shun and speak of
         this.scarecrowTarget = null;
 
         // episodic memory: a day-stamped journal of what happened to THIS bot — who helped,
@@ -4670,8 +4698,14 @@ export class Farmer {
         // SURVIVAL first: a wilderness threat on me (or a fight I've rallied to) overrides all chores.
         if (this.#handleCombat()) return;
 
-        // a lived lesson made AUDIBLE: venturing warily, far from home, where a foe once bested them —
-        // memory shaping visible behavior, not just a hidden journal entry.
+        // a lived lesson made AUDIBLE: memory shaping visible behavior, not a hidden journal entry.
+        // Standing on the very ground a foe once cut them down, they shun it aloud.
+        for (const d of this.dangerZones) {
+            if (Math.hypot(this.pos.i - d.i, this.pos.j - d.j) < 9 && this.rand() < 0.03) {
+                this.say(d.kind === 'foe' ? 'not here — this is where they got me...' : 'this is where the beast had me...', '#c8a060');
+                break;
+            }
+        }
         const wary = (this.threatWary.foe || 0) + (this.threatWary.beast || 0);
         if (wary >= 2 && this.plot.sited && this.rand() < 0.012 &&
             Math.hypot(this.pos.i - (this.plot.x + 6), this.pos.j - (this.plot.y + 6)) > 20) {
