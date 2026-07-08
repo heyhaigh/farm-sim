@@ -1312,7 +1312,9 @@ export class World {
             if (d > 42) continue;                                     // out of neighbourhood range
             const prox = 1 - d / 42;                                  // closer neighbours weigh more
             const bond = this.bonds.get(this.bondKey(f, o)) || 0;
-            const rapport = Math.max(-1, Math.min(1, f.opinionOf(o) + bond * 0.12 + this.#instinct(f, o)));
+            // rapport also weighs the neighbour's TOWN REPUTATION — an ill-reputed name (a known
+            // thief, a welcher) is shunned as a neighbour even before any personal history exists
+            const rapport = Math.max(-1, Math.min(1, f.opinionOf(o) + bond * 0.12 + this.#instinct(f, o) + (o.reputation - 0.55) * 0.6));
             let w;
             if (rapport <= -0.28) w = -6 * prox;                      // a rival / distrusted: keep clear
             else if (rapport >= 0.28) w = 5 * prox;                   // a friend / trusted: settle near
@@ -3982,7 +3984,15 @@ export class Farmer {
         }
     }
 
-    adjustReputation(d) { this.reputation = Math.max(0, Math.min(1, this.reputation + d)); }
+    adjustReputation(d) {
+        const before = this.reputation;
+        this.reputation = Math.max(0, Math.min(1, this.reputation + d));
+        // the moment a name truly turns in town, mark it in the chronicle (once)
+        if (before > 0.25 && this.reputation <= 0.25 && !this._mudFlag) {
+            this._mudFlag = true;
+            this.world.addChronicle('rift', `${this.sheet.name.split(' ')[0]}'s name is mud in town.`, this, null, '#c05840');
+        }
+    }
 
     gainXP(n) {
         const s = this.sheet;
@@ -4707,13 +4717,25 @@ export class Farmer {
         for (const m of this.journal) if (m.who === other.sheet.seed && m.kind !== 'chat' && m.strength > 0.5 && (!vivid || m.strength > vivid.strength)) vivid = m;
         // the neighbour answers, tone set by THEIR regard for us
         const rop = other.opinionOf(this);
-        // GOSSIP — an independent aside, whatever pleasantry they exchange: a farmer with a real
-        // grudge will sometimes warn this (still-neutral) neighbour off the one they resent. A
-        // manipulator (low honesty) poisons the well far more readily, AND it lands (opinion drop).
-        if (grudge && grudge.v < -0.2 && grudge.who !== other && other.opinionOf(grudge.who) > -0.4 &&
-            this.rand() < (this.p.honesty < 0.35 ? 0.9 : 0.6)) {
+        // GOSSIP — an aside alongside the pleasantry: a farmer with a real grudge warns this
+        // still-neutral neighbour off the one they resent. Whether it LANDS turns on the warner's
+        // CREDIBILITY in the listener's eyes — do they trust the speaker (opinion), is the speaker
+        // well-regarded in town (reputation), are they known to be honest? A trusted, honest witness
+        // is believed and the third party's trust drops BEFORE they ever deal with the offender (so a
+        // caught thief's ill name spreads through the net); a known liar's poison is discounted, and
+        // smearing others when you're not trusted only makes YOU look worse. This is how reputation
+        // propagates socially, not just victim<->offender.
+        if (grudge && grudge.v < -0.2 && grudge.who !== other && grudge.who !== this &&
+            other.opinionOf(grudge.who) > -0.5 && this.rand() < (this.p.honesty < 0.35 ? 0.9 : 0.6)) {
             other.hearGossip(this, grudge.who);
-            if (this.p.honesty < 0.35) other.adjustOpinion(grudge.who, -0.1, 'heard unsettling things about them');
+            const cred = other.opinionOf(this) * 0.5 + (this.reputation - 0.5) + (this.p.honesty - 0.4);
+            if (cred > 0.12) {
+                // a believable warning: bite scales with how bad the grudge is AND the warner's credibility
+                const bite = Math.min(0.22, (0.05 + Math.min(0.4, -grudge.v) * 0.3) * (0.5 + cred));
+                other.adjustOpinion(grudge.who, -bite, `heard troubling things from ${shortName(this)}`);
+            } else if (cred < -0.15 && this.rand() < 0.5) {
+                other.adjustOpinion(this, -0.05, 'spreads nasty rumours');   // the smear backfires on the smearer
+            }
         }
         const fallback = this.#scriptedChat(other, op, rop, grudge, vivid);
         if (w.tryLlmChat(this, other, { op, rop, grudge, vivid, fallback })) return true;
@@ -5746,7 +5768,7 @@ export class Farmer {
             if (victim && victim !== this) victim.adjustOpinion(this, -0.32, 'stole from my farm');   // the wronged never forget
             const witness = w.farmers.find(o => o !== this && o.health !== 'sick' && o.p.honesty > 0.55 &&
                 Math.abs(o.pos.i - pos.i) + Math.abs(o.pos.j - pos.j) < 6);
-            if (witness) { witness.say('HEY! THIEF!', '#c05840'); this.say('uh oh', '#e0a03c'); this.adjustReputation(-0.12); w.addBond(this, witness, -1); witness.adjustOpinion(this, -0.25, 'caught them thieving'); w.addLog(`${witness.sheet.name} caught ${s.name} stealing ${name}!`, '#c05840'); }
+            if (witness) { witness.say('HEY! THIEF!', '#c05840'); this.say('uh oh', '#e0a03c'); this.adjustReputation(-0.12); w.addBond(this, witness, -1); witness.adjustOpinion(this, -0.25, 'caught them thieving'); w.addLog(`${witness.sheet.name} caught ${s.name} stealing ${name}!`, '#c05840'); w.addChronicle('crime', `${witness.sheet.name.split(' ')[0]} caught ${s.name.split(' ')[0]} stealing ${name}.`, this, witness, '#c05840'); }
             else w.addLog(`${s.name} quietly made off with a ${name}`, '#e0a03c');
         }
         // the more crooked the bot, the sooner they're tempted to pilfer again (a chaos-agent

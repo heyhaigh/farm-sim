@@ -2937,7 +2937,7 @@ function drawChronicle() {
 // Auto-fades; click to dismiss. Skipped at 20x (you're fast-forwarding, not watching).
 // ---------------------------------------------------------------------------
 const RECAP_MS = 7000;
-const RECAP_PRI = { peril: 6, build: 5, town: 4, find: 4, season: 3, bond: 2, rift: 2, found: 1 };
+const RECAP_PRI = { peril: 6, crime: 5, build: 5, town: 4, find: 4, season: 3, bond: 2, rift: 2, found: 1 };
 
 function drawDayRecap() {
     RECAP_CARD.w = 0;
