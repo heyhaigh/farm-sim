@@ -230,15 +230,9 @@ const TREE_SETS = (() => {
     for (const s of Object.keys(TREE_TYPES)) out[s] = TREE_TYPES[s].flatMap(b => ['1', '2', '3'].map(n => b + n));
     return out;
 })();
-// LIVING FOREST: an animated tree sheet (654184 Trees_animation.png) — the whole non-winter forest
-// gently sways, and a tree rustles HARDER while a farmer is chopping it. Grid = 9 cols x 13 frames of
-// 64x80: 3 tree types (green / apple / pine) x 3 sizes (large=mature / med=young / small=sapling).
-const treeAnimSheet = new Image(); let treeAnimReady = false; treeAnimSheet.onload = () => { treeAnimReady = true; }; treeAnimSheet.onerror = () => {};
-treeAnimSheet.src = './assets/craftpix-net-654184-main-characters-home-free-top-down-pixel-art-asset/PNG/Trees_animation.png';
-// scale MUST stay an INTEGER: a fractional nearest-neighbour scale makes moving foliage pulse
-// between 1px and 2px tall each frame, which reads as horizontal striations (worst on the finely
-// detailed young trees). 1x = native 64px, crisp and stable.
-const TREE_ANIM = { cols: 9, rows: 13, fw: 64, fh: 80, scale: 1 };
+// LIVING FOREST: the static with-shadow trees (385863) stay the base look — shadowed, seasonal, no
+// clipping. A tree is STILL almost all the time; it only SWAYS (a light canvas shear about its base)
+// while a farmer chops it (the reveal), plus a rare seed-desynced idle rustle — see treeSway/drawWild.
 const choppingTiles = new Set();   // "i,j" of tiles a farmer is actively chopping — rebuilt each frame
 const BUSH_ART_BASE = './assets/craftpix-net-141354-free-top-down-bushes-pixel-art/PNG/Assets/';
 const BUSH_SETS = {
@@ -415,6 +409,8 @@ function drawCoin(x, y, size = 8) {
 const fantasyIcons = new Image(); let fantasyIconsReady = false; fantasyIcons.onload = () => { fantasyIconsReady = true; }; fantasyIcons.onerror = () => {};
 fantasyIcons.src = './assets/craftpix-net-994534-free-basic-pixel-art-fantasy-icons-16x16-for-ui/PNG/Gui_icons2.png';
 const SICK_DROP_SRC = { x: 266, y: 7, w: 10, h: 17 };
+// hunted-meat inventory icons (same fantasy-icon sheet): small/medium/large red meat (fowl added with #69 2b)
+const MEAT_ICONS = { 'meat-s': [528, 177, 14, 13], 'meat-m': [500, 167, 18, 21], 'meat-l': [550, 167, 21, 21] };
 // a small blood drop, centred on cx with its top at y (over a sick farmer's home/head)
 function drawBloodDrop(cx, y) {
     if (!fantasyIconsReady || !fantasyIcons.naturalWidth) return;
@@ -738,15 +734,6 @@ function pickTieredImage(store, names, i, j, seed, tier) {
 function wildDims(img) { return { w: Math.round(img.naturalWidth * ASSET_SCALE), h: Math.round(img.naturalHeight * ASSET_SCALE) }; }
 function wildSpec(i, j, t, season) {
     if (t === T.TREE) {
-        // LIVING FOREST (spring/summer/fall): an animated swaying tree. Winter keeps the static snowy
-        // tree below (dormant, no sway). Type: apple in fruit season, else green or pine by variant;
-        // size column tracks the growth stage (mature=large ... sapling=small).
-        if (season.name !== 'WINTER' && treeAnimReady && treeAnimSheet.naturalWidth) {
-            const typeIdx = (treeIsFruit(i, j) && world.isFruitSeason()) ? 1 : (treeVariant(i, j, 2) === 0 ? 0 : 2);
-            const sizeCol = 2 - world.treeStage(i, j);   // 0 large(mature) .. 2 small(sapling)
-            const w = Math.round(TREE_ANIM.fw * TREE_ANIM.scale), h = Math.round(TREE_ANIM.fh * TREE_ANIM.scale);
-            return { treeCol: typeIdx * 3 + sizeCol, w, h, anchor: 0.9, depth: 0.4, seed: hash2(i, j, 73), chopKey: i + ',' + j, leaves: season.name === 'FALL' };
-        }
         // pick this tree's species (stable) + current growth SIZE (rises over time); fall back to a
         // smaller loaded size, then any loaded, then the procedural tree.
         const bases = TREE_TYPES[season.name] || TREE_TYPES.SUMMER;
@@ -758,11 +745,11 @@ function wildSpec(i, j, t, season) {
         for (let s = stage; s >= 0 && !img; s--) { const c = treeImg[base + TREE_STAGE_SUFFIX[s]]; if (imageLoaded(c)) img = c; }
         if (img) {
             const { w, h } = wildDims(img);
-            return { img, w, h, anchor: 0.82, depth: 0.4, leaves: season.name === 'FALL', seed: hash2(i, j, 73) };
+            return { img, w, h, anchor: 0.82, depth: 0.4, leaves: season.name === 'FALL', seed: hash2(i, j, 73), tree: true, chopKey: i + ',' + j };
         }
         const species = TREE_SPECIES[hash2(i, j, 63) % TREE_SPECIES.length];
         const spr = treeSprite(species, season.name);
-        return { img: spr, w: spr.width, h: spr.height, anchor: 1, nudgeY: 2, depth: 0.4, leaves: season.name === 'FALL', seed: hash2(i, j, 73) };
+        return { img: spr, w: spr.width, h: spr.height, anchor: 1, nudgeY: 2, depth: 0.4, leaves: season.name === 'FALL', seed: hash2(i, j, 73), tree: true, chopKey: i + ',' + j };
     }
     if (t === T.FLOWER) {
         const bushSet = BUSH_SETS[season.name] || BUSH_SETS.SUMMER;
@@ -804,17 +791,33 @@ function wildJitter(i, j, t) {
         y: Math.round((rand2(i, j, 72) - 0.5) * ySpread),
     };
 }
+// How much a tree leans right now (0 = still). A tree is STATIC almost always; it SHAKES while a
+// farmer chops it (the reveal), and very occasionally gives a brief, gentle idle rustle — each on a
+// long, seed-desynced schedule so the forest never all moves at once.
+function treeSway(spec) {
+    const now = performance.now() / 1000;
+    if (choppingTiles.has(spec.chopKey)) return 0.07 * Math.sin(now * 22);   // an axe biting: a quick shake
+    const period = 27, phase = (spec.seed % 1000) / 1000;                    // ~once every 27s, per tree
+    const cyc = ((now / period) + phase) % 1;
+    const RUSTLE = 0.085;                                                     // rustle fills ~8.5% of the cycle (~2.3s)
+    if (cyc >= RUSTLE) return 0;                                             // the rest of the time: perfectly still
+    const local = cyc / RUSTLE, envelope = Math.sin(local * Math.PI);        // ease in/out
+    return 0.03 * envelope * Math.sin(local * Math.PI * 4);                  // a couple of soft sways
+}
 function drawWild(spec, x, baseY) {
     ctx.imageSmoothingEnabled = false;
-    if (spec.treeCol != null && treeAnimReady) {
-        // gently sway on an ambient loop; rustle fast while a farmer is chopping this tile. A per-tree
-        // phase from its seed desyncs the forest so it doesn't all sway in unison.
-        const A = TREE_ANIM, fps = choppingTiles.has(spec.chopKey) ? 16 : 4.5;
-        const frame = (Math.floor(performance.now() / 1000 * fps) + (spec.seed % A.rows)) % A.rows;
-        ctx.drawImage(treeAnimSheet, spec.treeCol * A.fw, frame * A.fh, A.fw, A.fh,
-            Math.floor(x - spec.w / 2), Math.floor(baseY - spec.h * spec.anchor + (spec.nudgeY || 0)), spec.w, spec.h);
-        drawLeafDrift(spec, x, baseY);
-        return;
+    if (spec.tree) {
+        const sway = treeSway(spec);
+        if (sway !== 0) {
+            const px = Math.floor(x - spec.w / 2), py = Math.floor(baseY - spec.h * spec.anchor + (spec.nudgeY || 0));
+            const pivotY = py + spec.h;   // pivot at the trunk base so the CANOPY sways, roots stay put
+            ctx.save();
+            ctx.translate(x, pivotY); ctx.transform(1, 0, sway, 1, 0, 0); ctx.translate(-x, -pivotY);
+            ctx.drawImage(spec.img, px, py, spec.w, spec.h);
+            ctx.restore();
+            drawLeafDrift(spec, x, baseY);
+            return;
+        }
     }
     ctx.drawImage(
         spec.img,
@@ -2696,8 +2699,10 @@ function drawSheet(f) {
                     if (src.found) parts.push(`${src.found} found`);
                     addSlot(sx, sy, key, { title: it.name, body: parts.join(', ') || `you have ${it.count}` });
                 } else if (it.good) {
-                    // a wild-caught good (fish/lily) drawn from its procedural sprite
-                    drawItemSlot(sx, sy, SZ, null, it.count, { sel: selectedSlotKey === key, canvas: GOOD_ICON[it.good] });
+                    // fish/lily use a procedural sprite; meat uses a fantasy-icon sub-rect
+                    const mi = MEAT_ICONS[it.good];
+                    const sprite = (mi && fantasyIconsReady) ? { sheet: fantasyIcons, sx: mi[0], sy: mi[1], sw: mi[2], sh: mi[3] } : null;
+                    drawItemSlot(sx, sy, SZ, null, it.count, { sel: selectedSlotKey === key, sprite, canvas: sprite ? null : GOOD_ICON[it.good] });
                     addSlot(sx, sy, key, { title: it.name, body: `you have ${it.count}` });
                 } else {
                     drawItemSlot(sx, sy, SZ, itemIcon(it.icon), it.count, { sel: selectedSlotKey === key });
