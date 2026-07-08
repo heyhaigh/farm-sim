@@ -56,7 +56,9 @@ let rosterOpen = false;
 let rosterScroll = 0;
 let chronOpen = false;            // town chronicle panel (the settlement's saga)
 let chronScroll = 0;
-let followMode = false;           // camera tracks the selected farmer (F to toggle; drag cancels)
+let followMode = false;           // camera tracks followTarget (F/crosshair toggles; drag/Esc cancels)
+let followTarget = null;          // the farmer being trailed — independent of the open card, so closing
+                                  // the sheet (X) keeps following; only F / Esc / a pan stops it
 let recapSeq = -1;                // last day-recap seq we've seen (to detect a new one)
 let recapShownAt = -1e9;          // real-time (ms) the current recap appeared; drives its fade-out
 let sheetScroll = 0;              // scroll offset for the selected-farmer detail card
@@ -2468,7 +2470,7 @@ function drawSheet(f) {
 
     // --- follow/track toggle (crosshair), just left of the X: camera trails this farmer ---
     SHEET_FOLLOW.x = SHEET_CLOSE.x - 13; SHEET_FOLLOW.y = PY + 3; SHEET_FOLLOW.w = 10; SHEET_FOLLOW.h = 10;
-    const following = followMode && selected === f;
+    const following = followMode && followTarget === f;
     ctx.fillStyle = following ? '#1f5a2a' : '#3a2c1e'; ctx.fillRect(SHEET_FOLLOW.x, SHEET_FOLLOW.y, 10, 10);
     ctx.fillStyle = following ? '#7dd069' : '#5a4632'; ctx.fillRect(SHEET_FOLLOW.x, SHEET_FOLLOW.y, 10, 1);
     const cxr = SHEET_FOLLOW.x + 5, cyr = SHEET_FOLLOW.y + 5, rc = following ? '#bff0a8' : '#e8c8a0';
@@ -2542,7 +2544,9 @@ function drawSheet(f) {
 
         y = sectionBand(IX, y, IW, 'FARM');
         const kv = (lx, label, val, vcol = SHEET_VAL) => { drawText(ctx, label, lx, y, SHEET_LABEL); drawText(ctx, String(val), lx + 32, y, vcol); };
-        kv(IX, 'CROP', s.crop); y += 7;
+        const cropMix = (s.crops && s.crops.length ? s.crops : [s.crop]).join(', ');
+        drawText(ctx, s.crops && s.crops.length > 1 ? 'CROPS' : 'CROP', IX, y, SHEET_LABEL);
+        drawText(ctx, cropMix.slice(0, 24), IX + 32, y, SHEET_VAL); y += 7;
         const facs = ['crops', ...f.plot.facilities.map(fc => FAC_SHORT[fc.type] || fc.type)];
         drawText(ctx, 'HAS', IX, y, SHEET_LABEL); drawText(ctx, facs.join(', ').slice(0, 26), IX + 32, y, SHEET_VAL); y += 7;
         kv(IX, 'LAND', `${f.plot.cells.size}t`); drawText(ctx, 'YIELD', IX + 76, y, SHEET_LABEL); drawText(ctx, String(s.harvested), IX + 108, y, SHEET_VAL); y += 7;
@@ -3007,7 +3011,7 @@ out.addEventListener('pointermove', (e) => {
     mouse.x = p.x; mouse.y = p.y;
     if (mouse.panStart) {
         const dx = p.x - mouse.panStart.x, dy = p.y - mouse.panStart.y;
-        if (Math.abs(dx) + Math.abs(dy) > 4) { mouse.dragging = true; followMode = false; }   // panning breaks follow
+        if (Math.abs(dx) + Math.abs(dy) > 4) { mouse.dragging = true; followMode = false; followTarget = null; }   // panning breaks follow
         if (mouse.dragging) {
             cam.x = mouse.panStart.camX + dx;
             cam.y = mouse.panStart.camY + dy;
@@ -3080,8 +3084,13 @@ out.addEventListener('pointerup', (e) => {
 
     // detail card: X closes it; clicks anywhere inside it are consumed. Checked BEFORE the
     // minimap because the full-height card is drawn OVER it (Codex: don't click through).
-    if (selected && inRect(p, SHEET_FOLLOW)) { followMode = !followMode; return; }
-    if (selected && inRect(p, SHEET_CLOSE)) { selected = null; selectedSlotKey = null; followMode = false; return; }
+    if (selected && inRect(p, SHEET_FOLLOW)) {
+        if (followMode && followTarget === selected) { followMode = false; followTarget = null; }
+        else { followMode = true; followTarget = selected; }
+        return;
+    }
+    // closing the card is just dismissing visual noise — it does NOT stop following (only F/Esc/pan do)
+    if (selected && inRect(p, SHEET_CLOSE)) { selected = null; selectedSlotKey = null; return; }
     // tab bar: switch view (reset scroll so the new view starts at the top)
     if (selected) { for (const tb of SHEET_TABS) if (inRect(p, tb)) { if (sheetTab !== tb.tab) { sheetTab = tb.tab; sheetScroll = 0; selectedSlotKey = null; } return; } }
     if (selected && MEM_PREV.w && inRect(p, MEM_PREV)) { sheetMemPage = Math.max(0, sheetMemPage - 1); return; }
@@ -3149,24 +3158,31 @@ function mostInterestingFarmer() {
 window.addEventListener('keydown', (e) => {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     if ((e.key === 't' || e.key === 'T') && world) {
-        followMode = false;
+        followMode = false; followTarget = null;
         cam.x = GW / 2 - isoX(world.well.i, world.well.j);
         cam.y = GH / 2 - isoY(world.well.i, world.well.j) - 20;
     }
-    // F — follow: toggle the camera trailing the selected farmer, or jump to (and follow) the action
+    // F — follow: toggle trailing. When starting, follow the open card's farmer, else jump to the action.
     if ((e.key === 'f' || e.key === 'F') && world && booted) {
-        if (selected && world.farmers.includes(selected)) followMode = !followMode;
+        if (followMode) { followMode = false; followTarget = null; }
         else {
-            const f = mostInterestingFarmer();
-            if (f) { selected = f; sheetScroll = 0; sheetTab = 0; followMode = true; rosterOpen = false; chronOpen = false; boardOpen = false; }
+            const target = (selected && world.farmers.includes(selected)) ? selected : mostInterestingFarmer();
+            if (target) { followMode = true; followTarget = target; selected = target; sheetScroll = 0; sheetTab = 0; rosterOpen = false; chronOpen = false; boardOpen = false; }
         }
     }
-    // ← / → — cycle the selected farmer through the whole cast (keeps following, if active)
-    if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && world && booted && selected) {
-        const arr = world.farmers, idx = arr.indexOf(selected);
+    // Esc — stop following AND close the card / any open panel (a clean sweep back to the map)
+    if (e.key === 'Escape' && world && booted) {
+        followMode = false; followTarget = null;
+        selected = null; selectedSlotKey = null;
+        rosterOpen = false; chronOpen = false; boardOpen = false;
+    }
+    // ← / → — cycle through the whole cast: moves the open card and/or the follow target together
+    if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && world && booted) {
+        const anchor = selected || followTarget, arr = world.farmers, idx = anchor ? arr.indexOf(anchor) : -1;
         if (arr.length && idx >= 0) {
-            selected = arr[(idx + (e.key === 'ArrowRight' ? 1 : -1) + arr.length) % arr.length];
-            sheetScroll = 0; selectedSlotKey = null;
+            const next = arr[(idx + (e.key === 'ArrowRight' ? 1 : -1) + arr.length) % arr.length];
+            if (selected) { selected = next; sheetScroll = 0; selectedSlotKey = null; }
+            if (followMode) followTarget = next;
             rosterOpen = false; chronOpen = false; boardOpen = false;
             e.preventDefault();
         }
@@ -3246,13 +3262,13 @@ function frame(now) {
     // all the leftover time, but cap it so we never spiral.
     if (steps >= 800) simAccumulator = Math.min(simAccumulator, 800 * FIXED_DT);
 
-    // camera: trail the followed farmer, easing toward centre (manual drag cancels — see pointermove)
-    if (followMode && selected && world.farmers.includes(selected) && !mouse.dragging) {
-        const tx = GW / 2 - isoX(selected.pos.i, selected.pos.j);
-        const ty = GH / 2 - isoY(selected.pos.i, selected.pos.j) - 12;
+    // camera: trail followTarget, easing toward centre (manual drag cancels — see pointermove)
+    if (followMode && followTarget && world.farmers.includes(followTarget) && !mouse.dragging) {
+        const tx = GW / 2 - isoX(followTarget.pos.i, followTarget.pos.j);
+        const ty = GH / 2 - isoY(followTarget.pos.i, followTarget.pos.j) - 12;
         cam.x += (tx - cam.x) * 0.14; cam.y += (ty - cam.y) * 0.14;
-    } else if (followMode && (!selected || !world.farmers.includes(selected))) {
-        followMode = false;   // nothing to follow
+    } else if (followMode && (!followTarget || !world.farmers.includes(followTarget))) {
+        followMode = false; followTarget = null;   // nothing left to follow
     }
 
     // background
@@ -3281,13 +3297,15 @@ function frame(now) {
     drawUI();
     drawDayRecap();
     // a quiet indicator while the camera is trailing someone (F, or the sheet's crosshair, toggles it)
-    if (followMode && selected && world.farmers.includes(selected) && !rosterOpen && !chronOpen && !boardOpen) {
-        const lbl = `FOLLOWING ${selected.sheet.name.split(' ')[0].toUpperCase()} - F TO STOP`;
-        const tw = textWidth(lbl), bx = Math.floor((GW - tw) / 2), cy = GH - 27;
+    if (followMode && followTarget && world.farmers.includes(followTarget) && !rosterOpen && !chronOpen && !boardOpen) {
+        const lbl = `FOLLOWING ${followTarget.sheet.name.split(' ')[0].toUpperCase()} - F TO STOP`;
+        // sit the plate ABOVE the bottom log bar (top of bar = GH-22) with the same 3px gap the
+        // detail card leaves, so the banner reads as a floating element, not part of the bar
+        const tw = textWidth(lbl), bx = Math.floor((GW - tw) / 2), boxTop = GH - 36, cy = GH - 31;
         const pad = 12, bxL = bx - pad, bxW = tw + pad * 2;
         ctx.fillStyle = 'rgba(12,14,22,0.82)';   // legibility: dark plate behind the label (like the bars)
-        ctx.fillRect(bxL, GH - 32, bxW, 11);
-        drawText(ctx, lbl, bx, GH - 29, '#7dd069');
+        ctx.fillRect(bxL, boxTop, bxW, 11);
+        drawText(ctx, lbl, bx, boxTop + 3, '#7dd069');
         // ◄ / ► cycle affordances (3x5, matched to the font height), flanking the label inside the plate
         ctx.fillStyle = '#7dd069';
         for (let c = 0; c < 3; c++) ctx.fillRect(bxL + 4 + c, cy - c, 1, c * 2 + 1);              // ◄ tip points left
