@@ -2832,15 +2832,11 @@ function drawRoster() {
     ctx.fillStyle = 'rgba(6,7,11,0.72)';
     ctx.fillRect(0, 18, GW, GH - 40);
 
-    // panel
-    ctx.fillStyle = 'rgba(12,14,24,0.97)';
-    ctx.fillRect(PX, PY, PW, PH);
-    ctx.fillStyle = '#7dd069';
-    ctx.fillRect(PX, PY, PW, 1); ctx.fillRect(PX, PY + PH - 1, PW, 1);
-    ctx.fillRect(PX, PY, 1, PH); ctx.fillRect(PX + PW - 1, PY, 1, PH);
+    // panel — shared wood frame (matches the Board + character sheet)
+    uiPanel(PX, PY, PW, PH);
 
     // header
-    drawText(ctx, 'TOWN ROSTER', PX + 6, PY + 5, '#7dd069', 1);
+    drawText(ctx, 'TOWN ROSTER', PX + 7, PY + 5, '#7dd069', 1);
     drawText(ctx, `${world.farmers.length} RYS`, PX + PW - 40, PY + 5, '#9aa0b4');
     // close X
     drawText(ctx, 'X', PX + PW - 10, PY + 5, '#c8ccd8');
@@ -2927,18 +2923,14 @@ function drawChronicle() {
     const PY = 22;
     chronRows = [];
 
-    // dim behind + panel chrome (purple accent, distinct from the green roster)
+    // dim behind, then the shared wood frame (matches the Board + character sheet)
     ctx.fillStyle = 'rgba(6,7,11,0.72)';
     ctx.fillRect(0, 18, GW, GH - 40);
-    ctx.fillStyle = 'rgba(12,14,24,0.97)';
-    ctx.fillRect(PX, PY, PW, PH);
-    ctx.fillStyle = CHRON_ACCENT;
-    ctx.fillRect(PX, PY, PW, 1); ctx.fillRect(PX, PY + PH - 1, PW, 1);
-    ctx.fillRect(PX, PY, 1, PH); ctx.fillRect(PX + PW - 1, PY, 1, PH);
+    uiPanel(PX, PY, PW, PH);
 
     // header — town-wide, or one farmer's personal saga when a Ry is selected
     const title = selected ? `SAGA OF ${selected.sheet.name.split(' ')[0].toUpperCase()}` : 'TOWN CHRONICLE';
-    drawText(ctx, title, PX + 6, PY + 5, CHRON_ACCENT, 1);
+    drawText(ctx, title, PX + 7, PY + 5, CHRON_ACCENT, 1);
     const entries = chronEntries();
     drawText(ctx, String(entries.length), PX + PW - 42, PY + 5, '#9aa0b4');
     drawText(ctx, 'X', PX + PW - 10, PY + 5, '#c8ccd8');
