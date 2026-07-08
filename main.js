@@ -676,9 +676,11 @@ function wildSpec(i, j, t, season) {
             const { w, h } = wildDims(img);
             return { img, w, h, anchor: 0.74, depth: -1 };
         }
+        if (season.name === 'WINTER') return null;   // no GREEN bush fallback under the snow
         return { img: flowerSprite, w: flowerSprite.width, h: flowerSprite.height, anchor: 1, nudgeY: 2, depth: -1 };
     }
     if (t === T.WHEAT) {
+        if (season.name === 'WINTER') return null;   // wild ferns lie dormant under the snow — no green in winter
         const img = pickTieredImage(bushImg, FERN_NAMES, i, j, 66, obstacleTier(i, j));
         if (img) {
             const { w, h } = wildDims(img);
@@ -935,7 +937,7 @@ function bakeChunk(cx, cy) {
             } else if (grassy) {
                 const scatter = rand2(i, j, 41);
                 const density = patch === 3 ? 0.34 : patch === 2 ? 0.24 : 0.15;
-                if (t === T.GRASS && grassDetailsReady && scatter < density) {
+                if (t === T.GRASS && grassDetailsReady && scatter < density && !winter) {   // no green tufts under snow
                     const useDirt = rand2(i, j, 42) < 0.18;
                     const set = useDirt ? DIRT_DECALS : GRASS_DECALS;
                     const d = pickTile(set, i, j, 43);
@@ -951,7 +953,7 @@ function bakeChunk(cx, cy) {
                 else if (patch === 3) {
                     bctx.fillStyle = flower;
                     bctx.fillRect(sx + 5 + Math.floor(rand2(i, j, 47) * 10), sy + 2 + Math.floor(rand2(i, j, 48) * 6), 1, 1);
-                } else if (patch === 2 && rand2(i, j, 49) < 0.34) {
+                } else if (patch === 2 && !winter && rand2(i, j, 49) < 0.34) {   // no green grass speckle under snow
                     bctx.fillStyle = shade(GRASS_A, 1.16);
                     bctx.fillRect(sx + 6 + Math.floor(rand2(i, j, 50) * 8), sy + 3 + Math.floor(rand2(i, j, 51) * 4), 1, 2);
                 }
