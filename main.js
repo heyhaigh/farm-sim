@@ -1792,6 +1792,11 @@ function drawFarmer(f, sx, sy) {
         const bob = Math.round(Math.sin(performance.now() / 200));
         ctx.imageSmoothingEnabled = false;
         ctx.drawImage(suppliesSheet, ix, iy, iw, ih, Math.floor(px + fw / 2 - dw / 2), Math.floor(py - dh - 3 + bob), dw, dh);
+    } else if (f.carryCrop && !PRODUCE_ICONS[f.carryCrop.type]) {
+        // a crop with no Supplies.png icon (bean stalks): hold up its procedural ripe sprite
+        const spr = makeCropSprites(f.carryCrop.type)[3];
+        const bob = Math.round(Math.sin(performance.now() / 200));
+        ctx.drawImage(spr, Math.floor(px + fw / 2 - spr.width / 2), Math.floor(py - spr.height - 3 + bob));
     }
 
     // work progress pips
@@ -2293,7 +2298,14 @@ function drawItemSlot(x, y, sz, iconImg, count, opts = {}) {
         ctx.fillStyle = '#fff4d0';
         ctx.fillRect(x, y, sz, 1); ctx.fillRect(x, y, 1, sz); ctx.fillRect(x + sz - 1, y, 1, sz); ctx.fillRect(x, y + sz - 1, sz, 1);
     }
-    if (opts.sprite && opts.sprite.sheet && opts.sprite.sheet.complete && opts.sprite.sheet.naturalWidth) {
+    if (opts.canvas && opts.canvas.width) {
+        // a ready procedural canvas (e.g. a crop with no Supplies.png icon) fitted into the slot
+        const cv = opts.canvas, fit = sz - 3, sc = fit / Math.max(cv.width, cv.height);
+        const dw = Math.max(1, Math.round(cv.width * sc)), dh = Math.max(1, Math.round(cv.height * sc));
+        const savedSmooth = ctx.imageSmoothingEnabled; ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(cv, x + Math.round((sz - dw) / 2), y + Math.round((sz - dh) / 2), dw, dh);
+        ctx.imageSmoothingEnabled = savedSmooth;
+    } else if (opts.sprite && opts.sprite.sheet && opts.sprite.sheet.complete && opts.sprite.sheet.naturalWidth) {
         // a sprite-sheet sub-rect (e.g. a harvested-crop icon from Supplies.png) fitted into the slot
         const sp = opts.sprite, fit = sz - 3, sc = fit / Math.max(sp.sw, sp.sh);   // scale to fill the slot (crop icons are small)
         const dw = Math.max(1, Math.round(sp.sw * sc)), dh = Math.max(1, Math.round(sp.sh * sc));
@@ -2578,10 +2590,12 @@ function drawSheet(f) {
             if (it) {
                 const key = `inv:${it.id}`;
                 if (it.crop) {
-                    // a crop stack: draw its Supplies.png produce icon and tag WHERE it came from
+                    // a crop stack: draw its Supplies.png produce icon (or the procedural ripe sprite
+                    // for crops with no icon, e.g. bean stalks) and tag WHERE it came from
                     const pi = PRODUCE_ICONS[it.crop];
                     const sprite = (pi && imageLoaded(suppliesSheet)) ? { sheet: suppliesSheet, sx: pi[0], sy: pi[1], sw: pi[2], sh: pi[3] } : null;
-                    drawItemSlot(sx, sy, SZ, null, it.count, { sel: selectedSlotKey === key, sprite });
+                    const canvas = sprite ? null : makeCropSprites(it.crop)[3];
+                    drawItemSlot(sx, sy, SZ, null, it.count, { sel: selectedSlotKey === key, sprite, canvas });
                     const src = it.sources, parts = [];
                     if (src.grown) parts.push(`${src.grown} grown`);
                     if (src.stolen) parts.push(`${src.stolen} stolen`);

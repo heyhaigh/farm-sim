@@ -248,7 +248,7 @@ export function growPersonality(rand, text) {
 const SKIN_TONES = ['#f0c8a0', '#e0b088', '#c89068', '#a87850', '#8a5c3c'];
 
 // The six crop kinds a farm can sow (one per archetype). A farm's MIX is drawn from these.
-export const ALL_CROPS = ['sunflower', 'carrot', 'grapes', 'pumpkin', 'pepper', 'wheat'];
+export const ALL_CROPS = ['sunflower', 'carrot', 'grapes', 'pumpkin', 'pepper', 'wheat', 'beanstalk'];
 // A farm's crop palette: the archetype's SIGNATURE crop plus a personality-sized spread of others.
 // The curious diversify (up to four kinds); the focused/diligent keep a tighter rotation — so a
 // farm is no longer a mono-culture. Deterministic (uses only the farmer's seeded rand).

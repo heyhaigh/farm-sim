@@ -257,6 +257,7 @@ const CROP_STYLES = {
     pumpkin: { fruit: '#e88820', leaf: '#4a8848', form: 'ground' },
     grapes: { fruit: '#8a5aa8', leaf: '#487840', form: 'bush' },
     wheat: { fruit: '#e8c860', leaf: '#88a850', form: 'tall' },
+    beanstalk: { fruit: '#5ac85a', leaf: '#3f8a3f', form: 'tall' },   // a tall green climbing vine of pods
 };
 
 const cropCache = {};

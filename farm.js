@@ -2986,6 +2986,7 @@ export class World {
     plantCrop(i, j, type, owner) {
         this.crops.set(`${i},${j}`, {
             i, j, type, owner, stage: 0, growth: 0, water: 0.7, withered: false, dryTime: 0,
+            fastGrow: type === 'beanstalk' ? 0.5 : 1,   // bean stalks race up in half the time (but yield half the value)
             wateredAt: this.time,
             waterDecayMul: 0.88 + tileRand(i, j, this.seed + 501) * 0.24,
             rainAbsorbMul: 0.85 + tileRand(i, j, this.seed + 502) * 0.3,
@@ -5748,7 +5749,10 @@ export class Farmer {
         else if (check.total >= 10) yieldN = 2;
         const ownerSheet = (helping && owner) ? owner.sheet : s;
         ownerSheet.harvested += yieldN; w.harvestTotal += yieldN;
-        ownerSheet.produce = (ownerSheet.produce || 0) + yieldN;   // spendable stockpile (harvested is lifetime-only)
+        // bean stalks are a fast but LOW-VALUE crop: they add only half to the spendable/tradeable
+        // wallet, though the physical count (yield stat + inventory) reflects every stalk pulled.
+        const worth = c.type === 'beanstalk' ? Math.max(1, Math.round(yieldN * 0.5)) : yieldN;
+        ownerSheet.produce = (ownerSheet.produce || 0) + worth;    // spendable stockpile (harvested is lifetime-only)
         addCropStock(ownerSheet, c.type, yieldN, 'grown');          // provenance: grown on the farm
         w.payHarvestShares(helping && owner ? owner : this, yieldN);
         if (yieldN > 0 && !check.crit) this.say(`+${yieldN} ${c.type}`);
