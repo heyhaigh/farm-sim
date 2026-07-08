@@ -65,7 +65,7 @@ const HOUSE_TIERS = [
     null,
     { wood: 10, ore: 2, harvested: 0, minLevel: 0, name: 'tipi', buildSteps: 30, footprint: 3 },        // L1 — 3x3, ~1/4 day
     { wood: 30, ore: 12, harvested: 300, minLevel: 9, name: 'yurt', buildSteps: 62, footprint: 5 },     // L2 — 5x5, ~1/2 day
-    { wood: 120, ore: 60, harvested: 1400, minLevel: 18, name: 'cottage', buildSteps: 250, footprint: 5 }, // L3 — 5x5, ~2 days
+    { wood: 120, ore: 60, harvested: 1400, minLevel: 18, name: 'cottage', buildSteps: 250, footprint: 7 }, // L3 — 7x7, ~2 days (needs an expanded plot)
 ];
 const START_WOOD = 4;
 const MAX_FARMERS = 8;   // the original map maxes out at the first ring's 8 homesteads
@@ -899,7 +899,7 @@ export class World {
         if (ontoFarm && this.rand() < 0.6) this.addLog('Wild brush is creeping into the farms — clear it before it takes root.', '#8a9a5a');
     }
 
-    // Reserve the dwelling's footprint (3x3 tipi / 5x5 yurt, centred on houseCentre) plus a one-tile
+    // Reserve the dwelling's footprint (3x3 tipi / 5x5 yurt / 7x7 cottage, centred on houseCentre) plus a one-tile
     // margin (and extra above, where the tall roof sprite overhangs) so crops and facilities are
     // never placed under the house or its sprite.
     #inHouse(plot, i, j) {
@@ -1682,7 +1682,10 @@ export class World {
 
     static MAX_CELLS = 560;  // acreage cap (~23x23 worth of land, any shape, annexes included)
     static BASE_PLOT = 13;   // starting plot size (square); house + garden + facility zones fit inside
-    static HOUSE_FT = 5;     // the MAX dwelling footprint (yurt/cottage); a tipi is smaller (3x3)
+    static HOUSE_FT = 5;     // the reserve ANCHOR footprint (yurt); a tipi is 3x3, a cottage 7x7 —
+                             // all centred on the same houseCentre, so this stays 5 (see houseFt/houseCentre)
+    static COTTAGE_MIN_CELLS = 200;  // a 7x7 cottage is an ESTATE house — a starter 13x13 (169) plot is too
+                                     // cramped; a farmer must first ANNEX ~31 tiles of land to earn the room
 
     // The footprint a plot's dwelling reserves right now: the tipi is 3x3, the yurt/cottage 5x5.
     // Uses the building-in-progress tier if upgrading, else the built tier, else the tipi they'll
@@ -1938,9 +1941,9 @@ export class World {
         if (!p.built.fence) return false;   // a home is never raised until the fence is fully up
         if (!free) { const c = HOUSE_TIERS[level]; farmer.wood -= c.wood; farmer.ore -= c.ore; }
         // the building itself BLOCKS a modest 3x3 core (under the sprite); the surrounding ring of
-        // the 5x5 footprint is reserved YARD — kept clear of crops/facilities (#inHouse) but left as
-        // walkable grass, so a small dwelling isn't a giant solid slab.
-        const off = (World.HOUSE_FT - 3) >> 1;   // 1 for a 5x5 footprint -> core at h+1..h+3
+        // the footprint (5x5 yurt / 7x7 cottage) is reserved YARD — kept clear of crops/facilities
+        // (#inHouse) but left as walkable grass, so a dwelling isn't a giant solid slab.
+        const off = (World.HOUSE_FT - 3) >> 1;   // 1 (anchor ft 5) -> 3x3 core at h+1..h+3, centred on houseCentre
         for (let di = off; di < off + 3; di++) for (let dj = off; dj < off + 3; dj++) this.set(h.i + di, h.j + dj, T.HOUSE);
         p.built.level = level;
         this._tilesChanged = true;
@@ -4620,6 +4623,18 @@ export class Farmer {
         if (p.building) return this.#buildHouse(p.building.level);   // an upgrade already under way — work it
         const next = p.built.level + 1;
         if (!w.canBuild(this, next)) return false;   // can't afford yet — keep farming and saving
+        // A COTTAGE (L3) is a 7x7 estate house: it demands ACREAGE. Before a farmer can raise one they
+        // must first EXPAND their homestead past a threshold — a cramped starter plot has no standing for a
+        // farmhouse this grand. So the ambition turns to land first; the cottage waits on the bigger farm.
+        if (next >= 3 && p.cells.size < World.COTTAGE_MIN_CELLS) {
+            const info = w.expansionInfo(p);
+            if (info.state !== 'blocked') {   // there's room to grow — annex land first, then the cottage
+                this.wantExpand = true;
+                if (this.rand() < 0.2) this.think('MY FARM IS TOO SMALL FOR A COTTAGE — TIME TO EXPAND');
+                return this.#pursueGrowth();   // put a shift into growing the plot right now
+            }
+            // truly hemmed in by neighbours — the 7x7 still fits the existing yard, so let it rise
+        }
         // afford it: clear the site of any encroaching trees/rocks/brush BEFORE laying the foundation
         if (!w.houseSiteClear(p)) {
             const b = this.#nearestSiteBlocker();

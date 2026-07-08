@@ -1206,7 +1206,7 @@ function collectDrawables() {
     // houses (tiered: L1 tipi -> L2 round yurt -> L3 cottage)
     for (const f of world.farmers) {
         const p = f.plot, level = p.built.level;
-        const h = p.house, F = 5;   // 5x5 footprint (World.HOUSE_FT); sprite sits centred within it
+        const h = p.house, F = 5;   // anchor: h+(F-1)/2 = houseCentre (fixed); sprite sits centred there for every tier
         const sx = cam.x + isoX(h.i + (F - 1) / 2, h.j + (F - 1) / 2);   // footprint centre
         const sy = cam.y + isoY(h.i + (F - 1) / 2, h.j + (F - 1) / 2);
         if (p.building) {   // under construction: gray foundation pad + a house rising by progress
