@@ -1057,6 +1057,9 @@ export class World {
     isNight() { return this.clock > DAY_LENGTH; }
     nightProgress() { return this.isNight() ? (this.clock - DAY_LENGTH) / NIGHT_LENGTH : 0; }
     get seasonDef() { return SEASONS[this.season]; }
+    // Apples ripen late summer through fall, as in real life — so fruit trees only bear (and drop)
+    // apples in the back half of summer and all of autumn.
+    isFruitSeason() { return this.season === 2 || (this.season === 1 && this.seasonDay >= 8); }
     get seasonName() { return SEASONS[this.season].name; }
     // winter is the fallow season: no tilling/planting/watering, the ground is frozen.
     // Farmers pivot to livestock, foraging, chopping, crafting and helping instead.
@@ -5667,7 +5670,7 @@ export class Farmer {
                 const wood = WOOD_TREE * (tier + 1);   // a bigger trunk yields more timber (sapling 3 .. mature 9)
                 this.wood += wood;
                 this.say(`+${wood} wood`, '#c8a060');
-                if (treeIsFruit(tgt.i, tgt.j)) {       // an apple tree drops fruit too — for the larder + trade
+                if (treeIsFruit(tgt.i, tgt.j) && w.isFruitSeason()) {   // an apple tree IN SEASON drops fruit too
                     const apples = 2 + tier, s = this.sheet;
                     s.goods = s.goods || {}; s.goods.apple = (s.goods.apple || 0) + apples;
                     this.say(`+${apples} apples`, '#e04838');

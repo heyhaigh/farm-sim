@@ -656,7 +656,7 @@ function wildSpec(i, j, t, season) {
         // smaller loaded size, then any loaded, then the procedural tree.
         const bases = TREE_TYPES[season.name] || TREE_TYPES.SUMMER;
         let base;
-        if (treeIsFruit(i, j) && bases.includes('Fruit_tree')) base = 'Fruit_tree';   // apple trees show fruit
+        if (treeIsFruit(i, j) && bases.includes('Fruit_tree') && world.isFruitSeason()) base = 'Fruit_tree';   // apples: late summer + fall
         else { const nf = bases.filter(b => b !== 'Fruit_tree'); const pool = nf.length ? nf : bases; base = pool[treeVariant(i, j, pool.length)]; }
         const stage = world.treeStage(i, j);
         let img = null;
