@@ -1266,8 +1266,10 @@ function collectDrawables() {
                 const roofX = Math.floor(sx);
                 if (indoors) {
                     if (f.downed) {
+                        // recovering from wounds: a blinking red "!" so a felled Ry reads at a glance
                         const bob = Math.round(Math.sin(performance.now() / 500));
-                        drawText(ctx, '+', roofX - 1, roofY + bob, '#e03828');   // red cross: recovering from wounds
+                        const blink = Math.floor(performance.now() / 350) % 2;
+                        drawText(ctx, '!', roofX - 1, roofY + bob, blink ? '#ff5038' : '#a02818');
                     } else if (f.state === 'sick') {
                         const bob = Math.round(Math.sin(performance.now() / 400));
                         drawText(ctx, '+', roofX - 1, roofY + bob, '#c05840');
@@ -1804,7 +1806,11 @@ function drawFarmer(f, sx, sy) {
     // status icon: sleeping outside (animated Z), sick (+) or worn out / catching breath (~). A
     // RESTING farmer is WAITING for their energy, not asleep — so they get the '~', never the sleep Z.
     if (!f.bubble) {
-        if (f.state === 'sleep') {
+        if (f.downed) {
+            const bob = Math.round(Math.sin(performance.now() / 500));   // felled with no home to recover in
+            const blink = Math.floor(performance.now() / 350) % 2;
+            drawText(ctx, '!', px + 6, py - 8 + bob, blink ? '#ff5038' : '#a02818');
+        } else if (f.state === 'sleep') {
             const zt = Math.floor(f.animTime * 2) % 3;   // Z rising + fading, like the roof sleepers
             drawText(ctx, 'Z', px + 6, py - 8 - zt * 3, `rgba(200,210,255,${1 - zt * 0.25})`);
         } else if (f.health === 'sick') {
@@ -2460,7 +2466,7 @@ function drawSheet(f) {
     SHEET_RECT.x = PX; SHEET_RECT.y = PY; SHEET_RECT.w = PW; SHEET_RECT.h = PH;
     uiPanel(PX, PY, PW, PH);
     const IX = PX + 7, IW = PW - 14;
-    const eCol = f.health === 'sick' ? '#c05840' : f.tired ? '#e0a03c' : '#7dd069';
+    const eCol = f.downed ? '#e0703c' : f.health === 'sick' ? '#c05840' : f.tired ? '#e0a03c' : '#7dd069';
 
     // --- close (X) button, top-right corner ---
     SHEET_CLOSE.x = PX + PW - 13; SHEET_CLOSE.y = PY + 3; SHEET_CLOSE.w = 10; SHEET_CLOSE.h = 10;
@@ -2484,7 +2490,7 @@ function drawSheet(f) {
     ctx.fillStyle = SHEET_GOLD; ctx.fillRect(IX - 2, PY + 16, IW + 4, 1); ctx.fillRect(IX - 2, PY + 36, IW + 4, 1);
     drawText(ctx, s.name, IX, PY + 19, '#ffffff', 1);
     drawText(ctx, `${s.archetype.toUpperCase()} LV${s.level}`, IX, PY + 28, SHEET_GOLD);
-    const hStr = f.health === 'sick' ? 'SICK' : f.tired ? 'TIRED' : 'WELL';
+    const hStr = f.downed ? 'RECOVERING' : f.health === 'sick' ? 'SICK' : f.tired ? 'TIRED' : 'WELL';
     drawText(ctx, hStr, IX + IW - textWidth(hStr), PY + 28, eCol);
 
     // --- tab bar (fixed, below the title band) — the long scroll is now split into four
@@ -2789,7 +2795,7 @@ function drawRoster() {
         const isLeader = world.leader === f;
         if (selected === f) { ctx.fillStyle = 'rgba(125,208,105,0.16)'; ctx.fillRect(PX + 2, ry - 1, PW - 4, rowH); }
         // health-tinted name; leader gets a star
-        const nameCol = f.health === 'sick' ? '#e07868' : f.tired ? '#e0a03c' : '#e8ecf5';
+        const nameCol = f.downed ? '#e0703c' : f.health === 'sick' ? '#e07868' : f.tired ? '#e0a03c' : '#e8ecf5';
         const nm = (isLeader ? '*' : '') + s.name;
         drawText(ctx, nm.slice(0, 16), colName, ry + 1, nameCol);
         drawText(ctx, String(s.level), colLv, ry + 1, '#7dd069');
