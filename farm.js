@@ -3605,15 +3605,18 @@ const GOAL_CREEDS = {
 // `townLvl` is the town-level rung each build unlocks at (see World.townLevel) — the town must
 // grow (silo donations) before its settlers can raise these, so a level-1 ghost town has only a well.
 const PROJECT_DEFS = [
+    // Ordered build queue (strict projectIndex order). The guardian chain is interleaved so the head
+    // arrives early (town L2) and its upgrades follow at L4 / L6, with harvest + carver-level gates
+    // lowered to match those tiers so they're actually reachable there.
     { type: 'board', label: 'BULLETIN BOARD', townLvl: 2, at: 8, needed: 22, perk: 'FARMERS CAN POST JOBS' },
-    { type: 'toolshed', label: 'TOOLSHED', townLvl: 3, at: 20, needed: 30, perk: 'ALL WORK +12% FASTER' },
-    { type: 'windmill', label: 'WINDMILL', townLvl: 4, at: 55, needed: 45, perk: 'CROPS GROW +15% FASTER' },
-    { type: 'statue1', label: 'GUARDIAN HEAD', townLvl: 5, at: 100, needed: 55, lvlReq: 8, wood: 14, ore: 8, size: 1,
+    { type: 'statue1', label: 'GUARDIAN HEAD', townLvl: 2, at: 18, needed: 40, lvlReq: 3, wood: 14, ore: 8, size: 1,
       lightning: 0.82, rain: 1.1, perk: 'LIGHTNING -18%, RAIN +10%' },
-    { type: 'well2', label: 'SECOND WELL', townLvl: 5, at: 160, needed: 65, perk: 'SHORTER WATER RUNS' },
-    { type: 'statue2', label: 'FOX SENTINEL', townLvl: 6, at: 260, needed: 110, lvlReq: 16, wood: 35, ore: 20, size: 2,
+    { type: 'toolshed', label: 'TOOLSHED', townLvl: 3, at: 30, needed: 30, perk: 'ALL WORK +12% FASTER' },
+    { type: 'windmill', label: 'WINDMILL', townLvl: 4, at: 60, needed: 45, perk: 'CROPS GROW +15% FASTER' },
+    { type: 'statue2', label: 'FOX SENTINEL', townLvl: 4, at: 95, needed: 80, lvlReq: 8, wood: 35, ore: 20, size: 2,
       lightning: 0.55, rain: 1.3, perk: 'LIGHTNING -45%, RAIN +30%' },
-    { type: 'statue3', label: 'STONE MOTHER', townLvl: 7, at: 480, needed: 220, lvlReq: 26, wood: 88, ore: 50, size: 3,
+    { type: 'well2', label: 'SECOND WELL', townLvl: 5, at: 150, needed: 65, perk: 'SHORTER WATER RUNS' },
+    { type: 'statue3', label: 'STONE MOTHER', townLvl: 6, at: 260, needed: 160, lvlReq: 16, wood: 88, ore: 50, size: 3,
       lightning: 0.25, rain: 1.6, perk: 'LIGHTNING -75%, RAIN +60%' },
 ];
 
