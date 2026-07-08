@@ -99,7 +99,8 @@ const TOWN_MAX_LEVEL = 10;                       // the town is "built out" here
 // and facility produce (eggs/milk/wool/truffles/fish/lilies) are worth more than raw wood/forage
 // since they take a built facility to yield. Unknown goods fall back to DONATE_XP_DEFAULT.
 const DONATE_XP = { wood: 2, ore: 3, crops: 1, egg: 3, milk: 3, fish: 3, lily: 2, truffle: 4, wool: 4,
-                    wheat: 1, flower: 1, 'wild wheat': 1, wildflowers: 1 };
+                    wheat: 1, flower: 1, 'wild wheat': 1, wildflowers: 1,
+                    'meat-s': 3, 'meat-m': 5, 'meat-l': 7, fowl: 4 };   // meat is prized
 const DONATE_XP_DEFAULT = 2;
 const DONATE_BATCH = 15;                          // how much surplus a farmer carries to the silo per trip
 const DONATE_KEEP = 8;                            // wood a farmer keeps for themselves before giving
@@ -226,6 +227,12 @@ const ENERGY_NEUTRAL = new Set(['work', 'build', 'coopbuild', 'housebuild', 'cho
 const FISH_COOLDOWN = 4;   // days a wild-water tile rests between catches (a renewable, not-spammable bounty)
 const HP_REST = 0.55;         // HP knit back per second of rest (a full night mends most wounds)
 const HP_SICK_DRAIN = 0.05;   // HP an untreated illness gnaws away per second on your feet
+// MEAT — a prized barter good AND a HP restorative. Downing a beast (later, hunted prey) yields meat by
+// SIZE; a wounded farmer eats it to heal. Heal = fraction of maxHp restored per unit eaten. (The 25%-
+// revive + rest cap that make meat ESSENTIAL land with the hunting in #69 2b, when meat is reliably had.)
+const MEAT_HEAL = { 'meat-s': 0.35, 'meat-m': 0.55, 'meat-l': 0.8, fowl: 0.45 };
+const MEAT_NAME = { 'meat-s': 'small game', 'meat-m': 'red meat', 'meat-l': 'prime cut', fowl: 'fowl' };
+const MEAT_GOODS = ['meat-s', 'meat-m', 'meat-l', 'fowl'];   // eaten smallest-first when healing
 // Tending crops and animals is free — tilling a patch, sowing, watering, harvesting, collecting
 // eggs/milk, feeding. Only heavy construction (build) drains here; the rest is 0. Chopping,
 // mining, breaking stumps, fencing and raising scarecrows drain via the LABOR table below.
@@ -3562,6 +3569,8 @@ export class World {
         this.clearHelp(f);
         if (e.def.loot === 'ore') { f.ore += 3; f.say('+3 ore', '#c8d0dc'); }
         else if (e.def.loot === 'goods') { f.sheet.goods = f.sheet.goods || {}; f.sheet.goods.flower = (f.sheet.goods.flower || 0) + 2; f.say('+loot', '#e0b050'); }
+        // a downed BEAST is dressed for meat — the kill feeds the hunter (a prized barter good + HP)
+        if (e.def.meat) { f.sheet.goods = f.sheet.goods || {}; f.sheet.goods[e.def.meat] = (f.sheet.goods[e.def.meat] || 0) + 1; f.say(`+${MEAT_NAME[e.def.meat]}`, '#e07868'); }
         const who = fighters.length > 1 ? `${f.sheet.name} + ${fighters.length - 1} more` : f.sheet.name;
         this.addLog(`${who} drove off ${e.def.name}!`, '#7dd069');
         f.sparkle = 2;
@@ -3716,8 +3725,8 @@ const MERCHANT_TYPES = [
 // Farmers fight with bare hands and a hoe, so even beasts are dangerous — only a fox is a safe shoo-off.
 // diff = how hard to land a blow on it AND how hard to dodge its own; hp = blows to drive it off.
 const ENCOUNTER_DEFS = {
-    fox:      { name: 'a fox',             kind: 'beast', diff: 10, hp: 1, dmg: 2, speed: 1.5,  menace: 0.6, color: '#d0803c' },
-    boar:     { name: 'a wild boar',       kind: 'beast', diff: 13, hp: 3, dmg: 4, speed: 1.2,  menace: 1.1, color: '#8a6a4a' },
+    fox:      { name: 'a fox',             kind: 'beast', diff: 10, hp: 1, dmg: 2, speed: 1.5,  menace: 0.6, meat: 'meat-m', color: '#d0803c' },
+    boar:     { name: 'a wild boar',       kind: 'beast', diff: 13, hp: 3, dmg: 4, speed: 1.2,  menace: 1.1, meat: 'meat-l', color: '#8a6a4a' },
     orc:      { name: 'an orc raider',     kind: 'foe',   diff: 15, hp: 4, dmg: 5, speed: 1.05, menace: 1.3, loot: 'ore',   color: '#6a8a4a' },
     assassin: { name: 'a hooded assassin', kind: 'foe',   diff: 17, hp: 4, dmg: 6, speed: 1.45, menace: 1.6, loot: 'goods', color: '#6a5a7a' },
 };
@@ -4166,6 +4175,8 @@ export class Farmer {
         // wild-caught goods drawn with a procedural sprite (resolved renderer-side): fish is its own
         // item, lilies too — the yield of the wild-water fishing bounty.
         for (const key of ['fish', 'lily']) { const n = g[key] || 0; if (n > 0) out.push({ id: key, good: key, name: key === 'fish' ? 'Fish' : 'Lily pad', count: n }); }
+        // hunted MEAT — prized barter good + HP restorative, drawn from the fantasy-icon sheet
+        for (const key of MEAT_GOODS) { const n = g[key] || 0; if (n > 0) out.push({ id: key, good: key, name: MEAT_NAME[key], count: n }); }
         return out;
     }
 
@@ -4944,6 +4955,22 @@ export class Farmer {
 
     // ---- deciding ---------------------------------------------------------------
 
+    // A wounded farmer eats meat to heal past what rest can mend — smallest cut first (don't burn a
+    // prime cut on a scratch). Returns true if they ate (heals instantly; re-decide next tick).
+    #maybeEatMeat() {
+        if (this.hp >= this.maxHp * 0.6 || this.state === 'fight' || this.state === 'flee') return false;
+        const g = this.sheet.goods; if (!g) return false;
+        for (const m of MEAT_GOODS) {
+            if ((g[m] || 0) <= 0) continue;
+            g[m]--;
+            this.hp = Math.min(this.maxHp, this.hp + Math.round(this.maxHp * MEAT_HEAL[m]));
+            this.say(`ate ${MEAT_NAME[m]}`, '#e07868'); this.sparkle = 1;
+            this.remember('event', `Ate ${MEAT_NAME[m]} to mend after a scuffle`, null, 0.7);
+            return true;
+        }
+        return false;
+    }
+
     #decide() {
         const w = this.world, s = this.sheet;
 
@@ -4955,6 +4982,8 @@ export class Farmer {
 
         // SURVIVAL first: a wilderness threat on me (or a fight I've rallied to) overrides all chores.
         if (this.#handleCombat()) return;
+        // wounded and carrying meat? eat to mend — rest alone won't get you fight-fit anymore.
+        if (this.#maybeEatMeat()) return;
 
         // a lived lesson made AUDIBLE: memory shaping visible behavior, not a hidden journal entry.
         // Standing on the very ground a foe once cut them down, they shun it aloud.
