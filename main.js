@@ -1929,7 +1929,7 @@ function drawMinimap() {
     for (const e of world.encounters) {
         if (e.done) continue;
         if (inWin(e.i, e.j)) {
-            if (blink) { const [px, py] = t2m(e.i, e.j); ctx.fillStyle = '#ff3020'; ctx.fillRect(Math.floor(px) - 1, Math.floor(py) - 1, 3, 3); }
+            if (blink) { const [px, py] = t2m(e.i, e.j); ctx.fillStyle = '#ff3020'; ctx.fillRect(Math.floor(px), Math.floor(py), 2, 2); }
         } else {
             drawMiniEdgeArrow(mx, my, mw, mh, e.i - ci, e.j - cj);
         }
@@ -1948,7 +1948,7 @@ function drawMiniEdgeArrow(mx, my, mw, mh, dx, dy) {
     const ax = Math.round(cx + dx * scale), ay = Math.round(cy + dy * scale);
     ctx.fillStyle = '#ff3020';
     ctx.beginPath();
-    const s = 3;
+    const s = 2;
     if (onVert) { const d = dx > 0 ? 1 : -1; ctx.moveTo(ax + d * s, ay); ctx.lineTo(ax - d * s, ay - s); ctx.lineTo(ax - d * s, ay + s); }
     else { const d = dy > 0 ? 1 : -1; ctx.moveTo(ax, ay + d * s); ctx.lineTo(ax - s, ay - d * s); ctx.lineTo(ax + s, ay - d * s); }
     ctx.closePath(); ctx.fill();

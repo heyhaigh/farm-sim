@@ -3158,11 +3158,16 @@ export class World {
             if (standing >= 3) { this.#endEncounter(e, `Outnumbered, ${e.def.name} turned tail and fled.`, '#7dd069'); return; }
         }
         if (e.life <= 0) { this.#endEncounter(e, `${e.def.name} lost the trail and slunk back into the wilds.`, '#9a9a8a'); return; }
+        // ducked behind a raised fence? the threat can't follow onto a fenced homestead — safe haven.
+        if (this.tileInFencedPlot(Math.floor(f.pos.i), Math.floor(f.pos.j))) {
+            this.#endEncounter(e, `${f.sheet.name} made it inside the fences — ${e.def.name} can't follow.`, '#7dd069'); return;
+        }
         const dx = f.pos.i - e.i, dy = f.pos.j - e.j, dist = Math.hypot(dx, dy) || 1;
         if (Math.abs(dx) > 0.08) e.facing = dx < 0 ? -1 : 1;   // face the way it moves
         if (dist > 1.2) {
             const sp = e.def.speed * 2.6 * dt;             // ~as fast as a bustling farmer, so chases are real
-            e.i += dx / dist * sp; e.j += dy / dist * sp;
+            const ni = e.i + dx / dist * sp, nj = e.j + dy / dist * sp;
+            if (!this.tileInFencedPlot(Math.floor(ni), Math.floor(nj))) { e.i = ni; e.j = nj; }   // fences turn it away
         } else {
             e.clashTimer -= dt;
             if (e.clashTimer <= 0) { e.clashTimer = 1.4; this.#resolveClash(e); }
@@ -3172,6 +3177,14 @@ export class World {
     // A threat has strayed into the settled heart of town (only foes get this far — beasts give up
     // first), where its defenders can see it and rush to protect their property and livestock.
     threatInVillage(e) { return Math.hypot(e.i - CENTER, e.j - CENTER) < WILD_RADIUS; }
+
+    // A raised fence keeps threats OUT — a fenced homestead is a safe haven a chased farmer can duck
+    // into. Threats treat these tiles as solid and won't set foot inside.
+    tileInFencedPlot(i, j) {
+        const k = pkey(i, j);
+        for (const p of this.plots) if (p.sited && p.built.fence && p.cells.has(k)) return true;
+        return false;
+    }
 
     #resolveClash(e) {
         const f = e.target, def = e.def;
