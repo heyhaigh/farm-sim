@@ -293,6 +293,8 @@ export class World {
         this.struckTile = null;
 
         this.helpBoard = [];
+        this.encounters = [];      // active wilderness threats (see the Dungeon Master, #tickDM)
+        this.dmCooldown = 90;      // a grace period before the first threat stalks the young town
         this.project = null;
         this.projectIndex = 0;
         this.coops = [];      // farmer-proposed neighborhood projects (shared wells) — need-driven, sited where the members live
@@ -3078,11 +3080,144 @@ export class World {
         this.#tickTreasure(dt);
         this.#maybeStartProject();
         this.#tickMerchant(dt);
+        this.#tickDM(dt);
         this.updateLeader();
         for (const f of this.farmers) f.tick(dt);
     }
 
     // ---- Wandering merchant: schedule, travel in/out, and the goods-for-ore trade ----
+    // ---- The Dungeon Master: wilderness threats ---------------------------------------------
+
+    encounterFor(f) { for (const e of this.encounters) if (e.target === f && !e.done) return e; return null; }
+
+    // A settler is exposed to the wilds when they're well clear of the plaza core AND not safe on
+    // their own fenced homestead — out foraging/mining/charting where the DM's threats roam.
+    #inWild(f) {
+        if (!f.plot || f.state === 'sleep' || f.state === 'sleepwalk' || f.health === 'sick') return false;
+        if (Math.hypot(f.pos.i - CENTER, f.pos.j - CENTER) < WILD_RADIUS) return false;
+        const p = f.plot;
+        if (p.sited && f.pos.i >= p.x - 1 && f.pos.i <= p.x + p.w + 1 && f.pos.j >= p.y - 1 && f.pos.j <= p.y + p.h + 1) return false;
+        return true;
+    }
+
+    #tickDM(dt) {
+        for (const e of this.encounters) this.#advanceEncounter(e, dt);
+        if (this.encounters.some(e => e.done)) this.encounters = this.encounters.filter(e => !e.done);
+        this.dmCooldown -= dt;
+        if (this.dmCooldown > 0 || this.encounters.length >= MAX_ENCOUNTERS) return;
+        const prey = this.farmers.filter(f => this.#inWild(f) && !this.encounterFor(f));
+        if (!prey.length) { this.dmCooldown = 10; return; }
+        this.#spawnEncounter(prey[Math.floor(this.rand() * prey.length)]);
+        this.dmCooldown = ENCOUNTER_INTERVAL + this.rand() * ENCOUNTER_JITTER;
+    }
+
+    #spawnEncounter(f) {
+        const standout = f.sheet.level >= 6 || this.leader === f;   // the assassin stalks the best hand
+        const r = this.rand();
+        const kind = (standout && r < 0.16) ? 'assassin' : r < 0.42 ? 'fox' : r < 0.78 ? 'boar' : 'orc';
+        const def = ENCOUNTER_DEFS[kind];
+        const ang = Math.atan2(f.pos.j - CENTER, f.pos.i - CENTER) + (this.rand() - 0.5) * 1.2;   // out of the wild
+        const d = 4 + this.rand() * 3;
+        const ei = f.pos.i + Math.cos(ang) * d, ej = f.pos.j + Math.sin(ang) * d;
+        const e = { kind, def, target: f, i: ei, j: ej, home: { i: ei, j: ej }, facing: 1,
+                    hp: def.hp, clashTimer: 1, life: 45, done: false, helpWanted: false, helpers: new Set() };
+        this.encounters.push(e);
+        this.reveal(Math.round(e.i), Math.round(e.j), 4);
+        this.addLog(`${f.sheet.name} ran into ${def.name} out in the wilds!`, '#e08850');
+        f.threatAlert = 2; f.say('!!', '#e05040');
+    }
+
+    #advanceEncounter(e, dt) {
+        const f = e.target;
+        if (!f || !this.farmers.includes(f) || f.health === 'sick') { this.#endEncounter(e, null); return; }
+        e.life -= dt;
+        const beast = e.def.kind === 'beast';
+        // BEASTS defend their own patch: they won't chase far from where they sprang, won't press into
+        // the settled town, and think better of facing a crowd. FOES (orc/assassin) are bolder — they
+        // follow their quarry right into the village (which rouses its defenders — see rally).
+        if (beast) {
+            if (Math.hypot(e.i - e.home.i, e.j - e.home.j) > BEAST_TERRITORY) {
+                this.#endEncounter(e, `${e.def.name} broke off and loped back to its territory.`, '#9a9a8a'); return;
+            }
+            if (Math.hypot(f.pos.i - CENTER, f.pos.j - CENTER) < WILD_RADIUS - 2) {
+                this.#endEncounter(e, `${f.sheet.name} reached safe ground and ${e.def.name} gave up the chase.`, '#7dd069'); return;
+            }
+            const standing = 1 + [...e.helpers].filter(h => this.farmers.includes(h) && h.combatStance === 'fight').length;
+            if (standing >= 3) { this.#endEncounter(e, `Outnumbered, ${e.def.name} turned tail and fled.`, '#7dd069'); return; }
+        }
+        if (e.life <= 0) { this.#endEncounter(e, `${e.def.name} lost the trail and slunk back into the wilds.`, '#9a9a8a'); return; }
+        const dx = f.pos.i - e.i, dy = f.pos.j - e.j, dist = Math.hypot(dx, dy) || 1;
+        if (Math.abs(dx) > 0.08) e.facing = dx < 0 ? -1 : 1;   // face the way it moves
+        if (dist > 1.2) {
+            const sp = e.def.speed * 2.6 * dt;             // ~as fast as a bustling farmer, so chases are real
+            e.i += dx / dist * sp; e.j += dy / dist * sp;
+        } else {
+            e.clashTimer -= dt;
+            if (e.clashTimer <= 0) { e.clashTimer = 1.4; this.#resolveClash(e); }
+        }
+    }
+
+    // A threat has strayed into the settled heart of town (only foes get this far — beasts give up
+    // first), where its defenders can see it and rush to protect their property and livestock.
+    threatInVillage(e) { return Math.hypot(e.i - CENTER, e.j - CENTER) < WILD_RADIUS; }
+
+    #resolveClash(e) {
+        const f = e.target, def = e.def;
+        if (f.combatStance !== 'fight') {                  // caught while fleeing: a DEX save to slip the blow
+            const dodge = d20(this.rand, mod(f.sheet.stats.dex));
+            if (dodge.total >= def.diff || dodge.crit) f.say('dodged!', '#c8d060'); else this.#threatHits(e, f);
+            return;
+        }
+        // standing to fight: the target + any adjacent helpers swing at the threat
+        const fighters = [f, ...[...e.helpers].filter(h => this.farmers.includes(h) && Math.hypot(h.pos.i - e.i, h.pos.j - e.j) < 2.2)];
+        let landed = false;
+        for (const ff of fighters) {
+            const atk = d20(this.rand, ff.combatMod());
+            if (atk.total >= def.diff || atk.crit) { e.hp -= atk.crit ? 2 : 1; ff.gainXP(2); landed = true; if (e.hp <= 0) break; }
+        }
+        if (e.hp <= 0) { this.#defeatThreat(e, fighters); return; }
+        if (landed) f.say('hah!', '#e0d060');
+        const victim = fighters[Math.floor(this.rand() * fighters.length)];   // the threat swings back
+        const dodge = d20(this.rand, mod(victim.sheet.stats.dex));
+        if (dodge.total < def.diff && !dodge.crit) this.#threatHits(e, victim);
+    }
+
+    #threatHits(e, f) {
+        f.energy = Math.max(0, f.energy - 0.17);
+        f.hurtFlash = 1; f.say('argh!', '#e05040');
+        if (e.def.loot === 'ore' && f.ore > 0 && this.rand() < 0.35) f.ore = Math.max(0, f.ore - 2);       // raider grabs loot
+        else if (e.def.loot === 'goods' && this.rand() < 0.35) this.#stealGood(f);
+        if (f.energy <= 0.08) {                            // beaten down: break and flee home hurt
+            f.combatStance = 'flee';
+            this.#endEncounter(e, `${f.sheet.name} was overpowered by ${e.def.name} and fled home hurt!`, '#e05040');
+        }
+    }
+
+    #stealGood(f) {
+        const g = f.sheet.goods || {}, have = Object.keys(g).filter(k => g[k] > 0);
+        if (have.length) { const k = have[Math.floor(this.rand() * have.length)]; g[k] = Math.max(0, g[k] - 1); }
+    }
+
+    #defeatThreat(e, fighters) {
+        e.done = true;
+        const f = e.target;
+        for (const ff of fighters) { ff.gainXP(5); ff.combatStance = null; ff.threatAlert = 0; if (ff.state === 'fight' || ff.state === 'flee') ff.state = 'decide'; }
+        this.clearHelp(f);
+        if (e.def.loot === 'ore') { f.ore += 3; f.say('+3 ore', '#c8d0dc'); }
+        else if (e.def.loot === 'goods') { f.sheet.goods = f.sheet.goods || {}; f.sheet.goods.flower = (f.sheet.goods.flower || 0) + 2; f.say('+loot', '#e0b050'); }
+        const who = fighters.length > 1 ? `${f.sheet.name} + ${fighters.length - 1} more` : f.sheet.name;
+        this.addLog(`${who} drove off ${e.def.name}!`, '#7dd069');
+        f.sparkle = 2;
+    }
+
+    #endEncounter(e, msg, color) {
+        e.done = true;
+        for (const h of e.helpers) { if (h.combatStance) h.combatStance = null; if (h.state === 'fight' || h.state === 'flee') h.state = 'decide'; }
+        const f = e.target;
+        if (f) { f.combatStance = null; f.threatAlert = 0; if (f.state === 'fight' || f.state === 'flee') f.state = 'decide'; this.clearHelp(f); }
+        if (msg) this.addLog(msg, color || '#9a9a8a');
+    }
+
     #tickMerchant(dt) {
         if (!this.merchant) {
             // a trader only bothers with a town that's grown enough to be worth the trip
@@ -3215,6 +3350,21 @@ const MERCHANT_TYPES = [
     { name: 'a roving Merchant', sprite: 2, rate: 3, stock: 24 },  // drives a harder bargain
 ];
 
+// The Dungeon Master: the wilds beyond the settled valley aren't empty. When a settler ventures far
+// out — foraging, chopping, mining, charting the fog — the DM may loose a threat on them. Beasts
+// (fox/boar) hunt; foes (orc/assassin) raid, and the assassin stalks the town's standout hand. A
+// settler answers by their nature: the bold + strong stand and FIGHT (d20 + STR/CON vs difficulty),
+// the timid FLEE for the plaza, the outmatched CALL FOR HELP — and brave neighbours come running.
+const ENCOUNTER_DEFS = {
+    fox:      { name: 'a fox',             kind: 'beast', diff: 9,  hp: 1, speed: 1.5,  menace: 0.5, color: '#d0803c' },
+    boar:     { name: 'a wild boar',       kind: 'beast', diff: 12, hp: 2, speed: 1.2,  menace: 0.9, color: '#8a6a4a' },
+    orc:      { name: 'an orc raider',     kind: 'foe',   diff: 14, hp: 3, speed: 1.05, menace: 1.1, loot: 'ore',   color: '#6a8a4a' },
+    assassin: { name: 'a hooded assassin', kind: 'foe',   diff: 16, hp: 3, speed: 1.45, menace: 1.5, loot: 'goods', color: '#6a5a7a' },
+};
+const ENCOUNTER_INTERVAL = 130, ENCOUNTER_JITTER = 130;   // game-seconds between spawn attempts (~1-2/day)
+const MAX_ENCOUNTERS = 3, WILD_RADIUS = 30;             // the wilds begin ~this far from the plaza
+const BEAST_TERRITORY = 17;   // a beast won't chase further than this from where it sprang (foes press on)
+
 // episodic-journal tuning: cap per bot, and nightly decay per memory kind — hard
 // lessons stick for a season+, relationship/job episodes for weeks, small talk for days
 const JOURNAL_MAX = 160;
@@ -3302,6 +3452,10 @@ export class Farmer {
         this.donateCooldown = 1 + Math.floor((sheet.seed >>> 5) % 3);  // days between silo donations
         this.donateTarget = null; // pending surplus a farmer is hauling to the town silo
         this.claim = null;        // the ground a founder is travelling out to stake (until their plot is sited)
+        this.combatStance = null; // 'fight' | 'flee' while facing a wilderness threat (see #handleCombat)
+        this.threatAlert = 0;     // render pulse when a threat appears / while in danger
+        this.hurtFlash = 0;       // render pulse when struck
+        this.fightTimer = 0; this.fleeTimer = 0;
         this.scarecrowTarget = null;
 
         // episodic memory: a day-stamped journal of what happened to THIS bot — who helped,
@@ -3920,6 +4074,74 @@ export class Farmer {
         }
     }
 
+    // Combat capability: STR + CON modifiers, plus a bump for hard-won levels.
+    combatMod() { return mod(this.sheet.stats.str) + mod(this.sheet.stats.con) + Math.floor((this.sheet.level || 1) / 4); }
+
+    // Survival priority: if a threat is on ME, face it; if I've rallied to someone else's fight, press
+    // on to it. Returns true if combat claimed this decide tick.
+    #handleCombat() {
+        const w = this.world;
+        const mine = w.encounterFor(this);
+        if (mine) { this.#faceThreat(mine); return true; }
+        const helping = w.encounters.find(e => !e.done && e.helpers.has(this));
+        if (helping) {
+            this.think(`HELPING vs ${helping.def.name.toUpperCase()}`);
+            const d = Math.hypot(this.pos.i - helping.i, this.pos.j - helping.j);
+            if (d > 1.3) { if (!this.#goTo(helping.i, helping.j, 'fight')) { this.fightTimer = 0.6; this.state = 'fight'; } return true; }
+            this.fightTimer = 0.8; this.state = 'fight'; return true;
+        }
+        if (this.combatStance) this.combatStance = null;   // stance left set but no fight involves me
+        return false;
+    }
+
+    // Meet the threat by nature: the bold + strong + competitive STAND (and are favoured by the odds);
+    // the timid or outmatched FLEE for the plaza and cry for help. Beasts are less terrifying than foes.
+    #faceThreat(e) {
+        const w = this.world, def = e.def;
+        if (this.combatStance == null) {
+            const odds = this.combatMod() - (def.diff - 11);
+            const nerve = 0.28 + this.p.competitiveness * 0.5 + this.p.diligence * 0.2
+                        + (this.sheet.stats.str >= 13 ? 0.15 : 0) + odds * 0.09 - (def.menace - 0.8) * 0.4;
+            this.combatStance = nerve > 0.5 ? 'fight' : 'flee';
+            if (this.combatStance === 'fight') this.say('COME ON THEN!', '#e0c040');
+            else { this.say(`HELP! ${def.name.toUpperCase()}!`, '#e05040'); e.helpWanted = true; }
+        }
+        // badly hurt mid-fight? break off and run rather than fight to collapse (unless help's at hand)
+        if (this.combatStance === 'fight' && this.energy < 0.28 && e.helpers.size === 0) {
+            this.combatStance = 'flee'; this.say('TOO STRONG — FALL BACK!', '#e05040'); e.helpWanted = true;
+        }
+        if (this.combatStance === 'fight') {
+            this.think(`FIGHTING ${def.name.toUpperCase()}`);
+            if (Math.hypot(this.pos.i - e.i, this.pos.j - e.j) > 1.3) {
+                if (!this.#goTo(e.i, e.j, 'fight')) { this.fightTimer = 0.6; this.state = 'fight'; }
+                return;
+            }
+            this.fightTimer = 0.8; this.state = 'fight'; return;   // hold + trade blows (encounter tick resolves)
+        }
+        this.think(`RUN — ${def.name.toUpperCase()}!`); this.fleeTimer = 0.5; this.state = 'flee';   // bolt for the plaza
+    }
+
+    // Brave neighbours answer a threat: either a cry for help within earshot, OR a foe that's strayed
+    // into the village within sight — then they defend their town, property and livestock on instinct.
+    #maybeRallyToThreat() {
+        const w = this.world;
+        for (const e of w.encounters) {
+            if (e.done || e.target === this || e.helpers.has(this)) continue;
+            const d = Math.hypot(this.pos.i - e.i, this.pos.j - e.j);
+            const inVillage = w.threatInVillage(e);
+            if (!((e.helpWanted && d < 26) || (inVillage && d < 15))) continue;   // heard the call / saw it in town
+            const grit = inVillage ? 0.35 : 0.5;   // more willing to stand for home turf
+            const brave = this.p.competitiveness * 0.4 + this.effCollab() * 0.5
+                        + (this.sheet.stats.str >= 12 ? 0.15 : 0) - (e.def.menace - 0.8) * 0.3;
+            if (brave < grit) continue;
+            e.helpers.add(this); this.combatStance = 'fight';
+            this.say(inVillage ? 'NOT IN MY TOWN!' : "HELP'S COMING!", '#e0c040');
+            if (!this.#goTo(e.i, e.j, 'fight')) { this.fightTimer = 0.6; this.state = 'fight'; }
+            return true;
+        }
+        return false;
+    }
+
     // Travel from the plaza out to the ground this founder was drawn to, and STAKE it on arrival.
     // Until then their plot is only a reservation — nothing on the map — so plots appear one by one
     // as founders reach and claim their land, rather than all pre-outlined from the first frame.
@@ -4268,6 +4490,9 @@ export class Farmer {
             if (open) { this.think('HOW DID I END UP HERE?!'); this.#goTo(open.i + 0.5, open.j + 0.5, 'wander'); return; }
         }
 
+        // SURVIVAL first: a wilderness threat on me (or a fight I've rallied to) overrides all chores.
+        if (this.#handleCombat()) return;
+
         // a founder who hasn't STAKED their claim yet: travel out from the plaza, scout the ground
         // they were drawn to, and stake it on arrival (then normal homesteading begins).
         if (!this.plot.sited) { this.#seekHomestead(); return; }
@@ -4293,6 +4518,9 @@ export class Farmer {
             this.awakeAtNight = true;
             if (w.nightProgress() > 0.4) this.workedLate = true;
         }
+
+        // a neighbour's cry for help against a wilderness threat pulls the brave away from their chores
+        if (this.#maybeRallyToThreat()) return;
 
         if (w.weather === 'storm') {
             const ripe = this.#findCrop(c => c.stage === 3 && !c.withered);
@@ -5273,6 +5501,8 @@ export class Farmer {
         if (this.bubble) { this.bubble.t -= dt; if (this.bubble.t <= 0) this.bubble = null; }
         if (this.carryCrop) { this.carryCrop.t -= dt; if (this.carryCrop.t <= 0) this.carryCrop = null; }
         this.sparkle = Math.max(0, this.sparkle - dt);
+        this.threatAlert = Math.max(0, this.threatAlert - dt);
+        this.hurtFlash = Math.max(0, this.hurtFlash - dt * 2.5);
 
         if (this.state === 'sleep') this.energy = Math.min(1, this.energy + SLEEP_RESTORE * dt);
         else if (this.state === 'rest') this.energy = Math.min(1, this.energy + REST_RESTORE * dt);
@@ -5317,6 +5547,7 @@ export class Farmer {
                     else if (then === 'fencepost') { this.fenceTimer = this.#laborTime('fencepost'); this.state = 'fencepost'; }
                     else if (then === 'housebuild') { this.buildTimer = this.#laborTime('housebuild'); this.state = 'housebuild'; }
                     else if (then === 'seek') { this.world.claimHomestead(this); this.state = 'decide'; }
+                    else if (then === 'fight') { this.fightTimer = 0.8; this.state = 'fight'; }
                     else if (then === 'scarecrow') { this.chopTimer = this.#laborTime('scarecrow'); this.state = 'scarecrow'; }
                     else if (then === 'fetchwater' || then === 'fetchwater-help') {
                         // hard guard: only a finished, listed, READY well yields water — never a build site
@@ -5385,6 +5616,21 @@ export class Farmer {
             case 'fencepost': this.fenceTimer -= dt; if (this.fenceTimer <= 0) this.#completeFencePost(); break;
             case 'housebuild': this.buildTimer -= dt; if (this.buildTimer <= 0) this.#completeHouseStep(); break;
             case 'scarecrow': this.chopTimer -= dt; if (this.chopTimer <= 0) this.#completeScarecrow(); break;
+            case 'fight':   // stand and trade blows — the encounter tick lands the clashes; re-decide often
+                this.fightTimer -= dt;
+                if (this.fightTimer <= 0) this.state = 'decide';
+                break;
+            case 'flee': {   // bolt for the plaza (adrenaline), sidestepping obstacles, revealing as you run
+                const dx = CENTER - this.pos.i, dy = CENTER - this.pos.j, d = Math.hypot(dx, dy) || 1;
+                const sp = this.speed * 1.2 * dt;
+                const ni = this.pos.i + dx / d * sp, nj = this.pos.j + dy / d * sp;
+                if (!this.world.pathBlocked(Math.floor(ni), Math.floor(nj))) { this.pos.i = ni; this.pos.j = nj; }
+                else { this.pos.i += (dy / d) * sp; this.pos.j += (-dx / d) * sp; }   // veer around a blocker
+                this.world.reveal(Math.round(this.pos.i), Math.round(this.pos.j), 3);
+                this.fleeTimer -= dt;
+                if (this.fleeTimer <= 0) this.state = 'decide';
+                break;
+            }
 
             case 'build': {
                 const pr = this.world.project;

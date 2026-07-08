@@ -222,6 +222,17 @@ const ROCK_ART_BASE = './assets/craftpix-net-974061-free-rocks-and-stones-top-do
 // Only the Rock4 variants, plain-shadow versions (no grass_shadow / no_shadow).
 const ROCK_NAMES = ['Rock4_1', 'Rock4_2', 'Rock4_3', 'Rock4_4', 'Rock4_5'];
 
+// The Dungeon Master's wilderness threats. Each sheet is a directional frame GRID; we slice one
+// side-profile frame (row 2, like the farm-animal pack). Frame size divides the sheet evenly.
+const THREAT_ART = {
+    fox:      { base: './assets/craftpix-net-789196-free-top-down-hunt-animals-pixel-sprite-pack/Tiled/', file: 'Fox_Idle_with_shadow',  fw: 32 },
+    boar:     { base: './assets/craftpix-net-789196-free-top-down-hunt-animals-pixel-sprite-pack/Tiled/', file: 'Boar_Idle_with_shadow', fw: 32 },
+    orc:      { base: './assets/craftpix-net-363992-free-top-down-orc-game-character-pixel-art/Tiled_files/', file: 'orc1_idle_with_shadow', fw: 64 },
+    assassin: { base: './assets/craftpix-net-180537-free-swordsman-1-3-level-pixel-top-down-sprite-character/PNG/Swordsman_lvl1/Without_shadow/', file: 'Swordsman_lvl1_Idle_without_shadow', fw: 64 },
+};
+const threatImg = {};
+for (const [k, c] of Object.entries(THREAT_ART)) { const im = new Image(); im.src = c.base + c.file + '.png'; threatImg[k] = im; }
+
 // Shared async image-set loader: fills `store` and flips `readyFlag` (+ redraws
 // terrain) once every image in the sets has loaded. Falls back to procedural
 // sprites until then.
@@ -1487,7 +1498,36 @@ function collectDrawables() {
         list.push({ y: sy + TILE_H * 0.5 + 0.12, draw: () => drawMerchant(m, sx, sy) });
     }
 
+    // wilderness threats (the Dungeon Master's beasts + foes), y-sorted into the scene
+    for (const e of world.encounters) {
+        if (e.done) continue;
+        const sx = cam.x + isoX(e.i, e.j), sy = cam.y + isoY(e.i, e.j);
+        list.push({ y: sy + TILE_H * 0.5 + 0.11, draw: () => drawThreat(e, sx, sy) });
+    }
+
     return list;
+}
+// A wilderness threat: one sliced side-profile frame of its real sprite (fallback: a menace blob).
+function drawThreat(e, sx, sy) {
+    const c = THREAT_ART[e.kind], img = threatImg[e.kind];
+    ctx.imageSmoothingEnabled = false;
+    if (img && img.complete && img.naturalWidth > 0) {
+        const fw = c.fw, rows = Math.max(1, Math.round(img.naturalHeight / fw));
+        const row = Math.min(2, rows - 1);
+        const disp = Math.round(fw * ASSET_SCALE * 1.15);
+        const dx = Math.round(sx - disp / 2), dy = Math.round(sy - disp * 0.82);
+        if (e.facing < 0) {   // the side-profile source frame faces RIGHT; mirror it to face left
+            ctx.save(); ctx.translate(dx + disp, dy); ctx.scale(-1, 1);
+            ctx.drawImage(img, 0, row * fw, fw, fw, 0, 0, disp, disp);
+            ctx.restore();
+        } else {
+            ctx.drawImage(img, 0, row * fw, fw, fw, dx, dy, disp, disp);
+        }
+    } else {
+        ctx.fillStyle = e.def.color;
+        ctx.beginPath(); ctx.ellipse(sx, sy - 6, 7, 9, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#1a1414'; ctx.fillRect(Math.round(sx - 3), Math.round(sy - 9), 2, 2); ctx.fillRect(Math.round(sx + 1), Math.round(sy - 9), 2, 2);
+    }
 }
 
 // the merchant's stall: the crate stack with a little striped awning + a coin banner above
@@ -1612,10 +1652,10 @@ function isIndoors(f) {
 function drawFarmer(f, sx, sy) {
     const frames = farmerSprites(f);
     let frame = frames.idle;
-    if (f.state === 'walk') {
-        frame = Math.floor(f.animTime * 7) % 2 ? frames.walk1 : frames.walk2;
-    } else if (f.state === 'work' || f.state === 'build' || f.state === 'coopbuild' || f.state === 'housebuild' || f.state === 'chop' || f.state === 'break' || f.state === 'forage' || f.state === 'mine' || f.state === 'fencepost' || f.state === 'scarecrow') {
-        frame = Math.floor(f.animTime * 5) % 2 ? frames.work : frames.idle;
+    if (f.state === 'walk' || f.state === 'flee') {
+        frame = Math.floor(f.animTime * (f.state === 'flee' ? 11 : 7)) % 2 ? frames.walk1 : frames.walk2;
+    } else if (f.state === 'work' || f.state === 'build' || f.state === 'coopbuild' || f.state === 'housebuild' || f.state === 'chop' || f.state === 'break' || f.state === 'forage' || f.state === 'mine' || f.state === 'fencepost' || f.state === 'scarecrow' || f.state === 'fight') {
+        frame = Math.floor(f.animTime * (f.state === 'fight' ? 8 : 5)) % 2 ? frames.work : frames.idle;
     } else if (f.state === 'sleep') {
         frame = frames.sleep;
     }
@@ -1672,6 +1712,16 @@ function drawFarmer(f, sx, sy) {
     if (f.health === 'sick' && f.state !== 'sleep') {
         ctx.fillStyle = 'rgba(120,200,120,0.28)';
         ctx.fillRect(px + 4, py + 3, fw - 8, 8);
+    }
+
+    // struck by a threat: a red flash. In danger: a blinking red "!" over their head.
+    if (f.hurtFlash > 0) {
+        ctx.fillStyle = `rgba(224,64,48,${Math.min(0.55, f.hurtFlash * 0.5)})`;
+        ctx.fillRect(px + 3, py + 2, fw - 6, fh - 4);
+    }
+    if (f.threatAlert > 0 && Math.floor(f.threatAlert * 6) % 2) {
+        ctx.fillStyle = '#e83828'; ctx.font = 'bold 11px monospace'; ctx.textAlign = 'center';
+        ctx.fillText('!', sx, py - 3); ctx.textAlign = 'left';
     }
 
     // carried lantern when working at night
