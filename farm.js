@@ -9,7 +9,8 @@
 // livestock pen (milk) — each with its own "producers" the farmer tends and
 // collects from. Which facility comes first reflects the farmer's archetype.
 
-import { mulberry32, mod, growFarmer, personalityLabel } from './dna.js';
+import { mulberry32, mod, growFarmer, personalityLabel, ALL_CROPS } from './dna.js';
+export { ALL_CROPS };   // re-exported so tools/tests can pull the crop list from the sim entrypoint
 
 // The FOUNDING VALLEY: the hand-tuned region generated with the original global algorithm
 // (plaza, homestead ring, clustered groves). Beyond it the world is INFINITE — tiles are
@@ -3019,15 +3020,13 @@ export class World {
         const season = this.seasonDef;
         const stormy = this.weather === 'storm';
         const night = this.isNight();
-        const winter = this.isWinter();
+        // NOTE: the winter pond "freeze" is render-only — the terrain layer draws ice and the
+        // fish/lily-pad sprites are hidden (main.js), while producers keep ticking under the ice so
+        // the pond simply reveals its accumulated catch come spring (no dead winter economy).
         for (const plot of this.plots) {
             for (const fac of plot.facilities) {
                 for (const p of fac.producers) {
                     const cfg = PROD[p.kind];
-                    // the pond freezes in winter: fish + lily pads go dormant under the ice —
-                    // no yield, no movement, and anything mid-ready is locked away until spring.
-                    const frozen = winter && (cfg.aquatic || p.kind === 'pad' || p.kind === 'fish');
-                    if (frozen) { p.ready = false; p.prod = Math.min(p.prod, 0.9); p.vx = 0; p.vy = 0; continue; }
                     p.anim += dt;
                     p.fed = Math.max(0, p.fed - cfg.feedDecay * dt);
                     if (!p.ready) {
