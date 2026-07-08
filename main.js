@@ -391,6 +391,16 @@ function drawSkull(cx, y) {
     ctx.drawImage(skullSheet, s.x, s.y, s.w, s.h, Math.round(cx - dw / 2), Math.round(y), dw, dh);
     ctx.imageSmoothingEnabled = sm;
 }
+// gold coin (basic RPG-UI Inventory.png) — the "new posts" badge on the Board/Chronicle buttons
+const uiSheet = new Image(); let uiSheetReady = false; uiSheet.onload = () => { uiSheetReady = true; }; uiSheet.onerror = () => {};
+uiSheet.src = './assets/craftpix-net-255216-free-basic-pixel-art-ui-for-rpg/PNG/Inventory.png';
+const COIN_SRC = { x: 243, y: 115, w: 10, h: 10 };
+function drawCoin(x, y, size = 8) {
+    if (!uiSheetReady || !uiSheet.naturalWidth) return;
+    const c = COIN_SRC, sm = ctx.imageSmoothingEnabled; ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(uiSheet, c.x, c.y, c.w, c.h, Math.round(x), Math.round(y), size, size);
+    ctx.imageSmoothingEnabled = sm;
+}
 const MERCHANT_SHEETS = ['Citizen1_Walk', 'Citizen2_Walk', 'Fighter2_Walk'].map(f => {
     const img = new Image(); img.onerror = () => {}; img.src = GUILD_BASE + f + '.png'; return img;
 });
@@ -2267,13 +2277,13 @@ function drawUI() {
 
     barBtn(ROSTER_BTN, 'ROSTER', rosterOpen, '#7dd069', '#10240c');
     barBtn(CHRON_BTN, 'CHRONICLE', chronOpen, '#c8a0e0', '#1a1024');
-    if (world.chronicle.length && !chronOpen) { ctx.fillStyle = '#c8a0e0'; ctx.fillRect(CHRON_BTN.x + CHRON_BTN.w - 4, CHRON_BTN.y - 1, 3, 3); }
+    if (world.chronicle.length && !chronOpen) drawCoin(CHRON_BTN.x + CHRON_BTN.w - 4, CHRON_BTN.y - 3, 6);
 
     BOARD_BTN.hidden = !world.board;   // only exists once the town has built the board
     if (!BOARD_BTN.hidden) {
         const postCount = world.helpBoard.filter(r => r.genuine).length + (world.project ? 1 : 0);
         barBtn(BOARD_BTN, 'BOARD', boardOpen, '#c9a45a', '#221a0e');
-        if (postCount > 0 && !boardOpen) { ctx.fillStyle = '#e0a03c'; ctx.fillRect(BOARD_BTN.x + BOARD_BTN.w - 4, BOARD_BTN.y - 1, 4, 4); }
+        if (postCount > 0 && !boardOpen) drawCoin(BOARD_BTN.x + BOARD_BTN.w - 4, BOARD_BTN.y - 3, 6);
     }
 
 
