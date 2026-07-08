@@ -1872,6 +1872,25 @@ function isIndoors(f) {
     return f.state === 'sleep' || f.state === 'rest' || f.state === 'sick' || f.state === 'shelter';
 }
 
+// A compact intent badge above-right of a farmer's head — reads their current DRIVER at a glance
+// (hunting / bartering / helping a neighbour) without opening the sheet. Icon-first + colour-coded on a
+// dark pill so it's language-free and legible over any terrain.
+function drawIntentIcon(kind, cx, y) {
+    ctx.imageSmoothingEnabled = false;
+    ctx.fillStyle = 'rgba(14,12,10,0.72)';                                   // rounded dark backing
+    ctx.fillRect(cx - 4, y - 3, 9, 7); ctx.fillRect(cx - 3, y - 4, 7, 9);
+    if (kind === 'hunt') {                                                   // tan paw print
+        ctx.fillStyle = '#e2c69e';
+        ctx.fillRect(cx - 1, y + 1, 3, 2);                                                              // pad
+        ctx.fillRect(cx - 2, y - 2, 1, 1); ctx.fillRect(cx, y - 2, 1, 1); ctx.fillRect(cx + 2, y - 2, 1, 1);   // toes
+    } else if (kind === 'barter') {                                         // gold coin
+        ctx.fillStyle = '#e6b83c'; ctx.fillRect(cx - 2, y - 2, 4, 4); ctx.fillRect(cx - 3, y - 1, 6, 2); ctx.fillRect(cx - 1, y - 3, 2, 6);
+        ctx.fillStyle = '#f8dc80'; ctx.fillRect(cx - 1, y - 1, 1, 1);                                    // highlight
+    } else if (kind === 'help') {                                          // green plus
+        ctx.fillStyle = '#6ad86a'; ctx.fillRect(cx - 1, y - 3, 2, 7); ctx.fillRect(cx - 3, y - 1, 7, 2);
+    }
+}
+
 function drawFarmer(f, sx, sy) {
     const frames = farmerSprites(f);
     let frame = frames.idle;
@@ -1960,6 +1979,12 @@ function drawFarmer(f, sx, sy) {
         ctx.fillStyle = hpFrac < 0.35 ? '#e83828' : '#d08a3c';                       // red when critical, amber otherwise
         ctx.fillRect(bx, byy, Math.max(1, Math.round(bw * hpFrac)), bh);
     }
+    // INTENT badge: what's driving them right now, readable without the sheet (hunt / barter / help).
+    let intent = null;
+    if (f.state === 'hunt' || f.huntTarget) intent = 'hunt';
+    else if (f.barterDeal || (f.path && f.path.then === 'barter')) intent = 'barter';
+    else if (f.helpTask) intent = 'help';
+    if (intent && f.state !== 'sleep') drawIntentIcon(intent, sx + 8, py + 1);
 
     // carried lantern when working at night
     if (awakeAtNight && (f.state === 'work' || f.state === 'walk' || f.state === 'build')) {
