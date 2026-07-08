@@ -1231,7 +1231,7 @@ export class World {
             // page load — see main.js). Headless tests pass a fixed seed, so they stay deterministic.
             const desiredR = 14 + v * 50 + (this.rand() - 0.5) * 12;        // ~plaza .. ~far fogged corner
             const baseAng = this.rand() * Math.PI * 2;
-            const cands = this.#scoutCandidates(f.plot, desiredR, baseAng, B);
+            const cands = this.#scoutCandidates(f, f.plot, desiredR, baseAng, B);
             if (!cands.length) continue;
             const best = cands[0];
             // a decent-but-worse spot a real walk away that they'll CONSIDER then pass on — so the
@@ -1243,7 +1243,7 @@ export class World {
 
     // Collect a handful of VALID candidate homesteads near the desired radius/bearing, each scored for
     // ground quality (timber good, water/boulders bad), best-first — the settler's options to weigh.
-    #scoutCandidates(plot, desiredR, baseAng, B) {
+    #scoutCandidates(f, plot, desiredR, baseAng, B) {
         const found = [];
         for (let dr = 0; dr <= 44 && found.length < 10; dr += 3) {
             const radii = dr === 0 ? [desiredR] : [desiredR + dr, Math.max(11, desiredR - dr)];
@@ -1252,7 +1252,9 @@ export class World {
                     const ang = baseAng + (da % 2 ? 1 : -1) * Math.ceil(da / 2) * 0.5;
                     const i = Math.round(CENTER + Math.cos(ang) * rr) - (B >> 1), j = Math.round(CENTER + Math.sin(ang) * rr) - (B >> 1);
                     if (this.#candidateBlockers(plot, i, j, B, B) === null) continue;
-                    found.push({ i, j, score: this.#homesteadScore(i, j, B) });
+                    // score = ground quality + who's nearby: a spot's worth is the land AND the neighbours
+                    const social = this.#socialEval(f, i + (B >> 1), j + (B >> 1)).bias;
+                    found.push({ i, j, score: this.#homesteadScore(i, j, B) + social });
                     if (found.length >= 10) break;
                 }
             }
@@ -1284,6 +1286,42 @@ export class World {
             else if (t === T.ROCK && obstacleTier(i, j) === 2) bigRock++;   // a founder shuns big boulders
         }
         return Math.min(3, trees) - water * 2 - bigRock * 2;
+    }
+
+    // A settler's INSTINCTIVE read of a neighbour before any shared history: honest, collaborative
+    // folk invite company; a visibly shifty one (a low-honesty manipulator like Chaos) puts people
+    // off. This is what lets founders — who have no bonds yet — still cluster toward the trustworthy
+    // and shun the wary, so the very first settlement reads as social judgment, not a blind radius.
+    #instinct(f, o) {
+        return (o.p.honesty - 0.5) * 0.9 + (o.p.collaboration - 0.5) * 0.5;
+    }
+    // The net social pull a spot at (cx,cy) exerts on farmer f: summed over every nearby neighbour
+    // who has COMMITTED to ground (reserved or sited). A friend / trusted soul draws them IN; a rival
+    // or distrusted neighbour pushes them AWAY; a lone wolf is crowd-averse even toward the likable;
+    // the gregarious welcome any neighbour. Returns { bias } for scoring and { driver } — the single
+    // neighbour who most shapes the feeling — so #claimReason can VOICE the actual social choice.
+    #socialEval(f, cx, cy) {
+        const collab = f.p.collaboration, loner = collab < 0.42, sociable = collab > 0.55;
+        let bias = 0, driver = null, driverMag = 0;
+        for (const o of this.farmers) {
+            if (o === f || !o.plot || o.plot.x == null) continue;
+            if (!(o.plot.sited || o.claim)) continue;                 // only neighbours with fixed ground count
+            const d = Math.hypot((o.plot.x + 6) - cx, (o.plot.y + 6) - cy);
+            if (d > 42) continue;                                     // out of neighbourhood range
+            const prox = 1 - d / 42;                                  // closer neighbours weigh more
+            const bond = this.bonds.get(this.bondKey(f, o)) || 0;
+            const rapport = Math.max(-1, Math.min(1, f.opinionOf(o) + bond * 0.12 + this.#instinct(f, o)));
+            let w;
+            if (rapport <= -0.28) w = -6 * prox;                      // a rival / distrusted: keep clear
+            else if (rapport >= 0.28) w = 5 * prox;                   // a friend / trusted: settle near
+            else if (loner) w = -4 * prox;                            // solitary + no strong tie: crowd-averse
+            else if (sociable) w = 3 * prox;                          // gregarious: a neighbour is welcome
+            else w = 0.4 * prox;                                      // neutral: a mild draw to company
+            if (loner && w > 0) w *= 0.25;                            // a loner won't crowd even the likable
+            bias += w;
+            if (Math.abs(w) > driverMag) { driverMag = Math.abs(w); driver = { o, rapport, loner, sociable, near: w > 0, d }; }
+        }
+        return { bias: Math.max(-4, Math.min(4, bias)), driver };     // clamp so ground quality still matters
     }
 
     // RESERVE (but don't yet stake) the ground a founder is drawn to: fix the plot's rect so no one
@@ -1342,22 +1380,26 @@ export class World {
             if (t === T.TREE) trees++; else if (t === T.WATER) water++;
             else if (t === T.ROCK) ore++; else if (t === T.WHEAT || t === T.FLOWER) forage++;
         }
-        let near = 1e9, nearName = null;
-        for (const o of this.farmers) {
-            if (o === f || !o.plot.sited) continue;
-            const d = Math.hypot((o.plot.x + 6) - cx, (o.plot.y + 6) - cy);
-            if (d < near) { near = d; nearName = o.sheet.name.split(' ')[0]; }
-        }
+        // the SOCIAL driver first: the neighbour who most shaped this choice, and whether they
+        // pulled the settler in (friend/trusted) or pushed them off (rival/distrusted). This is the
+        // settlement made legible as a relationship decision, not just a resource one.
+        const { driver } = this.#socialEval(f, cx, cy);
         const collab = f.p.collaboration, loner = collab < 0.42, sociable = collab > 0.55;
-        // social reasons win when they're the striking feature; else lead with the best resource
-        if (loner && (near > 28 || nearName == null)) return 'far from everyone — just how I like it';
-        if (sociable && near < 24 && nearName) return `good — ${nearName}'s right over there`;
-        if (sociable && near > 34) return "a bit lonely out here, but the land's good";
+        if (driver) {
+            const nm = driver.o.sheet.name.split(' ')[0];
+            if (driver.rapport <= -0.28) return `keeping my distance from ${nm}`;
+            if (driver.rapport >= 0.28 && driver.near) return `settling near ${nm} — we get on well`;
+            if (loner && !driver.near) return 'far from everyone — just how I like it';
+            if (sociable && driver.near && driver.d < 26) return `good — ${nm}'s right over there`;
+        }
+        // no neighbour nearby: solitude reads differently by nature
+        if (loner) return 'far from everyone — just how I like it';
+        if (sociable && !driver) return "a bit lonely out here, but the land's good";
         if (trees >= 4) return 'plenty of timber to build with';
         if (ore >= 3) return 'good stone in these rocks';
         if (water >= 2) return "water's close — the crops'll thank me";
         if (forage >= 4) return 'wild food all around — easy pickings';
-        if (near < 24 && nearName) return `neighbourly enough — ${nearName}'s not far`;
+        if (driver && driver.near) return `neighbourly enough — ${driver.o.sheet.name.split(' ')[0]}'s not far`;
         return "room to grow, and quiet. this'll do";
     }
     // Reveal a straight trail of fog between two points so a settler can path along it.
