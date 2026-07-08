@@ -1188,30 +1188,46 @@ export class World {
             // page load — see main.js). Headless tests pass a fixed seed, so they stay deterministic.
             const desiredR = 14 + v * 50 + (this.rand() - 0.5) * 12;        // ~plaza .. ~far fogged corner
             const baseAng = this.rand() * Math.PI * 2;
-            const spot = this.#findHomestead(f.plot, desiredR, baseAng, B);
-            if (spot) this.#reserveHomestead(f, spot.i, spot.j, B);
+            const cands = this.#scoutCandidates(f.plot, desiredR, baseAng, B);
+            if (!cands.length) continue;
+            const best = cands[0];
+            // a decent-but-worse spot a real walk away that they'll CONSIDER then pass on — so the
+            // watcher sees them survey, weigh, and choose (visible deliberation), not teleport-to-optimal.
+            const reject = cands.slice(1).find(c => c.score < best.score && Math.hypot(c.i - best.i, c.j - best.j) >= 8);
+            this.#reserveHomestead(f, best, reject, B);
         }
     }
 
-    // Search for a valid BxB homestead near a desired radius/bearing, sweeping bearings + widening
-    // the radius. Among the candidates it finds, it prefers ground with TIMBER nearby and shuns
-    // water — a settler assessing the resources around them — before settling for the first valid one.
-    #findHomestead(plot, desiredR, baseAng, B) {
-        let fallback = null;
-        for (let dr = 0; dr <= 52; dr += 2) {
+    // Collect a handful of VALID candidate homesteads near the desired radius/bearing, each scored for
+    // ground quality (timber good, water/boulders bad), best-first — the settler's options to weigh.
+    #scoutCandidates(plot, desiredR, baseAng, B) {
+        const found = [];
+        for (let dr = 0; dr <= 44 && found.length < 10; dr += 3) {
             const radii = dr === 0 ? [desiredR] : [desiredR + dr, Math.max(11, desiredR - dr)];
             for (const rr of radii) {
-                for (let da = 0; da <= 14; da++) {
-                    const ang = baseAng + (da % 2 ? 1 : -1) * Math.ceil(da / 2) * 0.42;
-                    const ci = Math.round(CENTER + Math.cos(ang) * rr), cj = Math.round(CENTER + Math.sin(ang) * rr);
-                    const i = ci - (B >> 1), j = cj - (B >> 1);
+                for (let da = 0; da <= 10; da++) {
+                    const ang = baseAng + (da % 2 ? 1 : -1) * Math.ceil(da / 2) * 0.5;
+                    const i = Math.round(CENTER + Math.cos(ang) * rr) - (B >> 1), j = Math.round(CENTER + Math.sin(ang) * rr) - (B >> 1);
                     if (this.#candidateBlockers(plot, i, j, B, B) === null) continue;
-                    if (!fallback) fallback = { i, j };
-                    if (this.#homesteadScore(i, j, B) >= 3) return { i, j };   // good timber, little water — settle here
+                    found.push({ i, j, score: this.#homesteadScore(i, j, B) });
+                    if (found.length >= 10) break;
                 }
             }
         }
-        return fallback;   // nowhere ideal — take the first that fit
+        found.sort((a, b) => b.score - a.score);
+        return found;
+    }
+    // A short, honest reaction to a spot a settler decides to PASS on — what's wrong with it.
+    #rejectNote(x, y, B) {
+        let water = 0, bigRock = 0, trees = 0;
+        for (let s = 0; s < 9; s++) {
+            const i = x - 2 + ((s * 5 + 1) % (B + 4)), j = y - 2 + ((s * 7 + 3) % (B + 4)), t = this.get(i, j);
+            if (t === T.WATER) water++; else if (t === T.ROCK && obstacleTier(i, j) === 2) bigRock++; else if (t === T.TREE) trees++;
+        }
+        if (bigRock >= 1) return 'too many boulders to clear here...';
+        if (water >= 2) return 'too swampy, this ground...';
+        if (trees === 0) return 'no timber close by — no good...';
+        return 'hm... not quite right here';
     }
     // A rough "is this good ground?" score: +1 per nearby stand of timber (up to 3), -2 if the plot
     // sits on water. Cheap sampling of the plot + a ring around it.
@@ -1232,16 +1248,29 @@ export class World {
     // settler at the plaza and reveal a trail out — they physically travel to the ground, scout it,
     // and STAKE it on arrival (claimHomestead), so plots appear one by one as founders settle rather
     // than all pre-outlined at once.
-    #reserveHomestead(f, i, j, B) {
-        const plot = f.plot;
-        plot.x = i; plot.y = j; plot.w = B; plot.h = B;   // rect reserved (overlap-checked) but NOT sited
+    #reserveHomestead(f, best, reject, B) {
+        const plot = f.plot, i = best.i, j = best.j;
+        plot.x = i; plot.y = j; plot.w = B; plot.h = B;   // the BEST spot's rect reserved (overlap-checked), not sited
         plot.house = { i: i + 4, j: j + 4 };
         plot.cells = new Set();                            // empty until claimed -> no fence/outline yet
         plot.sited = false; plot.rev++; plot._fenceRing = null;
         plot.built.fence = false; plot.built.level = 0;
-        f.claim = { i: i + (B >> 1), j: j + (B >> 1) };    // the ground they're heading for
-        this.#revealCorridor(CENTER, CENTER, f.claim.i, f.claim.j, 4);   // a trail to walk out on
-        const bearing = Math.atan2(f.claim.j - CENTER, f.claim.i - CENTER), r = 4 + this.rand() * 2.5;
+        const bestC = { i: i + (B >> 1), j: j + (B >> 1) };
+        f.claim = bestC;
+        // SCOUT ITINERARY: visit a worse spot first (and voice why they pass), then settle the best.
+        f.scoutList = [];
+        if (reject) {
+            const rc = { i: reject.i + (B >> 1), j: reject.j + (B >> 1), note: this.#rejectNote(reject.i, reject.j, B) };
+            f.scoutList.push(rc);
+            this.#revealCorridor(CENTER, CENTER, rc.i, rc.j, 4);
+            this.#revealCorridor(rc.i, rc.j, bestC.i, bestC.j, 4);
+        } else {
+            this.#revealCorridor(CENTER, CENTER, bestC.i, bestC.j, 4);
+        }
+        f.scoutList.push({ i: bestC.i, j: bestC.j, best: true });
+        f.scoutIdx = 0;
+        const first = f.scoutList[0];
+        const bearing = Math.atan2(first.j - CENTER, first.i - CENTER), r = 4 + this.rand() * 2.5;
         f.pos = { i: CENTER + Math.cos(bearing) * r, j: CENTER + Math.sin(bearing) * r };
     }
     // The settler reached the ground they scouted — STAKE it: fill the plot's cells, lay out the
@@ -3577,6 +3606,8 @@ export class Farmer {
         this.donateCooldown = 1 + Math.floor((sheet.seed >>> 5) % 3);  // days between silo donations
         this.donateTarget = null; // pending surplus a farmer is hauling to the town silo
         this.claim = null;        // the ground a founder is travelling out to stake (until their plot is sited)
+        this.scoutList = null;    // itinerary of candidate spots to survey before settling (visible deliberation)
+        this.scoutIdx = 0; this.scoutTimer = 0;
         this.combatStance = null; // 'fight' | 'flee' while facing a wilderness threat (see #handleCombat)
         this.threatAlert = 0;     // render pulse when a threat appears / while in danger
         this.hurtFlash = 0;       // render pulse when struck
@@ -4286,13 +4317,19 @@ export class Farmer {
     // Until then their plot is only a reservation — nothing on the map — so plots appear one by one
     // as founders reach and claim their land, rather than all pre-outlined from the first frame.
     #seekHomestead() {
-        const w = this.world, c = this.claim;
-        if (!c) { this.plot.sited = true; return; }   // safety — no claim recorded, treat as settled
-        if (Math.abs(this.pos.i - (c.i + 0.5)) + Math.abs(this.pos.j - (c.j + 0.5)) < 3) {
-            w.claimHomestead(this); return;            // reached the ground — stake it
+        const w = this.world, list = this.scoutList;
+        if (!list || !list.length) {   // safety — no itinerary, stake the claim if we have one
+            if (this.claim) w.claimHomestead(this); else this.plot.sited = true; return;
         }
-        this.think('SCOUTING FOR GOOD GROUND TO SETTLE');
-        if (!this.#goTo(c.i + 0.5, c.j + 0.5, 'seek')) this.#backoff();
+        const stop = list[Math.min(this.scoutIdx, list.length - 1)];
+        if (Math.abs(this.pos.i - (stop.i + 0.5)) + Math.abs(this.pos.j - (stop.j + 0.5)) >= 2.5) {
+            this.think('SCOUTING FOR GOOD GROUND TO SETTLE');            // still walking to this spot
+            if (!this.#goTo(stop.i + 0.5, stop.j + 0.5, 'scout')) this.#backoff();
+            return;
+        }
+        if (stop.best) { w.claimHomestead(this); return; }              // reached the chosen ground — stake it
+        this.say(stop.note, '#c8a878'); this.think('NOT HERE — KEEP LOOKING');   // pass on this spot, say why
+        this.scoutIdx++; this.scoutTimer = 1.4; this.state = 'scout';   // pause a beat to weigh it, then move on
     }
 
     // A raw settler clears their land, fences it, then raises a house — before normal farming.
@@ -5703,7 +5740,7 @@ export class Farmer {
                     else if (then === 'forage') { this.forageTimer = this.#laborTime('forage'); this.state = 'forage'; }
                     else if (then === 'fencepost') { this.fenceTimer = this.#laborTime('fencepost'); this.state = 'fencepost'; }
                     else if (then === 'housebuild') { this.buildTimer = this.#laborTime('housebuild'); this.state = 'housebuild'; }
-                    else if (then === 'seek') { this.world.claimHomestead(this); this.state = 'decide'; }
+                    else if (then === 'scout') this.state = 'decide';   // reached a survey stop -> assess it (see #seekHomestead)
                     else if (then === 'fight') { this.fightTimer = 0.8; this.state = 'fight'; }
                     else if (then === 'scarecrow') { this.chopTimer = this.#laborTime('scarecrow'); this.state = 'scarecrow'; }
                     else if (then === 'fetchwater' || then === 'fetchwater-help') {
@@ -5773,6 +5810,10 @@ export class Farmer {
             case 'fencepost': this.fenceTimer -= dt; if (this.fenceTimer <= 0) this.#completeFencePost(); break;
             case 'housebuild': this.buildTimer -= dt; if (this.buildTimer <= 0) this.#completeHouseStep(); break;
             case 'scarecrow': this.chopTimer -= dt; if (this.chopTimer <= 0) this.#completeScarecrow(); break;
+            case 'scout':   // pause to weigh a candidate homestead before moving on to the next
+                this.scoutTimer -= dt;
+                if (this.scoutTimer <= 0) this.state = 'decide';
+                break;
             case 'fight':   // stand and trade blows — the encounter tick lands the clashes; re-decide often
                 this.fightTimer -= dt;
                 if (this.fightTimer <= 0) this.state = 'decide';
