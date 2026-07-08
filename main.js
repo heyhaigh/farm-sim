@@ -230,6 +230,13 @@ const TREE_SETS = (() => {
     for (const s of Object.keys(TREE_TYPES)) out[s] = TREE_TYPES[s].flatMap(b => ['1', '2', '3'].map(n => b + n));
     return out;
 })();
+// LIVING FOREST: an animated tree sheet (654184 Trees_animation.png) — the whole non-winter forest
+// gently sways, and a tree rustles HARDER while a farmer is chopping it. Grid = 9 cols x 13 frames of
+// 64x80: 3 tree types (green / apple / pine) x 3 sizes (large=mature / med=young / small=sapling).
+const treeAnimSheet = new Image(); let treeAnimReady = false; treeAnimSheet.onload = () => { treeAnimReady = true; }; treeAnimSheet.onerror = () => {};
+treeAnimSheet.src = './assets/craftpix-net-654184-main-characters-home-free-top-down-pixel-art-asset/PNG/Trees_animation.png';
+const TREE_ANIM = { cols: 9, rows: 13, fw: 64, fh: 80, scale: 1.3 };
+const choppingTiles = new Set();   // "i,j" of tiles a farmer is actively chopping — rebuilt each frame
 const BUSH_ART_BASE = './assets/craftpix-net-141354-free-top-down-bushes-pixel-art/PNG/Assets/';
 const BUSH_SETS = {
     SPRING: ['Bush_pink_flowers1', 'Bush_pink_flowers2', 'Bush_blue_flowers1', 'Bush_pink_flowers3'],
@@ -728,6 +735,15 @@ function pickTieredImage(store, names, i, j, seed, tier) {
 function wildDims(img) { return { w: Math.round(img.naturalWidth * ASSET_SCALE), h: Math.round(img.naturalHeight * ASSET_SCALE) }; }
 function wildSpec(i, j, t, season) {
     if (t === T.TREE) {
+        // LIVING FOREST (spring/summer/fall): an animated swaying tree. Winter keeps the static snowy
+        // tree below (dormant, no sway). Type: apple in fruit season, else green or pine by variant;
+        // size column tracks the growth stage (mature=large ... sapling=small).
+        if (season.name !== 'WINTER' && treeAnimReady && treeAnimSheet.naturalWidth) {
+            const typeIdx = (treeIsFruit(i, j) && world.isFruitSeason()) ? 1 : (treeVariant(i, j, 2) === 0 ? 0 : 2);
+            const sizeCol = 2 - world.treeStage(i, j);   // 0 large(mature) .. 2 small(sapling)
+            const w = Math.round(TREE_ANIM.fw * TREE_ANIM.scale), h = Math.round(TREE_ANIM.fh * TREE_ANIM.scale);
+            return { treeCol: typeIdx * 3 + sizeCol, w, h, anchor: 0.9, depth: 0.4, seed: hash2(i, j, 73), chopKey: i + ',' + j, leaves: season.name === 'FALL' };
+        }
         // pick this tree's species (stable) + current growth SIZE (rises over time); fall back to a
         // smaller loaded size, then any loaded, then the procedural tree.
         const bases = TREE_TYPES[season.name] || TREE_TYPES.SUMMER;
@@ -787,6 +803,16 @@ function wildJitter(i, j, t) {
 }
 function drawWild(spec, x, baseY) {
     ctx.imageSmoothingEnabled = false;
+    if (spec.treeCol != null && treeAnimReady) {
+        // gently sway on an ambient loop; rustle fast while a farmer is chopping this tile. A per-tree
+        // phase from its seed desyncs the forest so it doesn't all sway in unison.
+        const A = TREE_ANIM, fps = choppingTiles.has(spec.chopKey) ? 16 : 4.5;
+        const frame = (Math.floor(performance.now() / 1000 * fps) + (spec.seed % A.rows)) % A.rows;
+        ctx.drawImage(treeAnimSheet, spec.treeCol * A.fw, frame * A.fh, A.fw, A.fh,
+            Math.floor(x - spec.w / 2), Math.floor(baseY - spec.h * spec.anchor + (spec.nudgeY || 0)), spec.w, spec.h);
+        drawLeafDrift(spec, x, baseY);
+        return;
+    }
     ctx.drawImage(
         spec.img,
         Math.floor(x - spec.w / 2),
@@ -1228,6 +1254,9 @@ function collectDrawables() {
     // farmers and buildings instead of being baked flat into the terrain.
     // Viewport-cull: only scan tiles that can reach the screen (the visible (i,j)
     // diamond + a margin for tall sprites drawn from tiles just off the bottom edge).
+    // which tiles are being actively chopped right now (so those trees rustle harder)
+    choppingTiles.clear();
+    for (const f of world.farmers) if ((f.state === 'chop' || f.state === 'break') && f.woodTarget) choppingTiles.add(f.woodTarget.i + ',' + f.woodTarget.j);
     {
         const cs = [screenToTile(0, 0), screenToTile(GW, 0), screenToTile(GW, GH), screenToTile(0, GH)];
         const M = 12;
@@ -1333,7 +1362,7 @@ function collectDrawables() {
                         drawSkull(roofX, roofY + bob - 5);
                     } else if (f.state === 'sick') {
                         const bob = Math.round(Math.sin(performance.now() / 400));
-                        drawBloodDrop(roofX, roofY + bob);
+                        drawBloodDrop(roofX + 1, roofY + bob);
                     } else if (f.state === 'shelter') {
                         drawText(ctx, '!', roofX - 1, roofY, '#e0a03c');
                     } else {
