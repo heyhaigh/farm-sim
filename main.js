@@ -1716,7 +1716,7 @@ function drawSilo(sx, sy) {
         blit(GH_CENTER, bx, by);                                                                  // the narrow hall walls
         // the flat roof caps the walls, fitted to the hall width + small eaves, seated flush on top
         const rw = cw + Math.round(9 * sc), rh = Math.round(GH_ROOF.h * (rw / GH_ROOF.w));
-        const roofTop = by - rh + Math.round(3 * sc) + 17;   // seated DOWN onto the hall (user-tuned)
+        const roofTop = by - rh + Math.round(3 * sc) + 7;   // seated DOWN onto the hall (user-tuned)
         ctx.drawImage(guildExtSheet, GH_ROOF.x, GH_ROOF.y, GH_ROOF.w, GH_ROOF.h, Math.round(sx - rw / 2) - 1, roofTop, rw, rh);
         var topY = roofTop;
     }
@@ -2568,7 +2568,7 @@ function buildingUnder(mx, my) {
       const gsc = ASSET_SCALE * 0.9, gcw = Math.round(GH_CENTER.w * gsc), gch = Math.round(GH_CENTER.h * gsc);
       const gFoot = Math.floor(sy + TILE_H), gby = gFoot - gch;
       const grw = gcw + Math.round(9 * gsc), grh = Math.round(GH_ROOF.h * (grw / GH_ROOF.w));
-      const gTop = Math.min(gby, gby - grh + Math.round(3 * gsc) + 17);
+      const gTop = Math.min(gby, gby - grh + Math.round(3 * gsc) + 7);
       let ghx = Math.floor(sx - gcw / 2), ghw = gcw;
       if (world.townLevel >= 5) { const glw = Math.round(GH_LWING.w * gsc), grwg = Math.round(GH_RWING.w * gsc); ghx -= glw; ghw += glw + grwg; }
       push(ghx - 2, gTop, ghw + 4, gFoot - gTop,
