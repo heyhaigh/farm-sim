@@ -1207,7 +1207,7 @@ function collectDrawables() {
                 if (art.ready) {
                     const S = art.src;
                     const dispW = Math.round(S.w * HOUSE_ART_SCALE), dispH = Math.round(dispW * S.h / S.w);
-                    const hx = Math.floor(sx - dispW / 2), hy = Math.floor(sy + TILE_H - dispH + 3);
+                    const hx = Math.floor(sx - dispW / 2), hy = Math.floor(sy + TILE_H - dispH + 13);   // sink ~1 tile so the sprite reads centred in the 5x5
                     ctx.imageSmoothingEnabled = false;
                     ctx.drawImage(art.img, S.x, S.y, S.w, S.h, hx, hy, dispW, dispH);
                     if (SMOKE_ENABLED && level >= 3) drawSmoke(hx, hy, dispW, dispH, f.sheet.seed % 9);
@@ -2083,7 +2083,7 @@ function drawFoundation(h, sx, sy, art, prog, ft = 5) {
     if (art && art.ready && prog > 0) {   // the house rising, revealed from the bottom up
         const S = art.src;
         const dispW = Math.round(S.w * HOUSE_ART_SCALE), dispH = Math.round(dispW * S.h / S.w);
-        const hx = Math.floor(sx - dispW / 2), hy = Math.floor(sy + TILE_H - dispH + 3);
+        const hx = Math.floor(sx - dispW / 2), hy = Math.floor(sy + TILE_H - dispH + 13);   // sink ~1 tile so the sprite reads centred in the 5x5
         const srcH = Math.max(1, Math.round(S.h * prog)), srcY = S.y + S.h - srcH;
         const dH = Math.max(1, Math.round(dispH * prog)), dY = hy + dispH - dH;
         ctx.imageSmoothingEnabled = false;

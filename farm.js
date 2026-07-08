@@ -1933,9 +1933,20 @@ export class World {
         if (!p.built.fence || p.building) return false;
         farmer.wood -= c.wood; farmer.ore -= c.ore;
         p.building = { level, points: 0, needed: c.buildSteps || 8 };
+        this.#clearHouseSite(p);   // level the ground first — a structure can't rise on brush and boulders
         this._tilesChanged = true;
-        this.addLog(`${farmer.sheet.name} laid a foundation for a ${c.name}.`, '#c9a45a');
+        this.addLog(`${farmer.sheet.name} cleared the ground and laid a foundation for a ${c.name}.`, '#c9a45a');
         return true;
+    }
+    // Level the site a dwelling will stand on: grub out any wild growth, rocks, stumps, or puddle in
+    // the (current-tier) footprint + a one-tile margin, so the structure fits cleanly. The plot's own
+    // crops/facilities are kept out of here by #inHouse, so only the wild is cleared.
+    #clearHouseSite(p) {
+        const c = this.houseCentre(p), half = this.houseFt(p) >> 1;
+        for (let dj = -half - 1; dj <= half + 1; dj++) for (let di = -half - 1; di <= half + 1; di++) {
+            const t = this.get(c.i + di, c.j + dj);
+            if (t === T.TREE || t === T.STUMP || t === T.ROCK || t === T.WATER || t === T.FLOWER || t === T.WHEAT) this.set(c.i + di, c.j + dj, T.GRASS);
+        }
     }
     // One completed shift of building work — advances the build and raises the house when it's done.
     buildHouseStep(farmer) {
