@@ -248,9 +248,16 @@ const TREE_SETS = (() => {
     for (const s of Object.keys(TREE_TYPES)) out[s] = TREE_TYPES[s].flatMap(b => ['1', '2', '3'].map(n => b + n));
     return out;
 })();
-// LIVING FOREST: the static with-shadow trees (385863) stay the base look — shadowed, seasonal, no
-// clipping. A tree is STILL almost all the time; it only SWAYS (a light canvas shear about its base)
-// while a farmer chops it (the reveal), plus a rare seed-desynced idle rustle — see treeSway/drawWild.
+// LIVING FOREST: the animated 654184 Trees_animation.png sheet. Trees are FROZEN on frame 0 (perfectly
+// still) almost all the time; a tree cycles its animation frames — a real rustle/shake — ONLY while a
+// farmer is chopping it (the "surprise reveal"). Winter keeps the static snow trees below. This sheet has
+// no ground shadow (accepted tradeoff for the animation). Grid = 9 cols x 13 frames of 64x80: 3 tree
+// types (green / apple / pine) x 3 sizes (large=mature / med=young / small=sapling).
+const treeAnimSheet = new Image(); let treeAnimReady = false; treeAnimSheet.onload = () => { treeAnimReady = true; }; treeAnimSheet.onerror = () => {};
+treeAnimSheet.src = './assets/craftpix-net-654184-main-characters-home-free-top-down-pixel-art-asset/PNG/Trees_animation.png';
+// scale MUST stay INTEGER: a fractional nearest-neighbour scale makes the foliage shimmer 1px<->2px
+// between frames (reads as horizontal striations). 1x = native 64x80, crisp + stable.
+const TREE_ANIM = { cols: 9, rows: 13, fw: 64, fh: 80, scale: 1 };
 const choppingTiles = new Set();   // "i,j" of tiles a farmer is actively chopping — rebuilt each frame
 const BUSH_ART_BASE = './assets/craftpix-net-141354-free-top-down-bushes-pixel-art/PNG/Assets/';
 const BUSH_SETS = {
@@ -776,6 +783,18 @@ function pickTieredImage(store, names, i, j, seed, tier) {
 function wildDims(img) { return { w: Math.round(img.naturalWidth * ASSET_SCALE), h: Math.round(img.naturalHeight * ASSET_SCALE) }; }
 function wildSpec(i, j, t, season) {
     if (t === T.TREE) {
+        // LIVING FOREST (spring/summer/fall): the animated tree sheet — frozen on frame 0, cycling only
+        // while chopped. Winter falls through to the static snow trees below. Type: apple in fruit season,
+        // else green or pine by variant; the size column tracks the growth stage (mature ... sapling).
+        if (season.name !== 'WINTER' && treeAnimReady && treeAnimSheet.naturalWidth) {
+            // ONLY green (cols 0-2) + apple (cols 3-5): those fit their 64px cells. The pine columns (6-8)
+            // are ~97px wide and OVERLAP each other + their neighbours in the sheet, so a clean slice cuts
+            // their left canopy (the "cut off on the left" bug) — so we don't use them.
+            const typeIdx = (treeIsFruit(i, j) && world.isFruitSeason()) ? 1 : 0;
+            const sizeCol = 2 - world.treeStage(i, j);   // 0 large(mature) .. 2 small(sapling)
+            const w = Math.round(TREE_ANIM.fw * TREE_ANIM.scale), h = Math.round(TREE_ANIM.fh * TREE_ANIM.scale);
+            return { treeCol: typeIdx * 3 + sizeCol, w, h, anchor: 0.9, depth: 0.4, seed: hash2(i, j, 73), chopKey: i + ',' + j, leaves: season.name === 'FALL' };
+        }
         // pick this tree's species (stable) + current growth SIZE (rises over time); fall back to a
         // smaller loaded size, then any loaded, then the procedural tree.
         const bases = TREE_TYPES[season.name] || TREE_TYPES.SUMMER;
@@ -833,34 +852,17 @@ function wildJitter(i, j, t) {
         y: Math.round((rand2(i, j, 72) - 0.5) * ySpread),
     };
 }
-// How much a tree leans right now (0 = still). A tree is STATIC almost always; it SHAKES while a
-// farmer chops it (the reveal), and very occasionally gives a brief, gentle idle rustle — each on a
-// long, seed-desynced schedule so the forest never all moves at once.
-function treeSway(spec) {
-    const now = performance.now() / 1000;
-    const period = 19, phase = (spec.seed % 1000) / 1000;                    // ~once every 19s, per tree (desynced)
-    const cyc = ((now / period) + phase) % 1;
-    const RUSTLE = 0.14;                                                      // rustle fills ~14% of the cycle (~2.7s)
-    if (cyc >= RUSTLE) return 0;                                             // the rest of the time: perfectly still
-    const local = cyc / RUSTLE, envelope = Math.sin(local * Math.PI);        // ease in/out
-    return 0.06 * envelope * Math.sin(local * Math.PI * 4);                  // a visible-but-gentle few sways
-}
 function drawWild(spec, x, baseY) {
     ctx.imageSmoothingEnabled = false;
-    const chopping = spec.tree && choppingTiles.has(spec.chopKey);
-    if (spec.tree) {
-        const sway = treeSway(spec);
-        if (sway !== 0) {
-            const px = Math.floor(x - spec.w / 2), py = Math.floor(baseY - spec.h * spec.anchor + (spec.nudgeY || 0));
-            const pivotY = py + spec.h;   // pivot at the trunk base so the CANOPY sways, roots stay put
-            ctx.save();
-            ctx.translate(x, pivotY); ctx.transform(1, 0, sway, 1, 0, 0); ctx.translate(-x, -pivotY);
-            ctx.drawImage(spec.img, px, py, spec.w, spec.h);
-            ctx.restore();
-            drawLeafDrift(spec, x, baseY);
-            if (chopping) drawChopLeaves(spec, x, baseY);
-            return;
-        }
+    // ANIMATED tree sheet: frozen on frame 0 (dead still), cycling its frames only while this tile is
+    // being chopped — the tree visibly rustles/shakes as it's felled, then falls.
+    if (spec.treeCol != null && treeAnimReady) {
+        const A = TREE_ANIM;
+        const frame = choppingTiles.has(spec.chopKey) ? (Math.floor(performance.now() / 1000 * 14) % A.rows) : 0;
+        ctx.drawImage(treeAnimSheet, spec.treeCol * A.fw, frame * A.fh, A.fw, A.fh,
+            Math.floor(x - spec.w / 2), Math.floor(baseY - spec.h * spec.anchor + (spec.nudgeY || 0)), spec.w, spec.h);
+        drawLeafDrift(spec, x, baseY);   // ambient autumn drift still applies in fall
+        return;
     }
     ctx.drawImage(
         spec.img,
@@ -870,23 +872,6 @@ function drawWild(spec, x, baseY) {
         spec.h
     );
     drawLeafDrift(spec, x, baseY);
-    if (chopping) drawChopLeaves(spec, x, baseY);
-}
-// Leaves shaken loose while a farmer's axe bites the tree — a livelier shower than the ambient drift:
-// more flakes, a faster fall + wider scatter, in the tree's seasonal colour (green in leaf, warm in fall).
-function drawChopLeaves(spec, x, baseY) {
-    const now = performance.now() / 850;
-    const fall = world.seasonDef && world.seasonDef.name === 'FALL';
-    const colors = fall ? ['#e0803c', '#c85838', '#d8a038', '#a86828'] : ['#5a9a3c', '#4a8a34', '#6aaa44', '#3a7a2c'];
-    for (let n = 0; n < 7; n++) {
-        const phase = (now + ((spec.seed >>> (n * 4)) & 255) / 255 + n * 0.14) % 1;
-        const sway = Math.sin(phase * Math.PI * 3 + n * 1.3);
-        const lx = x + sway * spec.w * 0.3 + ((n % 3) - 1) * spec.w * 0.17;
-        const ly = baseY - spec.h * 0.74 + phase * spec.h * 0.66;
-        ctx.fillStyle = colors[(spec.seed + n) % colors.length];
-        const s = phase > 0.6 ? 1 : 2;
-        ctx.fillRect(Math.floor(lx), Math.floor(ly), s, s);
-    }
 }
 function drawLeafDrift(spec, x, baseY) {
     if (!spec.leaves || world.weather === 'rain' || world.weather === 'storm') return;
@@ -3358,6 +3343,7 @@ out.addEventListener('pointerup', (e) => {
     // minimap: jump the camera (only interactive when visible — hidden under the card).
     // The map is a camera-following WINDOW now, so clicks map through its center.
     if (!selected && inRect(p, MINIMAP)) {
+        followMode = false; followTarget = null;   // tapping the map = "show me elsewhere" — stop trailing the farmer
         const ci = MINIMAP._ci ?? world.well.i, cj = MINIMAP._cj ?? world.well.j;
         const ti = ci + ((p.x - MINIMAP.x) / MINIMAP.w - 0.5) * MINI_SPAN;
         const tj = cj + ((p.y - MINIMAP.y) / MINIMAP.h - 0.5) * MINI_SPAN;
