@@ -235,7 +235,10 @@ const TREE_SETS = (() => {
 // 64x80: 3 tree types (green / apple / pine) x 3 sizes (large=mature / med=young / small=sapling).
 const treeAnimSheet = new Image(); let treeAnimReady = false; treeAnimSheet.onload = () => { treeAnimReady = true; }; treeAnimSheet.onerror = () => {};
 treeAnimSheet.src = './assets/craftpix-net-654184-main-characters-home-free-top-down-pixel-art-asset/PNG/Trees_animation.png';
-const TREE_ANIM = { cols: 9, rows: 13, fw: 64, fh: 80, scale: 1.3 };
+// scale MUST stay an INTEGER: a fractional nearest-neighbour scale makes moving foliage pulse
+// between 1px and 2px tall each frame, which reads as horizontal striations (worst on the finely
+// detailed young trees). 1x = native 64px, crisp and stable.
+const TREE_ANIM = { cols: 9, rows: 13, fw: 64, fh: 80, scale: 1 };
 const choppingTiles = new Set();   // "i,j" of tiles a farmer is actively chopping — rebuilt each frame
 const BUSH_ART_BASE = './assets/craftpix-net-141354-free-top-down-bushes-pixel-art/PNG/Assets/';
 const BUSH_SETS = {
