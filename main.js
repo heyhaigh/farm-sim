@@ -282,6 +282,16 @@ const THREAT_ART = {
 const threatImg = {};
 for (const [k, c] of Object.entries(THREAT_ART)) { const im = new Image(); im.src = c.base + c.file + '.png'; threatImg[k] = im; }
 
+// Roaming WILD PREY sprites (hunted for meat — see world.prey / #tickPrey). All 32x32, 4-frame idle
+// cycles; row 2 = side profile. Deer/hare side-frames face LEFT (srcFace -1), the turkey faces RIGHT.
+const PREY_ART = {
+    deer:   { base: './assets/craftpix-net-789196-free-top-down-hunt-animals-pixel-sprite-pack/PNG/Without_shadow/Deer/', file: 'Deer_Idle', fw: 32, row: 2, srcFace: -1 },
+    rabbit: { base: './assets/craftpix-net-789196-free-top-down-hunt-animals-pixel-sprite-pack/PNG/Without_shadow/Hare/', file: 'Hare_Idle', fw: 32, row: 2, srcFace: -1 },
+    turkey: { base: './assets/craftpix-net-291971-free-top-down-animals-farm-pixel-art-sprites/PNG/Without_shadow/', file: 'Turkey_animation_without_shadow', fw: 32, row: 2, srcFace: 1 },
+};
+const preyImg = {};
+for (const [k, c] of Object.entries(PREY_ART)) { const im = new Image(); im.src = c.base + c.file + '.png'; preyImg[k] = im; }
+
 // Shared async image-set loader: fills `store` and flips `readyFlag` (+ redraws
 // terrain) once every image in the sets has loaded. Falls back to procedural
 // sprites until then.
@@ -1686,7 +1696,36 @@ function collectDrawables() {
         list.push({ y: sy + TILE_H * 0.5 + 0.11, draw: () => drawThreat(e, sx, sy) });
     }
 
+    // roaming wild game (deer/rabbit/turkey) to hunt, y-sorted in
+    for (const a of world.prey) {
+        if (a.done) continue;
+        const sx = cam.x + isoX(a.i, a.j), sy = cam.y + isoY(a.i, a.j);
+        list.push({ y: sy + TILE_H * 0.5 + 0.09, draw: () => drawPrey(a, sx, sy) });
+    }
+
     return list;
+}
+// A wild prey animal: a sliced side-profile idle frame of its real sprite, mirrored to face its heading
+// (fallback: a small critter blob). Cycles a little faster while bolting from a hunter.
+function drawPrey(a, sx, sy) {
+    const c = PREY_ART[a.kind], img = preyImg[a.kind];
+    ctx.imageSmoothingEnabled = false;
+    if (img && img.complete && img.naturalWidth) {
+        const fw = c.fw, cols = 4, fps = a.bolt > 0 ? 9 : 3.5;
+        const col = Math.floor(performance.now() / 1000 * fps) % cols;
+        const disp = Math.round(fw * ASSET_SCALE * (a.def.size || 1));
+        const dx = Math.round(sx - disp / 2), dy = Math.round(sy - disp * 0.72);
+        const mirror = (a.facing > 0) !== (c.srcFace > 0);   // flip when heading ≠ the source frame's facing
+        if (mirror) {
+            ctx.save(); ctx.translate(dx + disp, dy); ctx.scale(-1, 1);
+            ctx.drawImage(img, col * fw, c.row * fw, fw, fw, 0, 0, disp, disp); ctx.restore();
+        } else {
+            ctx.drawImage(img, col * fw, c.row * fw, fw, fw, dx, dy, disp, disp);
+        }
+    } else {
+        ctx.fillStyle = a.def.color;
+        ctx.beginPath(); ctx.ellipse(sx, sy - 4, 5, 4, 0, 0, Math.PI * 2); ctx.fill();
+    }
 }
 // A wilderness threat: one sliced side-profile frame of its real sprite (fallback: a menace blob).
 function drawThreat(e, sx, sy) {
@@ -2767,10 +2806,13 @@ function drawSheet(f) {
                     const sprite = (pi && imageLoaded(suppliesSheet)) ? { sheet: suppliesSheet, sx: pi[0], sy: pi[1], sw: pi[2], sh: pi[3] } : null;
                     const canvas = sprite ? null : (CROP_ICON_CANVAS[it.crop] || makeCropSprites(it.crop)[3]);
                     drawItemSlot(sx, sy, SZ, null, it.count, { sel: selectedSlotKey === key, sprite, canvas });
+                    // provenance = how these COLLECTED crops were obtained (never counts what's still
+                    // planted — cropStock only fills on harvest/steal/forage). "raised" = harvested from
+                    // this farmer's own crop, so it reads as collected, not growing-in-the-field.
                     const src = it.sources, parts = [];
-                    if (src.grown) parts.push(`${src.grown} grown`);
+                    if (src.grown) parts.push(`${src.grown} raised`);
                     if (src.stolen) parts.push(`${src.stolen} stolen`);
-                    if (src.found) parts.push(`${src.found} found`);
+                    if (src.found) parts.push(`${src.found} foraged`);
                     addSlot(sx, sy, key, { title: it.name, body: parts.join(', ') || `you have ${it.count}` });
                 } else if (it.good) {
                     // fish/lily use a procedural sprite; meat uses a fantasy-icon sub-rect

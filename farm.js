@@ -34,7 +34,7 @@ export const ITEMS = {
     wood:   { name: 'WOOD',   icon: 75 },
     ore:    { name: 'ORE',    icon: 47 },
     crops:  { name: 'CROPS',  icon: 73 },
-    wheat:  { name: 'WHEAT',  icon: 45 },
+    wheat:  { name: 'WHEAT',  icon: 45 },   // foraged wild wheat — FOLDED into the wheat crop stack in the inventory
     flower: { name: 'FLOWER', icon: 79 },
 };
 
@@ -352,6 +352,8 @@ export class World {
         this.helpBoard = [];
         this.encounters = [];      // active wilderness threats (see the Dungeon Master, #tickDM)
         this.dmCooldown = 90;      // a grace period before the first threat stalks the young town
+        this.prey = [];            // roaming wild game — deer/rabbit/turkey hunted for meat (see #tickPrey)
+        this.preyCooldown = 55;    // a grace period before the first game wanders into the charted wilds
         this.project = null;
         this.projectIndex = 0;
         this.coops = [];      // farmer-proposed neighborhood projects (shared wells) — need-driven, sited where the members live
@@ -3338,11 +3340,96 @@ export class World {
         this.#maybeStartProject();
         this.#tickMerchant(dt);
         this.#tickDM(dt);
+        this.#tickPrey(dt);
         this.updateLeader();
         for (const f of this.farmers) f.tick(dt);
     }
 
     // ---- Wandering merchant: schedule, travel in/out, and the goods-for-ore trade ----
+    // ---- Wild game: roaming prey to hunt ----------------------------------------------------
+
+    // Nearest huntable prey within maxD tiles of pos (skips one already being run down by someone else).
+    nearestPrey(pos, maxD = 12) {
+        let best = null, bestD = maxD;
+        for (const a of this.prey) {
+            if (a.done || (a.hunter && a.hunter.state === 'hunt')) continue;
+            const d = Math.hypot(a.i - pos.i, a.j - pos.j);
+            if (d < bestD) { bestD = d; best = a; }
+        }
+        return best;
+    }
+
+    #tickPrey(dt) {
+        for (const a of this.prey) this.#advancePrey(a, dt);
+        if (this.prey.some(a => a.done)) this.prey = this.prey.filter(a => !a.done);
+        this.preyCooldown -= dt;
+        if (this.preyCooldown > 0 || this.prey.length >= MAX_PREY) return;
+        this.preyCooldown = PREY_SPAWN_INTERVAL + this.rand() * PREY_SPAWN_JITTER;
+        this.#spawnPrey();
+    }
+
+    #treeNear(ci, cj, r) {
+        for (let dj = -r; dj <= r; dj++) for (let di = -r; di <= r; di++)
+            if (this.isRevealed(ci + di, cj + dj) && this.get(ci + di, cj + dj) === T.TREE) return true;
+        return false;
+    }
+
+    #spawnPrey() {
+        // wild game keeps to the OUTSKIRTS — the wooded fringe of the charted land, well clear of the
+        // plaza and of any farmer (they're shy of people). Rabbits are commonest + the least skittish.
+        const r0 = this.rand();
+        const kind = r0 < 0.52 ? 'rabbit' : r0 < 0.8 ? 'deer' : 'turkey';
+        const def = PREY_DEFS[kind];
+        for (let tries = 0; tries < 8; tries++) {
+            const ang = this.rand() * Math.PI * 2, d = def.shy + 2 + this.rand() * 12;
+            const ci = Math.round(CENTER + Math.cos(ang) * d), cj = Math.round(CENTER + Math.sin(ang) * d);
+            if (!this.isRevealed(ci, cj) || this.pathBlocked(ci, cj)) continue;
+            // don't materialise near a settler — deer/turkey especially won't
+            if (this.farmers.some(f => f.plot && !f.downed && Math.hypot(f.pos.i - ci, f.pos.j - cj) < def.wary + 5)) continue;
+            // prefer cover: a tree within 3 tiles. Reroll a few times for it, then take what we can get.
+            if (!this.#treeNear(ci, cj, 3) && tries < 5) continue;
+            this.prey.push({ kind, def, i: ci + 0.5, j: cj + 0.5, home: { i: ci, j: cj }, facing: this.rand() < 0.5 ? -1 : 1,
+                             life: PREY_LIFE, done: false, hunter: null, bolt: 0, hop: 0, dir: this.rand() * Math.PI * 2, turnT: 0 });
+            return;
+        }
+    }
+
+    // Prey drift and graze; they BOLT from a hunter (or any farmer inside `wary`). A hunter latches on
+    // via a.hunter — the animal keeps fleeing that one until it's bagged, escapes, or the hunter gives up.
+    #advancePrey(a, dt) {
+        a.life -= dt; a.hop += dt;
+        if (a.life <= 0) { a.done = true; return; }
+        // who's the nearest threat? the latched hunter takes priority, else any settler too close.
+        let threat = (a.hunter && this.farmers.includes(a.hunter) && a.hunter.state === 'hunt') ? a.hunter : null;
+        let td = threat ? Math.hypot(threat.pos.i - a.i, threat.pos.j - a.j) : 99;
+        if (!threat) {
+            for (const f of this.farmers) {
+                if (!f.plot || f.downed) continue;
+                const d = Math.hypot(f.pos.i - a.i, f.pos.j - a.j);
+                if (d < a.def.wary && d < td) { threat = f; td = d; }
+            }
+        }
+        const def = a.def;
+        if (threat && td < 16) {           // FLEE: sprint directly away from the threat
+            a.bolt = Math.max(a.bolt, 0.6);
+            const ax = a.i - threat.pos.i, ay = a.j - threat.pos.j, m = Math.hypot(ax, ay) || 1;
+            const spd = def.speed * (a.bolt > 0 ? 1 : 0.7);
+            a.i += (ax / m) * spd * dt; a.j += (ay / m) * spd * dt;
+            if (Math.abs(ax) > 0.05) a.facing = ax < 0 ? -1 : 1;
+        } else {                            // GRAZE: amble in a slowly-turning heading, near home + shy of town
+            a.turnT -= dt;
+            if (a.turnT <= 0) { a.dir += (this.rand() - 0.5) * 1.6; a.turnT = 1.5 + this.rand() * 2.5; }
+            if (Math.hypot(a.i - a.home.i, a.j - a.home.j) > 14) a.dir = Math.atan2(a.home.j - a.j, a.home.i - a.i);
+            else if (Math.hypot(a.i - CENTER, a.j - CENTER) < def.shy) a.dir = Math.atan2(a.j - CENTER, a.i - CENTER) + (this.rand() - 0.5) * 0.4;   // veer back from the settled heart
+            const spd = def.speed * 0.28;
+            a.i += Math.cos(a.dir) * spd * dt; a.j += Math.sin(a.dir) * spd * dt;
+            if (Math.abs(Math.cos(a.dir)) > 0.05) a.facing = Math.cos(a.dir) < 0 ? -1 : 1;
+        }
+        a.bolt = Math.max(0, a.bolt - dt);
+        // wandered off into deep fog or miles from everyone? it's gone back to the wilds.
+        if (!this.isRevealed(Math.round(a.i), Math.round(a.j))) { a.done = true; if (a.hunter) { a.hunter = null; } }
+    }
+
     // ---- The Dungeon Master: wilderness threats ---------------------------------------------
 
     encounterFor(f) { for (const e of this.encounters) if (e.target === f && !e.done) return e; return null; }
@@ -3733,6 +3820,21 @@ const ENCOUNTER_DEFS = {
 const ENCOUNTER_INTERVAL = 130, ENCOUNTER_JITTER = 130;   // game-seconds between spawn attempts (~1-2/day)
 const MAX_ENCOUNTERS = 3, WILD_RADIUS = 30;             // the wilds begin ~this far from the plaza
 const BEAST_TERRITORY = 17;   // a beast won't chase further than this from where it sprang (foes press on)
+
+// Roaming WILD PREY — the peaceful counterpart to the DM's threats. Deer/rabbit/turkey drift the
+// charted wilds; a hunter STALKS them for MEAT (a prized barter good + a HP restorative — see #maybeEatMeat).
+// Each bolts when a farmer strays within `wary` tiles. `evade` is the DC a lunge must beat (d20 + DEX/WIS)
+// to bag it; a miss sends the animal bolting. meat by SIZE (rabbit small, deer large, turkey = fowl).
+// `wary` = how far off it spooks and bolts (deer/turkey are very skittish, a rabbit lets you get close).
+// `shy`  = the distance from the plaza it likes to keep — deer/turkey stay deep in the wilds; a rabbit
+// will graze right up to the settled fringe (but still bolts if a farmer closes in).
+const PREY_DEFS = {
+    rabbit: { name: 'a rabbit',      kind: 'rabbit', meat: 'meat-s', evade: 15, speed: 2.1, wary: 4,  xp: 3, size: 0.7,  color: '#b89060', shy: WILD_RADIUS - 9 },
+    turkey: { name: 'a wild turkey', kind: 'turkey', meat: 'fowl',   evade: 12, speed: 1.5, wary: 8,  xp: 4, size: 0.95, color: '#7a5a4a', shy: WILD_RADIUS + 5 },
+    deer:   { name: 'a deer',        kind: 'deer',   meat: 'meat-l', evade: 12, speed: 1.9, wary: 9,  xp: 6, size: 1.25, color: '#a9784c', shy: WILD_RADIUS + 8 },
+};
+const PREY_SPAWN_INTERVAL = 75, PREY_SPAWN_JITTER = 95;   // game-seconds between wild game appearing (occasional)
+const MAX_PREY = 4, PREY_LIFE = 150;                      // how many roam at once, and how long before one wanders off-map
 
 // episodic-journal tuning: cap per bot, and nightly decay per memory kind — hard
 // lessons stick for a season+, relationship/job episodes for weeks, small talk for days
@@ -4164,14 +4266,22 @@ export class Farmer {
         const push = (id, count, cap) => { if (count > 0 && ITEMS[id]) out.push({ id, name: ITEMS[id].name, icon: ITEMS[id].icon, count, cap }); };
         push('wood', this.wood, caps.wood);
         push('ore', this.ore, caps.ore);
-        // crops broken out by TYPE with their provenance (grown on the farm / stolen / found in the wilds)
-        const cs = this.sheet.cropStock || {};
-        for (const type of Object.keys(cs)) {
-            const e = cs[type], count = (e.grown || 0) + (e.stolen || 0) + (e.found || 0);
-            if (count > 0) out.push({ id: 'crop:' + type, crop: type, name: type.charAt(0).toUpperCase() + type.slice(1), count, sources: e });
-        }
+        // crops broken out by TYPE with their provenance (raised on the farm / stolen / foraged in the
+        // wilds). Foraged WILD wheat (goods.wheat) is FOLDED into the wheat stack as "foraged" — it's the
+        // same grain in the pouch, so we don't split wild from grown for now (may become "wild grass" later).
         const g = this.sheet.goods || {};
-        for (const key of ['wheat', 'flower']) push(key, g[key] || 0);
+        const cs = this.sheet.cropStock || {};
+        const wildWheat = g.wheat || 0;
+        const cropTypes = new Set(Object.keys(cs));
+        if (wildWheat > 0) cropTypes.add('wheat');
+        for (const type of cropTypes) {
+            const e = cs[type] || { grown: 0, stolen: 0, found: 0 };
+            const found = (e.found || 0) + (type === 'wheat' ? wildWheat : 0);
+            const count = (e.grown || 0) + (e.stolen || 0) + found;
+            if (count > 0) out.push({ id: 'crop:' + type, crop: type, name: type.charAt(0).toUpperCase() + type.slice(1),
+                                      count, sources: { grown: e.grown || 0, stolen: e.stolen || 0, found } });
+        }
+        for (const key of ['flower']) push(key, g[key] || 0);   // wheat folded above; flower stays a foraged good
         // wild-caught goods drawn with a procedural sprite (resolved renderer-side): fish is its own
         // item, lilies too — the yield of the wild-water fishing bounty.
         for (const key of ['fish', 'lily']) { const n = g[key] || 0; if (n > 0) out.push({ id: key, good: key, name: key === 'fish' ? 'Fish' : 'Lily pad', count: n }); }
