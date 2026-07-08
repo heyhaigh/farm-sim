@@ -4633,6 +4633,14 @@ export class Farmer {
         // SURVIVAL first: a wilderness threat on me (or a fight I've rallied to) overrides all chores.
         if (this.#handleCombat()) return;
 
+        // a lived lesson made AUDIBLE: venturing warily, far from home, where a foe once bested them —
+        // memory shaping visible behavior, not just a hidden journal entry.
+        const wary = (this.threatWary.foe || 0) + (this.threatWary.beast || 0);
+        if (wary >= 2 && this.plot.sited && this.rand() < 0.012 &&
+            Math.hypot(this.pos.i - (this.plot.x + 6), this.pos.j - (this.plot.y + 6)) > 20) {
+            this.say((this.threatWary.foe || 0) >= (this.threatWary.beast || 0) ? 'watch for raiders out this far...' : 'beasts prowl these wilds...', '#c8a060');
+        }
+
         // a founder who hasn't STAKED their claim yet: travel out from the plaza, scout the ground
         // they were drawn to, and stake it on arrival (then normal homesteading begins).
         if (!this.plot.sited) { this.#seekHomestead(); return; }
