@@ -4424,11 +4424,17 @@ export class Farmer {
         else if (deals >= 6 && p.honesty < 0.5) goal = 'sharp trader';           // the deals ARE the game
         else if (!goal && p.diligence > 0.7) goal = 'master farmer';
         if (goal !== this.goal) {
+            const hadCourse = !!this.goal;   // a genuine REVISION of an existing course vs. a first calling
             this.goal = goal;
             const creed = GOAL_CREEDS[goal];
             this.think(creed);
             this.remember('lesson', `Set my own course: ${goal} - ${creed.toLowerCase()}`, null, 1.3);
             this.world.addLog(`${this.sheet.name} has set their own course: ${goal.toUpperCase()}`, '#d08cc8');
+            // Legibility: an agent REWEIGHING its lived experience and CHANGING its approach is a
+            // story beat, so a genuine change of heart lands in the town chronicle (a first calling
+            // stays quieter — just the activity log above).
+            if (hadCourse) this.world.addChronicle('found',
+                `${this.sheet.name.split(' ')[0]} had a change of heart — now set on the ${goal} path.`, this, null, '#d08cc8');
         }
     }
 
