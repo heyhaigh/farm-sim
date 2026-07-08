@@ -1989,6 +1989,23 @@ function drawFarmer(f, sx, sy) {
     else if (f.barterDeal || (f.path && f.path.then === 'barter')) intent = 'barter';
     else if (f.helpTask) intent = 'help';
     if (intent && f.state !== 'sleep') drawIntentIcon(intent, sx + 8, py + 1);
+    // EMOTE: a transient social tell over the head — a pink heart when a bond forms, a red scowl when
+    // recoiling from someone they can't stand. Grudges/bonds you can catch happening (B3). Fades out.
+    if (f.emote && f.emoteT > 0 && f.state !== 'sleep') {
+        const ex = sx - 8, ey = py + 1;
+        ctx.globalAlpha = Math.min(1, f.emoteT);
+        ctx.fillStyle = 'rgba(14,12,10,0.6)'; ctx.fillRect(ex - 3, ey - 3, 8, 8);   // faint dark backing
+        if (f.emote === 'bond') {
+            ctx.fillStyle = '#e8688a';
+            ctx.fillRect(ex - 2, ey - 2, 2, 2); ctx.fillRect(ex + 1, ey - 2, 2, 2);       // two bumps
+            ctx.fillRect(ex - 2, ey, 5, 2); ctx.fillRect(ex - 1, ey + 2, 3, 1); ctx.fillRect(ex, ey + 3, 1, 1);   // taper to a point
+        } else {                                                                          // 'grudge'
+            ctx.fillStyle = '#e84438';
+            ctx.fillRect(ex - 2, ey + 2, 1, 1); ctx.fillRect(ex + 2, ey + 2, 1, 1); ctx.fillRect(ex - 1, ey + 3, 3, 1);  // frown
+            ctx.fillStyle = '#c02820'; ctx.fillRect(ex - 2, ey - 1, 2, 1); ctx.fillRect(ex + 1, ey - 1, 2, 1);           // angry brows
+        }
+        ctx.globalAlpha = 1;
+    }
 
     // carried lantern when working at night
     if (awakeAtNight && (f.state === 'work' || f.state === 'walk' || f.state === 'build')) {

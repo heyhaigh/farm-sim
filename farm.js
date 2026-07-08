@@ -1692,6 +1692,7 @@ export class World {
         const key = this.bondKey(a, b);
         const v = (this.bonds.get(key) || 0) + delta;
         this.bonds.set(key, v);
+        a.emote = b.emote = 'bond'; a.emoteT = b.emoteT = 1.6;   // a warm beat you can see (B3)
         // the moment a working acquaintance becomes a real friendship, note it (once per pair)
         if (v >= 4 && !this._chronBonds.has(key)) {
             this._chronBonds.add(key);
@@ -3967,6 +3968,8 @@ export class Farmer {
         this.combatStance = null; // 'fight' | 'flee' while facing a wilderness threat (see #handleCombat)
         this.threatAlert = 0;     // render pulse when a threat appears / while in danger
         this.hurtFlash = 0;       // render pulse when struck
+        this.emote = null;        // transient social tell ('grudge' | 'bond') shown over the head (B3)
+        this.emoteT = 0;          // seconds left on the current emote (dt-decremented — deterministic)
         this.fightTimer = 0; this.fleeTimer = 0;
         this.downed = false;      // felled by a FOE — reviving at home over a few days (NOT sickness)
         this.reviveDay = 0;       // world.day this bot gets back on their feet
@@ -6344,6 +6347,7 @@ export class Farmer {
         this.sparkle = Math.max(0, this.sparkle - dt);
         this.threatAlert = Math.max(0, this.threatAlert - dt);
         this.hurtFlash = Math.max(0, this.hurtFlash - dt * 2.5);
+        if (this.emoteT > 0) { this.emoteT -= dt; if (this.emoteT <= 0) this.emote = null; }
 
         if (this.state === 'sleep') this.energy = Math.min(1, this.energy + SLEEP_RESTORE * dt);
         else if (this.state === 'rest') this.energy = Math.min(1, this.energy + REST_RESTORE * dt);
@@ -6374,7 +6378,7 @@ export class Farmer {
                     if (this.avoidCooldown <= 0) {
                         this.avoidCooldown = 1.2;
                         const foe = this.#dislikedNear(2.8);
-                        if (foe) { this.think(`NOT NEAR ${shortName(foe).toUpperCase()}. NO THANKS.`); this.path = null; this.state = 'decide'; break; }
+                        if (foe) { this.think(`NOT NEAR ${shortName(foe).toUpperCase()}. NO THANKS.`); this.emote = 'grudge'; this.emoteT = 1.6; this.path = null; this.state = 'decide'; break; }
                     }
                 }
                 // absolute freeze watchdog: if position hasn't changed at all for a few seconds
