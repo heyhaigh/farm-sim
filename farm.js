@@ -3971,6 +3971,8 @@ export class Farmer {
         this.wantUpgrade = false; // ambition blocked by the HOUSE -> actively save toward the next tier
         this.woodTarget = null;
         this.fishTarget = null;   // { i, j (shore), water:{i,j} } — a wild lake being walked to
+        this.huntTarget = null;   // a world.prey animal this bot is running down (see the 'hunt' state)
+        this.huntTimer = 0;       // how much longer they'll keep up a chase before giving up
         this.tools = new Set();   // crafted tools owned (see CRAFTABLES) — unlock at level, cost ore
         this.craftTarget = null;  // the recipe a farmer has walked home to build
 
@@ -5334,6 +5336,21 @@ export class Farmer {
             if (spot) { this.think('A WILD LAKE — GOOD FISHING.'); this.fishTarget = spot; this.#goTo(spot.i + 0.5, spot.j + 0.5, 'fish'); return; }
         }
 
+        // 5b-3. HUNT wild game nearby — stalk deer/rabbit/turkey for MEAT (a prized barter good + a HP
+        //       restorative). Only a bot already out in the wilds who spots game close by, with the nerve +
+        //       knack for it (DEX + competitiveness + curiosity). A wounded bot is keener — meat mends them.
+        if (!w.isNight() && this.energy > 0.35 && Math.hypot(this.pos.i - CENTER, this.pos.j - CENTER) > WILD_RADIUS - 5) {
+            const a = w.nearestPrey(this.pos, 11);
+            if (a) {
+                const knack = 0.1 + Math.max(0, mod(s.stats.dex)) * 0.06 + this.p.competitiveness * 0.18
+                            + this.p.curiosity * 0.12 + (this.hp < this.maxHp * 0.6 ? 0.25 : 0);
+                if (this.rand() < knack) {
+                    this.think(`WILD ${a.kind.toUpperCase()} — MEAT IF I CAN CATCH IT`);
+                    this.huntTarget = a; a.hunter = this; this.huntTimer = 9; this.state = 'hunt'; return;
+                }
+            }
+        }
+
         // 5c. mine a nearby rock for ore — diligent/strong bots do this on downtime (but not
         //     when the store's already full: over-cap ore is discarded, so it'd be a wasted swing)
         if (!w.isNight() && this.energy > 0.35 && this.ore < this.storageCap().ore &&
@@ -6050,6 +6067,29 @@ export class Farmer {
         this.state = 'decide';
     }
 
+    // A lunge at cornered prey: DEX (+ a patient hunter's WIS) vs the animal's evasion. Land it and it's
+    // meat for the pouch + XP + a chronicle beat; miss and the animal bolts a burst — the chase goes on
+    // until the hunter's wind (huntTimer/energy) runs out.
+    #resolveHunt(a) {
+        const w = this.world, s = this.sheet;
+        this.#laborDrain('forage');   // the sprint + the lunge cost a little
+        const roll = d20(this.rand, mod(s.stats.dex) + Math.max(0, mod(s.stats.wis)));
+        if (roll.total >= a.def.evade || roll.crit) {
+            s.goods = s.goods || {};
+            s.goods[a.def.meat] = (s.goods[a.def.meat] || 0) + 1;
+            this.gainXP(a.def.xp);
+            this.say(`+${MEAT_NAME[a.def.meat]}`, '#e07868'); this.sparkle = roll.crit ? 1.2 : 0.8;
+            this.remember('event', `Ran down ${a.def.name} in the wilds — good hunting`, null, 0.6);
+            w.addLog(`${s.name} bagged ${a.def.name} — ${MEAT_NAME[a.def.meat]} for the pot.`, '#d0a060');
+            a.done = true; a.hunter = null; this.huntTarget = null; this.state = 'decide';
+        } else {
+            const ax = a.i - this.pos.i, ay = a.j - this.pos.j, m = Math.hypot(ax, ay) || 1;
+            a.i += (ax / m) * 2.5; a.j += (ay / m) * 2.5; a.bolt = 1.3;   // it darts clear
+            this.say('missed!', '#c0b060');
+            this.huntTimer = Math.min(this.huntTimer, 4);   // limited patience after a fumble
+        }
+    }
+
     #completeChop() {
         const w = this.world, tgt = this.woodTarget;
         if (tgt) {
@@ -6311,6 +6351,26 @@ export class Farmer {
                 this.world.reveal(Math.round(this.pos.i), Math.round(this.pos.j), 3);
                 this.fleeTimer -= dt;
                 if (this.fleeTimer <= 0) this.state = 'decide';
+                break;
+            }
+
+            case 'hunt': {   // run down a fleeing prey animal; when in range, lunge for the kill (see #resolveHunt)
+                const a = this.huntTarget;
+                if (!a || a.done || !this.world.prey.includes(a)) { this.huntTarget = null; this.state = 'decide'; break; }
+                this.huntTimer -= dt;
+                const dx = a.i - this.pos.i, dy = a.j - this.pos.j, dist = Math.hypot(dx, dy) || 1;
+                if (Math.abs(dx) > 0.05) this.facing = dx < 0 ? -1 : 1;
+                this.moveDir = 'side';
+                if (dist <= 1.2) { this.#resolveHunt(a); break; }   // close enough to strike
+                const sp = this.speed * 1.12 * dt;                  // press the chase a shade faster than it flees
+                let ni = this.pos.i + dx / dist * sp, nj = this.pos.j + dy / dist * sp;
+                if (this.world.pathBlocked(Math.floor(ni), Math.floor(nj))) { ni = this.pos.i + (dy / dist) * sp; nj = this.pos.j + (-dx / dist) * sp; }
+                if (!this.world.pathBlocked(Math.floor(ni), Math.floor(nj))) { this.pos.i = ni; this.pos.j = nj; }
+                this.energy = Math.max(0, this.energy - ACTION_ENERGY.build * 0.6 * dt);
+                this.world.reveal(Math.round(this.pos.i), Math.round(this.pos.j), 3);
+                if (this.huntTimer <= 0 || this.energy < 0.12 || dist > 16) {   // ran out of wind / lost it
+                    this.say('lost it', '#9a9a8a'); a.hunter = null; this.huntTarget = null; this.state = 'decide';
+                }
                 break;
             }
 
