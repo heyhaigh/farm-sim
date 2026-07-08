@@ -5411,7 +5411,8 @@ export class Farmer {
                             + this.p.curiosity * 0.12 + (this.hp < this.maxHp * 0.6 ? 0.25 : 0);
                 if (this.rand() < knack) {
                     this.think(`WILD ${a.kind.toUpperCase()} — MEAT IF I CAN CATCH IT`);
-                    this.huntTarget = a; a.hunter = this; this.huntTimer = 9; this.state = 'hunt'; return;
+                    // proud/competitive hands overextend (chase long); the timid quit early (#86)
+                    this.huntTarget = a; a.hunter = this; this.huntTimer = 6 + this.p.competitiveness * 8; this.state = 'hunt'; return;
                 }
             }
         }
@@ -6152,6 +6153,17 @@ export class Farmer {
                 Math.abs(o.pos.i - pos.i) + Math.abs(o.pos.j - pos.j) < 6);
             if (witness) { witness.say('HEY! THIEF!', '#c05840'); this.say('uh oh', '#e0a03c'); this.adjustReputation(-0.12); w.addBond(this, witness, -1); witness.adjustOpinion(this, -0.25, 'caught them thieving'); w.addLog(`${witness.sheet.name} caught ${s.name} stealing ${name}!`, '#c05840'); w.addChronicle('crime', `${witness.sheet.name.split(' ')[0]} caught ${s.name.split(' ')[0]} stealing ${name}.`, this, witness, '#c05840'); }
             else w.addLog(`${s.name} quietly made off with a ${name}`, '#e0a03c');
+            // #86 — an HONEST streak: a poacher near the upper end of "shady" can be guilt-stricken and
+            // give it straight back (nets a small good turn), the reverse of the hardened chaos-agent.
+            if (victim && victim !== this && this.carryCrop && this.rand() < this.p.honesty * 1.4) {
+                victim.sheet.produce = (victim.sheet.produce || 0) + 1;
+                if (s.cropStock && s.cropStock[this.carryCrop.type]) s.cropStock[this.carryCrop.type].stolen = Math.max(0, (s.cropStock[this.carryCrop.type].stolen || 0) - 1);
+                s.harvested = Math.max(0, s.harvested - 1); w.harvestTotal = Math.max(0, w.harvestTotal - 1);
+                this.carryCrop = null;
+                this.adjustReputation(0.14); victim.adjustOpinion(this, 0.28, 'owned up and gave it back');
+                this.say('...i cannot', '#7dd069'); this.emote = 'bond'; this.emoteT = 1.6;
+                w.addChronicle('bond', `${s.name.split(' ')[0]}, guilt-stricken, gave ${victim.sheet.name.split(' ')[0]} back their ${name}.`, this, victim, '#7dd069');
+            }
         }
         // the more crooked the bot, the sooner they're tempted to pilfer again (a chaos-agent
         // at honesty ~0.1 poaches roughly twice as often as a merely-shady one)
@@ -6225,7 +6237,7 @@ export class Farmer {
             const ax = a.i - this.pos.i, ay = a.j - this.pos.j, m = Math.hypot(ax, ay) || 1;
             a.i += (ax / m) * 2.5; a.j += (ay / m) * 2.5; a.bolt = 1.3;   // it darts clear
             this.say('missed!', '#c0b060');
-            this.huntTimer = Math.min(this.huntTimer, 4);   // limited patience after a fumble
+            this.huntTimer = Math.min(this.huntTimer, 2 + this.p.competitiveness * 5);   // a coward gives up after a miss; the proud press on (#86)
         }
     }
 
@@ -6387,7 +6399,18 @@ export class Farmer {
                     if (this.avoidCooldown <= 0) {
                         this.avoidCooldown = 1.2;
                         const foe = this.#dislikedNear(2.8);
-                        if (foe) { this.think(`NOT NEAR ${shortName(foe).toUpperCase()}. NO THANKS.`); this.emote = 'grudge'; this.emoteT = 1.6; this.path = null; this.state = 'decide'; break; }
+                        if (foe) {
+                            this.think(`NOT NEAR ${shortName(foe).toUpperCase()}. NO THANKS.`); this.emote = 'grudge'; this.emoteT = 1.6;
+                            // #86 — a VOLATILE hand doesn't just avoid; they escalate: a sharper grudge and,
+                            // now and then, a public blow-up that sours it for good (a rift beat).
+                            if (this.volatility > 0.66) {
+                                this.adjustOpinion(foe, -0.06, `bristled at ${shortName(foe)}`);
+                                if (this.rand() < 0.2) { this.say(`I'VE HAD IT WITH ${shortName(foe).toUpperCase()}!`, '#e05040');
+                                    foe.adjustOpinion(this, -0.1, 'blew up at me over nothing');
+                                    this.world.addChronicle('rift', `${this.sheet.name.split(' ')[0]} blew up at ${foe.sheet.name.split(' ')[0]} in the open.`, this, foe, '#e05040'); }
+                            }
+                            this.path = null; this.state = 'decide'; break;
+                        }
                     }
                 }
                 // absolute freeze watchdog: if position hasn't changed at all for a few seconds
