@@ -2592,6 +2592,7 @@ function drawSheet(f) {
 
         y = sectionBand(IX, y, IW, 'FARM');
         const kv = (lx, label, val, vcol = SHEET_VAL) => { drawText(ctx, label, lx, y, SHEET_LABEL); drawText(ctx, String(val), lx + 32, y, vcol); };
+        drawText(ctx, 'TRADE', IX, y, SHEET_LABEL); drawText(ctx, f.specialty().slice(0, 22), IX + 32, y, '#8ad0e0'); y += 7;   // the farm's specialty / identity
         const cropMix = (s.crops && s.crops.length ? s.crops : [s.crop]).join(', ');
         drawText(ctx, s.crops && s.crops.length > 1 ? 'CROPS' : 'CROP', IX, y, SHEET_LABEL);
         drawText(ctx, cropMix.slice(0, 24), IX + 32, y, SHEET_VAL); y += 7;

@@ -3942,6 +3942,18 @@ export class Farmer {
         return 0.7;   // forage goods = surplus to trade
     }
 
+    // The farm's IDENTITY — what it's known for, derived from its facilities + crops. A built
+    // facility is a real investment, so it leads the identity; a farm with none is known by its
+    // crops. Purely derived (no rng), so it always reflects the farm as it stands today — and it's
+    // the hook the coming market/barter layer reads to decide who trades what and who might pivot.
+    specialty() {
+        const facs = [...new Set(this.plot.facilities.map(f => f.type))];
+        if (facs.length >= 2) return 'mixed homestead';
+        if (facs.length === 1) return { coop: 'poultry farm', pen: 'livestock ranch', sheeppen: 'wool farm', pond: 'fishery' }[facs[0]] || 'homestead';
+        const crops = (this.sheet.crops && this.sheet.crops.length) ? this.sheet.crops : [this.sheet.crop];
+        return crops.length === 1 ? `${crops[0]} grower` : 'market garden';
+    }
+
     // Warmest ally / worst grudge, for the sheet's social readout.
     topRegard(sign) {
         let best = null, bestV = 0;
