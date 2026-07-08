@@ -277,6 +277,25 @@ function addCropStock(sheet, type, n, source) {
     e[source] = (e[source] || 0) + n;
 }
 
+// Physical crops leave the farm (traded / donated / eaten) — drain `n` units from cropStock so the
+// by-type inventory reflects CURRENT holdings, not lifetime provenance. Largest type first, grown ->
+// found -> stolen within it. Deterministic (stable key order + count sort). Called wherever `produce`
+// (the untyped spendable wallet) is decremented; the type breakdown is our best record of what left.
+function spendCropStock(sheet, n) {
+    const cs = sheet.cropStock; if (!cs || n <= 0) return;
+    const tot = t => (cs[t].grown || 0) + (cs[t].stolen || 0) + (cs[t].found || 0);
+    const types = Object.keys(cs).sort((a, b) => tot(b) - tot(a));
+    let left = Math.round(n);
+    for (const t of types) {
+        if (left <= 0) break;
+        for (const src of ['grown', 'found', 'stolen']) {
+            const take = Math.min(left, cs[t][src] || 0);
+            cs[t][src] -= take; left -= take;
+            if (left <= 0) break;
+        }
+    }
+}
+
 function cleanChatText(text, max = CHAT_LINE_MAX) {
     let s = String(text || '')
         .replace(/[\u2018\u2019]/g, "'")
@@ -2916,7 +2935,7 @@ export class World {
         if (good === 'wood') { from.wood -= n; to.wood += n; }
         else if (good === 'ore') { from.ore -= n; to.ore += n; }
         // crops move a spendable produce balance, NOT lifetime `harvested` (which gates leveling/upgrades)
-        else if (good === 'crops') { from.sheet.produce -= n; to.sheet.produce = (to.sheet.produce || 0) + n; }
+        else if (good === 'crops') { from.sheet.produce -= n; spendCropStock(from.sheet, n); to.sheet.produce = (to.sheet.produce || 0) + n; }
         else { from.sheet.goods[good] -= n; to.sheet.goods = to.sheet.goods || {}; to.sheet.goods[good] = (to.sheet.goods[good] || 0) + n; }
         return n;
     }
@@ -3325,6 +3344,8 @@ export class World {
         if (this.clock >= DAY_LENGTH + NIGHT_LENGTH) {
             const endedDay = this.day, endedSeason = this.season;   // capture before the rollover mutates them
             this.clock = 0; this.day++;
+            // age out expired fishing-spot cooldowns so the map doesn't accumulate stale entries forever
+            for (const [k, d] of this.fishedAt) if (this.day - d > FISH_COOLDOWN) this.fishedAt.delete(k);
             this.#dailyHealthCheck();
             this.#advanceSeason();
             this.#decayTilled();
@@ -4501,7 +4522,7 @@ export class Farmer {
     #spendGood(good, n) {
         if (good === 'wood') this.wood = Math.max(0, this.wood - n);
         else if (good === 'ore') this.ore = Math.max(0, this.ore - n);
-        else if (good === 'crops') this.sheet.produce = Math.max(0, (this.sheet.produce || 0) - n);
+        else if (good === 'crops') { this.sheet.produce = Math.max(0, (this.sheet.produce || 0) - n); spendCropStock(this.sheet, n); }
         else { this.sheet.goods[good] = Math.max(0, (this.sheet.goods[good] || 0) - n); }
     }
 
@@ -5635,16 +5656,21 @@ export class Farmer {
         return best;
     }
 
-    // Meet the neighbour and make the swap — a fair 3-for-3 (each values what they GET above what they
-    // GIVE, so both come out ahead). Seals a small bond + a chronicle beat, and both remember it.
+    // Meet the neighbour and make the swap — a fair N-for-N (up to 3 each way), where N is what BOTH
+    // sides can actually cover RIGHT NOW. Their stock may have dropped since I set out, so size the deal
+    // to the smaller of the two piles and swap equal counts — never a lopsided 3-for-1. Seals a bond +
+    // chronicle beat, and both remember it.
     #completeBarter() {
         const w = this.world, deal = this.barterDeal; this.barterDeal = null;
         this.state = 'decide';
         if (!deal || !w.farmers.includes(deal.partner)) return;
         const B = deal.partner;
         if (B.downed || Math.hypot(B.pos.i - this.pos.i, B.pos.j - this.pos.j) > 3.5) { this.say('...gone', '#9a9a8a'); return; }
-        const gave = w.transferGood(this, B, deal.give, 3);
-        const got = deal.get === 'crops' ? w.transferGood(B, this, 'crops', 3) : w.transferGood(B, this, deal.get, 3);
+        const stock = (f, g) => g === 'crops' ? (f.produce || 0) : ((f.sheet.goods && f.sheet.goods[g]) || 0);
+        const n = Math.min(3, stock(this, deal.give), stock(B, deal.get));   // fair, symmetric, affordable
+        if (n <= 0) { this.say('...no deal', '#9a9a8a'); return; }
+        const gave = w.transferGood(this, B, deal.give, n);
+        const got = w.transferGood(B, this, deal.get, n);
         if (gave > 0 && got > 0) {
             this.facing = B.pos.i > this.pos.i ? 1 : -1;
             this.say(`${deal.give}↔${deal.get}`, '#e0c060'); B.say('deal!', '#e0c060'); this.sparkle = 0.6;
@@ -5653,8 +5679,8 @@ export class Farmer {
             this.gainXP(2); B.gainXP(1);
             this.remember('event', `Bartered ${gave} ${deal.give} for ${got} ${deal.get} with ${B.sheet.name.split(' ')[0]}`, B, 0.5);
             w.addChronicle('trade', `${this.sheet.name.split(' ')[0]} bartered ${deal.give} for ${B.sheet.name.split(' ')[0]}'s ${deal.get}.`, this, B, '#e0c060');
-        } else if (gave > 0 && got === 0) {
-            w.transferGood(B, this, deal.give, gave);   // they had nothing to give back — hand mine back
+        } else if (gave > got) {
+            w.transferGood(B, this, deal.give, gave - got);   // safety: only ever swap equal counts — return any excess
         }
     }
 
