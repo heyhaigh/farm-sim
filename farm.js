@@ -3008,6 +3008,16 @@ export class World {
 
     #dailyHealthCheck() {
         for (const f of this.farmers) {
+            if (f.downed) {   // felled by a foe — back on their feet at home after 3 days (NOT sickness)
+                if (this.day >= f.reviveDay) {
+                    f.downed = false; f.health = 'healthy'; f.energy = 0.6; f.state = 'decide';
+                    const home = f.plot && f.plot.sited ? this.houseDoor(f.plot) : { i: CENTER, j: CENTER };
+                    f.pos = { i: home.i, j: home.j };
+                    this.addLog(`${f.sheet.name} picked themselves back up and is home, wiser for it.`, '#7dd069');
+                    f.say('...I LIVE.', '#7dd069');
+                }
+                f.workedLate = false; continue;
+            }
             if (f.health === 'sick') {
                 f.sickDays -= 1;
                 f.nightsExposed = Math.max(0, f.nightsExposed - 1);   // recovering eases the exposure count
@@ -3093,7 +3103,7 @@ export class World {
     // A settler is exposed to the wilds when they're well clear of the plaza core AND not safe on
     // their own fenced homestead — out foraging/mining/charting where the DM's threats roam.
     #inWild(f) {
-        if (!f.plot || f.state === 'sleep' || f.state === 'sleepwalk' || f.health === 'sick') return false;
+        if (!f.plot || f.downed || f.state === 'sleep' || f.state === 'sleepwalk' || f.health === 'sick') return false;
         if (Math.hypot(f.pos.i - CENTER, f.pos.j - CENTER) < WILD_RADIUS) return false;
         const p = f.plot;
         if (p.sited && f.pos.i >= p.x - 1 && f.pos.i <= p.x + p.w + 1 && f.pos.j >= p.y - 1 && f.pos.j <= p.y + p.h + 1) return false;
@@ -3187,10 +3197,51 @@ export class World {
         f.hurtFlash = 1; f.say('argh!', '#e05040');
         if (e.def.loot === 'ore' && f.ore > 0 && this.rand() < 0.35) f.ore = Math.max(0, f.ore - 2);       // raider grabs loot
         else if (e.def.loot === 'goods' && this.rand() < 0.35) this.#stealGood(f);
-        if (f.energy <= 0.08) {                            // beaten down: break and flee home hurt
-            f.combatStance = 'flee';
-            this.#endEncounter(e, `${f.sheet.name} was overpowered by ${e.def.name} and fled home hurt!`, '#e05040');
+        if (f.energy <= 0.08) {
+            if (e.def.kind === 'foe') this.#downFarmer(f, e);   // a FOE can put you DOWN (a hard reset, not sickness)
+            else {                                              // a beast just gores you — break and flee home hurt
+                f.combatStance = 'flee';
+                this.recordEncounter(f, e.def, 'beaten');
+                this.#endEncounter(e, `${f.sheet.name} was gored by ${e.def.name} and fled home hurt!`, '#e05040');
+            }
         }
+    }
+
+    // FELLED BY A FOE — treated as a hard RESET, not death and not sickness: they lose a quarter of
+    // their harvest, drop out for 3 days, then pick themselves back up at home (or where they fell if
+    // they've no home yet). They come back WISER (recordEncounter). Sickness, by contrast, costs a day.
+    #downFarmer(f, e) {
+        const lost = Math.floor(f.sheet.harvested * 0.25);
+        f.sheet.harvested = Math.max(0, f.sheet.harvested - lost);
+        f.downed = true; f.reviveDay = this.day + 3; f.state = 'downed';
+        const home = f.plot && f.plot.sited ? this.houseDoor(f.plot) : { i: f.pos.i, j: f.pos.j };
+        f.pos = { i: home.i, j: home.j };
+        this.recordEncounter(f, e.def, 'downed');
+        this.#endEncounter(e, null);   // clean up helpers/stance (state is 'downed', so it isn't reset)
+        this.addLog(`${f.sheet.name} was struck down by ${e.def.name}! They'll recover at home in 3 days (lost ${lost} crop).`, '#e03828');
+        f.say('...', '#e03828');
+    }
+
+    // A settler comes away from an encounter WISER — logging what they learned about the foe, where
+    // the danger lay, and how they'd handle it next time — and grows warier of that kind of threat.
+    recordEncounter(f, def, outcome) {
+        const dir = this.#compass(f.pos.i, f.pos.j);
+        if (outcome === 'downed' || outcome === 'beaten') {
+            f.threatWary[def.kind] = (f.threatWary[def.kind] || 0) + (outcome === 'downed' ? 2 : 1);
+            f.remember('lesson', outcome === 'downed'
+                ? `${def.name} cut me down out ${dir} — I'm no match for one alone. Next time I run, or bring help.`
+                : `${def.name} bloodied me out ${dir}. Best give that ground a wide berth, or not go there alone.`, null, 1.3);
+            f.think(outcome === 'downed' ? 'NEVER FACE ONE ALONE AGAIN...' : 'THAT GROUND IS DANGEROUS.');
+        } else if (outcome === 'won') {
+            f.remember('event', `Stood my ground against ${def.name} out ${dir} and won — I've got their measure now.`, null, 1.0);
+            f.threatWary[def.kind] = Math.max(0, (f.threatWary[def.kind] || 0) - 0.5);   // a win eases the dread
+        }
+    }
+    #compass(i, j) {
+        const dx = i - CENTER, dy = j - CENTER;
+        const ns = dy < -6 ? 'north' : dy > 6 ? 'south' : '';
+        const ew = dx < -6 ? 'west' : dx > 6 ? 'east' : '';
+        return (ns + ew) || 'in the near wilds';
     }
 
     #stealGood(f) {
@@ -3208,6 +3259,7 @@ export class World {
         const who = fighters.length > 1 ? `${f.sheet.name} + ${fighters.length - 1} more` : f.sheet.name;
         this.addLog(`${who} drove off ${e.def.name}!`, '#7dd069');
         f.sparkle = 2;
+        for (const ff of fighters) this.recordEncounter(ff, e.def, 'won');
     }
 
     #endEncounter(e, msg, color) {
@@ -3456,6 +3508,9 @@ export class Farmer {
         this.threatAlert = 0;     // render pulse when a threat appears / while in danger
         this.hurtFlash = 0;       // render pulse when struck
         this.fightTimer = 0; this.fleeTimer = 0;
+        this.downed = false;      // felled by a FOE — reviving at home over a few days (NOT sickness)
+        this.reviveDay = 0;       // world.day this bot gets back on their feet
+        this.threatWary = {};     // foe-kind -> how many times it's bested me (raises my urge to flee/rally)
         this.scarecrowTarget = null;
 
         // episodic memory: a day-stamped journal of what happened to THIS bot — who helped,
@@ -4099,12 +4154,16 @@ export class Farmer {
     #faceThreat(e) {
         const w = this.world, def = e.def;
         if (this.combatStance == null) {
-            const odds = this.combatMod() - (def.diff - 11);
-            const nerve = 0.28 + this.p.competitiveness * 0.5 + this.p.diligence * 0.2
-                        + (this.sheet.stats.str >= 13 ? 0.15 : 0) + odds * 0.09 - (def.menace - 0.8) * 0.4;
+            // LEVEL is the biggest factor in whether they'll stand: a green level-1 hand has no
+            // business trading blows with an orc, whatever their raw STR — they flee and fetch help.
+            // Then personality (nerve/competitiveness), the foe's menace, and any hard-won WARINESS
+            // from past maulings tilt the call.
+            const powerGap = this.combatMod() + (this.sheet.level || 1) * 0.7 - (def.diff - 8) - def.hp * 1.4;
+            const nerve = 0.5 + powerGap * 0.11 + this.p.competitiveness * 0.35 + this.p.diligence * 0.12
+                        - (def.menace - 0.8) * 0.25 - (this.threatWary[def.kind] || 0) * 0.2;
             this.combatStance = nerve > 0.5 ? 'fight' : 'flee';
             if (this.combatStance === 'fight') this.say('COME ON THEN!', '#e0c040');
-            else { this.say(`HELP! ${def.name.toUpperCase()}!`, '#e05040'); e.helpWanted = true; }
+            else { this.say(powerGap < -3 ? `NO CHANCE ALONE — HELP!` : `HELP! ${def.name.toUpperCase()}!`, '#e05040'); e.helpWanted = true; }
         }
         // badly hurt mid-fight? break off and run rather than fight to collapse (unless help's at hand)
         if (this.combatStance === 'fight' && this.energy < 0.28 && e.helpers.size === 0) {
@@ -5478,6 +5537,7 @@ export class Farmer {
 
     tick(dt) {
         this.animTime += dt;
+        if (this.downed) { this.hurtFlash = Math.max(0, this.hurtFlash - dt * 2.5); return; }   // out cold, recovering at home
         this.helpCooldown = Math.max(0, this.helpCooldown - dt);
         this.poachCooldown = Math.max(0, this.poachCooldown - dt);
         this.coopCooldown = Math.max(0, this.coopCooldown - dt);

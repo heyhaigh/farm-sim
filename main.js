@@ -1230,7 +1230,10 @@ function collectDrawables() {
                 // indoor status floating over the roof
                 const roofX = Math.floor(sx);
                 if (indoors) {
-                    if (f.state === 'sick') {
+                    if (f.downed) {
+                        const bob = Math.round(Math.sin(performance.now() / 500));
+                        drawText(ctx, '+', roofX - 1, roofY + bob, '#e03828');   // red cross: recovering from wounds
+                    } else if (f.state === 'sick') {
                         const bob = Math.round(Math.sin(performance.now() / 400));
                         drawText(ctx, '+', roofX - 1, roofY + bob, '#c05840');
                     } else if (f.state === 'shelter') {
@@ -1645,6 +1648,7 @@ function drawProducer(p, px, py) {
 // Is this farmer tucked inside their house (asleep / resting / ill / sheltering)?
 // Homeless settlers have no house yet, so they're always shown out in the open.
 function isIndoors(f) {
+    if (f.downed) return f.plot.built.level >= 1;   // felled: recovering inside their home (if they have one)
     if (f.plot.built.level < 1) return false;
     return f.state === 'sleep' || f.state === 'rest' || f.state === 'sick' || f.state === 'shelter';
 }
