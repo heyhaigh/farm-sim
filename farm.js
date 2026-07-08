@@ -3926,7 +3926,14 @@ export class Farmer {
             }
         }
         if (reason) {
-            this.opinionReasons = this.opinionReasons || new Map(), this.opinionReasons.set(k, reason);
+            // keep the reason SORTED BY DIRECTION: the last thing that WARMED us to them and the last
+            // thing that SOURED us, stored separately. The TIES tab then shows whichever matches the
+            // net opinion's sign — so "Trusts X" never reads "- tricked me" (a positive tie shows a
+            // positive reason; the trick still lives in the journal + drags the opinion value down).
+            this.opinionReasons = this.opinionReasons || new Map();
+            const rec = this.opinionReasons.get(k) || {};
+            if (d >= 0) rec.pos = reason; else rec.neg = reason;
+            this.opinionReasons.set(k, rec);
             // every opinion shift is an episode worth journaling; stronger shifts stick longer
             this.remember('person', `${other.sheet.name.split(' ')[0]} - ${reason}`, other, 0.6 + Math.min(0.6, Math.abs(d) * 1.5));
         }

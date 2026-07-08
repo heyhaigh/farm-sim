@@ -2277,13 +2277,13 @@ function drawUI() {
 
     barBtn(ROSTER_BTN, 'ROSTER', rosterOpen, '#7dd069', '#10240c');
     barBtn(CHRON_BTN, 'CHRONICLE', chronOpen, '#c8a0e0', '#1a1024');
-    if (world.chronicle.length && !chronOpen) drawCoin(CHRON_BTN.x + CHRON_BTN.w - 4, CHRON_BTN.y - 3, 6);
+    if (world.chronicle.length && !chronOpen) drawCoin(CHRON_BTN.x + CHRON_BTN.w - 3, CHRON_BTN.y - 2, 6);
 
     BOARD_BTN.hidden = !world.board;   // only exists once the town has built the board
     if (!BOARD_BTN.hidden) {
         const postCount = world.helpBoard.filter(r => r.genuine).length + (world.project ? 1 : 0);
         barBtn(BOARD_BTN, 'BOARD', boardOpen, '#c9a45a', '#221a0e');
-        if (postCount > 0 && !boardOpen) drawCoin(BOARD_BTN.x + BOARD_BTN.w - 4, BOARD_BTN.y - 3, 6);
+        if (postCount > 0 && !boardOpen) drawCoin(BOARD_BTN.x + BOARD_BTN.w - 3, BOARD_BTN.y - 2, 6);
     }
 
 
@@ -2727,13 +2727,15 @@ function drawSheet(f) {
         if (!friends.length && !grudges.length) { drawText(ctx, 'no strong ties yet', IX + 2, y, SHEET_LABEL); y += 8; }
         for (const fr of friends) {
             drawText(ctx, `Trusts ${fr.who.sheet.name.split(' ')[0]}`, IX + 2, y, '#7dd069'); y += 7;
-            const r = f.opinionReasons && f.opinionReasons.get(fr.who.sheet.seed);
+            const rec = f.opinionReasons && f.opinionReasons.get(fr.who.sheet.seed);
+            const r = rec && rec.pos;   // a POSITIVE tie shows why they warmed to them (never a soured memory)
             if (r) for (const line of wrapText(`- ${r}`, 30).slice(0, 1)) { drawText(ctx, line, IX + 6, y, SHEET_LABEL); y += 7; }
         }
         for (const gr of grudges) {
             const verb = gr.v <= -0.35 ? 'Avoids' : 'Wary of';   // strong resentment = active avoidance
             drawText(ctx, `${verb} ${gr.who.sheet.name.split(' ')[0]}`, IX + 2, y, '#c05840'); y += 7;
-            const r = f.opinionReasons && f.opinionReasons.get(gr.who.sheet.seed);
+            const rec = f.opinionReasons && f.opinionReasons.get(gr.who.sheet.seed);
+            const r = rec && rec.neg;   // a NEGATIVE tie shows what soured it (never a warm memory)
             if (r) for (const line of wrapText(`- ${r}`, 30).slice(0, 1)) { drawText(ctx, line, IX + 6, y, SHEET_LABEL); y += 7; }
         }
         y += 3;
