@@ -401,6 +401,18 @@ function drawCoin(x, y, size = 8) {
     ctx.drawImage(uiSheet, c.x, c.y, c.w, c.h, Math.round(x), Math.round(y), size, size);
     ctx.imageSmoothingEnabled = sm;
 }
+// fantasy 16x16 icon sheet — the sick "blood drop" marker (and, later, hunted-meat icons)
+const fantasyIcons = new Image(); let fantasyIconsReady = false; fantasyIcons.onload = () => { fantasyIconsReady = true; }; fantasyIcons.onerror = () => {};
+fantasyIcons.src = './assets/craftpix-net-994534-free-basic-pixel-art-fantasy-icons-16x16-for-ui/PNG/Gui_icons2.png';
+const SICK_DROP_SRC = { x: 266, y: 7, w: 10, h: 17 };
+// a small blood drop, centred on cx with its top at y (over a sick farmer's home/head)
+function drawBloodDrop(cx, y) {
+    if (!fantasyIconsReady || !fantasyIcons.naturalWidth) return;
+    const s = SICK_DROP_SRC, dw = 6, dh = Math.round(dw * s.h / s.w);
+    const sm = ctx.imageSmoothingEnabled; ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(fantasyIcons, s.x, s.y, s.w, s.h, Math.round(cx - dw / 2), Math.round(y), dw, dh);
+    ctx.imageSmoothingEnabled = sm;
+}
 const MERCHANT_SHEETS = ['Citizen1_Walk', 'Citizen2_Walk', 'Fighter2_Walk'].map(f => {
     const img = new Image(); img.onerror = () => {}; img.src = GUILD_BASE + f + '.png'; return img;
 });
@@ -1317,7 +1329,7 @@ function collectDrawables() {
                         drawSkull(roofX, roofY + bob - 5);
                     } else if (f.state === 'sick') {
                         const bob = Math.round(Math.sin(performance.now() / 400));
-                        drawText(ctx, '+', roofX - 1, roofY + bob, '#c05840');
+                        drawBloodDrop(roofX, roofY + bob);
                     } else if (f.state === 'shelter') {
                         drawText(ctx, '!', roofX - 1, roofY, '#e0a03c');
                     } else {
@@ -1865,7 +1877,7 @@ function drawFarmer(f, sx, sy) {
             drawText(ctx, 'Z', px + 6, py - 8 - zt * 3, `rgba(200,210,255,${1 - zt * 0.25})`);
         } else if (f.health === 'sick') {
             const bob = Math.floor(Math.sin(performance.now() / 400) * 1);
-            drawText(ctx, '+', px + 6, py - 8 + bob, '#c05840');
+            drawBloodDrop(px + 6, py - 10 + bob);
         } else if (f.tired || f.state === 'rest') {
             drawText(ctx, '~', px + 6, py - 7, '#e0a03c');
         }
