@@ -128,9 +128,8 @@ class FarmAudio {
         this.hasRooster = hasRooster;
         if (!this.ctx) { this.wasNight = isNight; this.season = season; return; }
         const t = this.ctx.currentTime;
-        // a steady hammer-on-wood while ANY structure is being raised — an audible feedback loop
-        // that real work is happening (houses, fences, wells, communal projects).
-        if (building && this.enabled && t - (this.lastHammer || 0) > 0.44) { this.#hammer(); this.lastHammer = t; }
+        // (structure-raising hammer is now emitted PER FARMER by the renderer via workSfx(), so it's
+        //  positioned in the stereo field and fades with camera distance — see maybeWorkSfx in main.js)
         this.season = season;
         // dawn: the rooster crow is disabled for now — the synth never read as a real crow, so
         // it's pulled from the dawn cue. (#crow()/playCrow() are left dormant below for a future
@@ -250,22 +249,57 @@ class FarmAudio {
 
     // One hammer knock on wood: a short bandpass-noise thwack over a low woody thud. Called on a
     // steady rhythm from update() while any structure is being raised.
-    #hammer() {
-        const ctx = this.ctx, t = ctx.currentTime;
+    // a per-sound output stage: a gain (proximity volume) into a stereo panner (screen position)
+    #workOut(pan, vol) {
+        const g = this.ctx.createGain(); g.gain.value = vol;
+        g.connect(this.#panned(this.master, Math.max(-1, Math.min(1, pan))));
+        return g;
+    }
+
+    // A metallic HAMMER on wood — raising a house/fence/well/structure.
+    #hammer(pan = 0, vol = 1) {
+        const ctx = this.ctx, t = ctx.currentTime, out = this.#workOut(pan, vol);
         const src = ctx.createBufferSource(); src.buffer = this.#noiseBuffer(0.09);
         const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1500; bp.Q.value = 1.1;
         const g = ctx.createGain();
         g.gain.setValueAtTime(0.0001, t);
         g.gain.linearRampToValueAtTime(0.12, t + 0.004);
         g.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
-        src.connect(bp); bp.connect(g); g.connect(this.master);
+        src.connect(bp); bp.connect(g); g.connect(out);
         src.start(t); src.stop(t + 0.1);
         const o = ctx.createOscillator(); o.type = 'triangle';
         o.frequency.setValueAtTime(190, t); o.frequency.exponentialRampToValueAtTime(85, t + 0.08);
         const og = ctx.createGain();
         og.gain.setValueAtTime(0.08, t); og.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
-        o.connect(og); og.connect(this.master);
+        o.connect(og); og.connect(out);
         o.start(t); o.stop(t + 0.1);
+    }
+
+    // A woody CHOP — an axe biting a tree/stump. Duller + lower than the hammer.
+    #chop(pan = 0, vol = 1) {
+        const ctx = this.ctx, t = ctx.currentTime, out = this.#workOut(pan, vol);
+        const src = ctx.createBufferSource(); src.buffer = this.#noiseBuffer(0.06);
+        const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 780; bp.Q.value = 0.8;
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.linearRampToValueAtTime(0.15, t + 0.003);
+        g.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
+        src.connect(bp); bp.connect(g); g.connect(out);
+        src.start(t); src.stop(t + 0.07);
+        const o = ctx.createOscillator(); o.type = 'sine';
+        o.frequency.setValueAtTime(150, t); o.frequency.exponentialRampToValueAtTime(66, t + 0.08);
+        const og = ctx.createGain();
+        og.gain.setValueAtTime(0.11, t); og.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
+        o.connect(og); og.connect(out);
+        o.start(t); o.stop(t + 0.1);
+    }
+
+    // Public one-shot for a farmer's chop/hammer, placed in the stereo field (pan -1..1) at a
+    // proximity volume (0..1). Driven per-frame by the renderer, which knows each farmer's screen pos.
+    workSfx(kind, pan = 0, vol = 1) {
+        if (!this.ctx || !this.enabled || vol <= 0.02) return;
+        if (kind === 'chop') this.#chop(pan, Math.min(1, vol));
+        else this.#hammer(pan, Math.min(1, vol));
     }
 
     #thunder() {

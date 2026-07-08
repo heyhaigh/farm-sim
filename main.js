@@ -614,6 +614,28 @@ function houseSprite(color) {
 // iso transforms
 function isoX(i, j) { return (i - j) * (TILE_W / 2); }
 function isoY(i, j) { return (i + j) * (TILE_H / 2); }
+
+// Proximity work audio: a farmer's chop/hammer, panned by screen position and faded by camera
+// distance, so the world sounds busy where you're LOOKING and quiets toward the edges. Driven by
+// the renderer (it knows each farmer's screen pos); never touches the sim, so determinism is safe.
+const WORK_SFX_KIND = { chop: 'chop', break: 'chop', mine: 'hammer', build: 'hammer',
+    coopbuild: 'hammer', housebuild: 'hammer', fencepost: 'hammer', scarecrow: 'hammer' };
+const workSfxNext = new Map();   // farmer seed -> next allowed play time (s)
+function maybeWorkSfx(f, sx, sy) {
+    if (!audio.enabled) return;
+    const kind = WORK_SFX_KIND[f.state];
+    if (!kind) return;
+    const dx = (sx - GW / 2) / (GW / 2), dy = (sy - GH / 2) / (GH / 2);
+    const d = Math.hypot(dx, dy);
+    if (d > 1.35) return;                                   // well off-screen — silent
+    const vol = Math.max(0, Math.min(1, 1 - d * 0.62));     // loud at centre, faint at the edges
+    if (vol < 0.06) return;
+    const now = performance.now() / 1000;
+    if (now < (workSfxNext.get(f.sheet.seed) || 0)) return;
+    // per-farmer cadence + jitter so a work gang never thwacks in perfect unison
+    workSfxNext.set(f.sheet.seed, now + 0.4 + (f.sheet.seed % 11) * 0.012 + Math.random() * 0.05);
+    audio.workSfx(kind, Math.max(-1, Math.min(1, dx)), vol * 0.9);
+}
 function screenToTile(sx, sy) {
     const gx = sx - cam.x, gy = sy - cam.y;
     const i = gx / TILE_W + gy / TILE_H;
@@ -1518,6 +1540,7 @@ function collectDrawables() {
         if (isIndoors(f)) continue;
         const sx = cam.x + isoX(f.pos.i, f.pos.j);
         const sy = cam.y + isoY(f.pos.i, f.pos.j);
+        maybeWorkSfx(f, sx, sy);
         list.push({ y: sy + TILE_H * 0.5 + 0.1, draw: () => drawFarmer(f, sx, sy) });
     }
 
