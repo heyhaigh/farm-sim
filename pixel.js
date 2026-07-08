@@ -45,7 +45,10 @@ export function drawText(ctx, str, x, y, color, scale = 1) {
     // snap to integer source pixels so glyphs never land on a half-pixel (which the browser would
     // anti-alias into a blur — the cause of the shimmer when a panel is scrolled by a fractional amount)
     let cx = Math.round(x); const yy = Math.round(y);
-    for (const raw of String(str).toUpperCase()) {
+    // fold typographic characters the 3x5 font lacks onto plain equivalents (em/en-dash -> hyphen,
+    // curly quotes -> straight, ellipsis -> "...") so a stray "—" never shows up as a "?" over a head
+    const norm = String(str).toUpperCase().replace(/[—–]/g, '-').replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/…/g, '...');
+    for (const raw of norm) {
         const glyph = FONT[raw] || FONT['?'];
         for (let i = 0; i < 15; i++) {
             if (glyph[i] === '1') {
