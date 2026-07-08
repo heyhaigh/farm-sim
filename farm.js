@@ -3444,11 +3444,13 @@ const MERCHANT_TYPES = [
 // (fox/boar) hunt; foes (orc/assassin) raid, and the assassin stalks the town's standout hand. A
 // settler answers by their nature: the bold + strong stand and FIGHT (d20 + STR/CON vs difficulty),
 // the timid FLEE for the plaza, the outmatched CALL FOR HELP — and brave neighbours come running.
+// Farmers fight with bare hands and a hoe, so even beasts are dangerous — only a fox is a safe shoo-off.
+// diff = how hard to land a blow on it AND how hard to dodge its own; hp = blows to drive it off.
 const ENCOUNTER_DEFS = {
-    fox:      { name: 'a fox',             kind: 'beast', diff: 9,  hp: 1, dmg: 2, speed: 1.5,  menace: 0.5, color: '#d0803c' },
-    boar:     { name: 'a wild boar',       kind: 'beast', diff: 12, hp: 2, dmg: 3, speed: 1.2,  menace: 0.9, color: '#8a6a4a' },
-    orc:      { name: 'an orc raider',     kind: 'foe',   diff: 14, hp: 3, dmg: 4, speed: 1.05, menace: 1.1, loot: 'ore',   color: '#6a8a4a' },
-    assassin: { name: 'a hooded assassin', kind: 'foe',   diff: 16, hp: 3, dmg: 5, speed: 1.45, menace: 1.5, loot: 'goods', color: '#6a5a7a' },
+    fox:      { name: 'a fox',             kind: 'beast', diff: 10, hp: 1, dmg: 2, speed: 1.5,  menace: 0.6, color: '#d0803c' },
+    boar:     { name: 'a wild boar',       kind: 'beast', diff: 13, hp: 3, dmg: 4, speed: 1.2,  menace: 1.1, color: '#8a6a4a' },
+    orc:      { name: 'an orc raider',     kind: 'foe',   diff: 15, hp: 4, dmg: 5, speed: 1.05, menace: 1.3, loot: 'ore',   color: '#6a8a4a' },
+    assassin: { name: 'a hooded assassin', kind: 'foe',   diff: 17, hp: 4, dmg: 6, speed: 1.45, menace: 1.6, loot: 'goods', color: '#6a5a7a' },
 };
 const ENCOUNTER_INTERVAL = 130, ENCOUNTER_JITTER = 130;   // game-seconds between spawn attempts (~1-2/day)
 const MAX_ENCOUNTERS = 3, WILD_RADIUS = 30;             // the wilds begin ~this far from the plaza
@@ -4171,8 +4173,9 @@ export class Farmer {
         }
     }
 
-    // Combat capability: STR + CON modifiers, plus a bump for hard-won levels.
-    combatMod() { return mod(this.sheet.stats.str) + mod(this.sheet.stats.con) + Math.floor((this.sheet.level || 1) / 4); }
+    // Combat capability is PHYSICAL — bare hands and a hoe — so it's STR + CON, with only a slim
+    // bump from experience. Tilling fields to level 18 doesn't make you a warrior.
+    combatMod() { return mod(this.sheet.stats.str) + mod(this.sheet.stats.con) + Math.floor((this.sheet.level || 1) / 8); }
 
     // Survival priority: if a threat is on ME, face it; if I've rallied to someone else's fight, press
     // on to it. Returns true if combat claimed this decide tick.
@@ -4200,9 +4203,10 @@ export class Farmer {
             // business trading blows with an orc, whatever their raw STR — they flee and fetch help.
             // Then personality (nerve/competitiveness), the foe's menace, and any hard-won WARINESS
             // from past maulings tilt the call.
-            const powerGap = this.combatMod() + (this.sheet.level || 1) * 0.7 - (def.diff - 8) - def.hp * 1.4;
-            const nerve = 0.5 + powerGap * 0.11 + this.p.competitiveness * 0.35 + this.p.diligence * 0.12
-                        - (def.menace - 0.8) * 0.25 - (this.threatWary[def.kind] || 0) * 0.2;
+            // physical edge (STR/CON) against the beast's toughness — level barely enters it
+            const powerGap = this.combatMod() * 1.5 - (def.diff - 9) - def.hp * 1.4;
+            const nerve = 0.4 + powerGap * 0.14 + this.p.competitiveness * 0.3 + this.p.diligence * 0.1
+                        - (def.menace - 0.8) * 0.3 - (this.threatWary[def.kind] || 0) * 0.2;
             this.combatStance = nerve > 0.5 ? 'fight' : 'flee';
             if (this.combatStance === 'fight') this.say('COME ON THEN!', '#e0c040');
             else { this.say(powerGap < -3 ? `NO CHANCE ALONE — HELP!` : `HELP! ${def.name.toUpperCase()}!`, '#e05040'); e.helpWanted = true; }
