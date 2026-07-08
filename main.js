@@ -2,7 +2,7 @@
 
 import { fetchMemories, mod, fmtMod, STAT_NAMES, TRAIT_NAMES, TRAIT_LABELS, hashString } from './dna.js';
 import { audio } from './audio.js';
-import { World, CHUNK, T, DAY_LENGTH, NIGHT_LENGTH, ITEMS, CRAFTABLES, xpForLevel, obstacleTier, treeVariant, treeIsFruit } from './farm.js';
+import { World, CHUNK, T, DAY_LENGTH, NIGHT_LENGTH, ITEMS, CRAFTABLES, xpForLevel, obstacleTier, treeVariant, treeIsFruit, SEASONS } from './farm.js';
 import {
     TILE_W, TILE_H, makeCanvas, drawText, textWidth,
     makeFarmerSprites, makeCropSprites, makeHouse, makeWell, makeBoard, makeFencePost,
@@ -54,6 +54,8 @@ let bootTime = 0;
 let booted = false;
 let rosterOpen = false;
 let rosterScroll = 0;
+let chronOpen = false;            // town chronicle panel (the settlement's saga)
+let chronScroll = 0;
 let sheetScroll = 0;              // scroll offset for the selected-farmer detail card
 let sheetContentH = 0;           // measured content height (for clamping the scroll)
 let maxSheetScroll = 0;          // clamp bound, set each draw
@@ -136,7 +138,7 @@ function drawCursor(mx, my, hot) {
 function cursorIsHot(worldTooltip) {
     const m = mouse;
     if (m.x < 0) return false;
-    for (const b of [ROSTER_BTN, SND_BTN, FWD_BTN, FF_BTN, SPEED1_BTN]) if (b.w && inRect(m, b)) return true;
+    for (const b of [ROSTER_BTN, CHRON_BTN, SND_BTN, FWD_BTN, FF_BTN, SPEED1_BTN]) if (b.w && inRect(m, b)) return true;
     if (!BOARD_BTN.hidden && inRect(m, BOARD_BTN)) return true;
     if (selected) {
         if (inRect(m, SHEET_CLOSE)) return true;
@@ -147,9 +149,11 @@ function cursorIsHot(worldTooltip) {
     }
     if (!selected && inRect(m, MINIMAP)) return true;
     if (rosterOpen) { for (const r of rosterRows) if (m.y >= r.y0 && m.y < r.y1) return true; }
+    if (chronOpen) { for (const r of chronRows) if (m.y >= r.y0 && m.y < r.y1) return true; }
     return !!worldTooltip;   // hovering a building/farmer/merchant that shows a tooltip
 }
 const ROSTER_BTN = { x: 0, y: 3, w: 44, h: 12 };   // positioned in drawUI
+const CHRON_BTN = { x: 0, y: 3, w: 0, h: 12 };     // town chronicle toggle, positioned in drawUI
 const MINIMAP = { x: 0, y: 0, w: 46, h: 46 };      // bottom-right legend, positioned in drawMinimap
 const SHEET_RECT = { x: 0, y: 0, w: 0, h: 0 };     // detail-card bounds, set in drawSheet (for hit-testing)
 const SHEET_CLOSE = { x: 0, y: 0, w: 0, h: 0 };    // card close (X) button, set in drawSheet
@@ -2207,6 +2211,8 @@ function drawUI() {
     if (spd !== 1) barBtn(SPEED1_BTN, '1X', false);
 
     barBtn(ROSTER_BTN, 'ROSTER', rosterOpen, '#7dd069', '#10240c');
+    barBtn(CHRON_BTN, 'CHRONICLE', chronOpen, '#c8a0e0', '#1a1024');
+    if (world.chronicle.length && !chronOpen) { ctx.fillStyle = '#c8a0e0'; ctx.fillRect(CHRON_BTN.x + CHRON_BTN.w - 4, CHRON_BTN.y - 1, 3, 3); }
 
     BOARD_BTN.hidden = !world.board;   // only exists once the town has built the board
     if (!BOARD_BTN.hidden) {
@@ -2229,6 +2235,7 @@ function drawUI() {
     });
 
     if (rosterOpen) drawRoster();
+    else if (chronOpen) drawChronicle();
     else { drawMinimap(); if (boardOpen) drawBoard(); else if (selected) drawSheet(selected); }
 }
 
@@ -2787,6 +2794,122 @@ function drawRoster() {
 }
 
 // ---------------------------------------------------------------------------
+// Town chronicle — the settlement's lasting saga (big beats, grouped by day).
+// Town-wide by default; with a farmer selected it narrows to THEIR personal story.
+// ---------------------------------------------------------------------------
+let chronRows = [];               // { e, y0, y1, farmerSeed } visible hit regions
+let chronView = null;             // { x, y, w, h, bodyTop, bodyBot, maxScroll }
+const CHRON_ACCENT = '#c8a0e0';
+
+function chronEntries() {
+    const sel = selected ? selected.sheet.seed : null;
+    const all = world.chronicle;
+    return sel != null ? all.filter(e => e.whoSeed === sel || e.otherSeed === sel) : all;
+}
+
+function drawChronicle() {
+    const PW = Math.min(GW - 12, 372);
+    const PH = GH - 40;
+    const PX = Math.floor((GW - PW) / 2);
+    const PY = 22;
+    chronRows = [];
+
+    // dim behind + panel chrome (purple accent, distinct from the green roster)
+    ctx.fillStyle = 'rgba(6,7,11,0.72)';
+    ctx.fillRect(0, 18, GW, GH - 40);
+    ctx.fillStyle = 'rgba(12,14,24,0.97)';
+    ctx.fillRect(PX, PY, PW, PH);
+    ctx.fillStyle = CHRON_ACCENT;
+    ctx.fillRect(PX, PY, PW, 1); ctx.fillRect(PX, PY + PH - 1, PW, 1);
+    ctx.fillRect(PX, PY, 1, PH); ctx.fillRect(PX + PW - 1, PY, 1, PH);
+
+    // header — town-wide, or one farmer's personal saga when a Ry is selected
+    const title = selected ? `SAGA OF ${selected.sheet.name.split(' ')[0].toUpperCase()}` : 'TOWN CHRONICLE';
+    drawText(ctx, title, PX + 6, PY + 5, CHRON_ACCENT, 1);
+    const entries = chronEntries();
+    drawText(ctx, String(entries.length), PX + PW - 42, PY + 5, '#9aa0b4');
+    drawText(ctx, 'X', PX + PW - 10, PY + 5, '#c8ccd8');
+    ctx.fillStyle = '#20242f';
+    ctx.fillRect(PX + 4, PY + 15, PW - 8, 1);
+
+    const bodyTop = PY + 19;
+    const bodyBot = PY + PH - 11;
+    const viewH = bodyBot - bodyTop;
+    const IX = PX + 8;
+    const maxChars = Math.max(30, Math.floor((PW - 30) / 4.2));
+    const H_DAY = 12, H_LINE = 7, GAP_ENTRY = 2;
+
+    // flat render list: newest day first; entries ascending WITHIN each day
+    const items = [];
+    if (!entries.length) items.push({ type: 'empty' });
+    else {
+        const days = [], seen = new Set();
+        for (let k = entries.length - 1; k >= 0; k--) { const d = entries[k].day; if (!seen.has(d)) { seen.add(d); days.push(d); } }
+        for (const d of days) {
+            const dayEntries = entries.filter(e => e.day === d);
+            items.push({ type: 'day', day: d, season: dayEntries[0].season });
+            for (const e of dayEntries) {
+                const wrapped = wrapText(e.text, maxChars);
+                wrapped.forEach((ln, li) => items.push({ type: 'entry', e, line: ln, first: li === 0, last: li === wrapped.length - 1 }));
+            }
+        }
+    }
+
+    // content height (for scroll clamp)
+    let contentH = 0;
+    for (const it of items) {
+        if (it.type === 'day') contentH += H_DAY;
+        else { contentH += H_LINE; if (it.last) contentH += GAP_ENTRY; }
+    }
+    const maxScroll = Math.max(0, contentH - viewH);
+    chronScroll = Math.max(0, Math.min(chronScroll, maxScroll));
+    chronView = { x: PX, y: PY, w: PW, h: PH, bodyTop, bodyBot, maxScroll };
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(PX + 1, bodyTop - 1, PW - 2, viewH + 2);
+    ctx.clip();
+    let y = bodyTop - Math.round(chronScroll);
+    for (const it of items) {
+        const vis = y + H_LINE > bodyTop && y < bodyBot;
+        if (it.type === 'day') {
+            if (y + H_DAY > bodyTop && y < bodyBot) {
+                drawText(ctx, `DAY ${it.day}`, IX, y + 3, '#e8ecf5');
+                const sd = SEASONS[it.season];
+                if (sd) drawText(ctx, sd.name, IX + 42, y + 3, sd.accent);
+                ctx.fillStyle = '#20242f'; ctx.fillRect(IX, y + H_DAY - 2, PW - 16, 1);
+            }
+            y += H_DAY;
+        } else if (it.type === 'entry') {
+            if (vis) {
+                if (it.first) { ctx.fillStyle = it.e.color; ctx.fillRect(IX + 1, y + 2, 2, 2); }
+                drawText(ctx, it.line, IX + 7, y, it.first ? it.e.color : '#aab0be');
+                if (it.first) chronRows.push({ e: it.e, y0: y, y1: y + H_LINE, farmerSeed: it.e.whoSeed });
+                else if (chronRows.length) chronRows[chronRows.length - 1].y1 = y + H_LINE;
+            }
+            y += H_LINE;
+            if (it.last) y += GAP_ENTRY;
+        } else {
+            drawText(ctx, selected ? 'No chronicle beats for this Ry yet.' : "The story is just beginning...", IX, y, '#6a6f7c');
+            y += H_LINE;
+        }
+    }
+    ctx.restore();
+
+    // scrollbar
+    if (maxScroll > 0) {
+        const thumbH = Math.max(8, viewH * viewH / contentH);
+        const thumbY = bodyTop + (viewH - thumbH) * (chronScroll / maxScroll);
+        ctx.fillStyle = 'rgba(255,255,255,0.14)';
+        ctx.fillRect(PX + PW - 3, bodyTop, 2, viewH);
+        ctx.fillStyle = CHRON_ACCENT;
+        ctx.fillRect(PX + PW - 3, Math.floor(thumbY), 2, Math.floor(thumbH));
+    }
+
+    drawText(ctx, selected ? "ONE RY'S STORY - CLICK A RY IN THE WORLD TO SWITCH" : 'CLICK A BEAT TO FOLLOW THAT RY - SCROLL FOR MORE', PX + 6, PY + PH - 8, '#4a4f5c');
+}
+
+// ---------------------------------------------------------------------------
 // Input
 // ---------------------------------------------------------------------------
 
@@ -2800,8 +2923,8 @@ out.addEventListener('pointerdown', (e) => {
     const p = gamePoint(e);
     mouse.downX = p.x; mouse.downY = p.y;
     // don't world-pan when the gesture starts on the minimap, the detail card, or the board
-    const onUI = !rosterOpen && (inRect(p, MINIMAP) || (selected && inRect(p, SHEET_RECT)) || (boardOpen && inRect(p, BOARD_RECT)));
-    mouse.panStart = (rosterOpen || onUI) ? null : { x: p.x, y: p.y, camX: cam.x, camY: cam.y };
+    const onUI = !rosterOpen && !chronOpen && (inRect(p, MINIMAP) || (selected && inRect(p, SHEET_RECT)) || (boardOpen && inRect(p, BOARD_RECT)));
+    mouse.panStart = (rosterOpen || chronOpen || onUI) ? null : { x: p.x, y: p.y, camX: cam.x, camY: cam.y };
     mouse.dragging = false;
     try { out.setPointerCapture(e.pointerId); } catch { /* stale/synthetic pointer id — capture is best-effort */ }
 });
@@ -2830,7 +2953,25 @@ out.addEventListener('pointerup', (e) => {
 
     // roster toggle button
     if (inRect(p, SND_BTN)) { audio.ensure(); audio.toggle(); return; }
-    if (inRect(p, ROSTER_BTN)) { rosterOpen = !rosterOpen; if (rosterOpen) boardOpen = false; return; }
+    if (inRect(p, ROSTER_BTN)) { rosterOpen = !rosterOpen; if (rosterOpen) { boardOpen = false; chronOpen = false; } return; }
+    if (CHRON_BTN.w && inRect(p, CHRON_BTN)) { chronOpen = !chronOpen; if (chronOpen) { boardOpen = false; rosterOpen = false; chronScroll = 0; } return; }
+
+    // chronicle overlay (modal) — X or click-outside closes; a beat selects that Ry (its saga)
+    if (chronOpen) {
+        const cv = chronView;
+        if (cv) {
+            if ((p.x > cv.x + cv.w - 14 && p.y < cv.y + 12) ||
+                p.x < cv.x || p.x > cv.x + cv.w || p.y < cv.y || p.y > cv.y + cv.h) { chronOpen = false; return; }
+            for (const row of chronRows) {
+                if (p.y >= row.y0 && p.y <= row.y1 && p.x > cv.x && p.x < cv.x + cv.w) {
+                    const f = row.farmerSeed != null ? world.farmers.find(x => x.sheet.seed === row.farmerSeed) : null;
+                    if (f) { selected = f; sheetScroll = 0; chronScroll = 0; }   // narrow to that Ry's saga
+                    return;
+                }
+            }
+        }
+        return;
+    }
 
     // board toggle button (only when the board has been built)
     if (!BOARD_BTN.hidden && inRect(p, BOARD_BTN)) { boardOpen = !boardOpen; if (boardOpen) { selected = null; rosterOpen = false; boardScroll = 0; } return; }
@@ -2904,6 +3045,7 @@ out.addEventListener('pointerup', (e) => {
 // wheel scrolls whichever panel is open (roster or the detail card)
 out.addEventListener('wheel', (e) => {
     if (rosterOpen) { e.preventDefault(); rosterScroll += e.deltaY * 0.5; return; }
+    if (chronOpen) { e.preventDefault(); chronScroll = Math.max(0, Math.min(chronView ? chronView.maxScroll : 0, chronScroll + e.deltaY * 0.5)); return; }
     if (boardOpen) { e.preventDefault(); boardScroll = Math.max(0, Math.min(boardMaxScroll, boardScroll + e.deltaY * 0.5)); return; }
     if (selected) { e.preventDefault(); sheetScroll = Math.max(0, Math.min(maxSheetScroll, sheetScroll + e.deltaY * 0.5)); }
 }, { passive: false });

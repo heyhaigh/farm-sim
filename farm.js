@@ -302,6 +302,13 @@ export class World {
         this.plots = [];
         this.farmers = [];
         this.log = [];
+        // The CHRONICLE: the town's lasting story. Where `log` is the ephemeral ticker (last ~80
+        // lines, decays), the chronicle keeps the BIG beats forever — foundings, homes raised,
+        // maulings & rescues, friendships & feuds, town milestones — so a watcher can read the
+        // settlement's saga (see addChronicle + the CHRONICLE panel). Deterministic (no world.rand).
+        this.chronicle = [];
+        this._chronBonds = new Set();   // pair-keys already chronicled as "grew close" (fire once)
+        this._chronRifts = new Set();   // pair-keys already chronicled as "fell out" (fire once)
         this.time = 0;
         this.day = 1;
         this.clock = 0;
@@ -589,6 +596,7 @@ export class World {
             farmer.say('A RELIC!', '#f0c850');
             farmer.remember('event', `Unearthed an ancient relic in the deep wilds — it left me sharper (+1 ${ab.toUpperCase()})`, null, 1.6);
             this.addLog(`${s.name} unearthed an ANCIENT RELIC in the deep wilds! (+1 ${ab.toUpperCase()}, and a fine haul)`, '#f0c850');
+            this.addChronicle('find', `${s.name.split(' ')[0]} unearthed an ancient relic in the deep wilds (+1 ${ab.toUpperCase()}).`, farmer, null, '#f0c850');
         } else {   // mixed homestead cache — the old reliable
             const crops = Math.round(rnd(8, 16) * mult);
             s.produce = (s.produce || 0) + crops;
@@ -1074,7 +1082,7 @@ export class World {
         if (this.seasonDay >= SEASON_LENGTH) {
             this.seasonDay = 0;
             this.season = (this.season + 1) % SEASONS.length;
-            if (this.season === 0) { this.year++; this.addLog(`A new year dawns on Ry Farms — Year ${this.year}!`, '#f0d060'); }
+            if (this.season === 0) { this.year++; this.addLog(`A new year dawns on Ry Farms — Year ${this.year}!`, '#f0d060'); this.addChronicle('season', `Year ${this.year} dawns on Ry Farms.`, null, null, '#e0c060'); }
             const def = SEASONS[this.season];
             this.addLog(`${def.name} has arrived.`, def.accent);
             // winter kills the garden: standing crops die back so the fields go dead, and the
@@ -1096,6 +1104,19 @@ export class World {
     addLog(text, color = '#c8ccd8') {
         this.log.push({ text, color, t: performance.now() });
         if (this.log.length > 80) this.log.shift();
+    }
+
+    // Record a lasting story beat in the chronicle. kind groups the beat (found/build/town/peril/
+    // bond/rift/find); who/other are the farmer(s) it belongs to, so the panel can thread each
+    // farmer's personal saga. Stamped with in-sim day/season/year only — fully deterministic.
+    addChronicle(kind, text, who = null, other = null, color = '#c8ccd8') {
+        text = text.replace(/[—–]/g, '-');   // the bitmap font has no long dash — normalize to a hyphen
+        this.chronicle.push({
+            day: this.day, season: this.season, year: this.year, kind, text, color,
+            whoSeed: who ? who.sheet.seed : null,
+            otherSeed: other ? other.sheet.seed : null,
+        });
+        if (this.chronicle.length > 240) this.chronicle.shift();
     }
 
     // The founding roster should have real texture. If the memory-grown personalities didn't
@@ -1309,6 +1330,7 @@ export class World {
         const reason = this.#claimReason(f);
         f.say(reason, '#7dd069'); f.think(reason); f.sparkle = 1.5;
         this.addLog(`${f.sheet.name} staked a homestead — "${reason.toLowerCase()}"`, '#7dd069');
+        this.addChronicle('found', `${f.sheet.name.split(' ')[0]} staked a homestead — ${reason.toLowerCase()}.`, f, null, '#7dd069');
     }
     // Why did this settler pick THIS ground? Read the nearby resources + nearest neighbour + their
     // nature, and voice the most salient reason. This is the settlement decision made LEGIBLE.
@@ -1573,7 +1595,16 @@ export class World {
     bondKey(a, b) {
         return a.sheet.seed < b.sheet.seed ? `${a.sheet.seed}|${b.sheet.seed}` : `${b.sheet.seed}|${a.sheet.seed}`;
     }
-    addBond(a, b, delta = 1) { this.bonds.set(this.bondKey(a, b), (this.bonds.get(this.bondKey(a, b)) || 0) + delta); }
+    addBond(a, b, delta = 1) {
+        const key = this.bondKey(a, b);
+        const v = (this.bonds.get(key) || 0) + delta;
+        this.bonds.set(key, v);
+        // the moment a working acquaintance becomes a real friendship, note it (once per pair)
+        if (v >= 4 && !this._chronBonds.has(key)) {
+            this._chronBonds.add(key);
+            this.addChronicle('bond', `${a.sheet.name.split(' ')[0]} and ${b.sheet.name.split(' ')[0]} have grown close.`, a, b, '#7dd069');
+        }
+    }
     bondCount(f) {
         let n = 0;
         for (const [k, v] of this.bonds) if (k.includes(String(f.sheet.seed)) && v > 0) n++;
@@ -1987,6 +2018,9 @@ export class World {
                 : b.level === 2 ? 'Raised my yurt - more room and bigger stores at last' : 'Built my first home - a roof at last', null, 1.1);
             this.addLog(b.level === 1 ? `${farmer.sheet.name} finished pitching a tipi — a first home!`
                 : `${farmer.sheet.name} finished raising a ${HOUSE_TIERS[b.level].name}!`, '#f0d060');
+            const fn = farmer.sheet.name.split(' ')[0];
+            this.addChronicle('build', b.level === 1 ? `${fn} pitched a tipi — a first roof.`
+                : b.level === 2 ? `${fn} raised a yurt.` : `${fn} raised a cottage — the estate is complete.`, farmer, null, '#f0d060');
         }
     }
 
@@ -2242,6 +2276,7 @@ export class World {
             this.townXP -= need; this.townLevel++;
             this.townLevelFlash = 2.5;
             this.addLog(`RY FARMS GREW TO TOWN LEVEL ${this.townLevel}! The settlement is thriving.`, '#f0d060');
+            this.addChronicle('town', `Ry Farms grew to town level ${this.townLevel}.`, null, null, '#e0c060');
             need = townXpForLevel(this.townLevel);
         }
         if (this.townLevel >= TOWN_MAX_LEVEL) this.townXP = 0;
@@ -2385,6 +2420,7 @@ export class World {
             else if (type === 'well2') this.wells.push({ i: site.i, j: site.j, ready: true });
         }
         this.addLog(`The ${label} is finished! ${perk}`, '#f0d060');
+        this.addChronicle('town', `The town raised the ${label.toLowerCase()} — ${perk.toLowerCase()}.`, null, null, '#e0c060');
         for (const f of pr.builders) {
             f.gainXP(6); f.say('HOORAY!', '#f0d060'); f.sparkle = 3;
             f.remember('event', `We raised the ${label.toLowerCase()} together`, null, 1.1);
@@ -3353,6 +3389,7 @@ export class World {
                 f.remember('person', `${h.sheet.name.split(' ')[0]} stood with me when ${e.def.name} had me — I owe them`, h, 1.4);
             }
             this.addLog(`${f.sheet.name} owes their life to ${rescuers.map(h => h.sheet.name.split(' ')[0]).join(' & ')}.`, '#7dd069');
+            this.addChronicle('peril', `${f.sheet.name.split(' ')[0]} was struck down by a ${e.def.name.toLowerCase()}, but ${rescuers.map(h => h.sheet.name.split(' ')[0]).join(' & ')} pulled them back.`, f, rescuers[0], '#e07040');
         } else {
             // no one came: resent the able-bodied who were near enough to have helped
             const bystanders = this.farmers.filter(x => x !== f && !x.downed && x.plot?.sited && x.state !== 'sleep'
@@ -3362,6 +3399,7 @@ export class World {
                 f.remember('person', `${b.sheet.name.split(' ')[0]} was near enough to help and left me to ${e.def.name}`, b, 1.3);
             }
             if (bystanders.length) this.addLog(`${f.sheet.name} won't forget that no one came.`, '#c05840');
+            this.addChronicle('peril', `${f.sheet.name.split(' ')[0]} was struck down by a ${e.def.name.toLowerCase()} in the wilds — no one came.`, f, null, '#e03828');
         }
         // shun the ground where they fell — a scar on the map they'll avoid and speak of
         (f.dangerZones ||= []).push({ i: downI, j: downJ, kind: e.def.kind });
@@ -3776,6 +3814,14 @@ export class Farmer {
         const k = other.sheet.seed;
         const v = Math.max(-1, Math.min(1, (this.opinions.get(k) || 0) + d));
         this.opinions.set(k, v);
+        // a soured opinion crossing into real resentment is a story beat (once per pair)
+        if (v <= -0.5) {
+            const w = this.world, rk = w.bondKey(this, other);
+            if (!w._chronRifts.has(rk)) {
+                w._chronRifts.add(rk);
+                w.addChronicle('rift', `${this.sheet.name.split(' ')[0]} and ${other.sheet.name.split(' ')[0]} have fallen out.`, this, other, '#c05840');
+            }
+        }
         if (reason) {
             this.opinionReasons = this.opinionReasons || new Map(), this.opinionReasons.set(k, reason);
             // every opinion shift is an episode worth journaling; stronger shifts stick longer
