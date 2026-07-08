@@ -3108,7 +3108,9 @@ export class World {
         if (!f.plot || f.downed || f.state === 'sleep' || f.state === 'sleepwalk' || f.health === 'sick') return false;
         if (Math.hypot(f.pos.i - CENTER, f.pos.j - CENTER) < WILD_RADIUS) return false;
         const p = f.plot;
-        if (p.sited && f.pos.i >= p.x - 1 && f.pos.i <= p.x + p.w + 1 && f.pos.j >= p.y - 1 && f.pos.j <= p.y + p.h + 1) return false;
+        // safe on/near their own homestead, AND only truly exposed once they've strayed a good way from
+        // it — deep enough in the wilds that reaching a fence again is a real run, not a step.
+        if (p.sited && Math.hypot(f.pos.i - (p.x + 6), f.pos.j - (p.y + 6)) < 16) return false;
         return true;
     }
 
@@ -3158,16 +3160,19 @@ export class World {
             if (standing >= 3) { this.#endEncounter(e, `Outnumbered, ${e.def.name} turned tail and fled.`, '#7dd069'); return; }
         }
         if (e.life <= 0) { this.#endEncounter(e, `${e.def.name} lost the trail and slunk back into the wilds.`, '#9a9a8a'); return; }
-        // ducked behind a raised fence? the threat can't follow onto a fenced homestead — safe haven.
-        if (this.tileInFencedPlot(Math.floor(f.pos.i), Math.floor(f.pos.j))) {
-            this.#endEncounter(e, `${f.sheet.name} made it inside the fences — ${e.def.name} can't follow.`, '#7dd069'); return;
+        // made it HOME behind their OWN fence? that's their refuge — the threat breaks off. (A
+        // neighbour's fence is no sanctuary; you have to reach your own gate.)
+        if (this.#onOwnFencedPlot(f)) {
+            this.#endEncounter(e, `${f.sheet.name} made it home behind the fence — ${e.def.name} can't follow.`, '#7dd069'); return;
         }
         const dx = f.pos.i - e.i, dy = f.pos.j - e.j, dist = Math.hypot(dx, dy) || 1;
         if (Math.abs(dx) > 0.08) e.facing = dx < 0 ? -1 : 1;   // face the way it moves
         if (dist > 1.2) {
-            const sp = e.def.speed * 2.6 * dt;             // ~as fast as a bustling farmer, so chases are real
+            let sp = e.def.speed * 2.6 * dt;               // ~as fast as a bustling farmer, so chases are real
             const ni = e.i + dx / dist * sp, nj = e.j + dy / dist * sp;
-            if (!this.tileInFencedPlot(Math.floor(ni), Math.floor(nj))) { e.i = ni; e.j = nj; }   // fences turn it away
+            const onFence = this.tileInFencedPlot(Math.floor(ni), Math.floor(nj));
+            if (beast) { if (!onFence) { e.i = ni; e.j = nj; } }        // a fence turns a BEAST away entirely
+            else { if (onFence) sp *= 0.4; e.i += dx / dist * sp; e.j += dy / dist * sp; }   // a FOE breaches, but slowly
         } else {
             e.clashTimer -= dt;
             if (e.clashTimer <= 0) { e.clashTimer = 1.4; this.#resolveClash(e); }
@@ -3184,6 +3189,11 @@ export class World {
         const k = pkey(i, j);
         for (const p of this.plots) if (p.sited && p.built.fence && p.cells.has(k)) return true;
         return false;
+    }
+    // Is this farmer standing on their OWN fenced homestead — their true refuge from a threat?
+    #onOwnFencedPlot(f) {
+        const p = f.plot;
+        return !!(p && p.sited && p.built.fence && p.cells.has(pkey(Math.floor(f.pos.i), Math.floor(f.pos.j))));
     }
 
     #resolveClash(e) {
@@ -5719,8 +5729,9 @@ export class Farmer {
                 this.fightTimer -= dt;
                 if (this.fightTimer <= 0) this.state = 'decide';
                 break;
-            case 'flee': {   // bolt for the plaza (adrenaline), sidestepping obstacles, revealing as you run
-                const dx = CENTER - this.pos.i, dy = CENTER - this.pos.j, d = Math.hypot(dx, dy) || 1;
+            case 'flee': {   // bolt for their OWN homestead (their refuge), sidestepping obstacles as they run
+                const home = this.plot && this.plot.sited ? { i: this.plot.x + 6, j: this.plot.y + 6 } : { i: CENTER, j: CENTER };
+                const dx = home.i - this.pos.i, dy = home.j - this.pos.j, d = Math.hypot(dx, dy) || 1;
                 const sp = this.speed * 1.2 * dt;
                 const ni = this.pos.i + dx / d * sp, nj = this.pos.j + dy / d * sp;
                 if (!this.world.pathBlocked(Math.floor(ni), Math.floor(nj))) { this.pos.i = ni; this.pos.j = nj; }

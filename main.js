@@ -2481,8 +2481,7 @@ function drawSheet(f) {
         y += 2;
         const hpFrac = Math.max(0, Math.min(1, f.hp / f.maxHp));
         const hpCol = hpFrac > 0.5 ? '#d05450' : hpFrac > 0.25 ? '#e0a03c' : '#e83828';
-        drawText(ctx, 'HP', IX, y, SHEET_LABEL); barFill(IX + 42, y, IW - 42, hpFrac, hpCol);
-        drawText(ctx, `${Math.ceil(f.hp)}/${f.maxHp}`, IX + IW - textWidth(`${Math.ceil(f.hp)}/${f.maxHp}`), y, '#8a8f9c'); y += 6;
+        drawText(ctx, 'HP', IX, y, SHEET_LABEL); barFill(IX + 42, y, IW - 42, hpFrac, hpCol); y += 6;
         drawText(ctx, 'ENERGY', IX, y, SHEET_LABEL); barFill(IX + 42, y, IW - 42, f.energy, eCol); y += 6;
         drawText(ctx, 'XP', IX, y, SHEET_LABEL); barFill(IX + 42, y, IW - 42, Math.min(s.xp / xpForLevel(s.level), 1), '#5a8ac8'); y += 10;
 
