@@ -198,6 +198,10 @@ const AWAKE_DRAIN = 0;        // no passive drain — merely being awake and far
                              // only real labor (below) costs energy, so farms stay productive
 const SLEEP_RESTORE = 0.04;
 const REST_RESTORE = 0.045;   // recover faster, so a short breather is enough — less time slumped, more time about
+const IDLE_REGAIN = 0.01;     // a SUPER-slow second wind while idling / walking / exploring (not laboring or
+                              // fighting) — so a settler recovers as they roam and never crashes mid-build on day 1
+// states where energy neither drains passively nor trickles back (labor pays via #laborDrain; combat is its own strain)
+const ENERGY_NEUTRAL = new Set(['work', 'build', 'coopbuild', 'housebuild', 'chop', 'break', 'forage', 'mine', 'fencepost', 'scarecrow', 'fight', 'flee']);
 const HP_REST = 0.55;         // HP knit back per second of rest (a full night mends most wounds)
 const HP_SICK_DRAIN = 0.05;   // HP an untreated illness gnaws away per second on your feet
 // Tending crops and animals is free — tilling a patch, sowing, watering, harvesting, collecting
@@ -5613,7 +5617,8 @@ export class Farmer {
         if (this.state === 'sleep') this.energy = Math.min(1, this.energy + SLEEP_RESTORE * dt);
         else if (this.state === 'rest') this.energy = Math.min(1, this.energy + REST_RESTORE * dt);
         else if (this.state === 'sick') this.energy = Math.min(1, this.energy + REST_RESTORE * 0.6 * dt);
-        else this.energy = Math.max(0, this.energy - AWAKE_DRAIN * dt);
+        else if (ENERGY_NEUTRAL.has(this.state)) this.energy = Math.max(0, this.energy - AWAKE_DRAIN * dt);   // labor/combat
+        else this.energy = Math.min(1, this.energy + IDLE_REGAIN * dt);   // idle / walking / exploring: a slow second wind
 
         // HP: REST knits you back together (sleeping/resting/recovering), while an untreated illness
         // gnaws at it if you stay on your feet. Bleed out entirely and you COLLAPSE (a downed reset).
