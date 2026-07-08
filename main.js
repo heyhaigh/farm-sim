@@ -383,6 +383,15 @@ const CRATES_SRC = { x: 69, y: 60, w: 26, h: 29 };   // just the two crates — 
 // the wandering merchant — a DIFFERENT guild-hall character each visit (32x32 frames, 6-col walk,
 // 4 dir rows [down,up,left,right]). Idle/trading uses walk frame 0, so no separate idle sheet needed.
 const GUILD_BASE = './assets/craftpix-net-189780-free-top-down-pixel-art-guild-hall-asset-pack/PNG/';
+// The TOWN SILO is rendered as a GUILD HALL (654184... no, 189780 Exterior.png), assembled in pieces as
+// the town levels: the centre hall + its roof cap from day one, and at TOWN LV5 it earns its GUILD HALL
+// banner + two flanking pennants. Rects into Exterior.png (tuned against the sheet).
+const guildExtSheet = new Image(); let guildExtReady = false; guildExtSheet.onload = () => { guildExtReady = true; }; guildExtSheet.onerror = () => {};
+guildExtSheet.src = './assets/craftpix-net-189780-free-top-down-pixel-art-guild-hall-asset-pack/Tiled_files/Exterior.png';
+const GH_CENTER = { x: 47, y: 38, w: 66, h: 106 };   // JUST the narrow central hall (door-centred, flat-topped gable — no wings)
+const GH_ROOF   = { x: 150, y: 9, w: 106, h: 55 };    // the flat roof that caps the gable (fitted to the centre width below)
+const GH_BANNER = { x: 152, y: 96, w: 96, h: 26 };   // the "GUILD HALL" sign (L5)
+const GH_FLAG   = { x: 165, y: 100, w: 15, h: 36 };   // one hanging pennant (L5, one each side)
 // small skull (guild-hall Interior_objects.png) floated over a home while a felled farmer recovers
 const skullSheet = new Image(); let skullReady = false; skullSheet.onload = () => { skullReady = true; }; skullSheet.onerror = () => {};
 skullSheet.src = GUILD_BASE + 'Interior_objects.png';
@@ -796,7 +805,7 @@ function wildJitter(i, j, t) {
 // long, seed-desynced schedule so the forest never all moves at once.
 function treeSway(spec) {
     const now = performance.now() / 1000;
-    if (choppingTiles.has(spec.chopKey)) return 0.07 * Math.sin(now * 22);   // an axe biting: a quick shake
+    if (choppingTiles.has(spec.chopKey)) return 0.022 * Math.sin(now * 15);   // an axe biting: a small quiver
     const period = 27, phase = (spec.seed % 1000) / 1000;                    // ~once every 27s, per tree
     const cyc = ((now / period) + phase) % 1;
     const RUSTLE = 0.085;                                                     // rustle fills ~8.5% of the cycle (~2.3s)
@@ -1681,20 +1690,30 @@ function drawStall(sx, sy) {
 // The town silo — a grain bin at the plaza where settlers donate surplus to level the town.
 // Procedural (no asset): tan cylinder + hooped bands + conical roof, with a floating TOWN LV tag.
 function drawSilo(sx, sy) {
-    const w = 16, h = 22;
-    const x = Math.floor(sx - w / 2), footY = Math.floor(sy + TILE_H), topY = footY - h;
-    ctx.fillStyle = 'rgba(10,14,10,0.30)'; ctx.fillRect(x - 1, footY - 1, w + 2, 3);            // shadow
-    ctx.fillStyle = '#c9a24e'; ctx.fillRect(x, topY + 6, w, h - 6);                              // body
-    ctx.fillStyle = '#e0c072'; ctx.fillRect(x + 1, topY + 6, 3, h - 6);                          // left highlight
-    ctx.fillStyle = '#b3893c'; ctx.fillRect(x + w - 5, topY + 6, 5, h - 6);                      // right shade
-    ctx.fillStyle = '#8a6a34'; for (let k = 0; k < 3; k++) ctx.fillRect(x, topY + 10 + k * 4, w, 1); // hoops
-    for (let r = 0; r <= 6; r++) { ctx.fillStyle = '#7a5230'; ctx.fillRect(x + r, topY + 6 - r, w - r * 2, 1);   // conical roof
-        ctx.fillStyle = '#93643a'; ctx.fillRect(x + r, topY + 6 - r, Math.max(1, (w - r * 2) >> 1), 1); }        // roof highlight
-    ctx.fillStyle = '#5a3c22'; ctx.fillRect(Math.floor(sx) - 1, topY - 1, 2, 2);                 // cap
-    ctx.fillStyle = '#3a2814'; ctx.fillRect(x - 1, topY + 6, 1, h - 6); ctx.fillRect(x + w, topY + 6, 1, h - 6); ctx.fillRect(x - 1, footY, w + 2, 1); // outline
-    const tag = `LV ${world.townLevel}`, tw = textWidth(tag);                                    // town-level tag
-    ctx.fillStyle = 'rgba(20,16,8,0.78)'; ctx.fillRect(Math.floor(sx - tw / 2) - 2, topY - 12, tw + 4, 9);
-    drawText(ctx, tag, Math.floor(sx - tw / 2), topY - 11, '#f0d060');
+    const footY = Math.floor(sy + TILE_H);
+    if (!guildExtReady || !guildExtSheet.naturalWidth) {   // sheet not loaded — a small stand-in
+        ctx.fillStyle = '#c9a24e'; ctx.fillRect(Math.floor(sx - 8), footY - 20, 16, 20);
+    } else {
+        const sc = ASSET_SCALE * 0.9, blit = (r, dx, dy, s = sc) => {
+            const dw = Math.round(r.w * s), dh = Math.round(r.h * s);
+            ctx.drawImage(guildExtSheet, r.x, r.y, r.w, r.h, Math.round(dx), Math.round(dy), dw, dh);
+            return { dw, dh };
+        };
+        ctx.imageSmoothingEnabled = false;
+        const cw = Math.round(GH_CENTER.w * sc), ch = Math.round(GH_CENTER.h * sc);
+        const bx = Math.floor(sx - cw / 2), by = footY - ch;   // hall body: bottom-anchored on the silo tile
+        ctx.fillStyle = 'rgba(10,14,10,0.28)'; ctx.fillRect(bx + 4, footY - 2, cw - 8, 3);        // ground shadow
+        blit(GH_CENTER, bx, by);                                                                  // the narrow hall
+        // roof caps the flat gable, fitted to the hall width + small eaves (aspect preserved). It sits
+        // DOWN over the gable band so it meets the wall with no exposed tan gap.
+        const rw = cw + Math.round(9 * sc), rh = Math.round(GH_ROOF.h * (rw / GH_ROOF.w));
+        const roofTop = by - Math.round(rh * 0.5);
+        ctx.drawImage(guildExtSheet, GH_ROOF.x, GH_ROOF.y, GH_ROOF.w, GH_ROOF.h, Math.round(sx - rw / 2), roofTop, rw, rh);
+        var topY = roofTop;
+    }
+    const tag = `LV ${world.townLevel}`, tw = textWidth(tag), ty = (typeof topY === 'number' ? topY : footY - 20) - 12;
+    ctx.fillStyle = 'rgba(20,16,8,0.78)'; ctx.fillRect(Math.floor(sx - tw / 2) - 2, ty, tw + 4, 9);
+    drawText(ctx, tag, Math.floor(sx - tw / 2), ty + 1, '#f0d060');
 }
 
 function drawMerchant(m, sx, sy) {
