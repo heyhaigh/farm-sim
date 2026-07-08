@@ -388,8 +388,10 @@ const GUILD_BASE = './assets/craftpix-net-189780-free-top-down-pixel-art-guild-h
 // banner + two flanking pennants. Rects into Exterior.png (tuned against the sheet).
 const guildExtSheet = new Image(); let guildExtReady = false; guildExtSheet.onload = () => { guildExtReady = true; }; guildExtSheet.onerror = () => {};
 guildExtSheet.src = './assets/craftpix-net-189780-free-top-down-pixel-art-guild-hall-asset-pack/Tiled_files/Exterior.png';
-const GH_CENTER = { x: 47, y: 38, w: 66, h: 106 };   // JUST the narrow central hall (door-centred, flat-topped gable — no wings)
-const GH_ROOF   = { x: 150, y: 9, w: 106, h: 55 };    // the flat roof that caps the gable (fitted to the centre width below)
+const GH_CENTER = { x: 47, y: 49, w: 66, h: 95 };    // the narrow hall walls (windows + door; the gable is capped by the roof)
+const GH_ROOF   = { x: 161, y: 9, w: 94, h: 57 };     // the flat roof, rect CENTRED on the roof content (fixes the right-offset)
+const GH_LWING  = { x: 8, y: 33, w: 39, h: 111 };     // left wing WITH its sloped roof (L5) — flanks the centre
+const GH_RWING  = { x: 113, y: 33, w: 27, h: 111 };   // right wing WITH its sloped roof (L5)
 const GH_BANNER = { x: 152, y: 96, w: 96, h: 26 };   // the "GUILD HALL" sign (L5)
 const GH_FLAG   = { x: 165, y: 100, w: 15, h: 36 };   // one hanging pennant (L5, one each side)
 // small skull (guild-hall Interior_objects.png) floated over a home while a felled farmer recovers
@@ -1703,12 +1705,19 @@ function drawSilo(sx, sy) {
         const cw = Math.round(GH_CENTER.w * sc), ch = Math.round(GH_CENTER.h * sc);
         const bx = Math.floor(sx - cw / 2), by = footY - ch;   // hall body: bottom-anchored on the silo tile
         ctx.fillStyle = 'rgba(10,14,10,0.28)'; ctx.fillRect(bx + 4, footY - 2, cw - 8, 3);        // ground shadow
-        blit(GH_CENTER, bx, by);                                                                  // the narrow hall
-        // roof caps the flat gable, fitted to the hall width + small eaves (aspect preserved). It sits
-        // DOWN over the gable band so it meets the wall with no exposed tan gap.
+        // L5+ SIDE WINGS (with their own sloped roofs) flank the hall, drawn FIRST so the centre
+        // overlaps their inner edges into one wide guild hall. Same footline, contiguous with the centre.
+        if (world.townLevel >= 5) {
+            const lw = Math.round(GH_LWING.w * sc), lh = Math.round(GH_LWING.h * sc);
+            const rwg = Math.round(GH_RWING.w * sc);
+            blit(GH_LWING, bx - lw, footY - lh);
+            blit(GH_RWING, bx + cw, footY - lh);
+        }
+        blit(GH_CENTER, bx, by);                                                                  // the narrow hall walls
+        // the flat roof caps the walls, fitted to the hall width + small eaves, seated flush on top
         const rw = cw + Math.round(9 * sc), rh = Math.round(GH_ROOF.h * (rw / GH_ROOF.w));
-        const roofTop = by - Math.round(rh * 0.5);
-        ctx.drawImage(guildExtSheet, GH_ROOF.x, GH_ROOF.y, GH_ROOF.w, GH_ROOF.h, Math.round(sx - rw / 2), roofTop, rw, rh);
+        const roofTop = by - rh + Math.round(3 * sc) + 17;   // seated DOWN onto the hall (user-tuned)
+        ctx.drawImage(guildExtSheet, GH_ROOF.x, GH_ROOF.y, GH_ROOF.w, GH_ROOF.h, Math.round(sx - rw / 2) - 1, roofTop, rw, rh);
         var topY = roofTop;
     }
     const tag = `LV ${world.townLevel}`, tw = textWidth(tag), ty = (typeof topY === 'number' ? topY : footY - 20) - 12;
@@ -2555,7 +2564,14 @@ function buildingUnder(mx, my) {
         [{ t: 'TOWN WELL', c: TT_G }, { t: 'Water source', c: TT_L }, { t: 'Water for the whole town', c: TT_B }]); }
     { const s = world.silo, sx = cam.x + isoX(s.i, s.j), sy = cam.y + isoY(s.i, s.j);
       const maxed = world.townLevel >= 10;
-      push(Math.floor(sx - 9), Math.floor(sy + TILE_H - 22), 18, 24,
+      // hover box matches the GUILD-HALL bounds (drawSilo geometry), widening for the L5 wings
+      const gsc = ASSET_SCALE * 0.9, gcw = Math.round(GH_CENTER.w * gsc), gch = Math.round(GH_CENTER.h * gsc);
+      const gFoot = Math.floor(sy + TILE_H), gby = gFoot - gch;
+      const grw = gcw + Math.round(9 * gsc), grh = Math.round(GH_ROOF.h * (grw / GH_ROOF.w));
+      const gTop = Math.min(gby, gby - grh + Math.round(3 * gsc) + 17);
+      let ghx = Math.floor(sx - gcw / 2), ghw = gcw;
+      if (world.townLevel >= 5) { const glw = Math.round(GH_LWING.w * gsc), grwg = Math.round(GH_RWING.w * gsc); ghx -= glw; ghw += glw + grwg; }
+      push(ghx - 2, gTop, ghw + 4, gFoot - gTop,
         [{ t: `TOWN SILO — LV ${world.townLevel}`, c: TT_G }, { t: 'The town levels on donations', c: TT_L },
          { t: 'Settlers give surplus goods here', c: TT_GR },
          { t: maxed ? 'The town is fully grown' : `${world.townXP} / ${world.townXpNeed()} to level ${world.townLevel + 1}`, c: TT_B }]); }
