@@ -2953,6 +2953,13 @@ export class World {
     // ---- crops -------------------------------------------------------------------
 
     cropAt(i, j) { return this.crops.get(`${i},${j}`); }
+    // Which crop a given field tile grows: drawn from the owner's palette by a stable per-tile hash,
+    // so a farm shows steady patches of several crops (not one mono-culture) and it never changes
+    // under a tile between plantings. Deterministic — no world.rand.
+    cropForField(owner, i, j) {
+        const cs = owner.sheet.crops && owner.sheet.crops.length ? owner.sheet.crops : [owner.sheet.crop];
+        return cs[tileHash(i, j, owner.sheet.seed) % cs.length];
+    }
     plantCrop(i, j, type, owner) {
         this.crops.set(`${i},${j}`, {
             i, j, type, owner, stage: 0, growth: 0, water: 0.7, withered: false, dryTime: 0,
@@ -5113,7 +5120,7 @@ export class Farmer {
         else if (task.act === 'harvest') this.think(`MY ${task.crop.type.toUpperCase()} IS READY!`);
         else if (task.act === 'clear') this.think('CLEARING OUT THE DEAD ONES');
         else if (task.act === 'water') this.think('WATER FOR THE THIRSTY ONES');
-        else if (task.act === 'plant') this.think(`SOWING ${this.sheet.crop.toUpperCase()} SEEDS`);
+        else if (task.act === 'plant') this.think(`SOWING ${(task.field ? this.world.cropForField(this, task.field.i, task.field.j) : this.sheet.crop).toUpperCase()} SEEDS`);
         else if (task.act === 'till') this.think('BREAKING NEW GROUND');
     }
 
@@ -5618,7 +5625,7 @@ export class Farmer {
 
         switch (task.act) {
             case 'till': w.set(task.field.i, task.field.j, T.TILLED); this.gainXP(1); break;
-            case 'plant': w.plantCrop(task.field.i, task.field.j, s.crop, owner || this); this.gainXP(1); break;
+            case 'plant': { const o = owner || this; w.plantCrop(task.field.i, task.field.j, w.cropForField(o, task.field.i, task.field.j), o); this.gainXP(1); break; }
             case 'water': {
                 const c = w.cropAt(task.crop.i, task.crop.j);
                 if (c) {

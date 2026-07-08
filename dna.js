@@ -247,6 +247,22 @@ export function growPersonality(rand, text) {
 
 const SKIN_TONES = ['#f0c8a0', '#e0b088', '#c89068', '#a87850', '#8a5c3c'];
 
+// The six crop kinds a farm can sow (one per archetype). A farm's MIX is drawn from these.
+export const ALL_CROPS = ['sunflower', 'carrot', 'grapes', 'pumpkin', 'pepper', 'wheat'];
+// A farm's crop palette: the archetype's SIGNATURE crop plus a personality-sized spread of others.
+// The curious diversify (up to four kinds); the focused/diligent keep a tighter rotation — so a
+// farm is no longer a mono-culture. Deterministic (uses only the farmer's seeded rand).
+function buildCropPalette(rand, signature, personality) {
+    const curiosity = personality.curiosity ?? 0.5, diligence = personality.diligence ?? 0.5;
+    let n = Math.round(1 + curiosity * 2.4 - diligence * 0.6 + (rand() - 0.4));
+    n = Math.max(1, Math.min(4, n));
+    const palette = [signature];
+    const others = ALL_CROPS.filter(c => c !== signature);
+    for (let i = others.length - 1; i > 0; i--) { const j = Math.floor(rand() * (i + 1)); [others[i], others[j]] = [others[j], others[i]]; }
+    for (let k = 0; k < n - 1 && k < others.length; k++) palette.push(others[k]);
+    return palette;
+}
+
 export function growFarmer(memory, mutation = 0) {
     const seed = hashString((memory.id || memory.title || 'ry') + (mutation ? `:m${mutation}` : ''));
     const rand = mulberry32(seed);
@@ -276,7 +292,8 @@ export function growFarmer(memory, mutation = 0) {
         level: 1,
         xp: 0,
         harvested: 0,
-        crop: arch.crop,
+        crop: arch.crop,   // signature crop (kept for code that still reads a single crop)
+        crops: buildCropPalette(rand, arch.crop, personality),
         hat: arch.hat,
         // every farmer can raise a sheep flock once they're a seasoned hand (LV15) with a yurt —
         // slot it right after the coop (chickens) so it's an early livestock reward, ahead of the
