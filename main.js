@@ -285,6 +285,7 @@ const ANIMAL_SHEETS = {
     cow:     { file: 'Bull_animation_without_shadow' },
     pig:     { file: 'Piglet_animation_without_shadow' },
     goat:    { file: 'Sheep_animation_without_shadow' },
+    sheep:   { file: 'Lamb_animation_without_shadow' },   // the sheeppen's flock — real lamb sprite
     chicken: { file: 'Chick_animation_without_shadow' },
     rooster: { file: 'Rooster_animation_without_shadow' },
 };
