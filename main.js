@@ -1887,6 +1887,10 @@ function drawFarmer(f, sx, sy) {
     const px = Math.floor(sx - fw / 2);
     const py = Math.floor(sy + TILE_H / 2 - fh + 2);
     const footY = py + fh - 2;
+    // LIMP: a badly-wounded farmer (below ~35% HP) favours a leg — a small uneven vertical hitch on the
+    // walk cycle, so the invisible HP economy reads as a visible hobble. Feet/shadow stay grounded (dy).
+    const hpFrac = f.maxHp ? f.hp / f.maxHp : 1;
+    const dy = py + ((hpFrac < 0.35 && f.state === 'walk' && Math.floor(f.animTime * 5) % 2) ? 1 : 0);
 
     // lantern glow for anyone up and about at night — a warm pool of light cast additively
     // over the scene (reads as EMITTED light, not a flat overlay) with a hot flickering core.
@@ -1923,12 +1927,12 @@ function drawFarmer(f, sx, sy) {
     // flip for left/right only on the side view (front/back rows shouldn't mirror)
     if (f.facing < 0 && (!charReady() || f.moveDir === 'side')) {
         ctx.save();
-        ctx.translate(px + fw, py);
+        ctx.translate(px + fw, dy);
         ctx.scale(-1, 1);
         ctx.drawImage(frame, 0, 0);
         ctx.restore();
     } else {
-        ctx.drawImage(frame, px, py);
+        ctx.drawImage(frame, px, dy);
     }
 
     // sick tint overlay
@@ -1945,6 +1949,16 @@ function drawFarmer(f, sx, sy) {
     if (f.threatAlert > 0 && Math.floor(f.threatAlert * 6) % 2) {
         ctx.fillStyle = '#e83828'; ctx.font = 'bold 11px monospace'; ctx.textAlign = 'center';
         ctx.fillText('!', sx, py - 3); ctx.textAlign = 'left';
+    }
+    // WOUND bar: a small red health bar over the head whenever a farmer is hurt + up-and-about, so the
+    // HP economy (revive frail -> hunt/rest for meat -> mend) is legible at a glance. Hidden while
+    // fighting/fleeing (the "!" + hurt-flash already carry the danger) and, of course, while asleep.
+    if (hpFrac < 0.9 && f.state !== 'sleep' && f.state !== 'fight' && f.state !== 'flee') {
+        const bw = 10, bh = 2, bx = Math.floor(sx - bw / 2), byy = py - 6;
+        ctx.fillStyle = '#141010'; ctx.fillRect(bx - 1, byy - 1, bw + 2, bh + 2);   // black stroke (matches #68)
+        ctx.fillStyle = '#5a2424'; ctx.fillRect(bx, byy, bw, bh);                    // depleted track
+        ctx.fillStyle = hpFrac < 0.35 ? '#e83828' : '#d08a3c';                       // red when critical, amber otherwise
+        ctx.fillRect(bx, byy, Math.max(1, Math.round(bw * hpFrac)), bh);
     }
 
     // carried lantern when working at night
