@@ -1254,8 +1254,38 @@ export class World {
         plot.sited = true; plot.rev++; plot._fenceRing = null;
         this.#rebuildFields(plot);
         this.reveal(plot.x + (B >> 1), plot.y + (B >> 1), 13);   // light up the homestead now they're here
-        this.addLog(`${f.sheet.name} scouted the land and staked out a homestead.`, '#7dd069');
-        f.say('this ground will do.', '#7dd069'); f.sparkle = 1.5;
+        // SAY the WHY, drawn from what actually drew them here — so the choice reads as judgment, not RNG.
+        const reason = this.#claimReason(f);
+        f.say(reason, '#7dd069'); f.think(reason); f.sparkle = 1.5;
+        this.addLog(`${f.sheet.name} staked a homestead — "${reason.toLowerCase()}"`, '#7dd069');
+    }
+    // Why did this settler pick THIS ground? Read the nearby resources + nearest neighbour + their
+    // nature, and voice the most salient reason. This is the settlement decision made LEGIBLE.
+    #claimReason(f) {
+        const p = f.plot, cx = p.x + 6, cy = p.y + 6;
+        let trees = 0, water = 0, ore = 0, forage = 0;
+        for (let dj = -8; dj <= 8; dj += 2) for (let di = -8; di <= 8; di += 2) {
+            const t = this.get(cx + di, cy + dj);
+            if (t === T.TREE) trees++; else if (t === T.WATER) water++;
+            else if (t === T.ROCK) ore++; else if (t === T.WHEAT || t === T.FLOWER) forage++;
+        }
+        let near = 1e9, nearName = null;
+        for (const o of this.farmers) {
+            if (o === f || !o.plot.sited) continue;
+            const d = Math.hypot((o.plot.x + 6) - cx, (o.plot.y + 6) - cy);
+            if (d < near) { near = d; nearName = o.sheet.name.split(' ')[0]; }
+        }
+        const collab = f.p.collaboration, loner = collab < 0.42, sociable = collab > 0.55;
+        // social reasons win when they're the striking feature; else lead with the best resource
+        if (loner && (near > 28 || nearName == null)) return 'far from everyone — just how I like it';
+        if (sociable && near < 24 && nearName) return `good — ${nearName}'s right over there`;
+        if (sociable && near > 34) return "a bit lonely out here, but the land's good";
+        if (trees >= 4) return 'plenty of timber to build with';
+        if (ore >= 3) return 'good stone in these rocks';
+        if (water >= 2) return "water's close — the crops'll thank me";
+        if (forage >= 4) return 'wild food all around — easy pickings';
+        if (near < 24 && nearName) return `neighbourly enough — ${nearName}'s not far`;
+        return "room to grow, and quiet. this'll do";
     }
     // Reveal a straight trail of fog between two points so a settler can path along it.
     #revealCorridor(i0, j0, i1, j1, r) {
@@ -4212,8 +4242,9 @@ export class Farmer {
             const nerve = 0.4 + powerGap * 0.14 + this.p.competitiveness * 0.3 + this.p.diligence * 0.1
                         - (def.menace - 0.8) * 0.3 - (this.threatWary[def.kind] || 0) * 0.2;
             this.combatStance = nerve > 0.5 ? 'fight' : 'flee';
-            if (this.combatStance === 'fight') this.say('COME ON THEN!', '#e0c040');
-            else { this.say(powerGap < -3 ? `NO CHANCE ALONE — HELP!` : `HELP! ${def.name.toUpperCase()}!`, '#e05040'); e.helpWanted = true; }
+            // voice WHY they'll stand or run — the enemy + how they rate their odds
+            if (this.combatStance === 'fight') this.say(powerGap > 4 ? `just ${def.name} — come on!` : `${def.name}? i'll chance it`, '#e0c040');
+            else { this.say(powerGap < -3 ? `${def.name} — no match, HELP!` : `${def.name}! RUN!`, '#e05040'); e.helpWanted = true; }
         }
         // bloodied mid-fight? break off and run rather than fight to the ground (unless help's at hand)
         if (this.combatStance === 'fight' && this.hp < this.maxHp * 0.35 && e.helpers.size === 0) {
