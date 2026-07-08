@@ -210,6 +210,24 @@ const flowerSprite = makeWildFlowers();
 // procedural inventory icons for wild-caught goods that have no Supplies.png entry (fish/lilies)
 const GOOD_ICON = { fish: makeFish(0), lily: makeLilyPad(true) };
 
+// A dedicated CARROT inventory icon: its procedural CROP sprite is a leafy green bundle that reads as
+// wheat, so for the inventory we hold up an unmistakable orange root with a green top instead.
+function makeCarrotIcon() {
+    const c = document.createElement('canvas'); c.width = 16; c.height = 16;
+    const g = c.getContext('2d'); g.imageSmoothingEnabled = false;
+    g.fillStyle = '#4a9a3c';                                          // green fronds
+    for (const [fx, fh] of [[5, 3], [7, 5], [9, 5], [11, 3]]) g.fillRect(fx, 6 - fh, 1, fh);
+    g.fillRect(6, 3, 4, 1);
+    for (let r = 0; r < 9; r++) {                                     // tapered orange root, point down
+        const w = Math.max(1, 6 - Math.round(r * 0.62)), x0 = 8 - Math.floor(w / 2);
+        g.fillStyle = '#f0801c'; g.fillRect(x0, 6 + r, w, 1);
+        g.fillStyle = '#d0600c'; g.fillRect(x0 + w - 1, 6 + r, 1, 1);  // shade the right edge
+    }
+    g.fillStyle = '#ffb050'; g.fillRect(7, 8, 1, 1); g.fillRect(8, 11, 1, 1);   // highlights
+    return c;
+}
+const CROP_ICON_CANVAS = { carrot: makeCarrotIcon() };   // crops whose inventory icon is a bespoke canvas
+
 // ---------------------------------------------------------------------------
 // Real hi-res tree art (CraftPix, iso billboards) — loaded async, with the
 // procedural trees below as fallback until the images arrive.
@@ -810,7 +828,6 @@ function wildJitter(i, j, t) {
 // long, seed-desynced schedule so the forest never all moves at once.
 function treeSway(spec) {
     const now = performance.now() / 1000;
-    if (choppingTiles.has(spec.chopKey)) return 0.022 * Math.sin(now * 15);   // an axe biting: a small quiver
     const period = 19, phase = (spec.seed % 1000) / 1000;                    // ~once every 19s, per tree (desynced)
     const cyc = ((now / period) + phase) % 1;
     const RUSTLE = 0.14;                                                      // rustle fills ~14% of the cycle (~2.7s)
@@ -820,6 +837,7 @@ function treeSway(spec) {
 }
 function drawWild(spec, x, baseY) {
     ctx.imageSmoothingEnabled = false;
+    const chopping = spec.tree && choppingTiles.has(spec.chopKey);
     if (spec.tree) {
         const sway = treeSway(spec);
         if (sway !== 0) {
@@ -830,6 +848,7 @@ function drawWild(spec, x, baseY) {
             ctx.drawImage(spec.img, px, py, spec.w, spec.h);
             ctx.restore();
             drawLeafDrift(spec, x, baseY);
+            if (chopping) drawChopLeaves(spec, x, baseY);
             return;
         }
     }
@@ -841,6 +860,23 @@ function drawWild(spec, x, baseY) {
         spec.h
     );
     drawLeafDrift(spec, x, baseY);
+    if (chopping) drawChopLeaves(spec, x, baseY);
+}
+// Leaves shaken loose while a farmer's axe bites the tree — a livelier shower than the ambient drift:
+// more flakes, a faster fall + wider scatter, in the tree's seasonal colour (green in leaf, warm in fall).
+function drawChopLeaves(spec, x, baseY) {
+    const now = performance.now() / 850;
+    const fall = world.seasonDef && world.seasonDef.name === 'FALL';
+    const colors = fall ? ['#e0803c', '#c85838', '#d8a038', '#a86828'] : ['#5a9a3c', '#4a8a34', '#6aaa44', '#3a7a2c'];
+    for (let n = 0; n < 7; n++) {
+        const phase = (now + ((spec.seed >>> (n * 4)) & 255) / 255 + n * 0.14) % 1;
+        const sway = Math.sin(phase * Math.PI * 3 + n * 1.3);
+        const lx = x + sway * spec.w * 0.3 + ((n % 3) - 1) * spec.w * 0.17;
+        const ly = baseY - spec.h * 0.74 + phase * spec.h * 0.66;
+        ctx.fillStyle = colors[(spec.seed + n) % colors.length];
+        const s = phase > 0.6 ? 1 : 2;
+        ctx.fillRect(Math.floor(lx), Math.floor(ly), s, s);
+    }
 }
 function drawLeafDrift(spec, x, baseY) {
     if (!spec.leaves || world.weather === 'rain' || world.weather === 'storm') return;
@@ -1921,8 +1957,8 @@ function drawFarmer(f, sx, sy) {
         ctx.imageSmoothingEnabled = false;
         ctx.drawImage(suppliesSheet, ix, iy, iw, ih, Math.floor(px + fw / 2 - dw / 2), Math.floor(py - dh - 3 + bob), dw, dh);
     } else if (f.carryCrop && !PRODUCE_ICONS[f.carryCrop.type]) {
-        // a crop with no Supplies.png icon (bean stalks): hold up its procedural ripe sprite
-        const spr = makeCropSprites(f.carryCrop.type)[3];
+        // a crop with no Supplies.png icon (bean stalks / carrot): hold up its bespoke icon or ripe sprite
+        const spr = CROP_ICON_CANVAS[f.carryCrop.type] || makeCropSprites(f.carryCrop.type)[3];
         const bob = Math.round(Math.sin(performance.now() / 200));
         ctx.drawImage(spr, Math.floor(px + fw / 2 - spr.width / 2), Math.floor(py - spr.height - 3 + bob));
     }
@@ -2729,7 +2765,7 @@ function drawSheet(f) {
                     // for crops with no icon, e.g. bean stalks) and tag WHERE it came from
                     const pi = PRODUCE_ICONS[it.crop];
                     const sprite = (pi && imageLoaded(suppliesSheet)) ? { sheet: suppliesSheet, sx: pi[0], sy: pi[1], sw: pi[2], sh: pi[3] } : null;
-                    const canvas = sprite ? null : makeCropSprites(it.crop)[3];
+                    const canvas = sprite ? null : (CROP_ICON_CANVAS[it.crop] || makeCropSprites(it.crop)[3]);
                     drawItemSlot(sx, sy, SZ, null, it.count, { sel: selectedSlotKey === key, sprite, canvas });
                     const src = it.sources, parts = [];
                     if (src.grown) parts.push(`${src.grown} grown`);

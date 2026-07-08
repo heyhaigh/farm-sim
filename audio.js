@@ -282,14 +282,14 @@ class FarmAudio {
         const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 780; bp.Q.value = 0.8;
         const g = ctx.createGain();
         g.gain.setValueAtTime(0.0001, t);
-        g.gain.linearRampToValueAtTime(0.15, t + 0.003);
+        g.gain.linearRampToValueAtTime(0.21, t + 0.003);   // a touch louder now proximity gates it
         g.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
         src.connect(bp); bp.connect(g); g.connect(out);
         src.start(t); src.stop(t + 0.07);
         const o = ctx.createOscillator(); o.type = 'sine';
         o.frequency.setValueAtTime(150, t); o.frequency.exponentialRampToValueAtTime(66, t + 0.08);
         const og = ctx.createGain();
-        og.gain.setValueAtTime(0.11, t); og.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
+        og.gain.setValueAtTime(0.155, t); og.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
         o.connect(og); og.connect(out);
         o.start(t); o.stop(t + 0.1);
     }
