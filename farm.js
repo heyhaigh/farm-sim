@@ -1785,8 +1785,11 @@ export class World {
     static INITIAL_PLOT = 9; // a settler's first staked claim (9x9=81) centred in the slot; scales up per house tier
     static HOUSE_FT = 5;     // the reserve ANCHOR footprint (yurt); a tipi is 3x3, a cottage 7x7 —
                              // all centred on the same houseCentre, so this stays 5 (see houseFt/houseCentre)
-    static COTTAGE_MIN_CELLS = 200;  // a 7x7 cottage is an ESTATE house — a starter 13x13 (169) plot is too
-                                     // cramped; a farmer must first ANNEX ~31 tiles of land to earn the room
+    // Each dwelling needs ELBOW ROOM before it can rise: a farmer must first EXPAND the homestead
+    // past these thresholds so the bigger house isn't crammed into a starter yard. Gated in
+    // #maybeUpgradeHome — ambition turns to LAND first, then the house.
+    static YURT_MIN_CELLS = 145;     // a yurt wants a real farm around it — grow the tipi's ~81-tile yard first
+    static COTTAGE_MIN_CELLS = 280;  // a 7x7 cottage is an ESTATE — nearly max out the yurt's plot before raising one
 
     // The footprint a plot's dwelling reserves right now: the tipi is 3x3, the yurt/cottage 5x5.
     // Uses the building-in-progress tier if upgrading, else the built tier, else the tipi they'll
@@ -1802,7 +1805,7 @@ export class World {
     // The homestead LADDER: your house is your license to hold land. A tipi keeps a modest
     // yard; the yurt earns real acreage; only the cottage commands a full estate. This is
     // what makes farmers hungry to upgrade — the farm can't outgrow the home.
-    static tierCellCap(level) { return level >= 3 ? World.MAX_CELLS : level >= 2 ? 260 : 120; }
+    static tierCellCap(level) { return level >= 3 ? World.MAX_CELLS : level >= 2 ? 300 : 160; }
 
     // Validate a candidate rect for a plot; returns null if it collides with a
     // neighbor plot / commons / edge, else the list of woodland tiles to clear.
@@ -4816,17 +4819,18 @@ export class Farmer {
         if (p.building) return this.#buildHouse(p.building.level);   // an upgrade already under way — work it
         const next = p.built.level + 1;
         if (!w.canBuild(this, next)) return false;   // can't afford yet — keep farming and saving
-        // A COTTAGE (L3) is a 7x7 estate house: it demands ACREAGE. Before a farmer can raise one they
-        // must first EXPAND their homestead past a threshold — a cramped starter plot has no standing for a
-        // farmhouse this grand. So the ambition turns to land first; the cottage waits on the bigger farm.
-        if (next >= 3 && p.cells.size < World.COTTAGE_MIN_CELLS) {
+        // EVERY upgrade demands ELBOW ROOM: a bigger house needs a bigger farm around it, so before a
+        // yurt OR a cottage rises the farmer must first EXPAND the homestead past a threshold (no grand
+        // house crammed into a cramped starter yard). Ambition turns to LAND first; the house waits on it.
+        const minCells = next >= 3 ? World.COTTAGE_MIN_CELLS : World.YURT_MIN_CELLS;
+        if (p.cells.size < minCells) {
             const info = w.expansionInfo(p);
-            if (info.state !== 'blocked') {   // there's room to grow — annex land first, then the cottage
+            if (info.state !== 'blocked') {   // there's room to grow — annex land first, then build
                 this.wantExpand = true;
-                if (this.rand() < 0.2) this.think('MY FARM IS TOO SMALL FOR A COTTAGE — TIME TO EXPAND');
+                if (this.rand() < 0.2) this.think(`MY FARM IS TOO SMALL FOR A ${HOUSE_TIERS[next].name.toUpperCase()} — TIME TO EXPAND`);
                 return this.#pursueGrowth();   // put a shift into growing the plot right now
             }
-            // truly hemmed in by neighbours — the 7x7 still fits the existing yard, so let it rise
+            // truly hemmed in by neighbours — let the house rise in the existing yard rather than deadlock
         }
         // afford it: clear the site of any encroaching trees/rocks/brush BEFORE laying the foundation
         if (!w.houseSiteClear(p)) {

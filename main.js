@@ -2395,9 +2395,9 @@ function houseLines(f, lvl) {
     const name = lvl >= 3 ? 'COTTAGE' : lvl >= 2 ? 'YURT' : 'TIPI';
     const who = f.sheet.name.split(' ')[0];
     const lines = [{ t: name, c: TT_G }, { t: `${who}'s home - tier ${lvl}`, c: TT_L }];
-    if (lvl >= 3) { lines.push({ t: 'Estate: up to 560 tiles', c: TT_GR }, { t: 'Livestock + frontier fields', c: TT_GR }, { t: 'Big stores (160 wood / 80 ore)', c: TT_GR }); }
-    else if (lvl >= 2) { lines.push({ t: 'Bigger farm (up to 360 tiles)', c: TT_GR }, { t: 'Bigger stores (80 wood / 40 ore)', c: TT_GR }, { t: 'Upgrade unlocks livestock', c: TT_L }); }
-    else { lines.push({ t: 'Small yard (up to 200 tiles)', c: TT_GR }, { t: 'Upgrade for more land + stores', c: TT_L }); }
+    if (lvl >= 3) { lines.push({ t: 'Estate: up to 560 tiles', c: TT_GR }, { t: 'Livestock + frontier fields', c: TT_GR }, { t: 'Big stores (220 wood / 110 ore)', c: TT_GR }); }
+    else if (lvl >= 2) { lines.push({ t: 'Farm grows up to 300 tiles', c: TT_GR }, { t: 'Livestock + stores (140w / 75o)', c: TT_GR }, { t: 'Cottage needs a 280-tile farm', c: TT_L }); }
+    else { lines.push({ t: 'Small yard (up to 160 tiles)', c: TT_GR }, { t: 'Yurt needs a 145-tile farm first', c: TT_L }); }
     return lines;
 }
 const STRUCT_INFO = {
