@@ -225,7 +225,8 @@ const IDLE_REGAIN = 0.01;     // a SUPER-slow second wind while idling / walking
 // states where energy neither drains passively nor trickles back (labor pays via #laborDrain; combat is its own strain)
 const ENERGY_NEUTRAL = new Set(['work', 'build', 'coopbuild', 'housebuild', 'chop', 'break', 'forage', 'fish', 'mine', 'fencepost', 'scarecrow', 'fight', 'flee']);
 const FISH_COOLDOWN = 4;   // days a wild-water tile rests between catches (a renewable, not-spammable bounty)
-const HP_REST = 0.55;         // HP knit back per second of rest (a full night mends most wounds)
+const HP_REST = 0.55;         // HP knit back per second of rest — but only up to HP_REST_CAP (see #tickBody)
+const HP_REST_CAP = 0.6;      // rest alone mends a wound to ~60%; the last stretch needs MEAT (or a revive)
 const HP_SICK_DRAIN = 0.05;   // HP an untreated illness gnaws away per second on your feet
 // MEAT — a prized barter good AND a HP restorative. Downing a beast (later, hunted prey) yields meat by
 // SIZE; a wounded farmer eats it to heal. Heal = fraction of maxHp restored per unit eaten. (The 25%-
@@ -3251,7 +3252,7 @@ export class World {
         for (const f of this.farmers) {
             if (f.downed) {   // felled by a foe — back on their feet at home after 3 days (NOT sickness)
                 if (this.day >= f.reviveDay) {
-                    f.downed = false; f.health = 'healthy'; f.energy = 0.6; f.hp = f.maxHp; f.state = 'decide';
+                    f.downed = false; f.health = 'healthy'; f.energy = 0.6; f.hp = Math.max(1, Math.round(f.maxHp * 0.25)); f.state = 'decide';   // back on their feet but FRAIL — rest + meat to mend
                     const home = f.plot && f.plot.sited ? this.houseDoor(f.plot) : { i: CENTER, j: CENTER };
                     f.pos = { i: home.i, j: home.j };
                     this.addLog(`${f.sheet.name} picked themselves back up and is home, wiser for it.`, '#7dd069');
@@ -6220,7 +6221,9 @@ export class Farmer {
         // HP: REST knits you back together (sleeping/resting/recovering), while an untreated illness
         // gnaws at it if you stay on your feet. Bleed out entirely and you COLLAPSE (a downed reset).
         const resting = this.state === 'sleep' || this.state === 'rest' || this.state === 'sick';
-        if (resting) this.hp = Math.min(this.maxHp, this.hp + HP_REST * dt);
+        // rest mends a wound only to HP_REST_CAP; the last stretch to full needs MEAT — so a bad scuffle
+        // has lasting teeth and hunted meat is worth hoarding. Never DROPS hp already above the cap.
+        if (resting && this.hp < this.maxHp * HP_REST_CAP) this.hp = Math.min(this.maxHp * HP_REST_CAP, this.hp + HP_REST * dt);
         else if (this.health === 'sick') this.hp = Math.max(0, this.hp - HP_SICK_DRAIN * dt);
         if (this.hp <= 0 && this.state !== 'fight' && this.state !== 'flee') this.world.collapse(this);
 
