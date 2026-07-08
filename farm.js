@@ -59,7 +59,7 @@ const CROP_STAGE_DAYS = [3, 4.5, 1.5]; // calibrated so a well-tended crop in go
 const ORE_ROCK = 2;        // iron ore from breaking a rock
 const FACILITY_WOOD = 6;   // wood to raise a facility
 const FENCE_WOOD = 8;      // wood to fence the new homestead
-const FENCE_POST_WOOD = 1; // wood per fence post — reclaimed when torn down, paid when built
+const FENCE_POST_WOOD = 2; // wood per fence post (one per border tile) — must be on hand to raise it, reclaimed when torn down
 // Tiered dwellings. L1 (tipi) is quick shelter; L2 (yurt) is a real mid-game investment; L3
 // (cottage) is the lifetime goal — a full YEAR of graft. Each tier gates on lifetime crops
 // (harvested, NOT spent), a personal LEVEL (minLevel), and a real pile of timber + stone, so a
@@ -1366,8 +1366,9 @@ export class World {
     claimHomestead(f) {
         const plot = f.plot;
         if (plot.sited) return;
-        const B = plot.w;
-        for (let jj = plot.y; jj < plot.y + B; jj++) for (let ii = plot.x; ii < plot.x + B; ii++) plot.cells.add(pkey(ii, jj));
+        const B = plot.w, span = World.INITIAL_PLOT, off = (B - span) >> 1;   // small starter claim, centred in the slot
+        for (let jj = plot.y + off; jj < plot.y + off + span; jj++)
+            for (let ii = plot.x + off; ii < plot.x + off + span; ii++) plot.cells.add(pkey(ii, jj));
         plot.sited = true; plot.rev++; plot._fenceRing = null;
         this.#rebuildFields(plot);
         this.reveal(plot.x + (B >> 1), plot.y + (B >> 1), 13);   // light up the homestead now they're here
@@ -1717,7 +1718,12 @@ export class World {
             building: null,                  // { level, points, needed } while a dwelling is under construction
             sited: false,                    // false until the settler physically travels out and STAKES it
         };
-        for (let j = slot.j; j < slot.j + B; j++) for (let i = slot.i; i < slot.i + B; i++) plot.cells.add(pkey(i, j));
+        // A settler stakes only a SMALL starter claim (centred on the house) — just enough to fence,
+        // raise a tipi and till a few beds. The homestead SCALES UP with each dwelling tier as they
+        // annex land (tierCellCap gates growth), so a tipi is cramped and a cottage is an estate.
+        const span = World.INITIAL_PLOT, off = (B - span) >> 1;   // centre the claim in the reserved slot
+        for (let j = slot.j + off; j < slot.j + off + span; j++)
+            for (let i = slot.i + off; i < slot.i + off + span; i++) plot.cells.add(pkey(i, j));
         this.#rebuildFields(plot);   // (plot is NOT auto-cleared; the house tiles are NOT placed yet)
 
         const farmer = new Farmer(sheet, plot, this);
@@ -1761,7 +1767,8 @@ export class World {
     // ---- farm expansion + diversification ---------------------------------------
 
     static MAX_CELLS = 560;  // acreage cap (~23x23 worth of land, any shape, annexes included)
-    static BASE_PLOT = 13;   // starting plot size (square); house + garden + facility zones fit inside
+    static BASE_PLOT = 13;   // reserved slot size (square) — neighbour spacing; the CLAIMED area starts smaller
+    static INITIAL_PLOT = 9; // a settler's first staked claim (9x9=81) centred in the slot; scales up per house tier
     static HOUSE_FT = 5;     // the reserve ANCHOR footprint (yurt); a tipi is 3x3, a cottage 7x7 —
                              // all centred on the same houseCentre, so this stays 5 (see houseFt/houseCentre)
     static COTTAGE_MIN_CELLS = 200;  // a 7x7 cottage is an ESTATE house — a starter 13x13 (169) plot is too
@@ -1781,7 +1788,7 @@ export class World {
     // The homestead LADDER: your house is your license to hold land. A tipi keeps a modest
     // yard; the yurt earns real acreage; only the cottage commands a full estate. This is
     // what makes farmers hungry to upgrade — the farm can't outgrow the home.
-    static tierCellCap(level) { return level >= 3 ? World.MAX_CELLS : level >= 2 ? 360 : 200; }
+    static tierCellCap(level) { return level >= 3 ? World.MAX_CELLS : level >= 2 ? 260 : 120; }
 
     // Validate a candidate rect for a plot; returns null if it collides with a
     // neighbor plot / commons / edge, else the list of woodland tiles to clear.
@@ -4549,14 +4556,15 @@ export class Farmer {
                 (p.fenceSkip || (p.fenceSkip = new Set())).add(pkey(blocker.i, blocker.j));
                 this.#backoff(); return true;
             }
-            const needWood = (p.fencePosts % 2 === 0);   // ~1 wood per 2 posts
-            if (needWood && this.wood < 1) {
-                this.think(this.wood > 0 ? 'MORE WOOD FOR THE FENCE' : 'GATHERING WOOD TO FENCE MY LAND');
+            // every fence post costs real wood, and the farmer must have it ON HAND to raise one —
+            // no fencing from nothing. A whole perimeter is a genuine lumber sink (see FENCE_POST_WOOD).
+            if (this.wood < FENCE_POST_WOOD) {
+                this.think(this.wood > 0 ? 'NEED MORE WOOD FOR THE FENCE' : 'GATHERING WOOD TO FENCE MY LAND');
                 if (this.#goChop()) return true;
                 this.#backoff(); return true;
             }
             const spot = w.fencePostSpot(p, p.fencePosts);   // fence line is clear now — pick a post spot
-            this.pendingFence = { needWood };
+            this.pendingFence = { cost: FENCE_POST_WOOD };
             this.think(`RAISING FENCE POST ${p.fencePosts + 1}/${p.fenceTarget}`);
             if (this.#goTo(spot.i + 0.5, spot.j + 0.5, 'fencepost')) return true;
             p.fencePosts++; this.#backoff(); return true;   // spot unreachable — skip it, don't loop
@@ -5864,7 +5872,7 @@ export class Farmer {
 
     #completeFencePost() {
         const p = this.plot;
-        if (this.pendingFence && this.pendingFence.needWood && this.wood > 0) this.wood -= 1;
+        if (this.pendingFence && this.wood >= this.pendingFence.cost) this.wood -= this.pendingFence.cost;
         this.pendingFence = null;
         this.#laborDrain('fencepost');
         this.gainXP(1);
