@@ -60,6 +60,10 @@ let followMode = false;           // camera tracks followTarget (F/crosshair tog
 let followTarget = null;          // the farmer being trailed — independent of the open card, so closing
                                   // the sheet (X) keeps following; only F / Esc / a pan stops it
 let recapSeq = -1;                // last day-recap seq we've seen (to detect a new one)
+let dramaSpotlight = null;        // { seed, kind, label, t } — a recent off-camera story beat worth watching (B4)
+let lastChronLen = -1;            // chronicle length last frame, to detect NEW beats to spotlight
+// which chronicle kinds are dramatic enough to nudge the player to go watch, + their short cue label
+const DRAMA_KINDS = { peril: 'peril!', rift: 'a falling-out', crime: 'a theft', hunt: 'a hunt' };
 let recapShownAt = -1e9;          // real-time (ms) the current recap appeared; drives its fade-out
 let sheetScroll = 0;              // scroll offset for the selected-farmer detail card
 let sheetContentH = 0;           // measured content height (for clamping the scroll)
@@ -3417,14 +3421,57 @@ out.addEventListener('wheel', (e) => {
 // owns cmd+T (new tab) and never lets the page see it.
 // The most watch-worthy farmer right now: someone in a fight, fleeing, downed, rushing to help,
 // or staking a claim outranks the routine — so 'jump to the action' lands on real drama.
+// B4 — witnessable drama: watch the chronicle for a NEW dramatic beat and, if its farmer exists,
+// remember them as the current spotlight so we can point the player at the action ('W' to watch).
+function updateDramaSpotlight() {
+    const ch = world.chronicle;
+    if (lastChronLen < 0) { lastChronLen = ch.length; return; }   // ignore the pre-existing backlog on load
+    for (let k = lastChronLen; k < ch.length; k++) {
+        const b = ch[k];
+        if (!DRAMA_KINDS[b.kind] || b.whoSeed == null) continue;
+        if (world.farmers.some(x => x.sheet.seed === b.whoSeed))
+            dramaSpotlight = { seed: b.whoSeed, kind: b.kind, label: DRAMA_KINDS[b.kind], t: performance.now() };
+    }
+    lastChronLen = ch.length;
+}
+function spotlightFarmer() {
+    if (!dramaSpotlight || performance.now() - dramaSpotlight.t > 6500) return null;   // cue fades after ~6.5s
+    return world.farmers.find(x => x.sheet.seed === dramaSpotlight.seed) || null;
+}
+// A pulsing arrow + label at the screen edge pointing to an OFF-SCREEN spotlight farmer, with a [W] hint.
+// Never grabs the camera — the player chooses to look (observer identity).
+function drawDramaCue() {
+    const f = spotlightFarmer(); if (!f || (followMode && followTarget === f)) return;
+    const fx = cam.x + isoX(f.pos.i, f.pos.j), fy = cam.y + isoY(f.pos.i, f.pos.j);
+    const m = 16;
+    if (fx > m && fx < GW - m && fy > 24 + m && fy < GH - m) return;   // already on-screen, no cue needed
+    const cx = GW / 2, cy = GH / 2, dx = fx - cx, dy = fy - cy;
+    const adx = Math.abs(dx) || 1e-6, ady = Math.abs(dy) || 1e-6;
+    const sc = Math.min((GW / 2 - m) / adx, (GH / 2 - 24 - m) / ady);
+    const ax = Math.round(cx + dx * sc), ay = Math.round(cy + dy * sc);
+    const ang = Math.atan2(dy, dx), pulse = 0.55 + 0.45 * Math.sin(performance.now() / 170), s = 6;
+    ctx.fillStyle = `rgba(240,200,80,${pulse})`;
+    ctx.beginPath();
+    ctx.moveTo(ax + Math.cos(ang) * s, ay + Math.sin(ang) * s);
+    ctx.lineTo(ax + Math.cos(ang + 2.5) * s, ay + Math.sin(ang + 2.5) * s);
+    ctx.lineTo(ax + Math.cos(ang - 2.5) * s, ay + Math.sin(ang - 2.5) * s);
+    ctx.closePath(); ctx.fill();
+    const label = `${dramaSpotlight.label} - W`, tw = textWidth(label);   // "- W" = press W to watch (font has no brackets)
+    const lx = Math.max(4, Math.min(GW - tw - 4, ax - Math.cos(ang) * 10 - tw / 2));
+    const ly = Math.max(26, Math.min(GH - 10, ay - Math.sin(ang) * 10 - 4));
+    ctx.fillStyle = 'rgba(16,14,10,0.8)'; ctx.fillRect(Math.round(lx) - 2, Math.round(ly) - 1, tw + 4, 8);
+    drawText(ctx, label, Math.round(lx), Math.round(ly), '#f0d060');
+}
 function mostInterestingFarmer() {
     if (!world) return null;
     const pri = { downed: 8, fight: 7, flee: 7, help: 5, care: 5, housebuild: 3, build: 3, coopbuild: 3, fencepost: 2, scarecrow: 2 };
+    const spot = spotlightFarmer();
     let best = null, bs = -1;
     for (const f of world.farmers) {
         let s = pri[f.state] || 0;
         if (f.claim && !f.plot.sited) s = Math.max(s, 6);   // travelling out to stake a claim
         if (f.downed) s = Math.max(s, 8);
+        if (f === spot) s = Math.max(s, 7.5);               // a fresh dramatic beat pulls the eye
         if (world.leader === f) s += 0.3;
         s += (f.sheet.seed % 97) / 1000;                    // stable tiebreak
         if (s > bs) { bs = s; best = f; }
@@ -3446,6 +3493,11 @@ window.addEventListener('keydown', (e) => {
             const target = (selected && world.farmers.includes(selected)) ? selected : mostInterestingFarmer();
             if (target) { followMode = true; followTarget = target; selected = target; sheetScroll = 0; sheetTab = 0; rosterOpen = false; chronOpen = false; boardOpen = false; }
         }
+    }
+    // W — WATCH: jump to follow the current off-screen drama the cue is pointing at
+    if ((e.key === 'w' || e.key === 'W') && world && booted) {
+        const target = spotlightFarmer();
+        if (target) { followMode = true; followTarget = target; selected = target; sheetScroll = 0; sheetTab = 0; rosterOpen = false; chronOpen = false; boardOpen = false; dramaSpotlight = null; }
     }
     // Esc — stop following AND close the card / any open panel (a clean sweep back to the map)
     if (e.key === 'Escape' && world && booted) {
@@ -3601,6 +3653,10 @@ function frame(now) {
             worldHover = world.farmers.some(f => Math.hypot(f.pos.i - tile.i, f.pos.j - tile.j) < 1.6);
         }
     }
+
+    // B4: nudge the player toward a fresh off-screen story beat (drawn above the world, below the cursor)
+    updateDramaSpotlight();
+    if (booted && !rosterOpen && !chronOpen && !boardOpen) drawDramaCue();
 
     // custom pixel hand cursor, on top of everything (dragging = pressed/gold too)
     if (mouse.x >= 0) drawCursor(mouse.x, mouse.y, mouse.dragging || cursorIsHot(worldHover));

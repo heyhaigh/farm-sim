@@ -6213,6 +6213,7 @@ export class Farmer {
             this.say(`+${MEAT_NAME[a.def.meat]}`, '#e07868'); this.sparkle = roll.crit ? 1.2 : 0.8;
             this.remember('event', `Ran down ${a.def.name} in the wilds — good hunting`, null, 0.6);
             w.addLog(`${s.name} bagged ${a.def.name} — ${MEAT_NAME[a.def.meat]} for the pot.`, '#d0a060');
+            w.addChronicle('hunt', `${s.name.split(' ')[0]} ran down ${a.def.name} out in the wilds.`, this, null, '#d0a060');
             a.done = true; a.hunter = null; this.huntTarget = null; this.state = 'decide';
         } else {
             const ax = a.i - this.pos.i, ay = a.j - this.pos.j, m = Math.hypot(ax, ay) || 1;
