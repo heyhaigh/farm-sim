@@ -252,10 +252,10 @@ export function makeFarmerSprites(sheet) {
 
 const CROP_STYLES = {
     carrot: { fruit: '#f08030', leaf: '#5aa848', form: 'ground' },
-    tomato: { fruit: '#e04838', leaf: '#4a9840', form: 'bush' },
+    pepper: { fruit: '#e04838', leaf: '#4a9840', form: 'bush' },
     sunflower: { fruit: '#f8d020', leaf: '#58a050', form: 'tall' },
     pumpkin: { fruit: '#e88820', leaf: '#4a8848', form: 'ground' },
-    rose: { fruit: '#e05878', leaf: '#487840', form: 'bush' },
+    grapes: { fruit: '#8a5aa8', leaf: '#487840', form: 'bush' },
     wheat: { fruit: '#e8c860', leaf: '#88a850', form: 'tall' },
 };
 
@@ -362,7 +362,7 @@ function drawCropStage(ctx, style, type, stage, withered) {
             break;
         }
         // ---------------------------------------------------------------
-        case 'tomato': { // leafy bush on a stake; ripe = red tomatoes
+        case 'pepper': { // leafy bush on a stake; ripe = red peppers
             px(ctx, 8, 4, 1, 7, '#9a7a4a');      // support stake
             if (stage === 2) {
                 px(ctx, 3, 6, 6, 5, leafD);
@@ -433,7 +433,7 @@ function drawCropStage(ctx, style, type, stage, withered) {
             break;
         }
         // ---------------------------------------------------------------
-        case 'rose': { // leafy bush; ripe = pink rose blooms
+        case 'grapes': { // leafy bush; ripe = purple grape clusters
             if (stage === 2) {
                 px(ctx, 3, 6, 6, 5, leafD);
                 px(ctx, 3, 5, 6, 4, leaf);

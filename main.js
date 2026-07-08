@@ -397,9 +397,9 @@ const suppliesSheet = new Image(); let suppliesReady = false;
 // Growth-stage source rects into Plants.png. Order matches crop.stage 0..3:
 // [seed, sprout, mature-foliage, ripe-with-fruit]  (measured from the sheet)
 const CROP_FRAMES = {
-    tomato: [[11, 112, 12, 14], [40, 105, 19, 21], [101, 96, 22, 30], [68, 96, 23, 30]],   // ripe = red
+    pepper: [[11, 112, 12, 14], [40, 105, 19, 21], [101, 96, 22, 30], [68, 96, 23, 30]],   // ripe = red peppers
     carrot: [[9, 141, 13, 10], [39, 140, 19, 14], [102, 138, 22, 17], [70, 138, 22, 17]],  // ripe = leafy head
-    rose: [[9, 9, 13, 37], [41, 9, 13, 37], [100, 9, 24, 37], [68, 9, 24, 37]],            // ripe = purple cluster
+    grapes: [[9, 9, 13, 37], [41, 9, 13, 37], [100, 9, 24, 37], [68, 9, 24, 37]],          // ripe = purple grape cluster
     pumpkin: [[7, 296, 13, 11], [34, 290, 22, 21], [96, 288, 29, 27], [64, 289, 29, 26]],  // ripe = orange gourd
     wheat: [[9, 371, 11, 10], [39, 363, 14, 18], [39, 363, 14, 18], [68, 353, 22, 28]],    // ripe = grain
     sunflower: [[12, 416, 11, 14], [37, 410, 21, 20], [37, 410, 21, 20], [67, 396, 25, 34]],
@@ -407,7 +407,7 @@ const CROP_FRAMES = {
 const CROP_SCALE = ASSET_SCALE;   // crops share the one global asset scale
 // Harvested-produce icons in Supplies.png (loose items), shown when a crop is picked / carried.
 const PRODUCE_ICONS = {
-    tomato: [195, 147, 9, 9], carrot: [147, 210, 11, 11], rose: [242, 209, 11, 14],
+    pepper: [195, 147, 9, 9], carrot: [147, 210, 11, 11], grapes: [242, 209, 11, 14],
     pumpkin: [85, 166, 20, 17], wheat: [1, 176, 13, 15], sunflower: [244, 132, 10, 9],
 };
 
