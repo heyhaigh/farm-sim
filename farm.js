@@ -313,6 +313,8 @@ export class World {
         this.day = 1;
         this.clock = 0;
         this.harvestTotal = 0;
+        this._dayHarvestStart = 0;   // harvestTotal snapshot at the current day's start (for the daily delta)
+        this.dayRecap = null;        // end-of-day summary card for the UI (built at each rollover)
 
         this.season = 0;
         this.seasonDay = 0;
@@ -3247,6 +3249,7 @@ export class World {
         this.time += dt;
         this.clock += dt;
         if (this.clock >= DAY_LENGTH + NIGHT_LENGTH) {
+            const endedDay = this.day, endedSeason = this.season;   // capture before the rollover mutates them
             this.clock = 0; this.day++;
             this.#dailyHealthCheck();
             this.#advanceSeason();
@@ -3257,6 +3260,13 @@ export class World {
             this.#tickCoops();
             this.#maybeHatchRooster();
             this.addLog(`Day ${this.day} begins on Ry Farms`, '#f0d060');
+            // END-OF-DAY RECAP: gather the day's notable beats (from the chronicle) + the harvest tally,
+            // so the UI can surface what happened in a self-playing town where the action is off-screen.
+            const beats = this.chronicle.filter(e => e.day === endedDay);
+            const harvest = Math.max(0, Math.round(this.harvestTotal - this._dayHarvestStart));
+            this._dayHarvestStart = this.harvestTotal;
+            const downed = this.farmers.filter(f => f.downed).length;
+            this.dayRecap = { day: endedDay, season: endedSeason, beats, harvest, downed, seq: (this._recapSeq = (this._recapSeq || 0) + 1) };
             // NB: weather is NOT force-rerolled at the day boundary any more — it changes only when
             // its (now day-spanning) timer runs out, so spells can persist across several days.
         }

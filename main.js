@@ -56,6 +56,9 @@ let rosterOpen = false;
 let rosterScroll = 0;
 let chronOpen = false;            // town chronicle panel (the settlement's saga)
 let chronScroll = 0;
+let followMode = false;           // camera tracks the selected farmer (F to toggle; drag cancels)
+let recapSeq = -1;                // last day-recap seq we've seen (to detect a new one)
+let recapShownAt = -1e9;          // real-time (ms) the current recap appeared; drives its fade-out
 let sheetScroll = 0;              // scroll offset for the selected-farmer detail card
 let sheetContentH = 0;           // measured content height (for clamping the scroll)
 let maxSheetScroll = 0;          // clamp bound, set each draw
@@ -140,8 +143,10 @@ function cursorIsHot(worldTooltip) {
     if (m.x < 0) return false;
     for (const b of [ROSTER_BTN, CHRON_BTN, SND_BTN, FWD_BTN, FF_BTN, SPEED1_BTN]) if (b.w && inRect(m, b)) return true;
     if (!BOARD_BTN.hidden && inRect(m, BOARD_BTN)) return true;
+    if (RECAP_CARD.w && inRect(m, RECAP_CARD)) return true;
     if (selected) {
         if (inRect(m, SHEET_CLOSE)) return true;
+        if (inRect(m, SHEET_FOLLOW)) return true;
         for (const tb of SHEET_TABS) if (inRect(m, tb)) return true;
         if (MEM_PREV.w && inRect(m, MEM_PREV)) return true;
         if (MEM_NEXT.w && inRect(m, MEM_NEXT)) return true;
@@ -157,6 +162,8 @@ const CHRON_BTN = { x: 0, y: 3, w: 0, h: 12 };     // town chronicle toggle, pos
 const MINIMAP = { x: 0, y: 0, w: 46, h: 46 };      // bottom-right legend, positioned in drawMinimap
 const SHEET_RECT = { x: 0, y: 0, w: 0, h: 0 };     // detail-card bounds, set in drawSheet (for hit-testing)
 const SHEET_CLOSE = { x: 0, y: 0, w: 0, h: 0 };    // card close (X) button, set in drawSheet
+const SHEET_FOLLOW = { x: 0, y: 0, w: 0, h: 0 };   // card follow/track toggle, set in drawSheet
+const RECAP_CARD = { x: 0, y: 0, w: 0, h: 0 };     // end-of-day recap card bounds, set in drawDayRecap
 const MEM_PREV = { x: 0, y: 0, w: 0, h: 0 };       // memories pager arrows, set in drawSheet
 const MEM_NEXT = { x: 0, y: 0, w: 0, h: 0 };
 let SHEET_TABS = [];                               // tab-bar hit-rects {x,y,w,h,tab}, rebuilt in drawSheet
@@ -2459,6 +2466,17 @@ function drawSheet(f) {
     ctx.fillStyle = '#5a4632'; ctx.fillRect(SHEET_CLOSE.x, SHEET_CLOSE.y, SHEET_CLOSE.w, 1);
     drawText(ctx, 'X', SHEET_CLOSE.x + 3, SHEET_CLOSE.y + 3, '#e8c8a0');
 
+    // --- follow/track toggle (crosshair), just left of the X: camera trails this farmer ---
+    SHEET_FOLLOW.x = SHEET_CLOSE.x - 13; SHEET_FOLLOW.y = PY + 3; SHEET_FOLLOW.w = 10; SHEET_FOLLOW.h = 10;
+    const following = followMode && selected === f;
+    ctx.fillStyle = following ? '#1f5a2a' : '#3a2c1e'; ctx.fillRect(SHEET_FOLLOW.x, SHEET_FOLLOW.y, 10, 10);
+    ctx.fillStyle = following ? '#7dd069' : '#5a4632'; ctx.fillRect(SHEET_FOLLOW.x, SHEET_FOLLOW.y, 10, 1);
+    const cxr = SHEET_FOLLOW.x + 5, cyr = SHEET_FOLLOW.y + 5, rc = following ? '#bff0a8' : '#e8c8a0';
+    ctx.fillStyle = rc;
+    ctx.fillRect(cxr - 3, cyr, 2, 1); ctx.fillRect(cxr + 2, cyr, 2, 1);   // horizontal reticle ticks
+    ctx.fillRect(cxr, cyr - 3, 1, 2); ctx.fillRect(cxr, cyr + 2, 1, 2);   // vertical reticle ticks
+    ctx.fillRect(cxr, cyr, 1, 1);                                          // centre dot
+
     // --- fixed title band (name + archetype/level + health) ---
     ctx.fillStyle = '#2b2016'; ctx.fillRect(IX - 2, PY + 16, IW + 4, 21);
     ctx.fillStyle = SHEET_GOLD; ctx.fillRect(IX - 2, PY + 16, IW + 4, 1); ctx.fillRect(IX - 2, PY + 36, IW + 4, 1);
@@ -2910,6 +2928,61 @@ function drawChronicle() {
 }
 
 // ---------------------------------------------------------------------------
+// End-of-day RECAP — a self-playing town's action happens off-screen, so surface
+// what mattered: a card at each rollover summing the day's harvest + notable beats.
+// Auto-fades; click to dismiss. Skipped at 20x (you're fast-forwarding, not watching).
+// ---------------------------------------------------------------------------
+const RECAP_MS = 7000;
+const RECAP_PRI = { peril: 6, build: 5, town: 4, find: 4, season: 3, bond: 2, rift: 2, found: 1 };
+
+function drawDayRecap() {
+    RECAP_CARD.w = 0;
+    if (rosterOpen || chronOpen || boardOpen) return;      // don't fight a modal for the screen
+    const r = world.dayRecap;
+    if (!r) return;
+    if (r.seq !== recapSeq) {                               // a fresh day just closed
+        recapSeq = r.seq;
+        const worthShowing = (r.beats.length > 0 || r.harvest > 0) && (world._speedMult || 1) <= 5;
+        recapShownAt = worthShowing ? performance.now() : -1e9;
+    }
+    const age = performance.now() - recapShownAt;
+    if (age < 0 || age > RECAP_MS) return;
+    const alpha = Math.min(1, age / 220) * Math.min(1, (RECAP_MS - age) / 600);
+
+    // pick the most notable beats (priority desc, then chronological), wrap to card width
+    const beats = [...r.beats].map((b, i) => ({ b, i }))
+        .sort((a, z) => (RECAP_PRI[z.b.kind] || 0) - (RECAP_PRI[a.b.kind] || 0) || a.i - z.i)
+        .slice(0, 4).map(o => o.b);
+    const lines = [];
+    for (const b of beats) for (const ln of wrapText(b.text, 44).slice(0, 2)) lines.push({ t: ln, c: b.color });
+
+    const PW = 214, PX = Math.floor((GW - PW) / 2), PY = 20;
+    const headH = 22, PH = headH + lines.length * 8 + 12;
+    RECAP_CARD.x = PX; RECAP_CARD.y = PY; RECAP_CARD.w = PW; RECAP_CARD.h = PH;
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = 'rgba(14,16,26,0.95)'; ctx.fillRect(PX, PY, PW, PH);
+    ctx.fillStyle = '#e8c860'; ctx.fillRect(PX, PY, PW, 1); ctx.fillRect(PX, PY + PH - 1, PW, 1);
+    ctx.fillRect(PX, PY, 1, PH); ctx.fillRect(PX + PW - 1, PY, 1, PH);
+
+    const sd = SEASONS[r.season];
+    drawText(ctx, `DAY ${r.day} RECAP`, PX + 6, PY + 5, '#f0d060', 1);
+    if (sd) drawText(ctx, sd.name, PX + PW - textWidth(sd.name) - 16, PY + 5, sd.accent);
+    drawText(ctx, 'X', PX + PW - 9, PY + 5, '#9aa0b4');
+    // headline stat line
+    let stat = `${r.harvest} harvested`;
+    if (r.downed) stat += `  -  ${r.downed} down`;
+    drawText(ctx, stat.toUpperCase(), PX + 6, PY + 14, '#9ad0e0');
+    ctx.fillStyle = '#2a2e3a'; ctx.fillRect(PX + 4, PY + 21, PW - 8, 1);
+
+    let y = PY + headH + 2;
+    if (!lines.length) { drawText(ctx, 'A QUIET DAY IN THE VALLEY.', PX + 8, y, '#6a6f7c'); }
+    else for (const ln of lines) { ctx.fillStyle = ln.c; ctx.fillRect(PX + 6, y + 2, 2, 2); drawText(ctx, ln.t, PX + 11, y, ln.c); y += 8; }
+    ctx.restore();
+}
+
+// ---------------------------------------------------------------------------
 // Input
 // ---------------------------------------------------------------------------
 
@@ -2934,7 +3007,7 @@ out.addEventListener('pointermove', (e) => {
     mouse.x = p.x; mouse.y = p.y;
     if (mouse.panStart) {
         const dx = p.x - mouse.panStart.x, dy = p.y - mouse.panStart.y;
-        if (Math.abs(dx) + Math.abs(dy) > 4) mouse.dragging = true;
+        if (Math.abs(dx) + Math.abs(dy) > 4) { mouse.dragging = true; followMode = false; }   // panning breaks follow
         if (mouse.dragging) {
             cam.x = mouse.panStart.camX + dx;
             cam.y = mouse.panStart.camY + dy;
@@ -2987,6 +3060,9 @@ out.addEventListener('pointerup', (e) => {
     if (inRect(p, FF_BTN)) { world._speedMult = world._speedMult === 20 ? 1 : 20; return; }
     if (SPEED1_BTN.w && inRect(p, SPEED1_BTN)) { world._speedMult = 1; return; }
 
+    // end-of-day recap card: click anywhere on it to dismiss
+    if (RECAP_CARD.w && inRect(p, RECAP_CARD)) { recapShownAt = -1e9; return; }
+
     // roster overlay (modal) — handle before any world/minimap clicks
     if (rosterOpen) {
         const rv = rosterView;
@@ -3004,7 +3080,8 @@ out.addEventListener('pointerup', (e) => {
 
     // detail card: X closes it; clicks anywhere inside it are consumed. Checked BEFORE the
     // minimap because the full-height card is drawn OVER it (Codex: don't click through).
-    if (selected && inRect(p, SHEET_CLOSE)) { selected = null; selectedSlotKey = null; return; }
+    if (selected && inRect(p, SHEET_FOLLOW)) { followMode = !followMode; return; }
+    if (selected && inRect(p, SHEET_CLOSE)) { selected = null; selectedSlotKey = null; followMode = false; return; }
     // tab bar: switch view (reset scroll so the new view starts at the top)
     if (selected) { for (const tb of SHEET_TABS) if (inRect(p, tb)) { if (sheetTab !== tb.tab) { sheetTab = tb.tab; sheetScroll = 0; selectedSlotKey = null; } return; } }
     if (selected && MEM_PREV.w && inRect(p, MEM_PREV)) { sheetMemPage = Math.max(0, sheetMemPage - 1); return; }
@@ -3052,11 +3129,37 @@ out.addEventListener('wheel', (e) => {
 
 // T = snap the camera home to town (the plaza well). Plain T, not cmd+T — the browser
 // owns cmd+T (new tab) and never lets the page see it.
+// The most watch-worthy farmer right now: someone in a fight, fleeing, downed, rushing to help,
+// or staking a claim outranks the routine — so 'jump to the action' lands on real drama.
+function mostInterestingFarmer() {
+    if (!world) return null;
+    const pri = { downed: 8, fight: 7, flee: 7, help: 5, care: 5, housebuild: 3, build: 3, coopbuild: 3, fencepost: 2, scarecrow: 2 };
+    let best = null, bs = -1;
+    for (const f of world.farmers) {
+        let s = pri[f.state] || 0;
+        if (f.claim && !f.plot.sited) s = Math.max(s, 6);   // travelling out to stake a claim
+        if (f.downed) s = Math.max(s, 8);
+        if (world.leader === f) s += 0.3;
+        s += (f.sheet.seed % 97) / 1000;                    // stable tiebreak
+        if (s > bs) { bs = s; best = f; }
+    }
+    return best;
+}
+
 window.addEventListener('keydown', (e) => {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     if ((e.key === 't' || e.key === 'T') && world) {
+        followMode = false;
         cam.x = GW / 2 - isoX(world.well.i, world.well.j);
         cam.y = GH / 2 - isoY(world.well.i, world.well.j) - 20;
+    }
+    // F — follow: toggle the camera trailing the selected farmer, or jump to (and follow) the action
+    if ((e.key === 'f' || e.key === 'F') && world && booted) {
+        if (selected && world.farmers.includes(selected)) followMode = !followMode;
+        else {
+            const f = mostInterestingFarmer();
+            if (f) { selected = f; sheetScroll = 0; sheetTab = 0; followMode = true; rosterOpen = false; chronOpen = false; boardOpen = false; }
+        }
     }
 });
 
@@ -3133,6 +3236,15 @@ function frame(now) {
     // all the leftover time, but cap it so we never spiral.
     if (steps >= 800) simAccumulator = Math.min(simAccumulator, 800 * FIXED_DT);
 
+    // camera: trail the followed farmer, easing toward centre (manual drag cancels — see pointermove)
+    if (followMode && selected && world.farmers.includes(selected) && !mouse.dragging) {
+        const tx = GW / 2 - isoX(selected.pos.i, selected.pos.j);
+        const ty = GH / 2 - isoY(selected.pos.i, selected.pos.j) - 12;
+        cam.x += (tx - cam.x) * 0.14; cam.y += (ty - cam.y) * 0.14;
+    } else if (followMode && (!selected || !world.farmers.includes(selected))) {
+        followMode = false;   // nothing to follow
+    }
+
     // background
     ctx.fillStyle = '#2a3438';
     ctx.fillRect(0, 0, GW, GH);
@@ -3157,6 +3269,12 @@ function frame(now) {
 
     drawWeather(dt, t);
     drawUI();
+    drawDayRecap();
+    // a quiet indicator while the camera is trailing someone (F, or the sheet's crosshair, toggles it)
+    if (followMode && selected && world.farmers.includes(selected) && !rosterOpen && !chronOpen && !boardOpen) {
+        const lbl = `FOLLOWING ${selected.sheet.name.split(' ')[0].toUpperCase()} - F TO STOP`;
+        drawText(ctx, lbl, Math.floor((GW - textWidth(lbl)) / 2), GH - 30, '#7dd069');
+    }
 
     // building hover tooltip — only when hovering the world (not over a panel, not dragging,
     // and not while an inventory-slot tooltip is already showing on the open sheet)
