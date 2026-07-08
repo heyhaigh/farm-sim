@@ -5646,6 +5646,7 @@ export class Farmer {
         let best = null, bestScore = 0.4;
         for (const B of w.farmers) {
             if (B === this || !B.plot || B.downed || B.plot.built.level < 1 || B.health === 'sick') continue;
+            if (this.opinionOf(B) <= -0.2 || B.opinionOf(this) <= -0.2) continue;   // #87 — no fair trade across distrust (a thief gets frozen out)
             const d = Math.hypot(B.pos.i - this.pos.i, B.pos.j - this.pos.j);
             if (d > 26) continue;
             const bg = B.sheet.goods || {}, warmth = Math.max(0, this.opinionOf(B));
@@ -6151,7 +6152,16 @@ export class Farmer {
             if (victim && victim !== this) victim.adjustOpinion(this, -0.32, 'stole from my farm');   // the wronged never forget
             const witness = w.farmers.find(o => o !== this && o.health !== 'sick' && o.p.honesty > 0.55 &&
                 Math.abs(o.pos.i - pos.i) + Math.abs(o.pos.j - pos.j) < 6);
-            if (witness) { witness.say('HEY! THIEF!', '#c05840'); this.say('uh oh', '#e0a03c'); this.adjustReputation(-0.12); w.addBond(this, witness, -1); witness.adjustOpinion(this, -0.25, 'caught them thieving'); w.addLog(`${witness.sheet.name} caught ${s.name} stealing ${name}!`, '#c05840'); w.addChronicle('crime', `${witness.sheet.name.split(' ')[0]} caught ${s.name.split(' ')[0]} stealing ${name}.`, this, witness, '#c05840'); }
+            if (witness) {
+                witness.say('HEY! THIEF!', '#c05840'); this.say('uh oh', '#e0a03c'); this.adjustReputation(-0.12); w.addBond(this, witness, -1); witness.adjustOpinion(this, -0.25, 'caught them thieving'); w.addLog(`${witness.sheet.name} caught ${s.name} stealing ${name}!`, '#c05840'); w.addChronicle('crime', `${witness.sheet.name.split(' ')[0]} caught ${s.name.split(' ')[0]} stealing ${name}.`, this, witness, '#c05840');
+                // #87 — WORD TRAVELS: everyone else within earshot of the shout also sours on the thief
+                // and files the rumor away, so a public theft costs standing town-wide, not just with the pair.
+                for (const o of w.farmers) {
+                    if (o === this || o === witness || o === victim || o.downed) continue;
+                    if (Math.abs(o.pos.i - pos.i) + Math.abs(o.pos.j - pos.j) > 10) continue;
+                    o.adjustOpinion(this, -0.12, `heard they stole ${name}`); o.noteRumor(witness, this);
+                }
+            }
             else w.addLog(`${s.name} quietly made off with a ${name}`, '#e0a03c');
             // #86 — an HONEST streak: a poacher near the upper end of "shady" can be guilt-stricken and
             // give it straight back (nets a small good turn), the reverse of the hardened chaos-agent.
