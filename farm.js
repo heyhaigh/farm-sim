@@ -48,8 +48,10 @@ export const CRAFTABLES = [
 ];
 
 // wood economy
-const WOOD_TREE = 3;       // BASE wood from felling a tree (scaled by growth stage: sapling x1 .. mature x3)
-const WOOD_STUMP = 3;      // grubbing the stump (roots included) yields as much as the trunk did
+const TREE_WOOD = [1, 3, 5];   // wood from felling a tree, by growth stage: sapling 1 / young 3 / mature 5
+const TREE_CHOPS = [1, 3, 5];  // chops (hence exhaustion) to fell each stage — proportionate to the yield
+const WOOD_STUMP = 3;      // grubbing the stump (roots included) yields 3 wood
+const STUMP_CHOPS = 3;     // ...and takes 3 chops of graft, matching that yield
 const TREE_STAGE_DAYS = [8, 12];   // sapling->young takes 8 days; young->mature takes 12 (20 days to mature)
 const CROP_STAGE_DAYS = [3, 4.5, 1.5]; // calibrated so a well-tended crop in good weather sprouts ~day 2 (48h),
                                        // reaches its next stage ~day 5, and ripens ~day 6 from sowing
@@ -5810,13 +5812,13 @@ export class Farmer {
                 this.#laborDrain('chop');           // felling a tree is heavy work
                 const tier = w.treeStage(tgt.i, tgt.j), key = pkey(tgt.i, tgt.j);   // a mature tree takes more chops
                 const hits = (w.rockWork.get(key) || 0) + 1;
-                if (hits < tier + 1 && this.energy > 0.12) {   // still standing — keep chopping in place
+                if (hits < TREE_CHOPS[tier] && this.energy > 0.12) {   // still standing — keep chopping in place
                     w.rockWork.set(key, hits);
                     this.chopTimer = this.#laborTime('chop'); this.state = 'chop'; return;
                 }
                 w.rockWork.delete(key); w.treePlanted.delete(key);   // it's a stump now — forget its growth clock
                 w.set(tgt.i, tgt.j, T.STUMP);
-                const wood = WOOD_TREE * (tier + 1);   // a bigger trunk yields more timber (sapling 3 .. mature 9)
+                const wood = TREE_WOOD[tier];   // sapling 1 / young 3 / mature 5
                 this.wood += wood;
                 this.say(`+${wood} wood`, '#c8a060');
                 if (treeIsFruit(tgt.i, tgt.j) && w.isFruitSeason()) {   // an apple tree IN SEASON drops fruit too
@@ -5830,7 +5832,14 @@ export class Farmer {
                 // much wood as the trunk was (WOOD_STUMP), so when they next need wood nearestWood
                 // may well send them back for it; the DEMAND is what drives the choice, not a script.
             } else if (t === T.STUMP) {
-                this.#laborDrain('break');          // grubbing the stump — same graft as the fell
+                this.#laborDrain('break');          // grubbing the stump — heavy, rooted graft
+                const key = pkey(tgt.i, tgt.j);
+                const hits = (w.rockWork.get(key) || 0) + 1;
+                if (hits < STUMP_CHOPS && this.energy > 0.12) {   // roots still holding — keep grubbing
+                    w.rockWork.set(key, hits);
+                    this.chopTimer = this.#laborTime('break'); this.state = 'break'; return;
+                }
+                w.rockWork.delete(key);
                 w.set(tgt.i, tgt.j, T.GRASS);
                 this.wood += WOOD_STUMP;
                 this.say(`+${WOOD_STUMP} wood`, '#c8a060');
