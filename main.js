@@ -379,6 +379,18 @@ const CRATES_SRC = { x: 69, y: 60, w: 26, h: 29 };   // just the two crates — 
 // the wandering merchant — a DIFFERENT guild-hall character each visit (32x32 frames, 6-col walk,
 // 4 dir rows [down,up,left,right]). Idle/trading uses walk frame 0, so no separate idle sheet needed.
 const GUILD_BASE = './assets/craftpix-net-189780-free-top-down-pixel-art-guild-hall-asset-pack/PNG/';
+// small skull (guild-hall Interior_objects.png) floated over a home while a felled farmer recovers
+const skullSheet = new Image(); let skullReady = false; skullSheet.onload = () => { skullReady = true; }; skullSheet.onerror = () => {};
+skullSheet.src = GUILD_BASE + 'Interior_objects.png';
+const SKULL_SRC = { x: 138, y: 57, w: 23, h: 22 };
+// a small skull marker, horizontally centred on cx with its top at y (over a recovering farmer's home/head)
+function drawSkull(cx, y) {
+    if (!skullReady || !skullSheet.naturalWidth) return;
+    const s = SKULL_SRC, dw = 11, dh = Math.round(dw * s.h / s.w);
+    const sm = ctx.imageSmoothingEnabled; ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(skullSheet, s.x, s.y, s.w, s.h, Math.round(cx - dw / 2), Math.round(y), dw, dh);
+    ctx.imageSmoothingEnabled = sm;
+}
 const MERCHANT_SHEETS = ['Citizen1_Walk', 'Citizen2_Walk', 'Fighter2_Walk'].map(f => {
     const img = new Image(); img.onerror = () => {}; img.src = GUILD_BASE + f + '.png'; return img;
 });
@@ -1290,10 +1302,9 @@ function collectDrawables() {
                 const roofX = Math.floor(sx);
                 if (indoors) {
                     if (f.downed) {
-                        // recovering from wounds: a blinking red "!" so a felled Ry reads at a glance
+                        // felled by a foe and recovering: a small skull floats over the home
                         const bob = Math.round(Math.sin(performance.now() / 500));
-                        const blink = Math.floor(performance.now() / 350) % 2;
-                        drawText(ctx, '!', roofX - 1, roofY + bob, blink ? '#ff5038' : '#a02818');
+                        drawSkull(roofX, roofY + bob - 5);
                     } else if (f.state === 'sick') {
                         const bob = Math.round(Math.sin(performance.now() / 400));
                         drawText(ctx, '+', roofX - 1, roofY + bob, '#c05840');
@@ -1838,8 +1849,7 @@ function drawFarmer(f, sx, sy) {
     if (!f.bubble) {
         if (f.downed) {
             const bob = Math.round(Math.sin(performance.now() / 500));   // felled with no home to recover in
-            const blink = Math.floor(performance.now() / 350) % 2;
-            drawText(ctx, '!', px + 6, py - 8 + bob, blink ? '#ff5038' : '#a02818');
+            drawSkull(px + 6, py - 10 + bob);
         } else if (f.state === 'sleep') {
             const zt = Math.floor(f.animTime * 2) % 3;   // Z rising + fading, like the roof sleepers
             drawText(ctx, 'Z', px + 6, py - 8 - zt * 3, `rgba(200,210,255,${1 - zt * 0.25})`);
