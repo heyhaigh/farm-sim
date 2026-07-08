@@ -207,6 +207,8 @@ const troughSprite = makeTrough();
 const stumpSprite = makeStump();
 const wheatSprite = makeWildWheat();
 const flowerSprite = makeWildFlowers();
+// procedural inventory icons for wild-caught goods that have no Supplies.png entry (fish/lilies)
+const GOOD_ICON = { fish: makeFish(0), lily: makeLilyPad(true) };
 
 // ---------------------------------------------------------------------------
 // Real hi-res tree art (CraftPix, iso billboards) — loaded async, with the
@@ -2625,6 +2627,10 @@ function drawSheet(f) {
                     if (src.stolen) parts.push(`${src.stolen} stolen`);
                     if (src.found) parts.push(`${src.found} found`);
                     addSlot(sx, sy, key, { title: it.name, body: parts.join(', ') || `you have ${it.count}` });
+                } else if (it.good) {
+                    // a wild-caught good (fish/lily) drawn from its procedural sprite
+                    drawItemSlot(sx, sy, SZ, null, it.count, { sel: selectedSlotKey === key, canvas: GOOD_ICON[it.good] });
+                    addSlot(sx, sy, key, { title: it.name, body: `you have ${it.count}` });
                 } else {
                     drawItemSlot(sx, sy, SZ, itemIcon(it.icon), it.count, { sel: selectedSlotKey === key });
                     addSlot(sx, sy, key, { title: it.name, body: it.cap ? `you have ${it.count} / ${it.cap} storage` : `you have ${it.count}` });

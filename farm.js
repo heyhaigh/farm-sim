@@ -222,7 +222,8 @@ const REST_RESTORE = 0.045;   // recover faster, so a short breather is enough �
 const IDLE_REGAIN = 0.01;     // a SUPER-slow second wind while idling / walking / exploring (not laboring or
                               // fighting) — so a settler recovers as they roam and never crashes mid-build on day 1
 // states where energy neither drains passively nor trickles back (labor pays via #laborDrain; combat is its own strain)
-const ENERGY_NEUTRAL = new Set(['work', 'build', 'coopbuild', 'housebuild', 'chop', 'break', 'forage', 'mine', 'fencepost', 'scarecrow', 'fight', 'flee']);
+const ENERGY_NEUTRAL = new Set(['work', 'build', 'coopbuild', 'housebuild', 'chop', 'break', 'forage', 'fish', 'mine', 'fencepost', 'scarecrow', 'fight', 'flee']);
+const FISH_COOLDOWN = 4;   // days a wild-water tile rests between catches (a renewable, not-spammable bounty)
 const HP_REST = 0.55;         // HP knit back per second of rest (a full night mends most wounds)
 const HP_SICK_DRAIN = 0.05;   // HP an untreated illness gnaws away per second on your feet
 // Tending crops and animals is free — tilling a patch, sowing, watering, harvesting, collecting
@@ -235,6 +236,7 @@ const ACTION_ENERGY = { till: 0, plant: 0, water: 0.006, harvest: 0, clear: 0, b
 // Costs kept modest so a settler can clear + fence + build without collapsing every day.
 const LABOR = {
     forage: { time: 1.6, energy: 0.02 },     // clear a shrub / brush
+    fish: { time: 2.4, energy: 0.02 },       // a patient cast at a wild lake — low drain, slow reward
     fencepost: { time: 1.8, energy: 0.028 }, // set a fence post
     break: { time: 4.6, energy: 0.055 },     // grub out a stump — as much work as felling the tree
     chop: { time: 4.6, energy: 0.055 },      // fell a tree
@@ -312,6 +314,7 @@ export class World {
         this.exploredTiles = 0;
         this.crops = new Map();
         this.tilledAt = new Map();   // "i,j" -> day tilled; unused broken ground reverts after ~5 days
+        this.fishedAt = new Map();   // "i,j" -> day a wild-water tile was last fished (bounty cooldown)
         this.plots = [];
         this.farmers = [];
         this.log = [];
@@ -2242,6 +2245,21 @@ export class World {
             return (t === T.WHEAT || t === T.FLOWER) ? { i, j, tile: t } : null;
         });
     }
+    // A wild lake worth fishing: a WALKABLE shore tile beside a revealed, off-cooldown WILD water
+    // tile (an owned farm pond doesn't count). Returns where to STAND + which water tile to fish.
+    nearestFishingSpot(pos, maxD = 16) {
+        return this.#spiralFind(pos, maxD, (i, j) => {
+            if (!this.isRevealed(i, j) || this.pathBlocked(i, j)) return null;   // must be able to stand on the shore
+            for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+                const wi = i + di, wj = j + dj;
+                if (!this.isRevealed(wi, wj) || this.get(wi, wj) !== T.WATER) continue;
+                if (this.plots.some(p => p.cells.has(pkey(wi, wj)))) continue;               // wild water only, not a farm pond
+                if (this.day - (this.fishedAt.get(pkey(wi, wj)) ?? -99) < FISH_COOLDOWN) continue;  // this spot is resting
+                return { i, j, water: { i: wi, j: wj } };
+            }
+            return null;
+        });
+    }
 
     #findFacilityRegion(plot, type) {
         const def = FACILITY_DEFS[type];
@@ -3838,6 +3856,7 @@ export class Farmer {
         this.wantFacility = false;
         this.wantUpgrade = false; // ambition blocked by the HOUSE -> actively save toward the next tier
         this.woodTarget = null;
+        this.fishTarget = null;   // { i, j (shore), water:{i,j} } — a wild lake being walked to
         this.tools = new Set();   // crafted tools owned (see CRAFTABLES) — unlock at level, cost ore
         this.craftTarget = null;  // the recipe a farmer has walked home to build
 
@@ -4134,6 +4153,9 @@ export class Farmer {
         }
         const g = this.sheet.goods || {};
         for (const key of ['wheat', 'flower']) push(key, g[key] || 0);
+        // wild-caught goods drawn with a procedural sprite (resolved renderer-side): fish is its own
+        // item, lilies too — the yield of the wild-water fishing bounty.
+        for (const key of ['fish', 'lily']) { const n = g[key] || 0; if (n > 0) out.push({ id: key, good: key, name: key === 'fish' ? 'Fish' : 'Lily pad', count: n }); }
         return out;
     }
 
@@ -5154,6 +5176,14 @@ export class Farmer {
             if (wild) { this.think(wild.tile === T.FLOWER ? 'WILDFLOWERS! WORTH GATHERING.' : 'WILD WHEAT! A FREE FORAGE.'); this.forageTarget = wild; this.#goTo(wild.i + 0.5, wild.j + 0.5, 'forage'); return; }
         }
 
+        // 5b-2. fish a wild lake nearby — a patient angler's bounty (fish + the odd lily to trade). Wild
+        //       water is sparse, so this only fires for a bot who happens to be near a lake; WIS + curiosity
+        //       make one likelier to wet a line.
+        if (!w.isNight() && this.energy > 0.3 && this.rand() < 0.3 + Math.max(0, mod(s.stats.wis)) * 0.08 + this.p.curiosity * 0.15) {
+            const spot = w.nearestFishingSpot(this.pos, 16);
+            if (spot) { this.think('A WILD LAKE — GOOD FISHING.'); this.fishTarget = spot; this.#goTo(spot.i + 0.5, spot.j + 0.5, 'fish'); return; }
+        }
+
         // 5c. mine a nearby rock for ore — diligent/strong bots do this on downtime (but not
         //     when the store's already full: over-cap ore is discarded, so it'd be a wasted swing)
         if (!w.isNight() && this.energy > 0.35 && this.ore < this.storageCap().ore &&
@@ -5850,6 +5880,26 @@ export class Farmer {
         this.state = 'decide';
     }
 
+    #completeFish() {
+        const w = this.world, s = this.sheet, tgt = this.fishTarget;
+        this.#laborDrain('fish');
+        if (tgt && tgt.water) {
+            const wt = tgt.water;
+            this.facing = wt.i > this.pos.i ? 1 : -1;                 // face the water
+            const check = d20(this.rand, mod(s.stats.wis));           // a patient (WIS) angler lands more
+            const n = check.fumble ? 0 : (check.crit || check.total >= 16) ? 3 : check.total >= 9 ? 2 : 1;
+            s.goods = s.goods || {};
+            if (n > 0) {
+                s.goods.fish = (s.goods.fish || 0) + n;
+                if (this.rand() < 0.4) s.goods.lily = (s.goods.lily || 0) + 1;   // a lily pad comes up with the line
+                this.say(`+${n} fish`, '#7dd0c0'); this.sparkle = check.crit ? 1.2 : 0; this.gainXP(1 + n);
+            } else this.say('nothing biting', '#8a9aa8');
+            w.fishedAt.set(pkey(wt.i, wt.j), w.day);                  // this spot rests a few days now
+        }
+        this.fishTarget = null;
+        this.state = 'decide';
+    }
+
     #completeChop() {
         const w = this.world, tgt = this.woodTarget;
         if (tgt) {
@@ -6019,6 +6069,7 @@ export class Farmer {
                     else if (then === 'chop' || then === 'break') { this.chopTimer = this.#laborTime(then); this.state = then; }
                     else if (then === 'mine') { this.chopTimer = this.#laborTime('mine'); this.state = 'mine'; }
                     else if (then === 'forage') { this.forageTimer = this.#laborTime('forage'); this.state = 'forage'; }
+                    else if (then === 'fish') { this.fishTimer = this.#laborTime('fish'); this.state = 'fish'; }
                     else if (then === 'fencepost') { this.fenceTimer = this.#laborTime('fencepost'); this.state = 'fencepost'; }
                     else if (then === 'housebuild') { this.buildTimer = this.#laborTime('housebuild'); this.state = 'housebuild'; }
                     else if (then === 'scout') this.state = 'decide';   // reached a survey stop -> assess it (see #seekHomestead)
@@ -6088,6 +6139,7 @@ export class Farmer {
             case 'mine': this.chopTimer -= dt; if (this.chopTimer <= 0) this.#completeMine(); break;
             case 'craft': this.craftTimer -= dt; if (this.craftTimer <= 0) this.#completeCraft(); break;
             case 'forage': this.forageTimer -= dt; if (this.forageTimer <= 0) this.#completeForage(); break;
+            case 'fish': this.fishTimer -= dt; if (this.fishTimer <= 0) this.#completeFish(); break;
             case 'fencepost': this.fenceTimer -= dt; if (this.fenceTimer <= 0) this.#completeFencePost(); break;
             case 'housebuild': this.buildTimer -= dt; if (this.buildTimer <= 0) this.#completeHouseStep(); break;
             case 'scarecrow': this.chopTimer -= dt; if (this.chopTimer <= 0) this.#completeScarecrow(); break;
