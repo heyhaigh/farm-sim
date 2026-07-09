@@ -28,6 +28,7 @@ try {
 
 const API = {
     '/api/knowledge-graph': require('./api/knowledge-graph.js'),
+    '/api/memory-writeback': require('./api/memory-writeback.js'),
     '/api/ry-farms-chat': require('./api/ry-farms-chat.js'),
     '/api/ry-farms-dm': require('./api/ry-farms-dm.js'),
     '/api/ry-farms-conscience': require('./api/ry-farms-conscience.js'),

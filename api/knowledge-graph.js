@@ -22,10 +22,21 @@ function send(res, status, payload) {
     res.end(JSON.stringify(payload));
 }
 
+// A doc THIS game wrote back (a farmer's persisted life, tagged app:'ry-farms' / container 'ry-farms')
+// must never be read back as a SOURCE memory — that would grow future farmers from past farmers, an
+// echo chamber. Skip anything carrying our marker, whichever field the SuperMemory build exposes it in.
+function isGenerated(d) {
+    const meta = d.metadata || d.meta || {};
+    if (meta.app === 'ry-farms' || meta.kind === 'farmer-life') return true;
+    const tags = d.containerTags || d.container_tags || meta.containerTags || meta.tags || [];
+    return Array.isArray(tags) && tags.includes('ry-farms');
+}
+
 // SuperMemory's document shape isn't pinned across versions, so pull each field from the likeliest
 // candidates and always end with the { id, title, summary, content } dna.js consumes.
 function normalizeDoc(d) {
     if (!d || typeof d !== 'object') return null;
+    if (isGenerated(d)) return null;   // never regrow a farmer from a farmer's persisted life
     const meta = d.metadata || d.meta || {};
     const id = d.id || d.documentId || d.document_id || d._id || d.uuid || meta.id || null;
     const title = d.title || d.name || d.heading || meta.title || meta.name || '';

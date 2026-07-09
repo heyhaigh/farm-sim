@@ -14,6 +14,7 @@ import {
 import { CRT } from './crt.js';
 import { saveTown, loadTown, wipeTown, undoWipe } from './save.js';
 import { enrichStories } from './dm.js';
+import { persistLives } from './memory-writeback.js';
 import { whisper } from './conscience.js';
 
 // ---------------------------------------------------------------------------
@@ -4507,6 +4508,16 @@ function drawBootScreen(t) {
     };
     setTimeout(tryEnrich, 5000);
     setInterval(tryEnrich, 5 * 60 * 1000);
+
+    // #91 memory writeback: persist each farmer's compiled life (creeds + beliefs + episodic) back to
+    // self-hosted SuperMemory. Off the sim loop, best-effort, save-carried stamp. Slower cadence than
+    // enrichment so a life is captured with a little history (beliefs form over days); no-ops offline.
+    const tryPersist = async () => {
+        const w = world;
+        if (await persistLives(w, () => world === w)) saveTown(w);
+    };
+    setTimeout(tryPersist, 20000);
+    setInterval(tryPersist, 6 * 60 * 1000);
 
     window.RYFARMS = {  // debug handle
         world, cam, audio,
