@@ -377,6 +377,7 @@ export class World {
         this.townCollab = 0.5;     // avg collaboration across the town — its CHARACTER (see #recomputeTownTraits, #84)
         this.townCompete = 0.5;    // avg competitiveness — a driven/rivalrous town vs an easygoing one
         this.townVolatile = 0.5;   // avg volatility — a hot-tempered town vs an even-keeled one
+        this.monuments = [];       // lasting marks of great deeds — a stone raised where a raider was felled (#85)
         this.project = null;
         this.projectIndex = 0;
         this.coops = [];      // farmer-proposed neighborhood projects (shared wells) — need-driven, sited where the members live
@@ -3724,6 +3725,17 @@ export class World {
         this.addLog(`${who} drove off ${e.def.name}!`, '#7dd069');
         f.sparkle = 2;
         for (const ff of fighters) this.recordEncounter(ff, e.def, 'won');
+        // #85 — felling a RAIDING FOE (orc/assassin) is a rare, heroic deed: raise a lasting MONUMENT
+        // on the spot + an 'legend' epic beat, so the stand becomes permanent town history.
+        if (e.def.kind === 'foe') {
+            const mi = Math.round(f.pos.i), mj = Math.round(f.pos.j);
+            this.monuments.push({ i: mi, j: mj, heroSeed: f.sheet.seed, hero: f.sheet.name.split(' ')[0], foe: e.def.name, day: this.day, party: fighters.length });
+            if (this.monuments.length > 40) this.monuments.shift();
+            for (const ff of fighters) ff.gainXP(6);
+            this.reveal(mi, mj, 3);
+            const stand = fighters.length > 1 ? `${f.sheet.name.split(' ')[0]} and ${fighters.length - 1} others` : f.sheet.name.split(' ')[0];
+            this.addChronicle('legend', `${stand} felled ${e.def.name} — a stand the town won't forget.`, f, null, '#f0d060');
+        }
     }
 
     #endEncounter(e, msg, color) {

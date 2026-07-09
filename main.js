@@ -1692,7 +1692,27 @@ function collectDrawables() {
         list.push({ y: sy + TILE_H * 0.5 + 0.09, draw: () => drawPrey(a, sx, sy) });
     }
 
+    // legend monuments — lasting stones where a raider was felled (#85)
+    for (const m of (world.monuments || [])) {
+        const sx = cam.x + isoX(m.i, m.j), sy = cam.y + isoY(m.i, m.j);
+        list.push({ y: sy + TILE_H * 0.5, draw: () => drawMonument(sx, sy) });
+    }
+
     return list;
+}
+// A commemorative stone raised where a great deed happened — a small plinth + a gold-plaqued obelisk.
+function drawMonument(sx, sy) {
+    ctx.imageSmoothingEnabled = false;
+    const footY = Math.floor(sy + TILE_H / 2), cx = Math.floor(sx);
+    ctx.fillStyle = 'rgba(10,14,10,0.3)'; ctx.fillRect(cx - 6, footY - 1, 12, 3);          // ground shadow
+    ctx.fillStyle = '#7a7466'; ctx.fillRect(cx - 5, footY - 4, 10, 4);                      // plinth
+    ctx.fillStyle = '#5c574c'; ctx.fillRect(cx - 5, footY - 1, 10, 1);
+    ctx.fillStyle = '#9a9484'; ctx.fillRect(cx - 3, footY - 17, 6, 13);                     // stone shaft
+    ctx.fillStyle = '#b4ae9c'; ctx.fillRect(cx - 3, footY - 17, 2, 13);                     // lit edge
+    ctx.fillStyle = '#6a6458'; ctx.fillRect(cx + 2, footY - 17, 1, 13);                     // shade edge
+    ctx.fillStyle = '#8a8474'; ctx.fillRect(cx - 2, footY - 19, 4, 2);                      // pointed cap
+    ctx.fillStyle = '#e0b040'; ctx.fillRect(cx - 2, footY - 12, 4, 3);                      // gold plaque
+    ctx.fillStyle = '#f6dc88'; ctx.fillRect(cx - 2, footY - 12, 4, 1);
 }
 // A wild prey animal: a sliced side-profile idle frame of its real sprite, mirrored to face its heading
 // (fallback: a small critter blob). Cycles a little faster while bolting from a hunter.
@@ -2706,6 +2726,12 @@ function buildingUnder(mx, my) {
         [{ t: `TOWN SILO — LV ${world.townLevel}`, c: TT_G }, { t: world.townCharacter(), c: TT_L },
          { t: 'Settlers give surplus goods here', c: TT_GR },
          { t: maxed ? 'The town is fully grown' : `${world.townXP} / ${world.townXpNeed()} to level ${world.townLevel + 1}`, c: TT_B }]); }
+    // legend monuments — hover to read the deed they mark (#85)
+    for (const m of (world.monuments || [])) {
+        const sx = cam.x + isoX(m.i, m.j), sy = cam.y + isoY(m.i, m.j);
+        push(Math.floor(sx - 6), Math.floor(sy + TILE_H / 2 - 19), 12, 21,
+            [{ t: 'MONUMENT', c: TT_G }, { t: `${m.hero} felled ${m.foe}`, c: TT_L }, { t: `a stand on day ${m.day}`, c: TT_GR }]);
+    }
     if (world.board && boardScreen.w) push(boardScreen.x, boardScreen.y, boardScreen.w, boardScreen.h,
         [{ t: 'BULLETIN BOARD', c: TT_G }, { t: 'Town structure', c: TT_L }, { t: 'Farmers post & take jobs', c: TT_GR }]);
     for (const p of world.plots) for (const fac of p.facilities) {
