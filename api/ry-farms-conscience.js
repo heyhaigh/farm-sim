@@ -72,44 +72,7 @@ function parseBody(req) {
     });
 }
 
-function extractOutputText(data) {
-    if (typeof data?.output_text === 'string') return data.output_text;
-    const parts = [];
-    for (const item of data?.output || []) {
-        for (const c of item.content || []) {
-            if (typeof c.text === 'string') parts.push(c.text);
-            else if (typeof c.output_text === 'string') parts.push(c.output_text);
-        }
-    }
-    return parts.join('\n');
-}
-
-function parseJson(text) {
-    try { return JSON.parse(text); }
-    catch {
-        const match = String(text || '').match(/\{[\s\S]*\}/);
-        if (!match) throw new Error('model did not return JSON');
-        return JSON.parse(match[0]);
-    }
-}
-
-async function callOpenAI(apiKey, model, system, user, schema, schemaName, maxTokens) {
-    const openaiRes = await fetch('https://api.openai.com/v1/responses', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            model,
-            input: [
-                { role: 'system', content: system },
-                { role: 'user', content: String(user).slice(0, 16000) },
-            ],
-            text: { format: { type: 'json_schema', name: schemaName, strict: true, schema } },
-            max_output_tokens: maxTokens,
-        }),
-    });
-    if (!openaiRes.ok) throw new Error(`OpenAI request failed (${openaiRes.status})`);
-    return parseJson(extractOutputText(await openaiRes.json()));
-}
+const { callLLM } = require('./_llm.js');
 
 // ---- stage 1: CLASSIFY ------------------------------------------------------
 
@@ -124,7 +87,7 @@ const classifySchema = {
     },
 };
 
-async function classify(apiKey, model, body) {
+async function classify(body) {
     const names = Array.isArray(body.names) ? body.names.slice(0, 40) : [];
     const system = [
         'You read a single stray thought that a player is pushing into a farmer\'s head in a farming sim, and map it onto ONE bounded intention.',
@@ -139,8 +102,12 @@ async function classify(apiKey, model, body) {
         'If the person named for a visit is not in the town list, use kind "none".',
         'Return JSON only.',
     ].filter(Boolean).join('\n');
-    const raw = await classify_normalize(await callOpenAI(apiKey, model, system, JSON.stringify({ message: String(body.message || '').slice(0, 400) }), classifySchema, 'ry_farms_conscience_classify', 200), names);
-    return raw;
+    const out = await callLLM({
+        system,
+        user: JSON.stringify({ message: String(body.message || '').slice(0, 400) }),
+        schema: classifySchema, schemaName: 'ry_farms_conscience_classify', maxTokens: 200, temperature: 0,
+    });
+    return classify_normalize(out, names);
 }
 
 function classify_normalize(raw, names) {
@@ -179,7 +146,7 @@ const STANCE_GUIDE = {
     unbothered: 'They barely register the voice as anything but their own passing thought.',
 };
 
-async function reply(apiKey, model, body) {
+async function reply(body) {
     const ch = body.character || {};
     const verdict = VERDICT_GUIDE[body.verdict] ? body.verdict : 'DISMISS';
     const stance = STANCE_GUIDE[ch.stance] ? ch.stance : 'unbothered';
@@ -202,7 +169,7 @@ async function reply(apiKey, model, body) {
         recent: Array.isArray(body.history) ? body.history.slice(-12) : [],
         snapshot: body.snapshot || {},
     });
-    const raw = await callOpenAI(apiKey, model, system, user, replySchema, 'ry_farms_conscience_reply', 320);
+    const raw = await callLLM({ system, user, schema: replySchema, schemaName: 'ry_farms_conscience_reply', maxTokens: 320 });
     const line = cleanReply(raw?.line);
     if (!line || line.length < 2) throw new Error('empty reply');
     return { line, verdict };
@@ -213,15 +180,14 @@ async function reply(apiKey, model, body) {
 module.exports = async function handler(req, res) {
     if (req.method !== 'POST') return send(res, 405, { fallback: true, error: 'POST required' });
 
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) return send(res, 503, { fallback: true, error: 'LLM not configured' });
+    // an OpenAI key OR a custom OpenAI-compatible base URL (e.g. a local Ollama) counts as configured
+    if (!process.env.OPENAI_API_KEY && !process.env.OPENAI_BASE_URL) return send(res, 503, { fallback: true, error: 'LLM not configured' });
     if (typeof fetch !== 'function') return send(res, 501, { fallback: true, error: 'fetch unavailable' });
 
     try {
         const body = await parseBody(req);
-        const model = process.env.RY_FARMS_LLM_MODEL || process.env.OPENAI_MODEL || 'gpt-4.1-mini';
-        if (body.stage === 'classify') return send(res, 200, await classify(apiKey, model, body));
-        if (body.stage === 'reply') return send(res, 200, await reply(apiKey, model, body));
+        if (body.stage === 'classify') return send(res, 200, await classify(body));
+        if (body.stage === 'reply') return send(res, 200, await reply(body));
         return send(res, 400, { fallback: true, error: 'unknown stage' });
     } catch (err) {
         return send(res, 500, { fallback: true, error: err?.message || 'conscience generation failed' });

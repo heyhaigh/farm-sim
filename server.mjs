@@ -27,6 +27,7 @@ try {
 } catch { /* no .env — fine, handlers fall back */ }
 
 const API = {
+    '/api/knowledge-graph': require('./api/knowledge-graph.js'),
     '/api/ry-farms-chat': require('./api/ry-farms-chat.js'),
     '/api/ry-farms-dm': require('./api/ry-farms-dm.js'),
     '/api/ry-farms-conscience': require('./api/ry-farms-conscience.js'),

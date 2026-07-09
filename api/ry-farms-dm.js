@@ -46,26 +46,7 @@ function parseBody(req) {
     });
 }
 
-function extractOutputText(data) {
-    if (typeof data?.output_text === 'string') return data.output_text;
-    const parts = [];
-    for (const item of data?.output || []) {
-        for (const c of item.content || []) {
-            if (typeof c.text === 'string') parts.push(c.text);
-            else if (typeof c.output_text === 'string') parts.push(c.output_text);
-        }
-    }
-    return parts.join('\n');
-}
-
-function parseJson(text) {
-    try { return JSON.parse(text); }
-    catch {
-        const match = String(text || '').match(/\{[\s\S]*\}/);
-        if (!match) throw new Error('model did not return JSON');
-        return JSON.parse(match[0]);
-    }
-}
+const { callLLM } = require('./_llm.js');
 
 const responseSchema = {
     type: 'object',
@@ -90,15 +71,13 @@ const responseSchema = {
 module.exports = async function handler(req, res) {
     if (req.method !== 'POST') return send(res, 405, { fallback: true, error: 'POST required' });
 
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) return send(res, 503, { fallback: true, error: 'LLM not configured' });
+    if (!process.env.OPENAI_API_KEY && !process.env.OPENAI_BASE_URL) return send(res, 503, { fallback: true, error: 'LLM not configured' });
     if (typeof fetch !== 'function') return send(res, 501, { fallback: true, error: 'fetch unavailable' });
 
     try {
         const body = await parseBody(req);
         const characters = Array.isArray(body.characters) ? body.characters.slice(0, 16) : [];
         if (!characters.length) return send(res, 400, { fallback: true, error: 'no characters' });
-        const model = process.env.RY_FARMS_LLM_MODEL || process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 
         const system = [
             'You are the town chronicler of RY FARMS: a Dungeons and Dragons 5th Edition Dungeon Master and a gifted fantasy prose writer.',
@@ -112,36 +91,11 @@ module.exports = async function handler(req, res) {
             'Return JSON only: { "tales": [ { "seed": <number from the input>, "tale": "<the rewritten backstory>" } ] } with one entry per character.',
         ].join('\n');
 
-        const openaiRes = await fetch('https://api.openai.com/v1/responses', {
-            method: 'POST',
-            headers: {
-                Authorization: `Bearer ${apiKey}`,
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                model,
-                input: [
-                    { role: 'system', content: system },
-                    { role: 'user', content: JSON.stringify({ town: body.town || {}, characters }).slice(0, 24000) },
-                ],
-                text: {
-                    format: {
-                        type: 'json_schema',
-                        name: 'ry_farms_dm_tales',
-                        strict: true,
-                        schema: responseSchema,
-                    },
-                },
-                max_output_tokens: 6000,
-            }),
+        const raw = await callLLM({
+            system,
+            user: JSON.stringify({ town: body.town || {}, characters }),
+            schema: responseSchema, schemaName: 'ry_farms_dm_tales', maxTokens: 6000,
         });
-
-        if (!openaiRes.ok) {
-            return send(res, 502, { fallback: true, error: `OpenAI request failed (${openaiRes.status})` });
-        }
-
-        const data = await openaiRes.json();
-        const raw = parseJson(extractOutputText(data));
         const wanted = new Set(characters.map(c => c.seed));
         const tales = (raw?.tales || [])
             .map(t => ({ seed: Number(t.seed), tale: cleanTale(t.tale) }))

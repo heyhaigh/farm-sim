@@ -43,26 +43,7 @@ function parseBody(req) {
     });
 }
 
-function extractOutputText(data) {
-    if (typeof data?.output_text === 'string') return data.output_text;
-    const parts = [];
-    for (const item of data?.output || []) {
-        for (const c of item.content || []) {
-            if (typeof c.text === 'string') parts.push(c.text);
-            else if (typeof c.output_text === 'string') parts.push(c.output_text);
-        }
-    }
-    return parts.join('\n');
-}
-
-function parseJson(text) {
-    try { return JSON.parse(text); }
-    catch {
-        const match = String(text || '').match(/\{[\s\S]*\}/);
-        if (!match) throw new Error('model did not return JSON');
-        return JSON.parse(match[0]);
-    }
-}
+const { callLLM } = require('./_llm.js');
 
 function normalizeConversation(raw) {
     const first = Array.isArray(raw?.lines) ? raw.lines[0] : null;
@@ -106,14 +87,12 @@ module.exports = async function handler(req, res) {
     }
     if (req.method !== 'POST') return send(res, 405, { fallback: true, error: 'POST required' });
 
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) return send(res, 503, { fallback: true, error: 'LLM not configured' });
+    if (!process.env.OPENAI_API_KEY && !process.env.OPENAI_BASE_URL) return send(res, 503, { fallback: true, error: 'LLM not configured' });
     if (typeof fetch !== 'function') return send(res, 501, { fallback: true, error: 'fetch unavailable' });
 
     try {
         const body = await parseBody(req);
         const context = body.context || body;
-        const model = process.env.RY_FARMS_LLM_MODEL || process.env.OPENAI_MODEL || 'gpt-4.1-mini';
         const system = [
             'You are the conversation engine for Ry Farms, a pixel farming simulation.',
             'Write one brief, lived-in exchange between the speaker and listener — dynamic and specific to THIS moment, never generic.',
@@ -128,38 +107,12 @@ module.exports = async function handler(req, res) {
             'Return JSON only.',
         ].join('\n');
 
-        const openaiRes = await fetch('https://api.openai.com/v1/responses', {
-            method: 'POST',
-            headers: {
-                Authorization: `Bearer ${apiKey}`,
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                model,
-                input: [
-                    { role: 'system', content: system },
-                    { role: 'user', content: JSON.stringify(context).slice(0, 18000) },
-                ],
-                text: {
-                    format: {
-                        type: 'json_schema',
-                        name: 'ry_farms_chat',
-                        strict: true,
-                        schema: responseSchema,
-                    },
-                },
-                max_output_tokens: 320,
-            }),
+        const raw = await callLLM({
+            system,
+            user: JSON.stringify(context),
+            schema: responseSchema, schemaName: 'ry_farms_chat', maxTokens: 320,
         });
-
-        if (!openaiRes.ok) {
-            return send(res, 502, { fallback: true, error: `OpenAI request failed (${openaiRes.status})` });
-        }
-
-        const data = await openaiRes.json();
-        const text = extractOutputText(data);
-        const conversation = normalizeConversation(parseJson(text));
-        return send(res, 200, conversation);
+        return send(res, 200, normalizeConversation(raw));
     } catch (err) {
         return send(res, 500, { fallback: true, error: err?.message || 'chat generation failed' });
     }

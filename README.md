@@ -20,14 +20,38 @@ node server.mjs            # http://localhost:8000  (node server.mjs 8001 for an
 python3 -m http.server 8000
 ```
 
-The page fetches memories from the live `https://heyhaigh.ai/api/knowledge-graph`
-endpoint (open CORS); if that's unreachable it falls back to a small embedded
-crew so it always runs.
+Every farmer is grown from a real memory. The corpus comes from a **self-hosted
+[SuperMemory](https://github.com/supermemoryai/supermemory)** instance
+(`npx supermemory local`, default `http://localhost:6767`): the server-side
+`api/knowledge-graph.js` proxy lists its `/v3/documents` with a Bearer key that
+never touches the browser, normalizes each doc, and sorts by id so the same
+corpus always grows the same deterministic town. If no instance is reachable, the
+game falls back to a small embedded crew so it always runs.
+
+Set the source in `.env` (copy `.env.example`):
+
+```bash
+SUPERMEMORY_URL=http://localhost:6767      # your self-hosted instance
+SUPERMEMORY_API_KEY=sm_...                 # generated on the instance's first boot
+```
+
+Compile-don't-query: the corpus is pulled ONCE at town founding. The sim never
+calls SuperMemory's `/v4/search` — memory-derived content is frozen at founding.
 
 ### Optional LLM channels (expressive only — never in the sim loop)
 
-With `OPENAI_API_KEY` in the environment or a gitignored `.env` next to
-`server.mjs` (deployed: on the serverless host), two out-of-band channels wake:
+The expressive channels run against **any OpenAI-compatible endpoint** — OpenAI by
+default, or a local model for a fully self-contained stack. Set in the environment
+or a gitignored `.env`:
+
+```bash
+OPENAI_API_KEY=sk-...                       # blank is fine for most local servers
+OPENAI_BASE_URL=http://localhost:11434/v1   # e.g. Ollama — omit to use OpenAI
+RY_FARMS_LLM_MODEL=gpt-4.1-mini             # or a local model id
+```
+
+With either a key or a base URL configured, three out-of-band channels wake
+(all share `api/_llm.js`, so all are endpoint-portable):
 
 - `api/ry-farms-chat.js` — farmers generate contextual two-line conversations
   from their goals, memories, relationships, weather, and town state.

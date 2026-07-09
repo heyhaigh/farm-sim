@@ -1,7 +1,11 @@
 // dna.js — turns SuperMemory documents into Ry Bot farmer character sheets.
 // Every farmer is deterministic: same memory -> same farmer.
 
-const MEMORY_ENDPOINT = 'https://heyhaigh.ai/api/knowledge-graph';
+// The corpus comes from a self-hosted SuperMemory instance via the server-side proxy
+// (api/knowledge-graph.js reads GET /v3/documents with the Bearer key, key stays off the
+// browser). Relative URL: works under `node server.mjs`; under a plain static server the
+// proxy 404s and we fall back to the embedded offline crew below.
+const MEMORY_ENDPOINT = '/api/knowledge-graph';
 
 // Small offline crew so the page still works if the API is unreachable.
 const FALLBACK_MEMORIES = [
@@ -333,8 +337,8 @@ export async function fetchMemories() {
                 summary: d.summary || d.content || '',
                 content: d.content || '',
             }));
-        if (docs.length === 0) throw new Error('no usable documents');
-        return { memories: docs, source: 'supermemory' };
+        if (docs.length === 0) throw new Error(data.error || 'no usable documents');
+        return { memories: docs, source: data.source || 'supermemory' };
     } catch (err) {
         console.warn('[ry-bots] falling back to offline memories:', err.message);
         return { memories: FALLBACK_MEMORIES, source: 'offline' };
