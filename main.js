@@ -3510,6 +3510,44 @@ function chronEntries() {
     return sel != null ? all.filter(e => e.whoSeed === sel || e.otherSeed === sel) : all;
 }
 
+// The TOWN HALL band folded into the top of the chronicle: the Manager + their standing, the day's
+// directive, and how the town answered it (rallied count + a couple of refusal reasons — the audit
+// trail the council asked for). Returns the pixel height drawn (0 if there's no seated Manager).
+function drawCivicBand(PX, y, PW) {
+    const roles = world.roles, m = world.managerFarmer && world.managerFarmer();
+    if (!roles || !m) return 0;
+    const IX = PX + 8, RX = PX + PW - 8;
+    let ty = y + 1;
+    // manager + approval meter
+    drawText(ctx, 'MANAGER', IX, ty, '#9a7fc0');
+    drawText(ctx, m.sheet.name.split(' ')[0].toUpperCase(), IX + textWidth('MANAGER '), ty, '#e8c860');
+    const barW = 46, bx = RX - barW, ap = Math.max(0, Math.min(1, roles.approval));
+    drawText(ctx, 'APPROVAL', bx - textWidth('APPROVAL '), ty, '#6a6f7c');
+    ctx.fillStyle = '#171a22'; ctx.fillRect(bx, ty, barW, 4);
+    ctx.fillStyle = ap > 0.5 ? '#7dd069' : ap > 0.28 ? '#e0a03c' : '#e05040'; ctx.fillRect(bx, ty, Math.round(barW * ap), 4);
+    ty += 8;
+    // the day's directive
+    const dir = roles.directive;
+    const call = dir ? dir.text : 'The Manager has no call today.';
+    for (const ln of wrapText(call, Math.floor((PW - 24) / 4.2)).slice(0, 2)) { drawText(ctx, ln, IX, ty, '#c8ccd8'); ty += 7; }
+    // how the town answered
+    if (dir) {
+        const heeded = dir.heeders.size;
+        drawText(ctx, `RALLIED: ${heeded}`, IX, ty, heeded > 0 ? '#7dd069' : '#6a6f7c');
+        const whys = [...dir.refusers.entries()].slice(0, 2).map(([seed, why]) => {
+            const f = world.farmers.find(x => x.sheet.seed === seed);
+            return f ? `${f.sheet.name.split(' ')[0]}: ${why}` : null;
+        }).filter(Boolean);
+        if (whys.length) {
+            const txt = 'PASSED - ' + whys.join('  -  ');
+            drawText(ctx, txt.slice(0, Math.floor((PW - 24) / 4.2 - 12)), IX + textWidth(`RALLIED: ${heeded}  `), ty, '#8a8f9c');
+        }
+        ty += 8;
+    }
+    ctx.fillStyle = '#171a22'; ctx.fillRect(PX + 4, ty, PW - 8, 1);
+    return ty - y + 2;
+}
+
 function drawChronicle() {
     const PW = Math.min(GW - 12, 372);
     const PH = GH - 40;
@@ -3531,7 +3569,11 @@ function drawChronicle() {
     ctx.fillStyle = '#20242f';
     ctx.fillRect(PX + 4, PY + 15, PW - 8, 1);
 
-    const bodyTop = PY + 19;
+    // TOWN HALL band (#94): who leads, what they're calling for, and how the town is answering.
+    // Only on the town-wide view (not a single farmer's saga). Returns the height it consumed.
+    const bandH = selected ? 0 : drawCivicBand(PX, PY + 17, PW);
+
+    const bodyTop = PY + 19 + bandH;
     const bodyBot = PY + PH - 11;
     const viewH = bodyBot - bodyTop;
     const IX = PX + 8;
