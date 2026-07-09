@@ -59,7 +59,15 @@ class FarmAudio {
     constructor() {
         this.ctx = null;
         this.enabled = true;        // the SND button state (persists while page lives)
+        // per-channel volume + on/off, remembered across sessions (settings menu)
+        const num = (k, d) => { try { const n = parseFloat(localStorage.getItem('ryf.' + k)); return isNaN(n) ? d : Math.max(0, Math.min(1, n)); } catch { return d; } };
+        const on = (k) => { try { return localStorage.getItem('ryf.' + k) !== '0'; } catch { return true; } };
+        this.musicVol = num('musicVol', 0.9);
+        this.sfxVol = num('sfxVol', 0.85);
+        this.musicOn = on('musicOn');
+        this.sfxOn = on('sfxOn');
         this.master = null;
+        this.sfxBus = null;         // all sound effects + ambience (chops, crickets, rain) -> master
         this.musicGain = null;      // day theme
         this.cricketGain = null;    // night ambience (crickets or owls)
         this.rainGain = null;       // weather layer
@@ -86,10 +94,14 @@ class FarmAudio {
         this.master.gain.value = this.enabled ? 0.8 : 0;
         this.master.connect(this.ctx.destination);
 
-        this.musicGain = this.ctx.createGain(); this.musicGain.gain.value = 0.9;
+        // the SFX bus scales every non-music sound (its slider); ambience + per-sound stages feed it
+        this.sfxBus = this.ctx.createGain(); this.sfxBus.gain.value = this.sfxOn ? this.sfxVol : 0;
+        this.sfxBus.connect(this.master);
+
+        this.musicGain = this.ctx.createGain(); this.musicGain.gain.value = this.musicOn ? this.musicVol : 0;
         this.musicGain.connect(this.master);
         this.cricketGain = this.ctx.createGain(); this.cricketGain.gain.value = 0;
-        this.cricketGain.connect(this.master);
+        this.cricketGain.connect(this.sfxBus);
         this.#startRain();
 
         const t = this.ctx.currentTime;
@@ -123,6 +135,16 @@ class FarmAudio {
         return this.enabled;
     }
 
+    // ---- settings: music + SFX channel volume (persisted) ----------------------
+    #save(k, v) { try { localStorage.setItem('ryf.' + k, String(v)); } catch { /* private mode - fine */ } }
+    musicLevel() { return this.musicOn ? this.musicVol : 0; }
+    #applyMusic() { if (this.musicGain && this.ctx) this.musicGain.gain.setTargetAtTime(this.musicLevel() * (1 - this.nightMix), this.ctx.currentTime, 0.08); }
+    #applySfx() { if (this.sfxBus && this.ctx) this.sfxBus.gain.setTargetAtTime(this.sfxOn ? this.sfxVol : 0, this.ctx.currentTime, 0.08); }
+    setMusicVolume(v) { this.musicVol = Math.max(0, Math.min(1, v)); this.#save('musicVol', this.musicVol); this.#applyMusic(); }
+    setSfxVolume(v) { this.sfxVol = Math.max(0, Math.min(1, v)); this.#save('sfxVol', this.sfxVol); this.#applySfx(); }
+    toggleMusic() { this.musicOn = !this.musicOn; this.#save('musicOn', this.musicOn ? '1' : '0'); this.#applyMusic(); return this.musicOn; }
+    toggleSfx() { this.sfxOn = !this.sfxOn; this.#save('sfxOn', this.sfxOn ? '1' : '0'); this.#applySfx(); return this.sfxOn; }
+
     // called every frame with sim state
     update({ isNight, weather, flash, season = 0, hasRooster = false, building = false }) {
         this.hasRooster = hasRooster;
@@ -138,7 +160,7 @@ class FarmAudio {
         // day/night crossfade: music out, night chorus in (~4s)
         const target = isNight ? 1 : 0;
         this.nightMix += (target - this.nightMix) * 0.01;
-        this.musicGain.gain.setTargetAtTime(0.9 * (1 - this.nightMix), t, 0.5);
+        this.musicGain.gain.setTargetAtTime(this.musicLevel() * (1 - this.nightMix), t, 0.5);
         this.cricketGain.gain.setTargetAtTime(0.5 * this.nightMix, t, 0.5);
         // rain/wind bed by weather (blizzard drives the noise bed as howling wind)
         this.rainTarget = weather === 'storm' ? 0.24 : weather === 'blizzard' ? 0.2 : weather === 'rain' ? 0.13 : 0;
@@ -243,7 +265,7 @@ class FarmAudio {
         const hp = this.ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 350;
         const lp = this.ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1100;
         this.rainGain = this.ctx.createGain(); this.rainGain.gain.value = 0;
-        src.connect(hp); hp.connect(lp); lp.connect(this.rainGain); this.rainGain.connect(this.master);
+        src.connect(hp); hp.connect(lp); lp.connect(this.rainGain); this.rainGain.connect(this.sfxBus);
         src.start();
     }
 
@@ -252,7 +274,7 @@ class FarmAudio {
     // a per-sound output stage: a gain (proximity volume) into a stereo panner (screen position)
     #workOut(pan, vol) {
         const g = this.ctx.createGain(); g.gain.value = vol;
-        g.connect(this.#panned(this.master, Math.max(-1, Math.min(1, pan))));
+        g.connect(this.#panned(this.sfxBus, Math.max(-1, Math.min(1, pan))));
         return g;
     }
 
@@ -313,7 +335,7 @@ class FarmAudio {
         g.gain.setValueAtTime(0.0001, t);
         g.gain.linearRampToValueAtTime(0.55, t + 0.04);               // the crack
         g.gain.exponentialRampToValueAtTime(0.0001, t + 2.8 + Math.random() * 1.2);
-        src.connect(lp); lp.connect(g); g.connect(this.master);
+        src.connect(lp); lp.connect(g); g.connect(this.sfxBus);
         src.start(t); src.stop(t + 4.4);
     }
 
@@ -401,7 +423,7 @@ class FarmAudio {
                 const fa = ctx.createGain(); fa.gain.value = amp;
                 mix.connect(bp); bp.connect(fa); fa.connect(g);
             }
-            g.connect(this.master);
+            g.connect(this.sfxBus);
             for (const o of oscs) { o.start(t); o.stop(t + s.dur + 0.05); }
             // a rasp of filtered noise right on the onset (the throaty crack of each squawk)
             const nlen = Math.min(0.05, s.dur * 0.32);
@@ -410,7 +432,7 @@ class FarmAudio {
             const ng = ctx.createGain();
             ng.gain.setValueAtTime(s.gain * 0.55, t);
             ng.gain.exponentialRampToValueAtTime(0.0001, t + nlen);
-            ns.connect(nbp); nbp.connect(ng); ng.connect(this.master);
+            ns.connect(nbp); nbp.connect(ng); ng.connect(this.sfxBus);
             ns.start(t); ns.stop(t + nlen + 0.02);
         }
     }

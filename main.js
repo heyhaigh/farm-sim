@@ -161,7 +161,7 @@ function drawCursor(mx, my, hot) {
 function cursorIsHot(worldTooltip) {
     const m = mouse;
     if (m.x < 0) return false;
-    for (const b of [ROSTER_BTN, CHRON_BTN, SND_BTN, NEW_BTN, FWD_BTN, FF_BTN, SPEED1_BTN]) if (b.w && inRect(m, b)) return true;
+    for (const b of [ROSTER_BTN, CHRON_BTN, SND_BTN, SETTINGS_BTN, FWD_BTN, FF_BTN, SPEED1_BTN]) if (b.w && inRect(m, b)) return true;
     if (!BOARD_BTN.hidden && inRect(m, BOARD_BTN)) return true;
     if (RECAP_CARD.w && inRect(m, RECAP_CARD)) return true;
     if (selected) {
@@ -198,7 +198,11 @@ let boardScroll = 0, boardMaxScroll = 0;
 const boardScreen = { x: 0, y: 0, w: 0, h: 0 };    // board sprite screen rect (click to open)
 const BOARD_BTN = { x: 0, y: 3, w: 40, h: 12 };    // top-bar button, positioned in drawUI
 const SND_BTN = { x: 0, y: 3, w: 30, h: 12 };      // sound on/off toggle, positioned in drawUI
-const NEW_BTN = { x: 0, y: 3, w: 30, h: 12 };      // NEW TOWN reset hatch (two-step confirm), positioned in drawUI
+const SETTINGS_BTN = { x: 0, y: 3, w: 15, h: 12 }; // gear cog — opens the settings menu (New Town + volume)
+const NEW_BTN = { x: 0, y: 3, w: 30, h: 12 };      // NEW TOWN reset hatch (now lives inside the settings menu)
+let settingsOpen = false;                          // settings menu (New Town + music/SFX volume)
+let settingsHits = null;                           // { music, sfx, musicSlider, sfxSlider, newBtn, close } rects (game px)
+let settingsDrag = null;                           // 'music' | 'sfx' while dragging a volume slider
 let newConfirmUntil = 0;                           // while now < this, the NEW button reads "SURE?" and a click wipes
 let lastSavedDay = 0;                              // last world.day autosaved (rollover-triggered)
 let saveFlashAt = -1e9;                            // brief "SAVED" tick in the top bar
@@ -2448,6 +2452,20 @@ function drawSpeakerIcon(x, y, on) {
     }
 }
 
+// a little gear cog (icon-only) for the settings button
+function drawGearIcon(x, y, active) {
+    ctx.fillStyle = active ? '#7dd069' : '#c8ccd8';
+    const cx = x + 5, cy = y + 4;
+    // four spokes/teeth around the hub
+    ctx.fillRect(cx - 1, y, 2, 9);       // vertical teeth (top+bottom)
+    ctx.fillRect(x, cy - 1, 11, 2);      // horizontal teeth (left+right)
+    ctx.fillRect(cx - 3, cy - 3, 2, 2); ctx.fillRect(cx + 2, cy - 3, 2, 2);   // diagonal nubs
+    ctx.fillRect(cx - 3, cy + 2, 2, 2); ctx.fillRect(cx + 2, cy + 2, 2, 2);
+    ctx.fillRect(cx - 2, cy - 2, 5, 5);  // hub
+    ctx.fillStyle = '#12141c';
+    ctx.fillRect(cx - 1, cy - 1, 3, 3);  // hub hole
+}
+
 function drawUI() {
     // top bar
     ctx.fillStyle = 'rgba(12,14,22,0.92)';
@@ -2514,6 +2532,8 @@ function drawUI() {
 
     // sound toggle — RIGHTMOST (drawn first), a speaker icon (with an X when muted), no text
     barIconBtn(SND_BTN, 15, (x, y) => drawSpeakerIcon(x + 3, y + 2, audio.enabled));
+    // settings cog — folds in New Town + music/SFX volume (sound on/off stays a top-bar quick action)
+    barIconBtn(SETTINGS_BTN, 15, (x, y) => drawGearIcon(x + 2, y + 2, settingsOpen));
 
     // speed controls in the corner: > = 5x, >> = 20x; a 1X revert appears while sped up
     const spd = world._speedMult || 1;
@@ -2528,18 +2548,9 @@ function drawUI() {
     barBtn(CHRON_BTN, 'CHRONICLE', chronOpen, '#c8a0e0', '#1a1024');
     if (world.chronicle.length && !chronOpen) drawCoin(CHRON_BTN.x + CHRON_BTN.w - 3, CHRON_BTN.y - 2, 6);
 
-    // NEW TOWN reset hatch — two-step confirm (click once -> "SURE?" for 3s -> click again wipes
-    // the save and reloads fresh). Persistence makes stuck/degenerate states PERMANENT, so the
-    // town needs an exit that's easy to reach but hard to fat-finger.
-    const confirming = performance.now() < newConfirmUntil;
-    barBtn(NEW_BTN, confirming ? 'SURE?' : 'NEW', confirming, '#e05040', '#2a0e0e');
-    // while armed, say EXACTLY what confirming does — nobody should erase a town blind
-    if (confirming) {
-        const warn = 'STARTS A NEW TOWN - THIS ONE IS SET ASIDE';
-        drawText(ctx, warn, NEW_BTN.x + NEW_BTN.w - textWidth(warn), 18, '#e05040');
-    }
-    // a quiet "SAVED" tick under the bar whenever the town autosaves (trust that memory is real)
-    else if (performance.now() - saveFlashAt < 1500) drawText(ctx, 'SAVED', NEW_BTN.x, 18, '#7dd069');
+    // (NEW TOWN moved into the settings menu.) A quiet "SAVED" tick under the cog whenever the town
+    // autosaves — trust that the memory is real.
+    if (performance.now() - saveFlashAt < 1500) drawText(ctx, 'SAVED', SETTINGS_BTN.x - 4, 18, '#7dd069');
 
     BOARD_BTN.hidden = !world.board;   // only exists once the town has built the board
     if (!BOARD_BTN.hidden) {
@@ -2564,6 +2575,58 @@ function drawUI() {
     if (rosterOpen) drawRoster();
     else if (chronOpen) drawChronicle();
     else { drawMinimap(); if (boardOpen) drawBoard(); else if (selected) drawSheet(selected); }
+    if (settingsOpen) drawSettings();
+}
+
+// ---------------------------------------------------------------------------
+// Settings menu — New Town + music/SFX volume. Opened by the top-bar gear cog.
+// ---------------------------------------------------------------------------
+function drawSettings() {
+    const PW = Math.min(GW - 24, 240), PH = 118;
+    const PX = Math.floor((GW - PW) / 2), PY = Math.floor((GH - PH) / 2) - 6;
+    ctx.fillStyle = 'rgba(6,7,11,0.72)'; ctx.fillRect(0, 18, GW, GH - 40);
+    uiPanel(PX, PY, PW, PH);
+    drawText(ctx, 'SETTINGS', PX + 7, PY + 5, '#c8ccd8', 1);
+    drawText(ctx, 'X', PX + PW - 10, PY + 5, '#c8ccd8');
+    ctx.fillStyle = '#20242f'; ctx.fillRect(PX + 4, PY + 15, PW - 8, 1);
+
+    const IX = PX + 8, TRACK_X = PX + 92, TRACK_W = PW - 92 - 40;
+    settingsHits = { close: { x: PX + PW - 14, y: PY, w: 14, h: 12 } };
+
+    // one volume row: label, an on/off toggle chip, a draggable track, and the percentage
+    const volRow = (y, label, on, vol, tKey, sKey) => {
+        drawText(ctx, label, IX, y + 1, on ? '#e8ecf5' : '#6a6f7c');
+        const tog = { x: IX + 46, y: y - 1, w: 20, h: 9 };
+        ctx.fillStyle = on ? '#2c5a22' : '#33261a'; ctx.fillRect(tog.x, tog.y, tog.w, tog.h);
+        ctx.strokeStyle = on ? '#7dd069' : '#7a6a4a'; ctx.lineWidth = 1; ctx.strokeRect(tog.x + 0.5, tog.y + 0.5, tog.w - 1, tog.h - 1);
+        drawText(ctx, on ? 'ON' : 'OFF', tog.x + 3, y + 1, on ? '#7dd069' : '#c8a060');
+        // track
+        ctx.fillStyle = '#171a22'; ctx.fillRect(TRACK_X, y, TRACK_W, 4);
+        ctx.strokeStyle = '#3a3f4c'; ctx.strokeRect(TRACK_X + 0.5, y + 0.5, TRACK_W - 1, 3);
+        const fillW = Math.round(TRACK_W * vol);
+        ctx.fillStyle = on ? '#7dd069' : '#5a5f6c'; ctx.fillRect(TRACK_X, y, fillW, 4);
+        ctx.fillStyle = on ? '#e8ecf5' : '#8a8f9c'; ctx.fillRect(TRACK_X + Math.max(0, Math.min(TRACK_W - 2, fillW - 1)), y - 1, 2, 6);   // knob
+        drawText(ctx, `${Math.round(vol * 100)}%`, TRACK_X + TRACK_W + 6, y + 1, '#c8ccd8');
+        settingsHits[tKey] = tog;
+        settingsHits[sKey] = { x: TRACK_X, y: y - 3, w: TRACK_W, h: 10 };
+    };
+    volRow(PY + 24, 'MUSIC', audio.musicOn, audio.musicVol, 'music', 'musicSlider');
+    volRow(PY + 40, 'SOUND FX', audio.sfxOn, audio.sfxVol, 'sfx', 'sfxSlider');
+
+    ctx.fillStyle = '#20242f'; ctx.fillRect(PX + 4, PY + 56, PW - 8, 1);
+
+    // NEW TOWN — the two-step reset hatch, moved here out of the top bar
+    const confirming = performance.now() < newConfirmUntil;
+    const nb = { x: IX, y: PY + 64, w: PW - 16, h: 14 };
+    ctx.fillStyle = confirming ? '#3a1010' : '#2a0e0e'; ctx.fillRect(nb.x, nb.y, nb.w, nb.h);
+    ctx.strokeStyle = '#e05040'; ctx.strokeRect(nb.x + 0.5, nb.y + 0.5, nb.w - 1, nb.h - 1);
+    const nlabel = confirming ? 'SURE? - THIS TOWN IS SET ASIDE' : 'START A NEW TOWN';
+    drawText(ctx, nlabel, nb.x + Math.floor((nb.w - textWidth(nlabel)) / 2), nb.y + 4, confirming ? '#ff9080' : '#e07868');
+    settingsHits.newBtn = nb;
+    drawText(ctx, 'A NEW TOWN GROWS A NEW CAST - THIS ONE IS SAVED, NOT LOST.', IX, PY + 84, '#5a5f6c');
+    drawText(ctx, 'SOUND ON/OFF STAYS ON THE TOP BAR AS A QUICK MUTE.', IX, PY + 92, '#4a4f5c');
+    drawText(ctx, 'ESC OR CLICK OUTSIDE TO CLOSE', IX, PY + 104, '#4a4f5c');
+    settingsHits.panel = { x: PX, y: PY, w: PW, h: PH };
 }
 
 function wrapText(str, maxChars) {
@@ -2674,12 +2737,13 @@ function drawInfoBox(ax, ay, lines) {
     for (const l of lines) { drawText(ctx, l.t, bx + pad, ty, l.c); ty += lh; }
 }
 function houseLines(f, lvl) {
-    const name = lvl >= 3 ? 'COTTAGE' : lvl >= 2 ? 'YURT' : 'TIPI';
+    const name = lvl >= 3 ? 'Cottage' : lvl >= 2 ? 'Yurt' : 'Tipi';
     const who = f.sheet.name.split(' ')[0];
-    const lines = [{ t: name, c: TT_G }, { t: `${who}'s home - tier ${lvl}`, c: TT_L }];
+    // first line (gold): whose home + type + tier, together — e.g. "Pixel's Tipi - Tier 1"
+    const lines = [{ t: `${who}'s ${name} - Tier ${lvl}`, c: TT_G }];
     if (lvl >= 3) { lines.push({ t: 'Estate: up to 560 tiles', c: TT_GR }, { t: 'Livestock + frontier fields', c: TT_GR }, { t: 'Big stores (220 wood / 110 ore)', c: TT_GR }); }
-    else if (lvl >= 2) { lines.push({ t: 'Farm grows up to 300 tiles', c: TT_GR }, { t: 'Livestock + stores (140w / 75o)', c: TT_GR }, { t: 'Cottage needs a 280-tile farm', c: TT_L }); }
-    else { lines.push({ t: 'Small yard (up to 160 tiles)', c: TT_GR }, { t: 'Yurt needs a 145-tile farm first', c: TT_L }); }
+    else if (lvl >= 2) { lines.push({ t: 'Farm grows up to 300 tiles', c: TT_GR }, { t: 'Livestock + stores (140w / 75o)', c: TT_GR }); }
+    else { lines.push({ t: 'Small yard (up to 160 tiles)', c: TT_GR }); }
     return lines;
 }
 const STRUCT_INFO = {
@@ -2888,18 +2952,8 @@ function drawSheet(f) {
     const addSlot = (sx, sy, key, tip) => sheetSlots.push({ x: sx, y: sy, w: SZ, h: SZ, key, tip });
 
     if (sheetTab === 0) {
-        // ===== STATS: who they are — creed, energy, personality, abilities, farm, gear =====
-        for (const line of wrapText(p.creed, 32).slice(0, 2)) { drawText(ctx, `"${line}"`, IX, y, SHEET_LABEL); y += 7; }
-        if (f.goal) { drawText(ctx, `> course: ${f.goal.toUpperCase()}`, IX, y, '#d08cc8'); y += 7; }
-        // DREAM (#89): the lifelong want above any season's course — gold while chased, checked when won
-        if (f.sheet.dream) {
-            const dd = f.sheet.dream;
-            const dreamTxt = `DREAM: ${dd.id === 'outdo' && dd.rivalName ? `TO OUTGROW ${dd.rivalName.toUpperCase()}` : dd.yearn}${f.sheet.dreamDone ? ' - WON!' : ''}`;
-            for (const line of wrapText(dreamTxt, 30).slice(0, 2)) { drawText(ctx, line, IX, y, f.sheet.dreamDone ? '#7dd069' : '#e8c860'); y += 7; }
-        }
-        // NOW: their current driver — explains whatever symbol is hovering over their head on the map
-        for (const line of wrapText(`NOW: ${currentStatus(f)}`, 30).slice(0, 2)) { drawText(ctx, line, IX, y, '#8fd0c0'); y += 7; }
-        y += 2;
+        // ===== STATS: vitals, personality, abilities, farm, gear. (The creed/course/dream/NOW
+        //       narration lives on the ACTIVITY and STORY tabs — no need to repeat it here.)
         const hpFrac = Math.max(0, Math.min(1, f.hp / f.maxHp));
         const hpCol = hpFrac > 0.5 ? '#d05450' : hpFrac > 0.25 ? '#e0a03c' : '#e83828';
         drawText(ctx, 'HP', IX, y, SHEET_LABEL); barFill(IX + 42, y, IW - 42, hpFrac, hpCol); y += 6;
@@ -3658,9 +3712,14 @@ out.addEventListener('pointerdown', (e) => {
     audio.ensure();   // browsers only allow audio to start on a user gesture
     const p = gamePoint(e);
     mouse.downX = p.x; mouse.downY = p.y;
+    // settings volume sliders: press to grab, drag to set
+    if (settingsOpen && settingsHits) {
+        if (inRect(p, settingsHits.musicSlider)) { settingsDrag = 'music'; audio.setMusicVolume((p.x - settingsHits.musicSlider.x) / settingsHits.musicSlider.w); mouse.panStart = null; return; }
+        if (inRect(p, settingsHits.sfxSlider)) { settingsDrag = 'sfx'; audio.setSfxVolume((p.x - settingsHits.sfxSlider.x) / settingsHits.sfxSlider.w); mouse.panStart = null; return; }
+    }
     // don't world-pan when the gesture starts on the minimap, the detail card, or the board
     const onUI = !rosterOpen && !chronOpen && (inRect(p, MINIMAP) || (selected && inRect(p, SHEET_RECT)) || (boardOpen && inRect(p, BOARD_RECT)));
-    mouse.panStart = (rosterOpen || chronOpen || onUI) ? null : { x: p.x, y: p.y, camX: cam.x, camY: cam.y };
+    mouse.panStart = (rosterOpen || chronOpen || settingsOpen || onUI) ? null : { x: p.x, y: p.y, camX: cam.x, camY: cam.y };
     mouse.dragging = false;
     try { out.setPointerCapture(e.pointerId); } catch { /* stale/synthetic pointer id — capture is best-effort */ }
 });
@@ -3668,6 +3727,11 @@ out.addEventListener('pointerdown', (e) => {
 out.addEventListener('pointermove', (e) => {
     const p = gamePoint(e);
     mouse.x = p.x; mouse.y = p.y;
+    if (settingsDrag && settingsHits) {
+        const s = settingsDrag === 'music' ? settingsHits.musicSlider : settingsHits.sfxSlider;
+        if (s) { const v = (p.x - s.x) / s.w; settingsDrag === 'music' ? audio.setMusicVolume(v) : audio.setSfxVolume(v); }
+        return;
+    }
     if (mouse.panStart) {
         const dx = p.x - mouse.panStart.x, dy = p.y - mouse.panStart.y;
         if (Math.abs(dx) + Math.abs(dy) > 4) { mouse.dragging = true; followMode = false; followTarget = null; }   // panning breaks follow
@@ -3682,23 +3746,36 @@ function inRect(p, r) { return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p
 
 out.addEventListener('pointerup', (e) => {
     const wasDrag = mouse.dragging;
+    const wasSlider = settingsDrag;
+    settingsDrag = null;
     mouse.panStart = null;
     mouse.dragging = false;
+    if (wasSlider) return;   // finished dragging a volume slider — consume the release
     if (wasDrag || !booted) return;
     const p = gamePoint(e);
 
     // the "previously on" catch-up card swallows the first click (any click dismisses it)
     if (resumeCard) { resumeCard = null; return; }
 
-    // roster toggle button
+    // sound quick-mute (stays on the top bar)
     if (inRect(p, SND_BTN)) { audio.ensure(); audio.toggle(); return; }
-    // NEW TOWN hatch: first click arms ("SURE?"), a second within 3s wipes the save + reloads fresh
-    if (NEW_BTN.w && inRect(p, NEW_BTN)) {
-        if (performance.now() < newConfirmUntil) {
-            newConfirmUntil = 0;
-            wipeTown(world.seed).finally(() => { location.href = location.pathname + '?fresh=1'; });
-        } else newConfirmUntil = performance.now() + 3000;
-        return;
+    // settings cog: open/close the menu (New Town + volume)
+    if (SETTINGS_BTN.w && inRect(p, SETTINGS_BTN)) { audio.ensure(); settingsOpen = !settingsOpen; if (settingsOpen) { rosterOpen = chronOpen = boardOpen = false; blurChatInput(); } return; }
+    // settings menu interactions
+    if (settingsOpen && settingsHits) {
+        if (inRect(p, settingsHits.close)) { settingsOpen = false; return; }
+        if (inRect(p, settingsHits.music)) { audio.ensure(); audio.toggleMusic(); return; }
+        if (inRect(p, settingsHits.sfx)) { audio.ensure(); audio.toggleSfx(); return; }
+        if (inRect(p, settingsHits.musicSlider)) { audio.setMusicVolume((p.x - settingsHits.musicSlider.x) / settingsHits.musicSlider.w); return; }
+        if (inRect(p, settingsHits.sfxSlider)) { audio.setSfxVolume((p.x - settingsHits.sfxSlider.x) / settingsHits.sfxSlider.w); return; }
+        if (inRect(p, settingsHits.newBtn)) {
+            // NEW TOWN: first click arms ("SURE?"), a second within 3s wipes the save + reloads fresh
+            if (performance.now() < newConfirmUntil) { newConfirmUntil = 0; wipeTown(world.seed).finally(() => { location.href = location.pathname + '?fresh=1'; }); }
+            else newConfirmUntil = performance.now() + 3000;
+            return;
+        }
+        if (!inRect(p, settingsHits.panel)) { settingsOpen = false; return; }   // click outside closes
+        return;   // click inside the panel, no-op
     }
     if (inRect(p, ROSTER_BTN)) { rosterOpen = !rosterOpen; if (rosterOpen) { boardOpen = false; chronOpen = false; } else { chatDropdownOpen = false; blurChatInput(); } return; }
     if (CHRON_BTN.w && inRect(p, CHRON_BTN)) { chronOpen = !chronOpen; if (chronOpen) { boardOpen = false; rosterOpen = false; chronScroll = 0; blurChatInput(); } return; }
@@ -3923,7 +4000,7 @@ window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && world && booted) {
         followMode = false; followTarget = null;
         selected = null; selectedSlotKey = null;
-        rosterOpen = false; chronOpen = false; boardOpen = false;
+        rosterOpen = false; chronOpen = false; boardOpen = false; settingsOpen = false;
         chatDropdownOpen = false; blurChatInput();
     }
     // ← / → — cycle through the whole cast: moves the open card and/or the follow target together
