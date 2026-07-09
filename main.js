@@ -3500,10 +3500,22 @@ async function submitWhisper() {
 // ---------------------------------------------------------------------------
 let chronRows = [];               // { e, y0, y1, farmerSeed } visible hit regions
 let chronView = null;             // { x, y, w, h, bodyTop, bodyBot, maxScroll }
+let chronTownWide = false;        // force the town-wide chronicle even when a farmer is in focus
+let chronScopeHits = null;        // { town, farmer } toggle-chip rects (game px)
 const CHRON_ACCENT = '#c8a0e0';
 
+// The farmer whose SAGA the chronicle is showing (or null for town-wide). Follows the camera focus
+// (the farmer you're trailing, else the open card), unless the player toggled to TOWN-WIDE. So
+// unfollowing (F) drops back to the town view, and the TOWN/name chips flip it explicitly.
+function chronFocusFarmer() {
+    if (chronTownWide) return null;
+    const f = (followTarget && world.farmers.includes(followTarget)) ? followTarget : selected;
+    return (f && world.farmers.includes(f)) ? f : null;
+}
+
 function chronEntries() {
-    const sel = selected ? selected.sheet.seed : null;
+    const cf = chronFocusFarmer();
+    const sel = cf ? cf.sheet.seed : null;
     const all = world.chronicle;
     return sel != null ? all.filter(e => e.whoSeed === sel || e.otherSeed === sel) : all;
 }
@@ -3558,18 +3570,39 @@ function drawChronicle() {
     ctx.fillRect(0, 18, GW, GH - 40);
     uiPanel(PX, PY, PW, PH);
 
-    // header — town-wide, or one farmer's personal saga when a Ry is selected
-    const title = selected ? `SAGA OF ${selected.sheet.name.split(' ')[0].toUpperCase()}` : 'TOWN CHRONICLE';
+    // header — town-wide, or one farmer's personal saga when a Ry is in focus
+    const cf = chronFocusFarmer();
+    const title = cf ? `SAGA OF ${cf.sheet.name.split(' ')[0].toUpperCase()}` : 'TOWN CHRONICLE';
     drawText(ctx, title, PX + 7, PY + 5, CHRON_ACCENT, 1);
     const entries = chronEntries();
-    drawText(ctx, String(entries.length), PX + PW - 42, PY + 5, '#9aa0b4');
     drawText(ctx, 'X', PX + PW - 10, PY + 5, '#c8ccd8');
+    // scope toggle: whenever a Ry is available to focus on, offer TOWN / <name> chips so there's
+    // always a clear way back to the town-wide view (and into a saga). Only the active one is lit.
+    chronScopeHits = null;
+    const scopeFarmer = (followTarget && world.farmers.includes(followTarget)) ? followTarget : selected;
+    if (scopeFarmer && world.farmers.includes(scopeFarmer)) {
+        const nm = scopeFarmer.sheet.name.split(' ')[0].toUpperCase();
+        const chip = (label, x, active) => {
+            const w = textWidth(label) + 6;
+            ctx.fillStyle = active ? 'rgba(200,160,224,0.22)' : 'rgba(255,255,255,0.05)';
+            ctx.fillRect(x, PY + 3, w, 9);
+            drawText(ctx, label, x + 3, PY + 5, active ? CHRON_ACCENT : '#8a8f9c');
+            return { x, y: PY + 3, w, h: 9 };
+        };
+        const nmW = textWidth(nm) + 6;
+        const townX = PX + PW - 18 - (textWidth('TOWN') + 6) - 3 - nmW;
+        const townR = chip('TOWN', townX, chronTownWide);
+        const farmR = chip(nm, townX + (textWidth('TOWN') + 6) + 3, !chronTownWide);
+        chronScopeHits = { town: townR, farmer: farmR };
+    } else {
+        drawText(ctx, String(entries.length), PX + PW - 42, PY + 5, '#9aa0b4');
+    }
     ctx.fillStyle = '#20242f';
     ctx.fillRect(PX + 4, PY + 15, PW - 8, 1);
 
     // TOWN HALL band (#94): who leads, what they're calling for, and how the town is answering.
     // Only on the town-wide view (not a single farmer's saga). Returns the height it consumed.
-    const bandH = selected ? 0 : drawCivicBand(PX, PY + 17, PW);
+    const bandH = cf ? 0 : drawCivicBand(PX, PY + 17, PW);
 
     const bodyTop = PY + 19 + bandH;
     const bodyBot = PY + PH - 11;
@@ -3827,18 +3860,23 @@ out.addEventListener('pointerup', (e) => {
         return;   // click inside the panel, no-op
     }
     if (inRect(p, ROSTER_BTN)) { rosterOpen = !rosterOpen; if (rosterOpen) { boardOpen = false; chronOpen = false; } else { chatDropdownOpen = false; blurChatInput(); } return; }
-    if (CHRON_BTN.w && inRect(p, CHRON_BTN)) { chronOpen = !chronOpen; if (chronOpen) { boardOpen = false; rosterOpen = false; chronScroll = 0; blurChatInput(); } return; }
+    if (CHRON_BTN.w && inRect(p, CHRON_BTN)) { chronOpen = !chronOpen; if (chronOpen) { boardOpen = false; rosterOpen = false; chronScroll = 0; blurChatInput(); chronTownWide = !(followMode && followTarget && world.farmers.includes(followTarget)); } return; }
 
     // chronicle overlay (modal) — X or click-outside closes; a beat selects that Ry (its saga)
     if (chronOpen) {
         const cv = chronView;
         if (cv) {
+            // scope toggle: TOWN switches to the town-wide view, the name chip back to the saga
+            if (chronScopeHits) {
+                if (inRect(p, chronScopeHits.town)) { chronTownWide = true; chronScroll = 0; return; }
+                if (inRect(p, chronScopeHits.farmer)) { chronTownWide = false; chronScroll = 0; return; }
+            }
             if ((p.x > cv.x + cv.w - 14 && p.y < cv.y + 12) ||
                 p.x < cv.x || p.x > cv.x + cv.w || p.y < cv.y || p.y > cv.y + cv.h) { chronOpen = false; return; }
             for (const row of chronRows) {
                 if (p.y >= row.y0 && p.y <= row.y1 && p.x > cv.x && p.x < cv.x + cv.w) {
                     const f = row.farmerSeed != null ? world.farmers.find(x => x.sheet.seed === row.farmerSeed) : null;
-                    if (f) { selected = f; sheetScroll = 0; chronScroll = 0; }   // narrow to that Ry's saga
+                    if (f) { selected = f; chronTownWide = false; sheetScroll = 0; chronScroll = 0; }   // narrow to that Ry's saga
                     return;
                 }
             }
@@ -4037,7 +4075,7 @@ window.addEventListener('keydown', (e) => {
     }
     // F — follow: toggle trailing. When starting, follow the open card's farmer, else jump to the action.
     if ((e.key === 'f' || e.key === 'F') && world && booted) {
-        if (followMode) { followMode = false; followTarget = null; }
+        if (followMode) { followMode = false; followTarget = null; if (chronOpen) chronTownWide = true; }   // unfollowing drops the chronicle back to town-wide
         else {
             const target = (selected && world.farmers.includes(selected)) ? selected : mostInterestingFarmer();
             if (target) { followMode = true; followTarget = target; selected = target; sheetScroll = 0; sheetTab = 0; rosterOpen = false; chronOpen = false; boardOpen = false; }
