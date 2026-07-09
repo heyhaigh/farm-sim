@@ -4626,6 +4626,26 @@ const JOURNAL_MAX = 160;
 const JOURNAL_DECAY = { lesson: 0.995, person: 0.97, job: 0.96, event: 0.975, chat: 0.90 };
 const JOURNAL_FORGET = 0.12;   // below this strength a memory is gone for good
 
+// #91 Tier-3 CONSOLIDATION: a recurring EPISODIC theme (many lived memories that rhyme) crystallises
+// into a stated BELIEF — the psychological bridge from short-term to long-term. Each theme matches
+// journal text; once enough memories of it accumulate, the farmer FORMS the belief, which reshapes
+// them (a one-time personality nudge) and narrates like a long-term memory. Distinct from CREEDS,
+// which are inherited from the source document — beliefs are EARNED from a lived life. (See #consolidateBeliefs.)
+const BELIEF_THEMES = [
+    { tag: 'wary',    min: 4, text: 'guard yourself - the world takes what it can',
+      test: /shortchang|lowball|welch|trick|thiev|stole|left me to it|haggled me|turned me away|refused to heal|warning|fined|shunned/i,
+      apply: f => { f.p.collaboration = Math.max(0, f.p.collaboration - 0.06); } },
+    { tag: 'kinship', min: 7, text: 'no one gets through it alone - lean on your neighbours',
+      test: /soup|nursed|healed me|lent me a hand|a hand|dug (our|my)|shares their well|well for nothing|stood with me|pulled them|for nothing|together/i,
+      apply: f => { f.p.collaboration = Math.min(1, f.p.collaboration + 0.06); } },
+    { tag: 'seeker',  min: 3, text: 'there is always another horizon worth the walk',
+      test: /struck an ore|found a|unearthed|further than anyone|frontier|tree line|treasure|forgotten stash|relic/i,
+      apply: f => { f.p.curiosity = Math.min(1, f.p.curiosity + 0.06); } },
+    { tag: 'proud',   min: 3, text: 'a name is earned - be one they remember',
+      test: /harvest king|leader|walked further|standing stone|raised my cottage|dream|won on|bumper|critical/i,
+      apply: f => { f.p.competitiveness = Math.min(1, f.p.competitiveness + 0.05); } },
+];
+
 // courses a bot can set for itself after reflecting on its journal (see Farmer.reflect)
 const GOAL_CREEDS = {
     'lone wolf': "I'LL RELY ON NO ONE.",
@@ -5193,13 +5213,34 @@ export class Farmer {
         return true;   // all three align — this healer will not tend this one
     }
 
-    // #91 Tier-3 seed — a BELIEF: a conviction FORMED from lived experience (as opposed to a creed,
-    // which is inherited from the source memory). Stored on the sheet so it persists + narrates.
+    // #91 Tier-3 — a BELIEF: a conviction FORMED from lived experience (as opposed to a creed, which is
+    // inherited from the source memory). Stored on the sheet so it persists + narrates.
     formBelief(text, tag) {
         this.sheet.beliefs = this.sheet.beliefs || [];
         if (!this.sheet.beliefs.some(b => b.text === text)) this.sheet.beliefs.push({ text, tag, day: this.world.day });
     }
     get beliefs() { return this.sheet.beliefs || []; }
+
+    // #91 Tier-3 CONSOLIDATION — at dawn, look back over the journal: has any THEME recurred enough to
+    // become a conviction? The best-supported un-held theme crystallises into a belief that reshapes
+    // them (a one-time personality nudge, its label re-derived) and lands a reflection beat. One a day,
+    // capped over a life — a farmer is shaped by what keeps happening to them, not every passing mood.
+    #consolidateBeliefs() {
+        const held = this.sheet.beliefs || [];
+        if (held.length >= 5) return;                          // a life is more than its doctrines
+        let best = null, bestStrength = 0;
+        for (const t of BELIEF_THEMES) {
+            if (held.some(b => b.tag === t.tag)) continue;
+            let count = 0, strength = 0;
+            for (const m of this.journal) if (t.test.test(m.text)) { count++; strength += m.strength; }
+            if (count >= t.min && strength > bestStrength) { bestStrength = strength; best = t; }
+        }
+        if (!best) return;
+        this.formBelief(best.text, best.tag);
+        best.apply(this);
+        const id = personalityLabel(this.p); this.p.label = id.label; this.p.creed = id.creed;   // lived change can rename them
+        this.world.addChronicle('reflection', `${shortName(this)} has come to believe: ${best.text}.`, this, null, '#8fc7e8');
+    }
 
     // #96 — the denied farmer RECKONS with being turned away in their sickness. Real introspection: they
     // remember it, and it moves them — a soul with some good left feels shame and starts to mend (a step
@@ -6032,6 +6073,8 @@ export class Farmer {
             c.asks = {}; c.verdicts = {}; c.verdictDay = this.world.day;
             if (c.urge && this.world.day > c.urge.expiresDay) c.urge = null;
         }
+
+        this.#consolidateBeliefs();   // #91 Tier-3: a recurring lived theme may crystallise into a belief today
     }
 
     #maybeAskForHelp() {
