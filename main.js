@@ -3565,6 +3565,19 @@ function drawCivicBand(PX, y, PW) {
         ctx.fillStyle = wa > 0.5 ? '#7dd069' : wa > 0.28 ? '#e0a03c' : '#e05040'; ctx.fillRect(wbx, ty, Math.round(wbW * wa), 4);
         ty += 8;
     }
+    // the Healer (#97 Slice 1), if one is seated: name + standing, and a herb-call flag when low
+    const hlr = world.healerFarmer && world.healerFarmer();
+    if (hlr) {
+        drawText(ctx, 'HEALER', IX, ty, '#9a7fc0');
+        drawText(ctx, hlr.sheet.name.split(' ')[0].toUpperCase(), IX + textWidth('HEALER '), ty, '#e8c860');
+        if (roles.healerNeedsHerbs) drawText(ctx, 'NEEDS HERBS', IX + textWidth('HEALER ') + textWidth(hlr.sheet.name.split(' ')[0].toUpperCase() + '  '), ty, '#e0a03c');
+        const ha = Math.max(0, Math.min(1, roles.healerApproval));
+        const hbW = 46, hbx = RX - hbW;
+        drawText(ctx, 'TRUST', hbx - textWidth('TRUST '), ty, '#6a6f7c');
+        ctx.fillStyle = '#171a22'; ctx.fillRect(hbx, ty, hbW, 4);
+        ctx.fillStyle = ha > 0.5 ? '#7dd069' : ha > 0.28 ? '#e0a03c' : '#e05040'; ctx.fillRect(hbx, ty, Math.round(hbW * ha), 4);
+        ty += 8;
+    }
     ctx.fillStyle = '#171a22'; ctx.fillRect(PX + 4, ty, PW - 8, 1);
     return ty - y + 2;
 }

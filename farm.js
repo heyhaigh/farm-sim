@@ -48,6 +48,17 @@ export const CRAFTABLES = [
       requires: 'wateringCan', desc: 'Waters a line of 5 crops' },
 ];
 
+// #97 CRAFTING (Slice 1): the recipe layer's first entries — the Town Healer's REMEDIES, brewed
+// from real inventory (nothing from thin air). `inputs` are consumed from goods (grass/flower) and
+// produce (crops); the effect is applied at the bedside (see #tendSick). Kept as DATA (a stable id +
+// input costs); the sim reads it, never invents it here. tonic is deliberately dear so a cheap salve
+// stays the workhorse and an outright cure never trivialises illness.
+export const RECIPES = {
+    soup:  { id: 'soup',  name: 'Soup',  inputs: { crops: 2, grass: 1 }, kind: 'remedy', tier: 1 },
+    salve: { id: 'salve', name: 'Salve', inputs: { grass: 3, flower: 1 }, kind: 'remedy', tier: 2 },
+    tonic: { id: 'tonic', name: 'Tonic', inputs: { grass: 6, flower: 2 }, kind: 'remedy', tier: 3 },
+};
+
 // wood economy
 const TREE_WOOD = [1, 3, 5];   // wood from felling a tree, by growth stage: sapling 1 / young 3 / mature 5
 const TREE_CHOPS = [1, 3, 5];  // chops (hence exhaustion) to fell each stage — proportionate to the yield
@@ -142,6 +153,11 @@ export const SEASONS = [
       weather: { sun: 2, cloud: 4, rain: 1, storm: 0, blizzard: 2.5, drought: 0 } },
 ];
 export const SEASON_LENGTH = 15;
+
+// #97 Slice 1 — Healer tuning: when the Healer's grass falls below this they call the town for herbs;
+// they keep a reserve + a higher energy floor so they stay AVAILABLE (never overwork themselves).
+const HEALER_HERB_LOW = 5;
+const HEALER_ENERGY_FLOOR = 0.4;    // rests earlier than others — an available healer beats a spent one
 
 // producer tuning per kind
 // Producers yield roughly ONCE PER DAY (a hen lays ~1 egg/day) — rate ~0.0037 fills the
@@ -429,7 +445,8 @@ export class World {
         // budget, logged refusals) and heed or refuse. `manager` is a seed; `approval` drives fatigue
         // + recall so a poor leader is unseated even before elections exist. Sim-driven + seeded.
         this.roles = { manager: null, approval: 0.6, lowDays: 0, directive: null, directiveSeq: 0, cooldown: 0,
-                       watch: null, watchApproval: 0.6, watchLowDays: 0, caseSeq: 0 };   // #94 P2: the Town Watch
+                       watch: null, watchApproval: 0.6, watchLowDays: 0, caseSeq: 0,        // #94 P2: the Town Watch
+                       healer: null, healerApproval: 0.6, healerLowDays: 0 };              // #94 P3: the Town Healer
         this.board = null;    // no bulletin board until the town builds one together (first communal project)
         this.merchant = null;                             // the wandering trader, present only during a visit
         this.merchantNextDay = 4 + Math.floor(this.rand() * 3);   // first caravan rolls in around day 4-6
@@ -1895,6 +1912,7 @@ export class World {
             roles: {   // #94: Sets/Maps flattened to arrays so the snapshot is structured-clone-plain
                 manager: this.roles.manager, approval: this.roles.approval, lowDays: this.roles.lowDays,
                 watch: this.roles.watch, watchApproval: this.roles.watchApproval, watchLowDays: this.roles.watchLowDays,
+                healer: this.roles.healer, healerApproval: this.roles.healerApproval, healerLowDays: this.roles.healerLowDays,
                 directiveSeq: this.roles.directiveSeq, cooldown: this.roles.cooldown, caseSeq: this.roles.caseSeq,
                 directive: this.roles.directive ? {
                     id: this.roles.directive.id, kind: this.roles.directive.kind,
@@ -1994,12 +2012,13 @@ export class World {
         this.roles = d.roles ? {   // #94 (guarded: pre-roles saves resume with a fresh, unseated chair)
             manager: d.roles.manager, approval: d.roles.approval, lowDays: d.roles.lowDays || 0,
             watch: d.roles.watch ?? null, watchApproval: d.roles.watchApproval ?? 0.6, watchLowDays: d.roles.watchLowDays || 0,
+            healer: d.roles.healer ?? null, healerApproval: d.roles.healerApproval ?? 0.6, healerLowDays: d.roles.healerLowDays || 0,
             directiveSeq: d.roles.directiveSeq || 0, cooldown: d.roles.cooldown || 0, caseSeq: d.roles.caseSeq || 0,
             directive: d.roles.directive ? {
                 ...d.roles.directive,
                 heeders: new Set(d.roles.directive.heeders), refusers: new Map(d.roles.directive.refusers),
             } : null,
-        } : { manager: null, approval: 0.6, lowDays: 0, watch: null, watchApproval: 0.6, watchLowDays: 0, directive: null, directiveSeq: 0, cooldown: 0, caseSeq: 0 };
+        } : { manager: null, approval: 0.6, lowDays: 0, watch: null, watchApproval: 0.6, watchLowDays: 0, healer: null, healerApproval: 0.6, healerLowDays: 0, directive: null, directiveSeq: 0, cooldown: 0, caseSeq: 0 };
 
         this.tiles.set(d.tiles);
         this.chunks = new Map(); for (const [k, a] of d.chunks) this.chunks.set(k, Uint8Array.from(a));
@@ -2103,21 +2122,25 @@ export class World {
         }
     }
 
-    // ---- CIVIC ROLES (#94): the Town Manager (P1) + the Town Watch (P2) -----------
+    // ---- CIVIC ROLES (#94): Manager (P1) + Watch (P2) + Healer (P3, #97 Slice 1) --------
 
     managerFarmer() { return this.roles.manager != null ? this.farmers.find(f => f.sheet.seed === this.roles.manager) : null; }
     watchFarmer() { return this.roles.watch != null ? this.farmers.find(f => f.sheet.seed === this.roles.watch) : null; }
+    healerFarmer() { return this.roles.healer != null ? this.farmers.find(f => f.sheet.seed === this.roles.healer) : null; }
     roleOf(f) {   // the civic role a farmer holds (or null) — for the card/roster label
         if (!f) return null;
         if (this.roles.manager === f.sheet.seed) return 'MANAGER';
         if (this.roles.watch === f.sheet.seed) return 'WATCH';
+        if (this.roles.healer === f.sheet.seed) return 'HEALER';
         return null;
     }
 
     // Manager: presence (CHA) + civic temperament (collaboration) + a good name. Watch: strength/grit
-    // (STR/CON) + honesty (a fair hand) + a good name. Both pure + seeded (stable tie-break by seed).
+    // (STR/CON) + honesty (a fair hand) + a good name. Healer: wisdom + wits (WIS/INT) + a caring
+    // temperament (collaboration). All pure + seeded (stable tie-break by seed).
     #managerFitness(f) { const s = f.sheet; return mod(s.stats.cha) * 0.5 + s.personality.collaboration + f.reputation + (s.level || 1) * 0.08; }
     #watchFitness(f) { const s = f.sheet; return (mod(s.stats.str) + mod(s.stats.con)) * 0.35 + s.personality.honesty + f.reputation + (s.level || 1) * 0.06; }
+    #healerFitness(f) { const s = f.sheet; return (mod(s.stats.wis) + mod(s.stats.int)) * 0.35 + s.personality.collaboration + f.reputation + (s.level || 1) * 0.06; }
     #bestFor(fitFn, ...exclude) {
         const ex = new Set(exclude.filter(Boolean).map(x => x.sheet ? x.sheet.seed : x));
         const pool = [...this.farmers].filter(f => !ex.has(f.sheet.seed) && f.health !== 'sick' && !f.downed).sort((a, b) => a.sheet.seed - b.sheet.seed);
@@ -2144,6 +2167,15 @@ export class World {
             if (wch) { r.watch = wch.sheet.seed; r.watchApproval = 0.6; r.watchLowDays = 0;
                 this.addChronicle('town', `${shortName(wch)} was made the Town Watch.`, wch, null, '#e0c060'); }
         }
+        // seat the HEALER if empty (#97 Slice 1) — excludes the Manager + Watch (one role each)
+        if (r.healer == null || !this.healerFarmer()) {
+            const hl = this.#bestFor(f => this.#healerFitness(f), this.managerFarmer(), this.watchFarmer());
+            if (hl) { r.healer = hl.sheet.seed; r.healerApproval = 0.6; r.healerLowDays = 0;
+                this.addChronicle('town', `${shortName(hl)} took up the healer's satchel.`, hl, null, '#e0c060'); }
+        }
+        // the Healer's herb supply: does the town need to bring grass? (drives the herb request)
+        const hf = this.healerFarmer();
+        r.healerNeedsHerbs = !!hf && ((hf.sheet.goods && hf.sheet.goods.grass) || 0) < HEALER_HERB_LOW;
 
         // QUORUM: the town who COULD answer today (not the Manager, not sick/downed). On a no-quorum
         // day — a plague lays everyone up — there's no signal, so approval AND the recall clocks both
@@ -2168,6 +2200,13 @@ export class World {
                 if (n > 0) r.watchApproval = Math.max(0, Math.min(1, r.watchApproval * 0.9 + (0.55 + sum / n) * 0.1));
             }
             r.watchLowDays = r.watchApproval < 0.25 ? r.watchLowDays + 1 : 0;
+            // HEALER approval drifts toward the town's regard for them (a tend/cure nudges it directly).
+            if (hf) {
+                let sum = 0, n = 0;
+                for (const f of this.farmers) if (f !== hf && f.health !== 'sick' && !f.downed) { sum += f.opinionOf(hf); n++; }
+                if (n > 0) r.healerApproval = Math.max(0, Math.min(1, r.healerApproval * 0.9 + (0.55 + sum / n) * 0.1));
+            }
+            r.healerLowDays = r.healerApproval < 0.25 ? r.healerLowDays + 1 : 0;
         }
 
         // recall a chronically-unpopular office-holder; the chair passes to the next-fittest DIFFERENT
@@ -2181,6 +2220,11 @@ export class World {
             const out = this.watchFarmer(), next = this.#bestFor(f => this.#watchFitness(f), out, this.managerFarmer());
             if (next && next !== out) { r.watch = next.sheet.seed; r.watchApproval = 0.5; r.watchLowDays = 0;
                 this.addChronicle('rift', `${out ? shortName(out) : 'The Watch'} lost the town's trust; ${shortName(next)} takes up the Watch.`, next, out, '#d08cc8'); }
+        }
+        if (r.healerLowDays >= 3 && this.farmers.length > 1) {
+            const out = this.healerFarmer(), next = this.#bestFor(f => this.#healerFitness(f), out, this.managerFarmer(), this.watchFarmer());
+            if (next && next !== out) { r.healer = next.sheet.seed; r.healerApproval = 0.5; r.healerLowDays = 0;
+                this.addChronicle('rift', `${out ? shortName(out) : 'The Healer'} laid down the satchel; ${shortName(next)} takes up healing.`, next, out, '#d08cc8'); }
         }
 
         this.#postDirective();
@@ -2236,6 +2280,50 @@ export class World {
     // Is this farmer under an active shunning? (Expires after a season; NEVER blocks mercy — sick-care
     // ignores it, so a shun can't spiral a farmer into an unrecoverable state.)
     isShunned(f) { return f && f.sheet.shunUntil != null && this.day < f.sheet.shunUntil; }
+
+    // ---- CRAFTING (#97 Slice 1): recipes consume real inventory — nothing from thin air ---------
+    #haveGood(f, g) { return g === 'crops' ? (f.sheet.produce || 0) : g === 'wood' ? f.wood : g === 'ore' ? f.ore : ((f.sheet.goods && f.sheet.goods[g]) || 0); }
+    canCraft(f, recipeId) {
+        const r = RECIPES[recipeId]; if (!r) return false;
+        for (const g in r.inputs) if (this.#haveGood(f, g) < r.inputs[g]) return false;
+        return true;
+    }
+    #consumeRecipe(f, recipeId) {
+        const r = RECIPES[recipeId]; if (!r || !this.canCraft(f, recipeId)) return false;
+        for (const g in r.inputs) {
+            const q = r.inputs[g];
+            if (g === 'crops') { f.sheet.produce -= q; spendCropStock(f.sheet, q); }
+            else if (g === 'wood') f.wood -= q;
+            else if (g === 'ore') f.ore -= q;
+            else { f.sheet.goods = f.sheet.goods || {}; f.sheet.goods[g] = Math.max(0, (f.sheet.goods[g] || 0) - q); }
+        }
+        return true;
+    }
+    // The remedy the Healer brews for THIS patient: a tonic (cure) only when the illness is grave and
+    // the herbs allow, else a salve (halves it), else soup (mild), else nothing they can afford yet.
+    bestRemedy(healer, patient) {
+        const grave = patient.sickDays >= 3 || patient.energy < 0.25;
+        for (const id of (grave ? ['tonic', 'salve', 'soup'] : ['salve', 'soup'])) if (this.canCraft(healer, id)) return id;
+        return null;
+    }
+    // Brew + apply a remedy at the bedside: consume the inputs, act on the patient's illness, and let
+    // the beat land (bond, gratitude, a chronicle line, the Healer's standing). Returns true if applied.
+    applyRemedy(healer, patient, recipeId) {
+        if (!this.#consumeRecipe(healer, recipeId)) return false;
+        const nm = RECIPES[recipeId].name, cured = recipeId === 'tonic';
+        if (cured) { patient.health = 'healthy'; patient.sickDays = 0; patient.energy = Math.min(1, patient.energy + 0.25); patient.strain = 0; patient.sparkle = 2; }
+        else if (recipeId === 'salve') { patient.sickDays = Math.max(1, Math.ceil(patient.sickDays / 2)); patient.strain = Math.max(0, patient.strain - 0.5); patient.energy = Math.min(1, patient.energy + 0.1); }
+        else { patient.sickDays = Math.max(1, patient.sickDays - 1); patient.energy = Math.min(1, patient.energy + 0.15); }
+        patient.adjustOpinion(healer, 0.4, 'healed me when I was ill');
+        this.addBond(healer, patient); healer.adjustReputation(0.05); healer.gainXP(2);
+        this.roles.healerApproval = Math.min(1, this.roles.healerApproval + (cured ? 0.06 : 0.03));
+        patient.say(cured ? 'ALL BETTER!' : 'THANK YOU...', '#7dd069'); healer.say(cured ? 'GOOD AS NEW' : 'REST NOW, FRIEND', '#7dd069');
+        this.addLog(`${healer.sheet.name} tended ${patient.sheet.name} with a ${nm.toLowerCase()}`, '#7dd069');
+        this.addChronicle('bond', cured
+            ? `${shortName(healer)} nursed ${shortName(patient)} back to health with a tonic.`
+            : `${shortName(healer)} eased ${shortName(patient)}'s illness with a ${nm.toLowerCase()}.`, healer, patient, '#7dd069');
+        return true;
+    }
 
     // The Manager reads the town and posts ONE directive for the day (or none if there's no need):
     // rally to the current communal project, else call for donations to level the town.
@@ -4985,6 +5073,8 @@ export class Farmer {
         return c;
     }
     isManager() { return this.world.roles.manager === this.sheet.seed; }
+    isHealer() { return this.world.roles.healer === this.sheet.seed; }
+    get grass() { return (this.sheet.goods && this.sheet.goods.grass) || 0; }
 
     // Decide ONCE per directive whether to take it up (cached on the sheet so re-deciding each tick
     // never re-rolls or floods rng). Returns 'heed' | 'refuse' | 'skip'. The Manager leads by doing
@@ -6269,6 +6359,37 @@ export class Farmer {
         // a new settler must clear their land, fence it, then build a house before farming
         if (this.plot.built.level < 1 && this.#pursueHomestead()) return;
         if (this.#maybeUpgradeHome()) return;
+
+        // #97 Slice 1 — the TOWN HEALER tends the sick as their FIRST duty: triage the patient in most
+        // need, brew the best remedy their herbs allow at the bedside, and never run to exhaustion
+        // (they rest early to stay available). Reliable — not a collaborator's coin-flip.
+        if (this.isHealer() && !w.isNight()) {
+            const sick = w.farmers.filter(o => o !== this && o.health === 'sick' && !o.downed)
+                .sort((a, b) => (b.sickDays - b.energy) - (a.sickDays - a.energy))[0];   // worst first
+            if (sick && this.energy > 0.2) {
+                this.careTarget = sick;
+                const rem = w.bestRemedy(this, sick);
+                this.think(rem ? `${shortName(sick).toUpperCase()} IS ILL - A ${RECIPES[rem].name.toUpperCase()} WILL HELP` : `${shortName(sick).toUpperCase()} AILS - I NEED MORE HERBS`);
+                const cd = w.houseDoor(sick.plot);
+                this.#goTo(cd.i + 0.5, cd.j + 0.5, 'care'); return;
+            }
+            if (this.grass < HEALER_HERB_LOW) {   // nobody to tend: restock herbs for the next outbreak
+                const wild = w.nearestForage(this.pos, 22);
+                if (wild) { this.think('GATHERING HERBS FOR THE SICK'); this.forageTarget = wild; this.#goTo(wild.i + 0.5, wild.j + 0.5, 'forage'); return; }
+            }
+            if (this.energy < HEALER_ENERGY_FLOOR) { this.think("RESTING SO I'M READY WHEN NEEDED"); this.#goHome('rest'); return; }
+        }
+
+        // #97 Slice 1 — the town answers the Healer's call: a willing farmer with spare grass carries
+        // some to the Healer when the satchel runs low (goodwill-gated; loners/enemies pass). Caregiving.
+        if (w.roles.healerNeedsHerbs && !this.isHealer() && this.goal !== 'lone wolf' && this.grass >= 3 && !w.isNight()) {
+            const hf = w.healerFarmer();
+            if (hf && hf !== this && this.opinionOf(hf) > -0.3 && (this.effCollab() > 0.45 || this.opinionOf(hf) > 0.2)) {
+                this.herbTarget = hf; this.think("THE HEALER NEEDS HERBS - I'LL BRING GRASS");
+                if (this.#goTo(hf.pos.i + 0.5, hf.pos.j + 0.5, 'herbrun')) return;
+                this.herbTarget = null;
+            }
+        }
 
         if (this.effCollab() > 0.55 && !w.isNight()) {
             const sick = w.farmers.find(o => o !== this && o.health === 'sick' && !this.visitedSick.has(o.sheet.seed) &&
@@ -7566,6 +7687,7 @@ export class Farmer {
                     else if (then === 'projdrop') { this.world.depositProject(this); this.state = 'decide'; }
                     else if (then === 'donate') { this.#completeDonate(); this.state = 'decide'; }
                     else if (then === 'care') { this.state = 'care'; this.careTimer = 1.2; }
+                    else if (then === 'herbrun') this.state = 'herbrun';
                     else if (then === 'explore') this.#completeExplore();
                     else if (then === 'trade') this.#completeTrade();
                     else if (then === 'barter') this.#completeBarter();
@@ -7674,13 +7796,31 @@ export class Farmer {
                 if (this.careTimer <= 0) {
                     const sick = this.careTarget;
                     if (sick && sick.health === 'sick') {
-                        sick.sickDays = Math.max(1, sick.sickDays - 1); sick.energy = Math.min(1, sick.energy + 0.15);
-                        sick.say('THANK YOU...', '#7dd069'); this.say('REST UP, FRIEND', '#7dd069');
-                        this.world.addBond(this, sick); this.adjustReputation(0.06);
-                        sick.adjustOpinion(this, 0.35, 'nursed me when I was ill');   // kindness is remembered
-                        this.world.addLog(`${this.sheet.name} brought soup to ${sick.sheet.name}`, '#7dd069');
+                        // #97 Slice 1 — the HEALER brews + applies the best remedy their herbs allow
+                        // (tonic cures, salve halves, soup eases). A neighbour just brings soup.
+                        const rem = this.isHealer() ? this.world.bestRemedy(this, sick) : null;
+                        if (rem && this.world.applyRemedy(this, sick, rem)) {
+                            // applyRemedy handled the beat + effect
+                        } else {
+                            sick.sickDays = Math.max(1, sick.sickDays - 1); sick.energy = Math.min(1, sick.energy + 0.15);
+                            sick.say('THANK YOU...', '#7dd069'); this.say('REST UP, FRIEND', '#7dd069');
+                            this.world.addBond(this, sick); this.adjustReputation(0.06);
+                            sick.adjustOpinion(this, 0.35, 'nursed me when I was ill');   // kindness is remembered
+                            this.world.addLog(`${this.sheet.name} brought soup to ${sick.sheet.name}`, '#7dd069');
+                        }
                     }
                     this.careTarget = null; this.state = 'decide';
+                }
+                break;
+            }
+            case 'herbrun': {   // #97 Slice 1 — carry spare grass to the Healer's satchel
+                const hf = this.herbTarget;
+                if (!hf || hf !== this.world.healerFarmer() || Math.abs(hf.pos.i - this.pos.i) + Math.abs(hf.pos.j - this.pos.j) < 1.8) {
+                    if (hf && hf === this.world.healerFarmer()) {
+                        const gave = this.world.transferGood(this, hf, 'grass', Math.min(this.grass, 4));
+                        if (gave > 0) { this.say(`+${gave} grass`, '#8fd06a'); hf.say('BLESS YOU', '#7dd069'); this.world.addBond(this, hf); hf.adjustOpinion(this, 0.15, 'brought me herbs for the sick'); this.world.addLog(`${this.sheet.name} brought ${gave} grass to healer ${hf.sheet.name}`, '#7dd069'); }
+                    }
+                    this.herbTarget = null; this.state = 'decide';
                 }
                 break;
             }
