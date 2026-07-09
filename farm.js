@@ -9,7 +9,7 @@
 // livestock pen (milk) — each with its own "producers" the farmer tends and
 // collects from. Which facility comes first reflects the farmer's archetype.
 
-import { mulberry32, mod, growFarmer, personalityLabel, compileCreeds, ALL_CROPS } from './dna.js';
+import { mulberry32, mod, growFarmer, personalityLabel, compileCreeds, hashString, ALL_CROPS } from './dna.js';
 export { ALL_CROPS };   // re-exported so tools/tests can pull the crop list from the sim entrypoint
 
 // The FOUNDING VALLEY: the hand-tuned region generated with the original global algorithm
@@ -4629,21 +4629,75 @@ const JOURNAL_FORGET = 0.12;   // below this strength a memory is gone for good
 // #91 Tier-3 CONSOLIDATION: a recurring EPISODIC theme (many lived memories that rhyme) crystallises
 // into a stated BELIEF — the psychological bridge from short-term to long-term. Each theme matches
 // journal text; once enough memories of it accumulate, the farmer FORMS the belief, which reshapes
-// them (a one-time personality nudge) and narrates like a long-term memory. Distinct from CREEDS,
-// which are inherited from the source document — beliefs are EARNED from a lived life. (See #consolidateBeliefs.)
+// them (a one-time personality nudge). The TEXT is COMPOSED, not canned: one of many phrasings, seeded
+// by the farmer + theme, and woven with the very person/event that crystallised it — so two farmers who
+// grow wary of the world say it differently, and name their own reasons. Distinct from CREEDS, which are
+// inherited from the source document — beliefs are EARNED from a lived life. (See #consolidateBeliefs.)
 const BELIEF_THEMES = [
-    { tag: 'wary',    min: 4, text: 'guard yourself - the world takes what it can',
-      test: /shortchang|lowball|welch|trick|thiev|stole|left me to it|haggled me|turned me away|refused to heal|warning|fined|shunned/i,
-      apply: f => { f.p.collaboration = Math.max(0, f.p.collaboration - 0.06); } },
-    { tag: 'kinship', min: 7, text: 'no one gets through it alone - lean on your neighbours',
-      test: /soup|nursed|healed me|lent me a hand|a hand|dug (our|my)|shares their well|well for nothing|stood with me|pulled them|for nothing|together/i,
-      apply: f => { f.p.collaboration = Math.min(1, f.p.collaboration + 0.06); } },
-    { tag: 'seeker',  min: 3, text: 'there is always another horizon worth the walk',
+    { tag: 'wary', min: 3, apply: f => { f.p.collaboration = Math.max(0, f.p.collaboration - 0.06); },
+      test: /shortchang|lowball|welch|trick|thiev|stole|haggled me|cheat|robbed/i,
+      lines: [
+        s => s ? `After ${s}, I count my coins twice and trust half as fast.` : `I've been burned enough to count my coins twice.`,
+        () => `A smile is just a smile - I look for the hook behind it now.`,
+        s => s ? `${s} taught me what a handshake is really worth: not much.` : `A handshake means nothing till the goods are in hand.`,
+        () => `Give freely and the world will empty your pockets - so I don't.`,
+      ] },
+    { tag: 'kinship', min: 6, apply: f => { f.p.collaboration = Math.min(1, f.p.collaboration + 0.06); },
+      test: /soup|nursed|healed me|a hand|stood with me|dug (our|my)|for nothing|together|pulled them/i,
+      lines: [
+        s => s ? `When I was low, ${s} showed up - I know now what a neighbour is for.` : `A neighbour who shows up is worth more than any wall.`,
+        () => `No fence is high enough to face a hard winter alone.`,
+        s => s ? `${s} carried me once; now I carry whoever's next.` : `We carry each other, or none of us get through.`,
+        () => `A town is just people deciding not to let each other fall.`,
+      ] },
+    { tag: 'solitude', min: 2, apply: f => { f.p.collaboration = Math.max(0, f.p.collaboration - 0.05); },
+      test: /left me to it|nobody came|turned me away|refused to heal|on my own|keeps to their own|roofless/i,
+      lines: [
+        () => `I asked once and no one came. I don't ask twice.`,
+        s => s ? `${s} looked away when it mattered - so I lean on myself.` : `Your own two hands are the only ones that always come.`,
+        () => `Quieter alone than let down again.`,
+        () => `Depend on no one and no one can fail you.`,
+      ] },
+    { tag: 'seeker', min: 3, apply: f => { f.p.curiosity = Math.min(1, f.p.curiosity + 0.06); },
       test: /struck an ore|found a|unearthed|further than anyone|frontier|tree line|treasure|forgotten stash|relic/i,
-      apply: f => { f.p.curiosity = Math.min(1, f.p.curiosity + 0.06); } },
-    { tag: 'proud',   min: 3, text: 'a name is earned - be one they remember',
-      test: /harvest king|leader|walked further|standing stone|raised my cottage|dream|won on|bumper|critical/i,
-      apply: f => { f.p.competitiveness = Math.min(1, f.p.competitiveness + 0.05); } },
+      lines: [
+        () => `Everything worth having was over a hill I almost didn't climb.`,
+        () => `The map ends where the timid stop walking - so I keep walking.`,
+        () => `There's always one more valley, and I mean to see it.`,
+        () => `Standing still is the surest way to find nothing.`,
+      ] },
+    { tag: 'grit', min: 2, apply: f => { f.p.diligence = Math.min(1, f.p.diligence + 0.05); },
+      test: /fell ill|took ill|overwork|worn out|shivered|collapsing|powers through|through the cold|mid-shift/i,
+      lines: [
+        () => `I've worked through worse than this and I'm still standing.`,
+        () => `The body breaks and mends - what counts is you get up.`,
+        () => `Comfort is a fair-weather friend. The work never is.`,
+        () => `Nothing that laid me low ever kept me down for long.`,
+      ] },
+    { tag: 'thrift', min: 2, apply: f => { f.p.diligence = Math.min(1, f.p.diligence + 0.05); },
+      test: /withered|crow ate|storm|drought|came up empty|lost my|scarecrow/i,
+      lines: [
+        () => `I've watched a crop rot in the field - I keep the stores full now.`,
+        () => `Feast today, famine tomorrow, so I never spend it all.`,
+        () => `A full barn is the only promise the weather keeps.`,
+        () => `Waste nothing; the lean season always comes.`,
+      ] },
+    { tag: 'renown', min: 2, apply: f => { f.p.competitiveness = Math.min(1, f.p.competitiveness + 0.05); },
+      test: /harvest king|the leader|walked further|standing stone|raised my cottage|dream|won on|bumper|critical|beloved/i,
+      lines: [
+        () => `A name outlasts a harvest - I mean to leave one worth saying.`,
+        () => `Second place is just the first to be forgotten.`,
+        () => `Let them remember what I built when I'm gone.`,
+        s => s ? `Ever since I outdid ${s}, I've known I wasn't made to be a footnote.` : `I didn't come this far to be a footnote.`,
+      ] },
+    { tag: 'cunning', min: 2, apply: f => { f.p.honesty = Math.max(0, f.p.honesty - 0.04); },
+      test: /warning|shunned|sharp trader|lowball offers|schem|nobody.?s watching|slip away/i,
+      lines: [
+        () => `The rules are for those too slow to bend them.`,
+        () => `Everyone's running an angle - I just run mine better.`,
+        () => `Ask forgiveness, never permission, and only if they catch you.`,
+        () => `A soft heart is just an open purse.`,
+      ] },
 ];
 
 // courses a bot can set for itself after reflecting on its journal (see Farmer.reflect)
@@ -5227,19 +5281,25 @@ export class Farmer {
     // capped over a life — a farmer is shaped by what keeps happening to them, not every passing mood.
     #consolidateBeliefs() {
         const held = this.sheet.beliefs || [];
-        if (held.length >= 5) return;                          // a life is more than its doctrines
-        let best = null, bestStrength = 0;
+        if (held.length >= 6) return;                          // a life is more than its doctrines
+        let best = null, bestStrength = 0, cause = null;
         for (const t of BELIEF_THEMES) {
             if (held.some(b => b.tag === t.tag)) continue;
-            let count = 0, strength = 0;
-            for (const m of this.journal) if (t.test.test(m.text)) { count++; strength += m.strength; }
-            if (count >= t.min && strength > bestStrength) { bestStrength = strength; best = t; }
+            let count = 0, strength = 0, top = null, topS = 0;
+            for (const m of this.journal) if (t.test.test(m.text)) { count++; strength += m.strength; if (m.strength > topS) { topS = m.strength; top = m; } }
+            if (count >= t.min && strength > bestStrength) { bestStrength = strength; best = t; cause = top; }
         }
         if (!best) return;
-        this.formBelief(best.text, best.tag);
+        // weave in WHO/WHAT crystallised it — a person memory reads "Name - reason", so pull the name
+        const subject = cause ? ((cause.text.match(/^([A-Z][a-z']+)\s*[-–]/) || [])[1] || null) : null;
+        // COMPOSE the phrasing from a dedicated stream (identity ^ theme ^ day) — deterministic, varied,
+        // and never touches the sim's rng, so the digest is unmoved by which words a belief happens to wear
+        const roll = mulberry32(((this.sheet.seed ^ hashString('belief:' + best.tag) ^ Math.imul(this.world.day, 0x9e3779b1)) >>> 0));
+        const text = best.lines[Math.floor(roll() * best.lines.length)](subject, roll);
+        this.formBelief(text, best.tag);
         best.apply(this);
         const id = personalityLabel(this.p); this.p.label = id.label; this.p.creed = id.creed;   // lived change can rename them
-        this.world.addChronicle('reflection', `${shortName(this)} has come to believe: ${best.text}.`, this, null, '#8fc7e8');
+        this.world.addChronicle('reflection', `${shortName(this)} has come to believe: ${text}`, this, null, '#8fc7e8');
     }
 
     // #96 — the denied farmer RECKONS with being turned away in their sickness. Real introspection: they
