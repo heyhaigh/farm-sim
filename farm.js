@@ -1256,6 +1256,40 @@ export class World {
         // town CHARACTER is now knowable (all founder personalities final) — compute it up front so
         // day-1 effCollab + the tooltip reflect the actual roster, not the 0.5 default (Codex r11 #5).
         this.#recomputeTownTraits();
+
+        // and each founder now ROLLS THEIR DREAM (#89) — after every personality nudge above, so a
+        // farmer's lifelong want fits who they finally are. Same town seed -> same dreams; a fresh
+        // town rerolls the cast's inner lives.
+        this.#ensureDreams();
+    }
+
+    // Roll a dream for any farmer without one (founders after ensureFounderVariety; any future
+    // arrival at the rollover safety net). Deterministic: seeded by (world seed ^ farmer seed),
+    // weighted by personality affinity, with a variety decay so one want doesn't sweep the cast.
+    // Idempotent — a dream on the sheet (including a restored one) is never re-rolled.
+    #ensureDreams() {
+        const taken = {};
+        for (const f of this.farmers) if (f.sheet.dream) taken[f.sheet.dream.id] = (taken[f.sheet.dream.id] || 0) + 1;
+        for (const f of this.farmers) {
+            if (f.sheet.dream) continue;
+            const r = mulberry32((this.seed ^ f.sheet.seed ^ 0xD5EA) >>> 0);
+            let total = 0;
+            const weights = DREAM_DEFS.map(d => {
+                const w = Math.max(0.02, d.aff(f.p)) * Math.pow(0.35, taken[d.id] || 0);
+                total += w; return w;
+            });
+            let roll = r() * total, def = DREAM_DEFS[0];
+            for (let k = 0; k < DREAM_DEFS.length; k++) { roll -= weights[k]; if (roll <= 0) { def = DREAM_DEFS[k]; break; } }
+            f.sheet.dream = { id: def.id, yearn: def.yearn };
+            if (def.id === 'outdo') {   // a rival dream needs a NAMED rival: the next settler over
+                const others = this.farmers.filter(o => o !== f);
+                const rv = others[Math.floor(r() * others.length)];
+                if (rv) { f.sheet.dream.rivalSeed = rv.sheet.seed; f.sheet.dream.rivalName = shortName(rv); }
+                else f.sheet.dream = { id: 'neverpoor', yearn: DREAM_DEFS.find(d => d.id === 'neverpoor').yearn };
+            }
+            taken[f.sheet.dream.id] = (taken[f.sheet.dream.id] || 0) + 1;
+            f.recomputeWanderlust();   // a far-shore dream pulls at the horizon from day one
+        }
     }
 
     #seedFoundingLog() {
@@ -3216,7 +3250,8 @@ export class World {
             if (req.farmer.opinionOf(helper) <= -0.35) continue;   // ...and the poster won't accept a resented hand either
             if (req.farmer.reputation < 0.3 && op < 0.2 && this.rand() > hc) continue;   // shun bad names (unless a personal friend)
             const friend = op >= 0.4;
-            const altruist = friend || hc > 0.7 || helper.goal === 'good neighbor' || (helper.sheet.stats.cha >= 15 && hp.honesty > 0.5);
+            // #89: a BELOVED-dreamer works for thanks — being needed IS the pay
+            const altruist = friend || hc > 0.7 || helper.goal === 'good neighbor' || helper.dream('beloved') || (helper.sheet.stats.cha >= 15 && hp.honesty > 0.5);
             const good = req.reward ? req.reward.good : 'crops';
             const gv = helper.goodValue(good);                 // a good the helper NEEDS is worth more per unit
             const offered = req.reward ? req.reward.offer : 0;
@@ -3595,6 +3630,7 @@ export class World {
             // age out expired fishing-spot cooldowns so the map doesn't accumulate stale entries forever
             for (const [k, d] of this.fishedAt) if (this.day - d > FISH_COOLDOWN) this.fishedAt.delete(k);
             this.#recomputeTownTraits();
+            this.#ensureDreams();   // safety net: any future arrival rolls their dream at first dawn
             this.#dailyHealthCheck();
             this.#advanceSeason();
             this.#decayTilled();
@@ -4179,6 +4215,29 @@ const PROJECT_DEFS = [
 ];
 
 // ---------------------------------------------------------------------------
+// DREAMS (#89): a lifelong want, rolled once per TOWN (seeded by world seed x farmer
+// seed, biased by personality) and carried on the sheet so it persists and survives
+// reload. A dream sits ABOVE the course system — the course is how this season is
+// going; the dream is who they are. Every dream binds to at least one real behavior
+// lever (capped below personality scale — a dream colors a farmer, never overrides
+// them) and has a visible arc: card line -> pursuit -> a fulfillment beat (or crisis).
+// This is deliberately the PROCEDURAL generator: Path A later swaps in memory-derived
+// keepsakes as a second source, giving the council's A/B (can you tell whose inner
+// life came from a real memory?) for free.
+// ---------------------------------------------------------------------------
+
+export const DREAM_DEFS = [
+    { id: 'farshore',   yearn: 'TO SEE WHAT LIES BEYOND THE FOG',      fulfil: 'walked further than anyone',        aff: p => 0.2 + (p.curiosity ?? 0.5) * 1.2 },
+    { id: 'grandhouse', yearn: 'A HOME THAT WILL OUTLAST THEM',        fulfil: 'raised the home they dreamed of',   aff: p => 0.2 + p.diligence * 0.7 + p.competitiveness * 0.4 },
+    { id: 'beloved',    yearn: 'TO BE NEEDED IN THIS TOWN',            fulfil: 'became beloved by the town',        aff: p => 0.2 + p.collaboration * 1.1 },
+    { id: 'outdo',      yearn: 'TO OUTGROW A RIVAL, ONCE AND FOR ALL', fulfil: 'outgrew their rival at last',       aff: p => 0.1 + p.competitiveness * 1.2 },
+    { id: 'neverpoor',  yearn: 'TO NEVER GO WANTING AGAIN',            fulfil: 'filled the stores at last',         aff: p => 0.3 + p.diligence * 0.5 + (1 - p.honesty) * 0.3 },
+    { id: 'deed',       yearn: 'A DEED WORTH A STANDING STONE',        fulfil: 'earned their standing stone',       aff: p => 0.15 + p.competitiveness * 0.6 + (p.volatility ?? 0.5) * 0.5 },
+    { id: 'craft',      yearn: 'TO MASTER EVERY TOOL OF THE TRADE',    fulfil: 'mastered the tools of the trade',   aff: p => 0.2 + p.diligence * 1.0 },
+    { id: 'quietlife',  yearn: 'PEACE, A FENCE, AND RAIN ON THE ROOF', fulfil: 'kept the quiet life they wanted',   aff: p => 0.25 + (1 - p.competitiveness) * 0.7 + (1 - (p.volatility ?? 0.5)) * 0.5 },
+];
+
+// ---------------------------------------------------------------------------
 // Farmer agent
 // ---------------------------------------------------------------------------
 
@@ -4330,11 +4389,55 @@ export class Farmer {
     // a touch (denser help/barter/clustering); a town of loners drags it down. Amplifies the collective
     // tendency so a close-knit vs stand-offish town visibly BEHAVES differently, not just looks it.
     effCollab() { return Math.max(0, Math.min(1, this.p.collaboration + this.mood * this.volatility * 0.6 + ((this.world.townCollab ?? 0.5) - 0.5) * 0.3)); }
+    // is this farmer still CHASING dream `k`? (a fulfilled dream stops pushing — the arc is done)
+    dream(k) { const d = this.sheet.dream; return !!(d && d.id === k && !this.sheet.dreamDone); }
+
+    // #89: the dream ARC, checked each dawn in reflect(). Fulfillment is a big public beat
+    // (chronicle + sparkle + a strong journal memory + XP); a shaken dream is a quiet one-shot
+    // crisis in the journal. Both live on the sheet, so a reload keeps the arc where it was.
+    #dreamCheck() {
+        const w = this.world, s = this.sheet, d = s.dream;
+        if (!d || s.dreamDone) return;
+        const done = (
+            d.id === 'farshore'   ? this.discovered >= 700 :
+            d.id === 'grandhouse' ? this.plot && this.plot.built.level >= 3 :
+            d.id === 'beloved'    ? w.bondCount(this) >= 4 :
+            d.id === 'outdo'      ? (() => { const rv = w.farmers.find(o => o.sheet.seed === d.rivalSeed);
+                                             return !!rv && w.day > 20 && s.harvested >= rv.sheet.harvested + 120; })() :
+            d.id === 'neverpoor'  ? (s.produce || 0) >= 60 && this.plot && this.plot.built.level >= 2 :
+            d.id === 'deed'       ? w.monuments.some(m => m.heroSeed === s.seed) :
+            d.id === 'craft'      ? this.tools.size >= 2 :
+            d.id === 'quietlife'  ? w.year >= 2 && this.illnesses <= 1 : false);
+        if (done) {
+            s.dreamDone = w.day;
+            const def = DREAM_DEFS.find(x => x.id === d.id);
+            this.say('MY DREAM - REAL!', '#f0d060'); this.sparkle = 3; this.gainXP(10);
+            this.remember('event', `My dream came true - ${d.yearn.toLowerCase()}`, null, 1.2);
+            w.addChronicle('dream', `${s.name.split(' ')[0]} ${def ? def.fulfil : 'saw their dream fulfilled'} - a lifelong want, answered.`, this, null, '#f0d060');
+            w.addLog(`${s.name}'s dream came true!`, '#f0d060');
+            return;
+        }
+        // one-shot crises for the dreams with a natural way to SOUR (kept quiet: journal + thought)
+        if (!d.crisis) {
+            if (d.id === 'outdo') {
+                const rv = w.farmers.find(o => o.sheet.seed === d.rivalSeed);
+                if (rv && rv.plot && this.plot && rv.plot.built.level >= 3 && this.plot.built.level < 3) {
+                    d.crisis = w.day;
+                    this.remember('lesson', `${d.rivalName} raised a cottage first - the gap is real`, d.rivalName, 1.0);
+                    this.think(`${(d.rivalName || 'THE RIVAL').toUpperCase()} IS AHEAD. NOT FOR LONG.`);
+                }
+            } else if (d.id === 'deed' && this.downed) {
+                d.crisis = w.day;
+                this.remember('lesson', 'Dreamed of a standing stone - nearly earned a grave instead', null, 1.0);
+            }
+        }
+    }
     // CURIOSITY is the main pull toward the fog line; a competitive streak adds restlessness. Recomputed
     // (not just set once) so a founder whose curiosity is nudged in ensureFounderVariety updates too.
     recomputeWanderlust() {
         this.wanderlust = Math.max(0.05, Math.min(0.95,
-            0.05 + (this.p.curiosity ?? 0.5) * 0.7 + this.p.competitiveness * 0.15 + ((this.sheet.seed >>> 3) % 16) / 100));
+            0.05 + (this.p.curiosity ?? 0.5) * 0.7 + this.p.competitiveness * 0.15 + ((this.sheet.seed >>> 3) % 16) / 100
+            + (this.dream('farshore') ? 0.12 : 0)));   // #89: the far shore calls (capped below the curiosity term)
     }
 
     opinionOf(other) { return other ? (this.opinions.get(other.sheet.seed) || 0) : 0; }
@@ -4809,6 +4912,10 @@ export class Farmer {
         const w = this.world;
         if (w.townLevel >= TOWN_MAX_LEVEL) return false;                       // town's built out
         if (this.donateCooldown > 0 || this.p.collaboration < 0.3) return false;
+        // #89: a GRAND-HOUSE dreamer hoards every plank toward the cottage; a NEVER-POOR dreamer
+        // only gives once their own stores feel safe (dream colors giving, never blocks it forever)
+        if (this.dream('grandhouse') && this.plot.built.level < 3) return false;
+        if (this.dream('neverpoor') && (this.sheet.produce || 0) < 30) return false;
         if (w.isNight() || this.energy < 0.4) return false;
         const spare = this.#donatableSurplus().reduce((s, x) => s + x.n, 0);
         if (spare >= DONATE_BATCH) {
@@ -4904,6 +5011,8 @@ export class Farmer {
         // a new day's mood: an emotional random walk, its amplitude the `volatility` trait.
         // Even-keeled bots barely move; the mercurial can wake up transformed.
         this.mood = Math.max(-1, Math.min(1, this.mood * 0.55 + (this.world.rand() - 0.5) * 2 * this.volatility));
+
+        this.#dreamCheck();   // #89: does this dawn find their lifelong want fulfilled — or shaken?
         // yesterday's rumors fade slowly — a warning lingers a couple of weeks before it's forgotten
         if (this.gossip.length) { for (const g of this.gossip) g.strength *= 0.93; this.gossip = this.gossip.filter(g => g.strength > 0.2); }
         // the moody's slow burn: a genuine plea for help still hanging a day later stings —
@@ -4989,7 +5098,8 @@ export class Farmer {
             // physical edge (STR/CON) against the beast's toughness — level barely enters it
             const powerGap = this.combatMod() * 1.5 - (def.diff - 9) - def.hp * 1.4;
             const nerve = 0.4 + powerGap * 0.14 + this.p.competitiveness * 0.3 + this.p.diligence * 0.1
-                        - (def.menace - 0.8) * 0.3 - (this.threatWary[def.kind] || 0) * 0.2;
+                        - (def.menace - 0.8) * 0.3 - (this.threatWary[def.kind] || 0) * 0.2
+                        + (this.dream('deed') ? 0.12 : 0);   // #89: a standing stone is won by STANDING (below the competitiveness term)
             this.combatStance = nerve > 0.5 ? 'fight' : 'flee';
             // voice WHY they'll stand or run — the enemy + how they rate their odds
             if (this.combatStance === 'fight') this.say(powerGap > 4 ? `just ${def.name} — come on!` : `${def.name}? i'll chance it`, '#e0c040');
@@ -5240,7 +5350,7 @@ export class Farmer {
         const wantToTalk = 0.008 + this.effCollab() * 0.035 + infoValue + friendPull;
         if (this.rand() > wantToTalk) { this.chatCooldown = 45 + this.rand() * 35; return false; }
         // a good long lull after a real conversation — nobody chatters every minute, even at work
-        this.chatCooldown = 110 + this.rand() * 70;
+        this.chatCooldown = (110 + this.rand() * 70) * (this.dream('beloved') ? 0.65 : 1);   // #89: a beloved-dreamer keeps showing up
         other.chatCooldown = Math.max(other.chatCooldown, 70 + this.rand() * 40);
         // there's a real tip in talking to someone further along — a little learned wisdom
         if (other.sheet.level > this.sheet.level) this.gainXP(1);
@@ -5654,7 +5764,12 @@ export class Farmer {
 
         // 5. competitive & behind: grind — but a bot that's been burned by overwork needs more in
         //    the tank before it pushes (learned restraint scales with how often it's fallen ill).
-        if (w.canGarden() && (this.isBehindLeader() && this.p.competitiveness > 0.55 - (w.townCompete - 0.5) * 0.4 || this.goal === 'harvest king') && this.energy > 0.4 + this.caution * 0.1) {
+        // #89: an OUTDO dreamer grinds when behind their NAMED rival; a QUIET-LIFE dreamer never
+        // joins the race at all — contentment is the dream
+        const rival = this.dream('outdo') ? w.farmers.find(o => o.sheet.seed === this.sheet.dream.rivalSeed) : null;
+        const behindRival = rival && rival.sheet.harvested > this.sheet.harvested;
+        if (w.canGarden() && !this.dream('quietlife') &&
+            (behindRival || this.isBehindLeader() && this.p.competitiveness > 0.55 - (w.townCompete - 0.5) * 0.4 || this.goal === 'harvest king') && this.energy > 0.4 + this.caution * 0.1) {
             const anyField = this.#findField(f => w.get(f.i, f.j) === T.GRASS) || this.#findField(f => w.get(f.i, f.j) === T.TILLED && !w.cropAt(f.i, f.j));
             if (anyField) { this.think(this.caution >= 2 ? "I'LL CATCH UP — BUT NOT AT ANY COST" : 'I WILL NOT FALL BEHIND'); this.#pursue({ act: w.get(anyField.i, anyField.j) === T.GRASS ? 'till' : 'plant', field: anyField }, this.plot, false); return; }
         }
@@ -5680,7 +5795,8 @@ export class Farmer {
             const a = w.nearestPrey(this.pos, 11);
             if (a) {
                 const knack = 0.1 + Math.max(0, mod(s.stats.dex)) * 0.06 + this.p.competitiveness * 0.18
-                            + this.p.curiosity * 0.12 + (this.hp < this.maxHp * 0.6 ? 0.25 : 0);
+                            + this.p.curiosity * 0.12 + (this.hp < this.maxHp * 0.6 ? 0.25 : 0)
+                            + (this.dream('deed') ? 0.08 : 0);   // #89: a deed-dreamer takes the chase
                 if (this.rand() < knack) {
                     this.think(`WILD ${a.kind.toUpperCase()} — MEAT IF I CAN CATCH IT`);
                     // proud/competitive hands overextend (chase long); the timid quit early (#86)
@@ -5874,7 +5990,7 @@ export class Farmer {
         if (this.oreExpedCooldown > 0) return false;
         const tgt = this.#outwardFrontierTarget();
         if (!tgt) { this.oreExpedCooldown = 25; return false; }   // hemmed in — try again shortly
-        this.oreExpedCooldown = 45 + this.rand() * 55;
+        this.oreExpedCooldown = (45 + this.rand() * 55) * (this.dream('craft') ? 0.55 : 1);   // #89: a tool-dreamer chases the stone harder
         this.think('MY STONE IS SPENT — OFF TO THE HIGHLANDS FOR ORE');
         this.remember('event', `Set out for the highlands seeking ore for a ${name.toLowerCase()}`, null, 0.7);
         return this.#goTo(tgt.i + 0.5, tgt.j + 0.5, 'explore');
@@ -5913,7 +6029,8 @@ export class Farmer {
         const w = this.world, mine = this.sheet.goods || {}, myProd = this.producedGoods();
         const mySurplus = [];   // anything I'm sitting on plenty of AND value little (so I can spare it)
         for (const g in mine) if (mine[g] >= 4 && this.goodValue(g) <= 0.85) mySurplus.push(g);
-        if ((this.sheet.produce || 0) >= 8) mySurplus.push('crops');   // the spendable crop wallet lives on sheet (Codex r11 #1)
+        // #89: a NEVER-POOR dreamer's "surplus" bar sits higher — they trade only from real plenty
+        if ((this.sheet.produce || 0) >= (this.dream('neverpoor') ? 14 : 8)) mySurplus.push('crops');   // the spendable crop wallet lives on sheet (Codex r11 #1)
         if (!mySurplus.length) return null;
         let best = null, bestScore = 0.4;
         for (const B of w.farmers) {

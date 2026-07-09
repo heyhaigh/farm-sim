@@ -2873,6 +2873,12 @@ function drawSheet(f) {
         // ===== STATS: who they are — creed, energy, personality, abilities, farm, gear =====
         for (const line of wrapText(p.creed, 32).slice(0, 2)) { drawText(ctx, `"${line}"`, IX, y, SHEET_LABEL); y += 7; }
         if (f.goal) { drawText(ctx, `> course: ${f.goal.toUpperCase()}`, IX, y, '#d08cc8'); y += 7; }
+        // DREAM (#89): the lifelong want above any season's course — gold while chased, checked when won
+        if (f.sheet.dream) {
+            const dd = f.sheet.dream;
+            const dreamTxt = `DREAM: ${dd.id === 'outdo' && dd.rivalName ? `TO OUTGROW ${dd.rivalName.toUpperCase()}` : dd.yearn}${f.sheet.dreamDone ? ' - WON!' : ''}`;
+            for (const line of wrapText(dreamTxt, 30).slice(0, 2)) { drawText(ctx, line, IX, y, f.sheet.dreamDone ? '#7dd069' : '#e8c860'); y += 7; }
+        }
         // NOW: their current driver — explains whatever symbol is hovering over their head on the map
         for (const line of wrapText(`NOW: ${currentStatus(f)}`, 30).slice(0, 2)) { drawText(ctx, line, IX, y, '#8fd0c0'); y += 7; }
         y += 2;
@@ -3309,7 +3315,7 @@ function drawChronicle() {
 // Auto-fades; click to dismiss. Skipped at 20x (you're fast-forwarding, not watching).
 // ---------------------------------------------------------------------------
 const RECAP_MS = 7000;
-const RECAP_PRI = { peril: 6, crime: 5, build: 5, town: 4, find: 4, season: 3, bond: 2, rift: 2, found: 1 };
+const RECAP_PRI = { dream: 7, peril: 6, crime: 5, build: 5, town: 4, find: 4, season: 3, bond: 2, rift: 2, found: 1 };
 
 function drawDayRecap() {
     RECAP_CARD.w = 0;
