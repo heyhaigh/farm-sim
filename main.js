@@ -13,6 +13,7 @@ import {
 } from './pixel.js';
 import { CRT } from './crt.js';
 import { saveTown, loadTown, wipeTown, undoWipe } from './save.js';
+import { enrichStories } from './dm.js';
 
 // ---------------------------------------------------------------------------
 // Canvases
@@ -3949,6 +3950,17 @@ function drawBootScreen(t) {
     // let the tuning screen breathe for a moment
     setTimeout(() => { booted = true; }, 1400);
 
+    // the LLM chronicler (#92 stage 2): once the town is up, offer the cast's draft tales
+    // for a finer telling. One try shortly after boot; the slow recheck catches farmers
+    // whose stories only reach composer-generation at the next dawn (older saves migrating)
+    // and any later arrivals. Display-only, save-carried, fails silent to procedural text.
+    const tryEnrich = async () => {
+        const w = world;
+        if (await enrichStories(w, () => world === w)) saveTown(w);
+    };
+    setTimeout(tryEnrich, 5000);
+    setInterval(tryEnrich, 5 * 60 * 1000);
+
     window.RYFARMS = {  // debug handle
         world, cam, audio,
         select: (i) => { selected = world.farmers[i] || null; },
@@ -3971,6 +3983,7 @@ function drawBootScreen(t) {
             location.href = location.pathname + '?seed=' + seed; return seed;
         }),
         dismissCard: () => { resumeCard = null; },
+        enrich: tryEnrich,                                   // ask the LLM chronicler now (debug)
         NEW_BTN,                                             // (debug) reset-hatch hitbox, for UI tests
     };
 })();

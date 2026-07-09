@@ -13,22 +13,31 @@ No build step. Pure ES modules + Canvas 2D + a WebGL post-process.
 ## Run
 
 ```bash
-# from this directory
+# from this directory — static files + the optional LLM endpoints
+node server.mjs            # http://localhost:8000  (node server.mjs 8001 for another port)
+
+# or any static server (game fully works; LLM channels just fall back)
 python3 -m http.server 8000
-# then open http://localhost:8000
 ```
 
-Any static file server works. The page fetches memories from the live
-`https://heyhaigh.ai/api/knowledge-graph` endpoint (open CORS); if that's
-unreachable it falls back to a small embedded crew so it always runs.
+The page fetches memories from the live `https://heyhaigh.ai/api/knowledge-graph`
+endpoint (open CORS); if that's unreachable it falls back to a small embedded
+crew so it always runs.
 
-### Optional LLM conversations
+### Optional LLM channels (expressive only — never in the sim loop)
 
-If the app is deployed with the serverless route in `api/ry-farms-chat.js`, set
-`OPENAI_API_KEY` on the server to let farmers generate contextual two-line
-conversations from their goals, memories, relationships, weather, and town
-state. `RY_FARMS_LLM_MODEL` can override the model. Local static servers that do
-not run `/api/ry-farms-chat` automatically fall back to procedural dialogue.
+With `OPENAI_API_KEY` in the environment or a gitignored `.env` next to
+`server.mjs` (deployed: on the serverless host), two out-of-band channels wake:
+
+- `api/ry-farms-chat.js` — farmers generate contextual two-line conversations
+  from their goals, memories, relationships, weather, and town state.
+- `api/ry-farms-dm.js` — the chronicler: a 5e-DM/fantasy-writer rewrites each
+  farmer's procedural origin tale as richer prose, once per town, cached on the
+  sheet and carried by the save (`dm.js` is the client side).
+
+`RY_FARMS_LLM_MODEL` can override the model. Both channels are display-text
+only and fall back to the procedural versions on any failure, so the seeded
+sim stays deterministic with or without them.
 
 ## How a farmer is made
 

@@ -15,3 +15,6 @@ node_modules/
 
 # licensed reference art (CraftPix) used as inspiration only + workflow scratch
 assets/
+
+# local LLM key for the expressive channel (server.mjs) - NEVER commit
+.env
