@@ -2,7 +2,7 @@
 
 import { fetchMemories, mod, fmtMod, STAT_NAMES, TRAIT_NAMES, TRAIT_LABELS, hashString } from './dna.js';
 import { audio } from './audio.js';
-import { World, CHUNK, T, DAY_LENGTH, NIGHT_LENGTH, ITEMS, CRAFTABLES, RECIPE_BY_ID, xpForLevel, obstacleTier, treeVariant, treeIsFruit, SEASONS } from './farm.js';
+import { World, CHUNK, T, DAY_LENGTH, NIGHT_LENGTH, ITEMS, CRAFTABLES, RECIPE_BY_ID, INVENTION_TABLE, xpForLevel, obstacleTier, treeVariant, treeIsFruit, SEASONS } from './farm.js';
 import {
     TILE_W, TILE_H, makeCanvas, drawText, textWidth,
     makeFarmerSprites, makeCropSprites, makeHouse, makeWell, makeBoard, makeFencePost,
@@ -3518,6 +3518,9 @@ let chronRows = [];               // { e, y0, y1, farmerSeed } visible hit regio
 let chronView = null;             // { x, y, w, h, bodyTop, bodyBot, maxScroll }
 let chronTownWide = false;        // force the town-wide chronicle even when a farmer is in focus
 let chronScopeHits = null;        // { town, farmer } toggle-chip rects (game px)
+let chronTab = 0;                 // 0 NEWS (the event log/saga), 1 ROLES (civic band), 2 RECIPES (discoveries)
+let chronTabHits = null;          // [{ x, y, w, h, tab }] tab-chip rects (game px)
+const CHRON_TABS = ['NEWS', 'ROLES', 'RECIPES'];
 const CHRON_ACCENT = '#c8a0e0';
 
 // The farmer whose SAGA the chronicle is showing (or null for town-wide). Follows the camera focus
@@ -3599,6 +3602,43 @@ function drawCivicBand(PX, y, PW) {
     return ty - y + 2;
 }
 
+// ROLES tab (#94): the town's civic offices — Manager + directive, Watch + trust, Healer + trust.
+// Reuses the civic band; a clear empty-state before a town has grown enough to seat a chair.
+function drawChronicleRoles(PX, top, PW, bot) {
+    const h = drawCivicBand(PX, top + 2, PW);
+    if (!h) drawText(ctx, 'No offices seated yet — the town is still finding its feet.', PX + 8, top + 4, '#6a6f7c');
+}
+
+// RECIPES tab (#97): what the town has invented, and who knows how to make each. Base remedies are
+// universal; invented recipes are listed with their knowers so the spread of know-how is legible.
+function drawChronicleRecipes(PX, top, PW, bot) {
+    const IX = PX + 8; let y = top + 2;
+    // town-known invented recipes -> the farmers who know them (stable order by first-seen id)
+    const known = new Map();
+    for (const f of world.farmers) for (const id of (f.sheet.recipes || [])) {
+        if (!known.has(id)) known.set(id, []);
+        known.get(id).push(f.sheet.name.split(' ')[0]);
+    }
+    const totalInvent = ['remedy', 'tool', 'utility'].reduce((n, k) => n + INVENTION_TABLE[k].filter(e => !e.locked).length, 0);
+
+    drawText(ctx, 'EVERYONE KNOWS', IX, y, '#8a8f9c');
+    drawText(ctx, 'Soup, Salve, Tonic'.toUpperCase(), IX + textWidth('EVERYONE KNOWS '), y, '#7dd069'); y += 10;
+
+    drawText(ctx, 'DISCOVERED', IX, y, CHRON_ACCENT);
+    const tally = `${known.size} / ${totalInvent}`;
+    drawText(ctx, tally, PX + PW - 8 - textWidth(tally), y, '#9aa0b4'); y += 10;
+
+    if (!known.size) { drawText(ctx, 'The town has invented nothing yet — give it time.', IX, y, '#6a6f7c'); return; }
+    const maxChars = Math.max(24, Math.floor((PW - 24) / 4.2));
+    for (const [id, names] of known) {
+        if (y > bot - 14) break;   // no scroll on this tab yet — cap to the panel
+        const r = RECIPE_BY_ID[id];
+        drawText(ctx, (r ? r.name : id).toUpperCase(), IX, y, '#ffd24a'); y += 7;
+        for (const ln of wrapText('known by ' + names.join(', '), maxChars)) { drawText(ctx, ln.toUpperCase(), IX + 4, y, '#8a8f9c'); y += 7; }
+        y += 3;
+    }
+}
+
 function drawChronicle() {
     const PW = Math.min(GW - 12, 372);
     const PH = GH - 40;
@@ -3611,17 +3651,18 @@ function drawChronicle() {
     ctx.fillRect(0, 18, GW, GH - 40);
     uiPanel(PX, PY, PW, PH);
 
-    // header — town-wide, or one farmer's personal saga when a Ry is in focus
-    const cf = chronFocusFarmer();
-    const title = cf ? `SAGA OF ${cf.sheet.name.split(' ')[0].toUpperCase()}` : 'TOWN CHRONICLE';
+    // header — the panel title reflects the active tab (NEWS can narrow to one Ry's saga)
+    const cf = chronTab === 0 ? chronFocusFarmer() : null;
+    const title = chronTab === 1 ? 'TOWN ROLES' : chronTab === 2 ? 'TOWN RECIPES'
+        : cf ? `SAGA OF ${cf.sheet.name.split(' ')[0].toUpperCase()}` : 'TOWN CHRONICLE';
     drawText(ctx, title, PX + 7, PY + 5, CHRON_ACCENT, 1);
     const entries = chronEntries();
     drawText(ctx, 'X', PX + PW - 10, PY + 5, '#c8ccd8');
-    // scope toggle: whenever a Ry is available to focus on, offer TOWN / <name> chips so there's
-    // always a clear way back to the town-wide view (and into a saga). Only the active one is lit.
+    // scope toggle (NEWS tab only): TOWN / <name> chips so there's always a way back to the town-wide
+    // view (and into a saga). Only the active one is lit. Roles/Recipes are always town-wide.
     chronScopeHits = null;
     const scopeFarmer = (followTarget && world.farmers.includes(followTarget)) ? followTarget : selected;
-    if (scopeFarmer && world.farmers.includes(scopeFarmer)) {
+    if (chronTab === 0 && scopeFarmer && world.farmers.includes(scopeFarmer)) {
         const nm = scopeFarmer.sheet.name.split(' ')[0].toUpperCase();
         const chip = (label, x, active) => {
             const w = textWidth(label) + 6;
@@ -3637,18 +3678,31 @@ function drawChronicle() {
         const townR = chip('TOWN', townX, chronTownWide);
         const farmR = chip(nm, townX + (textWidth('TOWN') + 6) + 3, !chronTownWide);
         chronScopeHits = { town: townR, farmer: farmR };
-    } else {
-        drawText(ctx, String(entries.length), PX + PW - 42, PY + 5, '#9aa0b4');
     }
     ctx.fillStyle = '#20242f';
     ctx.fillRect(PX + 4, PY + 15, PW - 8, 1);
 
-    // TOWN HALL band (#94): who leads, what they're calling for, and how the town is answering.
-    // Only on the town-wide view (not a single farmer's saga). Returns the height it consumed.
-    const bandH = cf ? 0 : drawCivicBand(PX, PY + 17, PW);
+    // TAB BAR — NEWS / ROLES / RECIPES. Splitting the (growing) town view into swappable tabs keeps
+    // each readable: the story log, the civic offices, and what the town has invented.
+    chronTabHits = [];
+    let tabX = PX + 8;
+    for (let i = 0; i < CHRON_TABS.length; i++) {
+        const label = CHRON_TABS[i], tw = textWidth(label) + 8, active = chronTab === i;
+        ctx.fillStyle = active ? 'rgba(200,160,224,0.22)' : 'rgba(255,255,255,0.05)';
+        ctx.fillRect(tabX, PY + 18, tw, 10);
+        drawText(ctx, label, tabX + 4, PY + 20, active ? CHRON_ACCENT : '#8a8f9c');
+        chronTabHits.push({ x: tabX, y: PY + 18, w: tw, h: 10, tab: i });
+        tabX += tw + 4;
+    }
+    ctx.fillStyle = '#20242f';
+    ctx.fillRect(PX + 4, PY + 30, PW - 8, 1);
 
-    const bodyTop = PY + 19 + bandH;
+    const bodyTop = PY + 33;
     const bodyBot = PY + PH - 11;
+
+    // ROLES + RECIPES render their own (non-scrolling) bodies and return; NEWS falls through below.
+    if (chronTab === 1) { drawChronicleRoles(PX, bodyTop, PW, bodyBot); return; }
+    if (chronTab === 2) { drawChronicleRecipes(PX, bodyTop, PW, bodyBot); return; }
     const viewH = bodyBot - bodyTop;
     const IX = PX + 8;
     const maxChars = Math.max(30, Math.floor((PW - 30) / 4.2));
@@ -3909,6 +3963,10 @@ out.addEventListener('pointerup', (e) => {
     if (chronOpen) {
         const cv = chronView;
         if (cv) {
+            // tab bar: NEWS / ROLES / RECIPES
+            if (chronTabHits) {
+                for (const t of chronTabHits) if (inRect(p, t)) { chronTab = t.tab; chronScroll = 0; return; }
+            }
             // scope toggle: TOWN switches to the town-wide view, the name chip back to the saga
             if (chronScopeHits) {
                 if (inRect(p, chronScopeHits.town)) { chronTownWide = true; chronScroll = 0; return; }
