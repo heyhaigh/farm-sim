@@ -374,6 +374,9 @@ export class World {
         this.dmCooldown = 90;      // a grace period before the first threat stalks the young town
         this.prey = [];            // roaming wild game — deer/rabbit/turkey hunted for meat (see #tickPrey)
         this.preyCooldown = 55;    // a grace period before the first game wanders into the charted wilds
+        this.townCollab = 0.5;     // avg collaboration across the town — its CHARACTER (see #recomputeTownTraits, #84)
+        this.townCompete = 0.5;    // avg competitiveness — a driven/rivalrous town vs an easygoing one
+        this.townVolatile = 0.5;   // avg volatility — a hot-tempered town vs an even-keeled one
         this.project = null;
         this.projectIndex = 0;
         this.coops = [];      // farmer-proposed neighborhood projects (shared wells) — need-driven, sited where the members live
@@ -1703,6 +1706,27 @@ export class World {
         let n = 0;
         for (const [k, v] of this.bonds) if (k.includes(String(f.sheet.seed)) && v > 0) n++;
         return n;
+    }
+
+    // #84 — the town's CHARACTER: the average of its settlers' key traits, recomputed daily. This feeds
+    // effCollab (so a collaborative town helps/trades/clusters more, a loner town less) and the grind
+    // drive, and surfaces as a label — so who the town IS shows in how it behaves, not just how it looks.
+    #recomputeTownTraits() {
+        const fs = this.farmers.filter(f => f.plot);
+        if (!fs.length) return;
+        let c = 0, k = 0, v = 0;
+        for (const f of fs) { c += f.p.collaboration; k += f.p.competitiveness; v += (f.p.volatility ?? 0.5); }
+        this.townCollab = c / fs.length; this.townCompete = k / fs.length; this.townVolatile = v / fs.length;
+    }
+    // A short label for the town's most PRONOUNCED trait (for the UI). Neutral -> "a balanced town".
+    townCharacter() {
+        const cands = [
+            { d: this.townCollab - 0.5, hi: 'a close-knit town', lo: 'a town of loners' },
+            { d: this.townCompete - 0.5, hi: 'a driven, rivalrous town', lo: 'an easygoing town' },
+            { d: this.townVolatile - 0.5, hi: 'a hot-tempered town', lo: 'an even-keeled town' },
+        ].sort((a, b) => Math.abs(b.d) - Math.abs(a.d));
+        const top = cands[0];
+        return Math.abs(top.d) < 0.06 ? 'a balanced town' : top.d > 0 ? top.hi : top.lo;
     }
 
     updateLeader() {
@@ -3347,6 +3371,7 @@ export class World {
             this.clock = 0; this.day++;
             // age out expired fishing-spot cooldowns so the map doesn't accumulate stale entries forever
             for (const [k, d] of this.fishedAt) if (this.day - d > FISH_COOLDOWN) this.fishedAt.delete(k);
+            this.#recomputeTownTraits();
             this.#dailyHealthCheck();
             this.#advanceSeason();
             this.#decayTilled();
@@ -4059,7 +4084,10 @@ export class Farmer {
     // (a big shift for the mercurial, none for the even-keeled). This — not the raw trait —
     // gates who they help, visit, and dig wells with, so their generosity visibly runs hot/cold.
     get volatility() { return this.p.volatility ?? 0.5; }
-    effCollab() { return Math.max(0, Math.min(1, this.p.collaboration + this.mood * this.volatility * 0.6)); }
+    // #84 — TOWN CHARACTER nudge: a town made mostly of collaborators lifts everyone's effective teamwork
+    // a touch (denser help/barter/clustering); a town of loners drags it down. Amplifies the collective
+    // tendency so a close-knit vs stand-offish town visibly BEHAVES differently, not just looks it.
+    effCollab() { return Math.max(0, Math.min(1, this.p.collaboration + this.mood * this.volatility * 0.6 + ((this.world.townCollab ?? 0.5) - 0.5) * 0.3)); }
     // CURIOSITY is the main pull toward the fog line; a competitive streak adds restlessness. Recomputed
     // (not just set once) so a founder whose curiosity is nudged in ensureFounderVariety updates too.
     recomputeWanderlust() {
@@ -5382,7 +5410,7 @@ export class Farmer {
 
         // 5. competitive & behind: grind — but a bot that's been burned by overwork needs more in
         //    the tank before it pushes (learned restraint scales with how often it's fallen ill).
-        if (w.canGarden() && (this.isBehindLeader() && this.p.competitiveness > 0.55 || this.goal === 'harvest king') && this.energy > 0.4 + this.caution * 0.1) {
+        if (w.canGarden() && (this.isBehindLeader() && this.p.competitiveness > 0.55 - (w.townCompete - 0.5) * 0.4 || this.goal === 'harvest king') && this.energy > 0.4 + this.caution * 0.1) {
             const anyField = this.#findField(f => w.get(f.i, f.j) === T.GRASS) || this.#findField(f => w.get(f.i, f.j) === T.TILLED && !w.cropAt(f.i, f.j));
             if (anyField) { this.think(this.caution >= 2 ? "I'LL CATCH UP — BUT NOT AT ANY COST" : 'I WILL NOT FALL BEHIND'); this.#pursue({ act: w.get(anyField.i, anyField.j) === T.GRASS ? 'till' : 'plant', field: anyField }, this.plot, false); return; }
         }

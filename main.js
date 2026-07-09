@@ -2703,7 +2703,7 @@ function buildingUnder(mx, my) {
       let ghx = Math.floor(sx - gcw / 2), ghw = gcw;
       if (world.townLevel >= 5) { const glw = Math.round(GH_LWING.w * gsc), grwg = Math.round(GH_RWING.w * gsc); ghx -= glw; ghw += glw + grwg; }
       push(ghx - 2, gTop, ghw + 4, gFoot - gTop,
-        [{ t: `TOWN SILO — LV ${world.townLevel}`, c: TT_G }, { t: 'The town levels on donations', c: TT_L },
+        [{ t: `TOWN SILO — LV ${world.townLevel}`, c: TT_G }, { t: world.townCharacter(), c: TT_L },
          { t: 'Settlers give surplus goods here', c: TT_GR },
          { t: maxed ? 'The town is fully grown' : `${world.townXP} / ${world.townXpNeed()} to level ${world.townLevel + 1}`, c: TT_B }]); }
     if (world.board && boardScreen.w) push(boardScreen.x, boardScreen.y, boardScreen.w, boardScreen.h,
