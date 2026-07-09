@@ -2846,7 +2846,7 @@ function drawSheet(f) {
 
     // --- tab bar (fixed, below the title band) — the long scroll is now split into four
     //     views so nothing important stays buried below the fold ---
-    const TAB_LABELS = ['STATS', 'ACTIVITY', 'TIES', 'MEMORY'];
+    const TAB_LABELS = ['STATS', 'ACTIVITY', 'TIES', 'MEMORY', 'STORY'];
     const tabY = PY + 39, tabH = 12, tseg = (IW + 4) / TAB_LABELS.length;
     SHEET_TABS = [];
     for (let t = 0; t < TAB_LABELS.length; t++) {
@@ -3050,6 +3050,27 @@ function drawSheet(f) {
                 y += 1;
             }
             y += 3;
+        }
+    } else if (sheetTab === 4) {
+        // ===== STORY (#92a): the DM's 5e-style identity block — background, origin tale,
+        // and the classic sheet quartet (ideal / bond / flaw), plus where the dream stands =====
+        const st = f.sheet.story;
+        if (!st) { drawText(ctx, 'their story is still being written', IX + 2, y, SHEET_LABEL); }
+        else {
+            y = sectionBand(IX, y, IW, `BACKGROUND: ${st.bg}`);
+            for (const ln of wrapText(st.tale, 34)) { drawText(ctx, ln, IX + 2, y, '#c8ccd8'); y += 7; }
+            y += 3;
+            const quartet = [['IDEAL', st.ideal, '#e8c860'], ['BOND', st.bond, '#8fc7e8'], ['FLAW', st.flaw, '#d08c74']];
+            for (const [label, text, col] of quartet) {
+                drawText(ctx, label, IX + 2, y, SHEET_LABEL); y += 7;
+                for (const ln of wrapText(text, 34)) { drawText(ctx, ln, IX + 4, y, col); y += 7; }
+                y += 2;
+            }
+            y += 1;
+            y = sectionBand(IX, y, IW, 'THE DREAM');
+            for (const ln of wrapText(f.sheet.dream ? f.sheet.dream.yearn : 'none yet', 34)) { drawText(ctx, ln, IX + 2, y, '#e8c860'); y += 7; }
+            drawText(ctx, f.sheet.dreamDone ? `WON ON DAY ${f.sheet.dreamDone}` : 'STILL CHASING IT', IX + 2, y, f.sheet.dreamDone ? '#7dd069' : SHEET_LABEL); y += 8;
+            if (f.goal) { drawText(ctx, `COURSE THIS SEASON: ${f.goal.toUpperCase()}`, IX + 2, y, '#d08cc8'); y += 7; }
         }
     } else {
         // ===== MEMORY: the episodic journal (newest first, paginated) + the source doc =====

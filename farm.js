@@ -1290,6 +1290,53 @@ export class World {
             taken[f.sheet.dream.id] = (taken[f.sheet.dream.id] || 0) + 1;
             f.recomputeWanderlust();   // a far-shore dream pulls at the horizon from day one
         }
+        this.#ensureBackstories();   // the DM writes each new sheet's story once its dream is known
+    }
+
+    // The procedural DUNGEON MASTER's character pass (#92a): every farmer gets a 5e-style
+    // identity block - BACKGROUND (an archetype earned by their stats + personality),
+    // a short origin tale woven from their source memory, and the classic sheet quartet's
+    // IDEAL (their dream), BOND (rival or the memory that made them) and FLAW (their
+    // weakest stat, or a vice). Seeded per (town x farmer), stored on the sheet so it
+    // persists and never re-rolls; a fresh town retells every life. Idempotent.
+    #ensureBackstories() {
+        for (const f of this.farmers) {
+            const s = f.sheet;
+            if (s.story || !s.dream) continue;
+            const r = mulberry32((this.seed ^ s.seed ^ 0xBA5E) >>> 0);
+            const p = f.p, st = s.stats;
+            const scores = [
+                ['OUTLANDER',     (p.curiosity ?? 0.5) * 2,                 'came in off the far roads, and the roads never quite let go'],
+                ['FOLK HERO',     p.collaboration + mod(st.str) * 0.15,     'once stood up for a place that could not stand up for itself'],
+                ['GUILD ARTISAN', p.diligence * 1.7,                        'apprenticed hard years under a master who praised nothing'],
+                ['CHARLATAN',     (1 - p.honesty) * 1.8,                    'has sold things that did not strictly exist'],
+                ['HERMIT',        (1 - p.collaboration) * 1.6,              'spent long seasons alone, and learned to prefer it'],
+                ['SOLDIER',       (mod(st.str) + mod(st.con)) * 0.35 + 0.4, 'marched under someone else\'s banner before choosing their own field'],
+                ['SAGE',          (mod(st.int) + mod(st.wis)) * 0.35 + 0.4, 'read everything they could hold onto, and remembers most of it'],
+                ['ENTERTAINER',   mod(st.cha) * 0.5 + 0.4,                  'can hold a room, and knows exactly how long to hold it'],
+            ];
+            const bg = scores.reduce((a, b) => (b[1] + r() * 0.3 > a[1] + r() * 0.3 ? b : a));
+            const memT = String((s.memory && s.memory.title) || 'a life before the valley').slice(0, 40);
+            s.story = {
+                bg: bg[0],
+                tale: `${/^[aeiou]/i.test(s.archetype) ? 'An' : 'A'} ${s.archetype.toLowerCase()} who ${bg[2]}. What brought them to the valley they mostly keep to themselves - but "${memT}" comes up when they've had a long day.`,
+                ideal: s.dream.yearn,
+                bond: s.dream.id === 'outdo' && s.dream.rivalName
+                    ? `${s.dream.rivalName} - rival, measure, and the itch they can't scratch`
+                    : `the memory that made them: "${memT}"`,
+                flaw: this.#pickFlaw(f, r),
+            };
+        }
+    }
+    #pickFlaw(f, r) {
+        const p = f.p, st = f.sheet.stats;
+        if (p.honesty < 0.35) return 'cannot pass up an easy mark';
+        if ((p.volatility ?? 0.5) > 0.7) return 'a temper like dry tinder';
+        const FLAWS = { str: 'no back for heavy work, and knows it', dex: 'slow hands in a crisis',
+            con: 'frail - winters scare them', int: 'plans no further than supper',
+            wis: 'misses what is plain to others', cha: 'says the wrong thing, reliably' };
+        const worst = Object.keys(FLAWS).reduce((a, b) => (st[b] < st[a] ? b : a), 'str');
+        return FLAWS[worst];
     }
 
     #seedFoundingLog() {
@@ -3788,9 +3835,21 @@ export class World {
         const ei = f.pos.i + Math.cos(ang) * d, ej = f.pos.j + Math.sin(ang) * d;
         const e = { kind, def, target: f, i: ei, j: ej, home: { i: ei, j: ej }, facing: 1,
                     hp: def.hp, clashTimer: 1, life: 45, done: false, helpWanted: false, helpers: new Set() };
+        // #92a: the DM NAMES every raiding foe — a felled "Gruk the Fence-Breaker" makes a far
+        // better legend (and monument) than "an orc raider". Beasts stay nameless; they're weather.
+        if (def.kind === 'foe') {
+            const FOE_NAMES = {
+                orc: ['Gruk', 'Morg', 'Tharg', 'Uzka', 'Drek', 'Snaga', 'Krul', 'Bolg'],
+                assassin: ['the Magpie', 'Sable', 'the Quiet One', 'Vesk', 'the Long Shadow', 'Wren'],
+            };
+            const EPITHETS = ['of the Red Fen', 'the Fence-Breaker', 'of the Black Pines', 'the Crop-Burner', 'One-Tusk', 'the Howler'];
+            const pool = FOE_NAMES[kind] || FOE_NAMES.orc;
+            e.foeName = kind === 'orc' ? `${pool[Math.floor(this.rand() * pool.length)]} ${EPITHETS[Math.floor(this.rand() * EPITHETS.length)]}`
+                                       : pool[Math.floor(this.rand() * pool.length)];
+        }
         this.encounters.push(e);
         this.reveal(Math.round(e.i), Math.round(e.j), 4);
-        this.addLog(`${f.sheet.name} ran into ${def.name} out in the wilds!`, '#e08850');
+        this.addLog(`${f.sheet.name} ran into ${e.foeName ? `${def.name} - ${e.foeName}` : def.name} out in the wilds!`, '#e08850');
         f.threatAlert = 2; f.say('!!', '#e05040');
     }
 
@@ -3995,12 +4054,12 @@ export class World {
                     if (!taken(ni, nj) && this.isRevealed(ni, nj) && !this.pathBlocked(ni, nj)) { mi = ni; mj = nj; break outer; }
                 }
             }
-            this.monuments.push({ i: mi, j: mj, heroSeed: f.sheet.seed, hero: f.sheet.name.split(' ')[0], foe: e.def.name, day: this.day, party: fighters.length });
+            this.monuments.push({ i: mi, j: mj, heroSeed: f.sheet.seed, hero: f.sheet.name.split(' ')[0], foe: e.foeName || e.def.name, day: this.day, party: fighters.length });
             if (this.monuments.length > 40) this.monuments.shift();
             for (const ff of fighters) ff.gainXP(6);
             this.reveal(mi, mj, 3);
             const stand = fighters.length > 1 ? `${f.sheet.name.split(' ')[0]} and ${fighters.length - 1} others` : f.sheet.name.split(' ')[0];
-            this.addChronicle('legend', `${stand} felled ${e.def.name} — a stand the town won't forget.`, f, null, '#f0d060');
+            this.addChronicle('legend', `${stand} felled ${e.foeName || e.def.name} — a stand the town won't forget.`, f, null, '#f0d060');
         }
     }
 
