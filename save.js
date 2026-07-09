@@ -63,13 +63,36 @@ export async function loadTown(seed) {
     }
 }
 
-// The NEW TOWN hatch: wipe a seed's snapshot (and the latest-pointer if it points there).
+// The NEW TOWN hatch: retire a seed's snapshot (and the latest-pointer if it points there).
+// NOT a hard delete — the save (and the wiped pointer) move to backup keys, so one accidental
+// "NEW -> SURE?" is always undoable (learned the hard way, day one). Each wipe overwrites the
+// previous backup: one-deep undo, zero ceremony.
 export async function wipeTown(seed) {
     try {
-        await idbReq('readwrite', s => s.delete('town:' + seed));
+        const snap = await idbReq('readonly', s => s.get('town:' + seed));
         const latest = await idbReq('readonly', s => s.get('latest'));
+        if (snap) await idbReq('readwrite', s => s.put(snap, 'backup:town'));
+        if (latest) await idbReq('readwrite', s => s.put(latest, 'backup:latest'));
+        await idbReq('readwrite', s => s.delete('town:' + seed));
         if (latest && latest.seed === seed) await idbReq('readwrite', s => s.delete('latest'));
     } catch (err) {
         console.warn('ry-farms: wipe failed', err);
+    }
+}
+
+// Undo the last wipe: put the backed-up town (and its latest-pointer) back. Returns the
+// restored seed, or null if there's nothing to restore. Reload after calling to resume it.
+export async function undoWipe() {
+    try {
+        const snap = await idbReq('readonly', s => s.get('backup:town'));
+        if (!snap) return null;
+        await idbReq('readwrite', s => s.put(snap, 'town:' + snap.seed));
+        const latest = await idbReq('readonly', s => s.get('backup:latest'));
+        await idbReq('readwrite', s => s.put(latest && latest.seed === snap.seed ? latest
+            : { seed: snap.seed, day: snap.day, season: snap.season, year: snap.year, savedAt: Date.now() }, 'latest'));
+        return snap.seed;
+    } catch (err) {
+        console.warn('ry-farms: undo failed', err);
+        return null;
     }
 }

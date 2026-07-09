@@ -12,7 +12,7 @@ import {
     fillDiamond, strokeDiamond,
 } from './pixel.js';
 import { CRT } from './crt.js';
-import { saveTown, loadTown, wipeTown } from './save.js';
+import { saveTown, loadTown, wipeTown, undoWipe } from './save.js';
 
 // ---------------------------------------------------------------------------
 // Canvases
@@ -2520,8 +2520,13 @@ function drawUI() {
     // town needs an exit that's easy to reach but hard to fat-finger.
     const confirming = performance.now() < newConfirmUntil;
     barBtn(NEW_BTN, confirming ? 'SURE?' : 'NEW', confirming, '#e05040', '#2a0e0e');
+    // while armed, say EXACTLY what confirming does — nobody should erase a town blind
+    if (confirming) {
+        const warn = 'STARTS A NEW TOWN - THIS ONE IS SET ASIDE';
+        drawText(ctx, warn, NEW_BTN.x + NEW_BTN.w - textWidth(warn), 18, '#e05040');
+    }
     // a quiet "SAVED" tick under the bar whenever the town autosaves (trust that memory is real)
-    if (performance.now() - saveFlashAt < 1500) drawText(ctx, 'SAVED', NEW_BTN.x, 18, '#7dd069');
+    else if (performance.now() - saveFlashAt < 1500) drawText(ctx, 'SAVED', NEW_BTN.x, 18, '#7dd069');
 
     BOARD_BTN.hidden = !world.board;   // only exists once the town has built the board
     if (!BOARD_BTN.hidden) {
@@ -3938,7 +3943,11 @@ function drawBootScreen(t) {
         buildingUnder: (x, y) => buildingUnder(x ?? mouse.x, y ?? mouse.y),
         resumed,                                             // did this boot hydrate a save?
         saveNow: () => saveTown(world),                      // force an autosave (returns the saved day)
-        wipeSave: () => wipeTown(world.seed),                // delete this town's slot (no reload)
+        wipeSave: () => wipeTown(world.seed),                // retire this town's slot to backup (no reload)
+        undoWipe: () => undoWipe().then(seed => {            // resurrect the last wiped town + resume it
+            if (seed == null) { console.log('no wiped town to restore'); return null; }
+            location.href = location.pathname + '?seed=' + seed; return seed;
+        }),
         dismissCard: () => { resumeCard = null; },
         NEW_BTN,                                             // (debug) reset-hatch hitbox, for UI tests
     };
