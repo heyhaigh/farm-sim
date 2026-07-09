@@ -71,3 +71,19 @@ but self-compare.
 ## Sequence
 W1 (lexicon + variation) → W5 blind test to PROVE W1 landed → W2 (belief self-correction) → W3 (invention
 throttle) → W4 (trial legibility) → soak harness + quick fixes folded in. Council-re-review after W1+W2.
+
+## STATUS (2026-07-09, all shipped local)
+- ✅ **W1** doc-specific creeds + lexicon + variation (`70ce0e3`) — proven: 0 fallback-only across 7 docs
+  incl. mundane ones, 7/7 distinct theme-sets.
+- ✅ **UNTETHER** (`72e9f7c`) — divorced from the ~167 real personal docs; default towns grow from INVENTED
+  past lives (14 vocations × 18 places), self-host SuperMemory still overrides. Resolves the council's
+  defamation/consent concern outright.
+- ✅ **W2** belief erosion + reversal + bounded drift (`919e7c4`) — beliefs strengthen/weaken/lapse against
+  recent life; #applyDrift clamps every trait to birth ±0.2 and reverses a lapsed belief's nudge.
+- ✅ **W4** trial legibility (evidence named) + no healer-saboteur (`473854b`).
+- ✅ **W3** invention throttle (stop when all reachable known) + observe-valve (crafting seen → heard-of)
+  (`0ee8e13`).
+- ✅ **Quick fixes** (`c64954c`): honest-doctrine gate (a thrift creed can't make an honest farmer chisel);
+  writeback customId dedupe.
+- ✅ **W5** soak-measurement harness (scratchpad/soak.mjs) — real distributions, not asserted numbers.
+- Deferred (minor): RECIPES "(N have heard of it)" knowledge-leak — left as-is (whisper channel doesn't read it).
