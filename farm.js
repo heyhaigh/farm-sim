@@ -7624,6 +7624,7 @@ export class Farmer {
         else if (check.total >= 10) yieldN = 2;
         const ownerSheet = (helping && owner) ? owner.sheet : s;
         ownerSheet.harvested += yieldN; w.harvestTotal += yieldN;
+        ownerSheet.cropsHarvested = (ownerSheet.cropsHarvested || 0) + yieldN;   // YIELD = crops only (not produce/forage/loot)
         // bean stalks are a fast but LOW-VALUE crop: they add only half to the spendable/tradeable
         // wallet, though the physical count (yield stat + inventory) reflects every stalk pulled.
         const worth = c.type === 'beanstalk' ? Math.max(1, Math.round(yieldN * 0.5)) : yieldN;

@@ -2997,7 +2997,7 @@ function drawSheet(f) {
         drawText(ctx, cropMix.slice(0, 24), IX + 32, y, SHEET_VAL); y += 7;
         const facs = ['crops', ...f.plot.facilities.map(fc => FAC_SHORT[fc.type] || fc.type)];
         drawText(ctx, 'HAS', IX, y, SHEET_LABEL); drawText(ctx, facs.join(', ').slice(0, 26), IX + 32, y, SHEET_VAL); y += 7;
-        kv(IX, 'LAND', `${f.plot.cells.size}t`); drawText(ctx, 'YIELD', IX + 76, y, SHEET_LABEL); drawText(ctx, String(s.harvested), IX + 108, y, SHEET_VAL); y += 7;
+        kv(IX, 'LAND', `${f.plot.cells.size}t`); drawText(ctx, 'YIELD', IX + 76, y, SHEET_LABEL); drawText(ctx, String(s.cropsHarvested || 0), IX + 108, y, SHEET_VAL); y += 7;
         kv(IX, 'REP', Math.round(f.reputation * 100)); drawText(ctx, 'BONDS', IX + 76, y, SHEET_LABEL); drawText(ctx, String(world.bondCount(f)), IX + 108, y, SHEET_VAL); y += 8;
         if (f.wantExpand || f.wantFacility) { drawText(ctx, f.wantExpand ? '> wants more land' : '> wants to build', IX, y, SHEET_GOLD); y += 8; }
         y += 2;
@@ -3257,7 +3257,7 @@ let rosterRows = [];              // { farmer, y0, y1 } hit regions (screen px)
 let rosterView = null;            // { x, y, w, h, bodyTop, bodyBot, rowH, maxScroll }
 
 function rosterSorted() {
-    return [...world.farmers].sort((a, b) => b.sheet.harvested - a.sheet.harvested);
+    return [...world.farmers].sort((a, b) => (b.sheet.cropsHarvested || 0) - (a.sheet.cropsHarvested || 0));
 }
 
 function drawRoster() {
@@ -3325,7 +3325,7 @@ function drawRoster() {
         STAT_NAMES.forEach((st, i) => {
             drawText(ctx, String(s.stats[st]).padStart(2), Math.floor(colStats + i * statW), ry + 1, '#c8ccd8');
         });
-        drawText(ctx, String(s.harvested), PX + PW - 22, ry + 1, '#e8c860');
+        drawText(ctx, String(s.cropsHarvested || 0), PX + PW - 22, ry + 1, '#e8c860');
         rosterRows.push({ farmer: f, y0: ry, y1: ry + rowH });
     });
     ctx.restore();

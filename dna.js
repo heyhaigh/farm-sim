@@ -339,7 +339,8 @@ export function growFarmer(memory, mutation = 0) {
         personality,
         level: 1,
         xp: 0,
-        harvested: 0,
+        harvested: 0,        // lifetime OUTPUT (crops + facility produce + forage) — drives progression/milestones
+        cropsHarvested: 0,   // CROPS grown + harvested only — the "yield" the roster/card report (see #doHarvest)
         cropStock: {},     // per-type provenance tally {type:{grown,stolen,found}} — the inventory breakout
         crop: arch.crop,   // signature crop (kept for code that still reads a single crop)
         crops: buildCropPalette(rand, arch.crop, personality),
