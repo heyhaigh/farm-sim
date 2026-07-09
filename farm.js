@@ -2360,7 +2360,7 @@ export class World {
     #investigateSabotage(perp, victim) {
         const wch = this.watchFarmer();
         if (!wch || wch === perp) { this.suspicion[perp.sheet.seed] = (this.suspicion[perp.sheet.seed] || 0) + 0.3; return; }
-        let topSeed = null, topScore = 0;
+        let topSeed = null, topScore = 0, topMotive = 0, topPattern = 0;
         for (const f of this.farmers) {
             if (f === victim || f === wch) continue;
             const opportunity = f === perp ? 0.4 : 0;                      // the only hand with evidence they were there
@@ -2368,13 +2368,17 @@ export class World {
             const motive = Math.max(0, -f.opinionOf(victim));
             const pattern = Math.min(0.5, (f.sheet.sabotages || 0) * 0.2);
             const score = motive + opportunity + pattern + (this.suspicion[f.sheet.seed] || 0);
-            if (score > topScore) { topScore = score; topSeed = f.sheet.seed; }
+            if (score > topScore) { topScore = score; topSeed = f.sheet.seed; topMotive = motive; topPattern = pattern; }
         }
         const accused = this.farmers.find(f => f.sheet.seed === topSeed);
         if (accused && topScore >= 0.9) {
             accused.sheet.sabotages = (accused.sheet.sabotages || 0) + 1;
             this.suspicion[accused.sheet.seed] = 0;
-            this.addChronicle('crime', `${shortName(wch)} traced the harm on ${shortName(victim)}'s farm to ${shortName(accused)}.`, accused, wch, '#c05840');
+            // W4 legibility — name the EVIDENCE, so a conviction never reads as the sim just knowing
+            const clues = ['a hand seen near the field'];   // opportunity is the prerequisite
+            if (topMotive > 0.3) clues.push('a standing grudge');
+            if (topPattern > 0) clues.push('and not their first');
+            this.addChronicle('crime', `${shortName(wch)} traced the harm on ${shortName(victim)}'s farm to ${shortName(accused)} - ${clues.join(', ')}.`, accused, wch, '#c05840');
             this.holdTrial(accused, victim, null, `the harm done to ${shortName(victim)}`);
         } else {
             this.suspicion[perp.sheet.seed] = (this.suspicion[perp.sheet.seed] || 0) + 0.3;
@@ -6688,6 +6692,7 @@ export class Farmer {
     #maybeSabotage() {
         const w = this.world;
         if (this.sabotageCooldown > 0 || w.isNight() || this.p.honesty >= 0.28) return false;
+        if (this.isHealer()) return false;   // W4 — the hand that heals doesn't poison (no poison-then-cure)
         if (w.isShunned(this) && this.rand() < 0.5) { /* the shunned are angrier, but still not always */ }
         let victim = null, worst = -0.45;
         for (const o of w.farmers) {
