@@ -12,6 +12,7 @@ import {
     fillDiamond, strokeDiamond,
 } from './pixel.js';
 import { CRT } from './crt.js';
+import { saveTown, loadTown, wipeTown } from './save.js';
 
 // ---------------------------------------------------------------------------
 // Canvases
@@ -147,7 +148,7 @@ function drawCursor(mx, my, hot) {
 function cursorIsHot(worldTooltip) {
     const m = mouse;
     if (m.x < 0) return false;
-    for (const b of [ROSTER_BTN, CHRON_BTN, SND_BTN, FWD_BTN, FF_BTN, SPEED1_BTN]) if (b.w && inRect(m, b)) return true;
+    for (const b of [ROSTER_BTN, CHRON_BTN, SND_BTN, NEW_BTN, FWD_BTN, FF_BTN, SPEED1_BTN]) if (b.w && inRect(m, b)) return true;
     if (!BOARD_BTN.hidden && inRect(m, BOARD_BTN)) return true;
     if (RECAP_CARD.w && inRect(m, RECAP_CARD)) return true;
     if (selected) {
@@ -184,6 +185,11 @@ let boardScroll = 0, boardMaxScroll = 0;
 const boardScreen = { x: 0, y: 0, w: 0, h: 0 };    // board sprite screen rect (click to open)
 const BOARD_BTN = { x: 0, y: 3, w: 40, h: 12 };    // top-bar button, positioned in drawUI
 const SND_BTN = { x: 0, y: 3, w: 30, h: 12 };      // sound on/off toggle, positioned in drawUI
+const NEW_BTN = { x: 0, y: 3, w: 30, h: 12 };      // NEW TOWN reset hatch (two-step confirm), positioned in drawUI
+let newConfirmUntil = 0;                           // while now < this, the NEW button reads "SURE?" and a click wipes
+let lastSavedDay = 0;                              // last world.day autosaved (rollover-triggered)
+let saveFlashAt = -1e9;                            // brief "SAVED" tick in the top bar
+let resumeCard = null;                             // "PREVIOUSLY ON RY FARMS" catch-up card (shown once on resume)
 const BOARD_CLOSE = { x: 0, y: 0, w: 0, h: 0 };
 const BOARD_RECT = { x: 0, y: 0, w: 0, h: 0 };
 
@@ -2509,6 +2515,14 @@ function drawUI() {
     barBtn(CHRON_BTN, 'CHRONICLE', chronOpen, '#c8a0e0', '#1a1024');
     if (world.chronicle.length && !chronOpen) drawCoin(CHRON_BTN.x + CHRON_BTN.w - 3, CHRON_BTN.y - 2, 6);
 
+    // NEW TOWN reset hatch — two-step confirm (click once -> "SURE?" for 3s -> click again wipes
+    // the save and reloads fresh). Persistence makes stuck/degenerate states PERMANENT, so the
+    // town needs an exit that's easy to reach but hard to fat-finger.
+    const confirming = performance.now() < newConfirmUntil;
+    barBtn(NEW_BTN, confirming ? 'SURE?' : 'NEW', confirming, '#e05040', '#2a0e0e');
+    // a quiet "SAVED" tick under the bar whenever the town autosaves (trust that memory is real)
+    if (performance.now() - saveFlashAt < 1500) drawText(ctx, 'SAVED', NEW_BTN.x, 18, '#7dd069');
+
     BOARD_BTN.hidden = !world.board;   // only exists once the town has built the board
     if (!BOARD_BTN.hidden) {
         const postCount = world.helpBoard.filter(r => r.genuine).length + (world.project ? 1 : 0);
@@ -3344,6 +3358,51 @@ function drawDayRecap() {
     ctx.restore();
 }
 
+// "PREVIOUSLY ON RY FARMS" — the returning player's catch-up card (#88): the last few
+// chronicle beats of the resumed town, held on screen until any click/key. This is also the
+// story-emergence instrument: if this card is ever boring, the sim has told us something.
+function drawResumeCard() {
+    if (!resumeCard || !booted) return;
+    const rc = resumeCard;
+    if (!rc.shownAt) rc.shownAt = performance.now();
+    const alpha = Math.min(1, (performance.now() - rc.shownAt) / 350);
+
+    const lines = [];
+    for (const b of rc.beats) for (const ln of wrapText(b.text, 44).slice(0, 2)) lines.push({ t: ln, c: b.color, day: b.day });
+
+    const PW = 224, PX = Math.floor((GW - PW) / 2);
+    const headH = 24, PH = headH + Math.max(1, lines.length) * 8 + 20;
+    const PY = Math.floor((GH - PH) / 2) - 8;
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = 'rgba(6,8,14,0.62)'; ctx.fillRect(0, 0, GW, GH);          // dim the town behind
+    ctx.fillStyle = 'rgba(14,16,26,0.97)'; ctx.fillRect(PX, PY, PW, PH);
+    ctx.fillStyle = '#e8c860'; ctx.fillRect(PX, PY, PW, 1); ctx.fillRect(PX, PY + PH - 1, PW, 1);
+    ctx.fillRect(PX, PY, 1, PH); ctx.fillRect(PX + PW - 1, PY, 1, PH);
+
+    drawText(ctx, 'PREVIOUSLY ON RY FARMS', PX + 6, PY + 6, '#f0d060', 1);
+    const sd = SEASONS[rc.season];
+    const sub = `DAY ${rc.day} - ${sd ? sd.name : ''} OF YEAR ${rc.year}`;
+    drawText(ctx, sub, PX + 6, PY + 15, '#9ad0e0');
+    ctx.fillStyle = '#2a2e3a'; ctx.fillRect(PX + 4, PY + 23, PW - 8, 1);
+
+    let y = PY + headH + 3;
+    if (!lines.length) drawText(ctx, 'THE TOWN WAITS, ITS STORY UNWRITTEN.', PX + 8, y, '#6a6f7c');
+    else for (const ln of lines) { ctx.fillStyle = ln.c; ctx.fillRect(PX + 6, y + 2, 2, 2); drawText(ctx, ln.t, PX + 11, y, ln.c); y += 8; }
+    const cue = 'CLICK TO CONTINUE';
+    drawText(ctx, cue, PX + Math.floor((PW - textWidth(cue)) / 2), PY + PH - 9, performance.now() % 1000 < 620 ? '#c8ccd8' : '#6a6f7c');
+    ctx.restore();
+}
+
+// Autosave (#88): the town writes itself to IndexedDB at every day rollover, plus whenever the
+// tab hides/closes. Fire-and-forget — a failed write never touches the sim (save.js swallows).
+function maybeAutosave() {
+    if (!booted || !world || world.day === lastSavedDay) return;
+    lastSavedDay = world.day;                       // claim synchronously so a slow write can't double-fire
+    saveTown(world).then(d => { if (d != null) saveFlashAt = performance.now(); });
+}
+
 // ---------------------------------------------------------------------------
 // Input
 // ---------------------------------------------------------------------------
@@ -3386,8 +3445,19 @@ out.addEventListener('pointerup', (e) => {
     if (wasDrag || !booted) return;
     const p = gamePoint(e);
 
+    // the "previously on" catch-up card swallows the first click (any click dismisses it)
+    if (resumeCard) { resumeCard = null; return; }
+
     // roster toggle button
     if (inRect(p, SND_BTN)) { audio.ensure(); audio.toggle(); return; }
+    // NEW TOWN hatch: first click arms ("SURE?"), a second within 3s wipes the save + reloads fresh
+    if (NEW_BTN.w && inRect(p, NEW_BTN)) {
+        if (performance.now() < newConfirmUntil) {
+            newConfirmUntil = 0;
+            wipeTown(world.seed).finally(() => { location.href = location.pathname + '?fresh=1'; });
+        } else newConfirmUntil = performance.now() + 3000;
+        return;
+    }
     if (inRect(p, ROSTER_BTN)) { rosterOpen = !rosterOpen; if (rosterOpen) { boardOpen = false; chronOpen = false; } return; }
     if (CHRON_BTN.w && inRect(p, CHRON_BTN)) { chronOpen = !chronOpen; if (chronOpen) { boardOpen = false; rosterOpen = false; chronScroll = 0; } return; }
 
@@ -3559,6 +3629,7 @@ function mostInterestingFarmer() {
 
 window.addEventListener('keydown', (e) => {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (resumeCard) { resumeCard = null; return; }   // any key dismisses the catch-up card
     if ((e.key === 't' || e.key === 'T') && world) {
         followMode = false; followTarget = null;
         cam.x = GW / 2 - isoX(world.well.i, world.well.j);
@@ -3702,6 +3773,7 @@ function frame(now) {
 
     drawWeather(dt, t);
     drawUI();
+    maybeAutosave();
     drawDayRecap();
     // a quiet indicator while the camera is trailing someone (F, or the sheet's crosshair, toggles it)
     if (followMode && followTarget && world.farmers.includes(followTarget) && !rosterOpen && !chronOpen && !boardOpen) {
@@ -3735,6 +3807,8 @@ function frame(now) {
     // B4: nudge the player toward a fresh off-screen story beat (drawn above the world, below the cursor)
     updateDramaSpotlight();
     if (booted && !rosterOpen && !chronOpen && !boardOpen) drawDramaCue();
+
+    drawResumeCard();   // the "previously on" catch-up card sits above every panel (only the cursor tops it)
 
     // custom pixel hand cursor, on top of everything (dragging = pressed/gold too)
     if (mouse.x >= 0) drawCursor(mouse.x, mouse.y, mouse.dragging || cursorIsHot(worldHover));
@@ -3788,20 +3862,49 @@ function drawBootScreen(t) {
     memories = result.memories;
     memorySource = result.source;
 
-    // A RANDOM seed each page load, so every visit lays the town out differently (the cast is the
-    // same — grown from the same memories — but who settles where, and the weather, vary). Pass
-    // ?seed=N in the URL to reproduce a specific town (handy for sharing / debugging).
-    const urlSeed = new URLSearchParams(location.search).get('seed');
+    // PERSISTENCE (#88): a plain visit RESUMES the last-played town from IndexedDB — the town
+    // remembers itself. ?seed=N resumes that seed's save (or founds it fresh if none exists);
+    // ?fresh=1 always founds a new town (random seed unless &seed pins it) — the reset hatch
+    // and the determinism-test entrance (?fresh=1&seed=42 never loads a save).
+    const bootParams = new URLSearchParams(location.search);
+    const urlSeed = bootParams.get('seed');
+    const wantFresh = bootParams.get('fresh') != null;
     const worldSeed = urlSeed != null && urlSeed !== '' ? (parseInt(urlSeed, 10) >>> 0) : Math.floor(Math.random() * 0x7fffffff);
-    world = new World(worldSeed);
-    world.addLog(`Ry Farms — seed ${worldSeed}`, '#5a6672');
+
+    let resumed = false;
+    if (!wantFresh) {
+        const saved = await loadTown(urlSeed != null && urlSeed !== '' ? worldSeed : undefined);
+        if (saved) {
+            try { world = World.fromSave(saved); resumed = true; }
+            catch (err) { console.warn('ry-farms: save unreadable — founding fresh', err); world = null; }
+        }
+    }
+    if (!world) world = new World(worldSeed);
+
     // hook tile changes to terrain redraw
     const origSet = world.set.bind(world);
     world.set = (i, j, t) => { origSet(i, j, t); world._tilesChanged = true; };
+    world._tilesChanged = true;
 
-    for (let i = 0; i < 8; i++) spawnFarmer();   // start with the full founding eight
-    world.ensureFounderVariety();                // guarantee a chaos-agent + a moody farmer among them
+    if (resumed) {
+        lastSavedDay = world.day;   // don't immediately re-save what we just loaded
+        world.addLog(`Welcome back - day ${world.day}, year ${world.year} (seed ${world.seed})`, '#7dd069');
+        resumeCard = {
+            day: world.day, season: world.season, year: world.year, shownAt: 0,
+            beats: world.chronicle.slice(-5).map(c => ({ text: c.text, color: c.color, day: c.day })),
+        };
+    } else {
+        lastSavedDay = world.day;
+        world.addLog(`Ry Farms — seed ${worldSeed}`, '#5a6672');
+        for (let i = 0; i < 8; i++) spawnFarmer();   // start with the full founding eight
+        world.ensureFounderVariety();                // guarantee a chaos-agent + a moody farmer among them
+    }
     selected = null;
+
+    // the town also saves itself whenever the tab hides or closes (the rollover autosave's backstop)
+    const saveOnHide = () => { if (booted && world) saveTown(world); };
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') saveOnHide(); });
+    window.addEventListener('pagehide', saveOnHide);
 
     // center camera on the well
     cam.x = GW / 2 - isoX(world.well.i, world.well.j);
@@ -3827,5 +3930,10 @@ function drawBootScreen(t) {
         get GW() { return GW; }, get GH() { return GH; },
         get mouse() { return { x: mouse.x, y: mouse.y, drag: mouse.dragging }; },
         buildingUnder: (x, y) => buildingUnder(x ?? mouse.x, y ?? mouse.y),
+        resumed,                                             // did this boot hydrate a save?
+        saveNow: () => saveTown(world),                      // force an autosave (returns the saved day)
+        wipeSave: () => wipeTown(world.seed),                // delete this town's slot (no reload)
+        dismissCard: () => { resumeCard = null; },
+        NEW_BTN,                                             // (debug) reset-hatch hitbox, for UI tests
     };
 })();

@@ -1737,6 +1737,215 @@ export class World {
         return Math.abs(top.d) < 0.06 ? 'a balanced town' : top.d > 0 ? top.hi : top.lo;
     }
 
+    // ------------------------------------------------------------------------------
+    // PERSISTENCE (#88): a town that REMEMBERS across sessions.
+    //
+    // serialize() captures the lived, non-derivable state as a structured-clone-safe
+    // snapshot (plain objects/arrays/Maps/Sets/typed arrays — no class instances, no
+    // functions; farmer references flattened to sheet seeds). World.fromSave() is the
+    // inverse. This is a SAVE, not a replay: the RNG stream restarts from a seed
+    // derived at save time, and in-flight transient state (paths, walked deals, board
+    // posts, active threats/prey, the merchant's visit, the treasure) intentionally
+    // resets — farmers wake on 'decide' and the town re-poses its own errands.
+    static SAVE_VERSION = 1;
+
+    serialize() {
+        const plotIdx = new Map(this.plots.map((p, i) => [p, i]));
+        const snap = {
+            v: World.SAVE_VERSION, seed: this.seed,
+            // continue the RNG from a save-derived seed WITHOUT consuming the live stream
+            // (saving must never be observable to the sim)
+            randSeed: (this.seed ^ Math.imul(this.day, 2654435761) ^ ((this.time * 997) | 0)) >>> 0,
+            time: this.time, day: this.day, clock: this.clock,
+            season: this.season, seasonDay: this.seasonDay, year: this.year,
+            harvestTotal: this.harvestTotal, dayHarvestStart: this._dayHarvestStart,
+            weather: this.weather, weatherTimer: this.weatherTimer,
+            dmCooldown: this.dmCooldown, preyCooldown: this.preyCooldown,
+            townCollab: this.townCollab, townCompete: this.townCompete, townVolatile: this.townVolatile,
+            stormLosses: this.stormLosses,
+            workMult: this.workMult, growthMult: this.growthMult,
+            lightningMult: this.lightningMult, rainBoost: this.rainBoost,
+            townLevel: this.townLevel, townXP: this.townXP, coffers: { ...this.coffers },
+            merchantNextDay: this.merchantNextDay, merchantVisit: this.merchantVisit,
+            projectIndex: this.projectIndex, exploredTiles: this.exploredTiles, ringCount: this.ringCount,
+
+            tiles: this.tiles.slice(),
+            chunks: new Map([...this.chunks].map(([k, a]) => [k, a.slice()])),
+            fog: new Map([...this.fog].map(([k, a]) => [k, a.slice()])),
+            revealRect: { ...this.revealRect },
+            rockWork: new Map(this.rockWork), treePlanted: new Map(this.treePlanted),
+            tilledAt: new Map(this.tilledAt), fishedAt: new Map(this.fishedAt),
+            crops: [...this.crops.values()].map(c => { const { owner, ...rest } = c; return { ...rest, ownerSeed: owner ? owner.sheet.seed : null }; }),
+
+            slots: this.slots.map(s => ({ ...s })),
+            wells: this.wells.map(w => ({ ...w, owners: w.owners ? [...w.owners] : undefined })),
+            silo: { ...this.silo }, board: this.board ? { ...this.board } : null,
+            statue: this.statue ? { ...this.statue } : null,
+            structures: this.structures.map(s => ({ ...s })),
+            scarecrows: this.scarecrows.map(s => ({ ...s })),
+            monuments: this.monuments.map(m => ({ ...m })),
+            chronicle: this.chronicle.map(c => ({ ...c })),
+            chronBonds: [...this._chronBonds], chronRifts: [...this._chronRifts],
+            log: this.log.map(l => ({ text: l.text, color: l.color })),   // t is a render clock — rebased on load
+            bonds: new Map(this.bonds),
+            waterDeals: new Map([...this.waterDeals].map(([k, v]) => [k, { ...v }])),
+            shareDeals: this.shareDeals.map(s => ({ ...s })),
+            project: this.project ? (() => { const { builders, site, ...rest } = this.project; return { ...rest, site: { ...site } }; })() : null,
+            coops: this.coops.map(c => ({
+                type: c.type, label: c.label, site: { ...c.site }, stage: c.stage, bornDay: c.bornDay,
+                needWood: c.needWood, needOre: c.needOre, wood: c.wood, ore: c.ore,
+                points: c.points, needed: c.needed,
+                proposerSeed: c.proposer ? c.proposer.sheet.seed : null,
+                memberSeeds: [...c.members].map(f => f.sheet.seed),
+            })),
+
+            plots: this.plots.map(p => ({
+                x: p.x, y: p.y, w: p.w, h: p.h, house: { ...p.house },
+                cells: [...p.cells], rev: p.rev, built: { ...p.built },
+                fencePosts: p.fencePosts, fenceTarget: p.fenceTarget,
+                building: p.building ? { ...p.building } : null, sited: p.sited,
+                fenceSkip: p.fenceSkip ? [...p.fenceSkip] : undefined,
+                facilities: p.facilities.map(f => ({
+                    type: f.type, x: f.x, y: f.y, w: f.w, h: f.h,
+                    struct: f.struct ? { ...f.struct } : null, trough: f.trough ? { ...f.trough } : null,
+                    producers: f.producers.map(pr => { const { region, ...rest } = pr; return { ...rest, busy: false }; }),
+                })),
+            })),
+
+            farmers: this.farmers.map(f => ({
+                sheet: f.sheet, plotIdx: plotIdx.get(f.plot),
+                pos: { ...f.pos }, facing: f.facing, moveDir: f.moveDir,
+                energy: f.energy, hp: f.hp, sleepDebt: f.sleepDebt, strain: f.strain,
+                health: f.health, sickDays: f.sickDays, caution: f.caution, illnesses: f.illnesses,
+                nightsExposed: f.nightsExposed, reputation: f.reputation, mood: f.mood,
+                helpPostedDay: f.helpPostedDay, wood: f.wood, ore: f.ore, discovered: f.discovered,
+                wantExpand: f.wantExpand, wantFacility: f.wantFacility, wantUpgrade: f.wantUpgrade,
+                birdLosses: f.birdLosses, stormLosses: f.stormLosses, donateCooldown: f.donateCooldown,
+                nextExpand: f.nextExpand, nextFacility: f.nextFacility, exploreCooldown: f.exploreCooldown,
+                goal: f.goal, downed: f.downed, reviveDay: f.reviveDay,
+                threatWary: { ...f.threatWary }, dangerZones: f.dangerZones.map(z => ({ ...z })),
+                jobStats: { ...f.jobStats },
+                journal: f.journal.map(e => ({ ...e })), gossip: f.gossip.map(g => ({ ...g })),
+                opinions: new Map(f.opinions), visitedSick: [...f.visitedSick], tools: [...f.tools],
+            })),
+        };
+        // one deep detach: guarantees the snapshot shares nothing with the live world
+        // (and throws loudly at SAVE time if anything non-clonable ever sneaks in)
+        return structuredClone(snap);
+    }
+
+    static fromSave(data) {
+        if (!data || data.v !== World.SAVE_VERSION) throw new Error(`save schema v${data && data.v} (expected v${World.SAVE_VERSION})`);
+        const w = new World(data.seed);
+        w.#restoreFrom(data);
+        return w;
+    }
+
+    #restoreFrom(d) {
+        this.rand = mulberry32(d.randSeed >>> 0);
+        this.time = d.time; this.day = d.day; this.clock = d.clock;
+        this.season = d.season; this.seasonDay = d.seasonDay; this.year = d.year;
+        this.harvestTotal = d.harvestTotal; this._dayHarvestStart = d.dayHarvestStart;
+        this.weather = d.weather; this.weatherTimer = d.weatherTimer;
+        this.dmCooldown = d.dmCooldown; this.preyCooldown = d.preyCooldown;
+        this.townCollab = d.townCollab; this.townCompete = d.townCompete; this.townVolatile = d.townVolatile;
+        this.stormLosses = d.stormLosses;
+        this.workMult = d.workMult; this.growthMult = d.growthMult;
+        this.lightningMult = d.lightningMult; this.rainBoost = d.rainBoost;
+        this.townLevel = d.townLevel; this.townXP = d.townXP; this.coffers = { ...d.coffers };
+        this.merchantNextDay = Math.max(d.merchantNextDay, d.day + 1);   // a visit active at save time reschedules cleanly
+        this.merchantVisit = d.merchantVisit; this.projectIndex = d.projectIndex;
+        this.exploredTiles = d.exploredTiles; this.ringCount = d.ringCount;
+
+        this.tiles.set(d.tiles);
+        this.chunks = new Map(); for (const [k, a] of d.chunks) this.chunks.set(k, Uint8Array.from(a));
+        this.fog = new Map(); for (const [k, a] of d.fog) this.fog.set(k, Uint8Array.from(a));
+        this.dirtyChunks.clear();
+        this.revealRect = { ...d.revealRect };
+        this.rockWork = new Map(d.rockWork); this.treePlanted = new Map(d.treePlanted);
+        this.tilledAt = new Map(d.tilledAt); this.fishedAt = new Map(d.fishedAt);
+
+        this.slots = d.slots.map(s => ({ ...s }));
+        this.wells = d.wells.map(w => ({ ...w, owners: w.owners ? new Set(w.owners) : undefined }));
+        this.well = this.wells[0];
+        this.silo = { ...d.silo }; this.board = d.board ? { ...d.board } : null;
+        this.statue = d.statue ? { ...d.statue } : null;
+        this.structures = d.structures.map(s => ({ ...s }));
+        this.scarecrows = d.scarecrows.map(s => ({ ...s }));
+        this.monuments = d.monuments.map(m => ({ ...m }));
+        this.chronicle = d.chronicle.map(c => ({ ...c }));
+        this._chronBonds = new Set(d.chronBonds); this._chronRifts = new Set(d.chronRifts);
+        this.log = d.log.map(l => ({ ...l, t: 0 }));   // rebase the render clock to this page's epoch
+        this.bonds = new Map(d.bonds);
+        this.waterDeals = new Map([...d.waterDeals].map(([k, v]) => [k, { ...v }]));
+        this.shareDeals = d.shareDeals.map(s => ({ ...s }));
+        this.project = d.project ? { ...d.project, site: { ...d.project.site }, builders: new Set() } : null;
+
+        this.plots = d.plots.map(pd => {
+            const plot = {
+                x: pd.x, y: pd.y, w: pd.w, h: pd.h, house: { ...pd.house },
+                fields: [], facilities: [], cells: new Set(pd.cells), rev: (pd.rev || 0) + 1,
+                built: { ...pd.built }, fencePosts: pd.fencePosts, fenceTarget: pd.fenceTarget,
+                building: pd.building ? { ...pd.building } : null, sited: pd.sited,
+            };
+            if (pd.fenceSkip) plot.fenceSkip = new Set(pd.fenceSkip);
+            plot.facilities = pd.facilities.map(fd => {
+                const region = { x: fd.x, y: fd.y, w: fd.w, h: fd.h };
+                return {
+                    type: fd.type, ...region,
+                    struct: fd.struct ? { ...fd.struct } : null, trough: fd.trough ? { ...fd.trough } : null,
+                    producers: fd.producers.map(pr => ({ ...pr, region })),
+                };
+            });
+            return plot;
+        });
+
+        this.farmers = d.farmers.map(fd => {
+            const f = new Farmer(fd.sheet, this.plots[fd.plotIdx], this);
+            f.pos = { ...fd.pos }; f.facing = fd.facing; f.moveDir = fd.moveDir;
+            f.energy = fd.energy; f.hp = fd.hp; f.sleepDebt = fd.sleepDebt; f.strain = fd.strain;
+            f.health = fd.health; f.sickDays = fd.sickDays; f.caution = fd.caution; f.illnesses = fd.illnesses;
+            f.nightsExposed = fd.nightsExposed; f.reputation = fd.reputation; f.mood = fd.mood;
+            f.helpPostedDay = fd.helpPostedDay; f.wood = fd.wood; f.ore = fd.ore; f.discovered = fd.discovered;
+            f.wantExpand = fd.wantExpand; f.wantFacility = fd.wantFacility; f.wantUpgrade = fd.wantUpgrade;
+            f.birdLosses = fd.birdLosses; f.stormLosses = fd.stormLosses; f.donateCooldown = fd.donateCooldown;
+            f.nextExpand = fd.nextExpand; f.nextFacility = fd.nextFacility; f.exploreCooldown = fd.exploreCooldown;
+            f.goal = fd.goal; f.downed = fd.downed; f.reviveDay = fd.reviveDay;
+            f.threatWary = { ...fd.threatWary }; f.dangerZones = fd.dangerZones.map(z => ({ ...z }));
+            f.jobStats = { ...fd.jobStats };
+            f.journal = fd.journal.map(e => ({ ...e })); f.gossip = fd.gossip.map(g => ({ ...g }));
+            f.opinions = new Map(fd.opinions);
+            f.visitedSick = new Set(fd.visitedSick); f.tools = new Set(fd.tools);
+            f.thought = 'ANOTHER DAY ON THE FARM';
+            return f;
+        });
+
+        // crops re-link to their restored owners; an orphaned crop (shouldn't happen) is dropped
+        const bySeed = new Map(this.farmers.map(f => [f.sheet.seed, f]));
+        this.crops = new Map();
+        for (const cd of d.crops) {
+            const { ownerSeed, ...rest } = cd;
+            const owner = bySeed.get(ownerSeed);
+            if (owner) this.crops.set(`${cd.i},${cd.j}`, { ...rest, owner });
+        }
+        this.coops = d.coops.map(cd => {
+            const proposer = bySeed.get(cd.proposerSeed);
+            if (!proposer) return null;
+            const { proposerSeed, memberSeeds, ...rest } = cd;
+            return { ...rest, site: { ...cd.site }, proposer, builders: new Set(),
+                     members: new Set(memberSeeds.map(s => bySeed.get(s)).filter(Boolean)) };
+        }).filter(Boolean);
+
+        // rebuild derived state + shed anything transient the constructor seeded for a fresh town
+        for (const plot of this.plots) this.#rebuildFields(plot);
+        this.helpBoard = []; this.encounters = []; this.prey = [];
+        this.treasure = null; this.merchant = null; this.dayRecap = null;
+        this.lightningTimer = 0; this.lightningFlash = 0; this.struckTile = null; this.townLevelFlash = 0;
+        this.birds = []; this.#spawnBirds(4 + Math.floor(this.rand() * 3));   // re-perch on the REAL current trees
+        this.updateLeader();
+        this.#recomputeTownTraits();
+    }
+
     updateLeader() {
         let top = null, best = -1;
         for (const f of this.farmers) if (f.sheet.harvested > best) { best = f.sheet.harvested; top = f; }
