@@ -3077,7 +3077,7 @@ function drawSheet(f) {
         const actWord = f.action ? (ACT_WORD[f.action.task?.act] || f.action.task?.act || 'working') : '';
         const doing = f.state === 'work' ? actWord + helping
             : f.state === 'chop' ? 'chopping wood' : f.state === 'break' ? 'clearing a stump'
-            : f.state === 'forage' ? 'foraging wheat' : f.state === 'poach' ? 'sneaking'
+            : f.state === 'forage' ? 'foraging' : f.state === 'poach' ? 'sneaking'
             : f.state === 'build' ? 'building' : f.state === 'care' ? 'tending sick'
             : f.state === 'sick' ? 'recovering' : f.state === 'rest' ? 'napping'
             : f.state === 'decide-help' || (f.state === 'walk' && f.helpTask) ? 'helping' + helping
@@ -3601,7 +3601,9 @@ function drawChronicle() {
             return { x, y: PY + 3, w, h: 9 };
         };
         const nmW = textWidth(nm) + 6;
-        const townX = PX + PW - 18 - (textWidth('TOWN') + 6) - 3 - nmW;
+        // keep the chips clear of the close-X hit zone (p.x > cv.x+cv.w-14): end them at -26 so the
+        // top-right X always closes and never toggles saga scope by accident (Codex r13 #3).
+        const townX = PX + PW - 26 - (textWidth('TOWN') + 6) - 3 - nmW;
         const townR = chip('TOWN', townX, chronTownWide);
         const farmR = chip(nm, townX + (textWidth('TOWN') + 6) + 3, !chronTownWide);
         chronScopeHits = { town: townR, farmer: farmR };

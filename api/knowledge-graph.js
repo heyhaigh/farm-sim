@@ -72,12 +72,16 @@ module.exports = async function handler(req, res) {
         for (let page = 0; page < MAX_PAGES; page++) {
             const url = `${base}/v3/documents?limit=${PAGE_LIMIT}&offset=${page * PAGE_LIMIT}&page=${page + 1}`;
             const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), 8000);
+            // HARD deadline: race BOTH the fetch and the body read against a timeout, so even a server
+            // that sends headers then stalls the body can never hang the handler (Codex r13 #2). The
+            // timeout wins the race and the outer catch returns an empty list -> dna.js falls back.
+            let timer;
+            const deadline = new Promise((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error('timeout')); }, 8000); });
             let data;
             try {
-                const r = await fetch(url, { headers, signal: controller.signal });
+                const r = await Promise.race([fetch(url, { headers, signal: controller.signal }), deadline]);
                 if (!r.ok) throw new Error(`SuperMemory ${r.status}`);
-                data = await r.json();
+                data = await Promise.race([r.json(), deadline]);
             } finally {
                 clearTimeout(timer);
             }

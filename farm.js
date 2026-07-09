@@ -2145,23 +2145,30 @@ export class World {
                 this.addChronicle('town', `${shortName(wch)} was made the Town Watch.`, wch, null, '#e0c060'); }
         }
 
-        // MANAGER approval = how much of the town RALLIED to the day's directive (vs ~half expected).
-        const d = r.directive;
-        if (d) {
-            const weighed = d.heeders.size + d.refusers.size;
-            const expect = Math.max(1, Math.ceil((this.farmers.length - 1) / 2));
-            r.approval = Math.max(0, Math.min(1, r.approval * 0.7 + (d.heeders.size / Math.max(weighed, expect)) * 0.3));
+        // QUORUM: the town who COULD answer today (not the Manager, not sick/downed). On a no-quorum
+        // day — a plague lays everyone up — there's no signal, so approval AND the recall clocks both
+        // HOLD. An office-holder is never punished (or churned out on recovery) for a day nobody could
+        // act. (Codex r13 #1.) Expectation scales to who's actually AVAILABLE, not the whole roster.
+        const mgr = this.managerFarmer();
+        const eligible = this.farmers.filter(f => f !== mgr && f.health !== 'sick' && !f.downed).length;
+        if (eligible > 0) {
+            // MANAGER approval = how much of the AVAILABLE town rallied to the day's directive.
+            const d = r.directive;
+            if (d) {
+                const weighed = d.heeders.size + d.refusers.size;
+                const expect = Math.max(1, Math.ceil(eligible / 2));
+                r.approval = Math.max(0, Math.min(1, r.approval * 0.7 + (d.heeders.size / Math.max(weighed, expect)) * 0.3));
+            }
+            r.lowDays = r.approval < 0.25 ? r.lowDays + 1 : 0;
+            // WATCH approval drifts toward the AVAILABLE town's regard for them (trials nudge it directly).
+            const wf = this.watchFarmer();
+            if (wf) {
+                let sum = 0, n = 0;
+                for (const f of this.farmers) if (f !== wf && f.health !== 'sick' && !f.downed) { sum += f.opinionOf(wf); n++; }
+                if (n > 0) r.watchApproval = Math.max(0, Math.min(1, r.watchApproval * 0.9 + (0.55 + sum / n) * 0.1));
+            }
+            r.watchLowDays = r.watchApproval < 0.25 ? r.watchLowDays + 1 : 0;
         }
-        r.lowDays = r.approval < 0.25 ? r.lowDays + 1 : 0;
-        // WATCH approval drifts toward the town's regard for them (trials nudge it directly); an
-        // unpopular or heavy-handed Watch erodes toward recall between cases.
-        const wf = this.watchFarmer();
-        if (wf) {
-            let sum = 0, n = 0;
-            for (const f of this.farmers) if (f !== wf) { sum += f.opinionOf(wf); n++; }
-            r.watchApproval = Math.max(0, Math.min(1, r.watchApproval * 0.9 + (0.55 + (n ? sum / n : 0)) * 0.1));
-        }
-        r.watchLowDays = r.watchApproval < 0.25 ? r.watchLowDays + 1 : 0;
 
         // recall a chronically-unpopular office-holder; the chair passes to the next-fittest DIFFERENT
         // hand (forced turnover keeps it dynamic before elections exist).
