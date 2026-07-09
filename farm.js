@@ -24,7 +24,7 @@ const ISO_HALF_H = 5;      // mirrors TILE_H / 2 without importing renderer code
 
 export const T = { GRASS: 0, PATH: 1, TILLED: 2, HOUSE: 3, WELL: 4, SIGN: 5, STRUCT: 6, WATER: 7, COOP: 8, BARN: 9, TREE: 10, STUMP: 11, WHEAT: 12, FLOWER: 13, ROCK: 14 };
 export const FORAGE_TILES = [T.WHEAT, T.FLOWER];
-export const FORAGE_NAME = { [T.WHEAT]: 'wild wheat', [T.FLOWER]: 'wildflowers' };
+export const FORAGE_NAME = { [T.WHEAT]: 'wild grass', [T.FLOWER]: 'wild bush' };
 
 // Canonical item catalog for the inventory UI. `icon` indexes the fantasy 16x16 icon
 // pack (assets/.../Separately/Icon{icon}_1.png), resolved to an <img> in main.js.
@@ -34,7 +34,7 @@ export const ITEMS = {
     wood:   { name: 'WOOD',   icon: 75 },
     ore:    { name: 'ORE',    icon: 47 },
     crops:  { name: 'CROPS',  icon: 73 },
-    wheat:  { name: 'WHEAT',  icon: 45 },   // foraged wild wheat — FOLDED into the wheat crop stack in the inventory
+    grass:  { name: 'GRASS',  icon: 45 },   // wild grass — foraged from grass clumps and bushes
     flower: { name: 'FLOWER', icon: 79 },
 };
 
@@ -99,7 +99,7 @@ const TOWN_MAX_LEVEL = 10;                       // the town is "built out" here
 // and facility produce (eggs/milk/wool/truffles/fish/lilies) are worth more than raw wood/forage
 // since they take a built facility to yield. Unknown goods fall back to DONATE_XP_DEFAULT.
 const DONATE_XP = { wood: 2, ore: 3, crops: 1, egg: 3, milk: 3, fish: 3, lily: 2, truffle: 4, wool: 4,
-                    wheat: 1, flower: 1, 'wild wheat': 1, wildflowers: 1,
+                    grass: 1, flower: 1,
                     'meat-s': 3, 'meat-m': 5, 'meat-l': 7, fowl: 4 };   // meat is prized
 const DONATE_XP_DEFAULT = 2;
 const DONATE_BATCH = 15;                          // how much surplus a farmer carries to the silo per trip
@@ -410,6 +410,11 @@ export class World {
         this.townLevelFlash = 0;                          // brief UI pulse on a town level-up
         this.silo = { i: CENTER - 4, j: CENTER - 1 };     // the donation heart of the plaza (present from day one)
         this.set(this.silo.i, this.silo.j, T.STRUCT);
+        // #94 CIVIC ROLES (P1): a Town Manager, appointed by fitness, posts one town DIRECTIVE at a
+        // time; farmers weigh it through the autonomy kernel (below survival/dream/urgent work, capped
+        // budget, logged refusals) and heed or refuse. `manager` is a seed; `approval` drives fatigue
+        // + recall so a poor leader is unseated even before elections exist. Sim-driven + seeded.
+        this.roles = { manager: null, approval: 0.6, lowDays: 0, directive: null, directiveSeq: 0, cooldown: 0 };
         this.board = null;    // no bulletin board until the town builds one together (first communal project)
         this.merchant = null;                             // the wandering trader, present only during a visit
         this.merchantNextDay = 4 + Math.floor(this.rand() * 3);   // first caravan rolls in around day 4-6
@@ -631,7 +636,7 @@ export class World {
             farmer.remember('event', `Found a woodcutter's forgotten stash — ${wood} timber`, null, 1.15);
             this.addLog(`${s.name} found a forgotten TIMBER STASH — ${wood} wood!`, '#b98a4a');
         } else if (tr.kind === 'goods') {
-            const pool = ['wild wheat', 'wildflowers', 'egg', 'wool', 'lily'];
+            const pool = ['grass', 'flower', 'egg', 'wool', 'lily'];
             const picks = [];
             for (let k = 0; k < 2 + (this.rand() < (tr.depth || 0) ? 1 : 0); k++) {
                 const g = pool[Math.floor(this.rand() * pool.length)];
@@ -656,7 +661,7 @@ export class World {
             s.produce = (s.produce || 0) + crops;
             addCropStock(s, s.crop, crops, 'found');   // provenance: a windfall from the wilds (their staple crop)
             farmer.wood += rnd(4, 8); farmer.ore += rnd(2, 4);
-            const g = ['wild wheat', 'wildflowers'][Math.floor(this.rand() * 2)];
+            const g = ['grass', 'flower'][Math.floor(this.rand() * 2)];
             s.goods[g] = (s.goods[g] || 0) + rnd(2, 4);
             farmer.gainXP(8); farmer.say('TREASURE!', '#f0d060');
             farmer.remember('event', `Found a treasure chest! ${crops} crops plus timber, ore and goods`, null, 1.2);
@@ -1261,6 +1266,7 @@ export class World {
         // farmer's lifelong want fits who they finally are. Same town seed -> same dreams; a fresh
         // town rerolls the cast's inner lives.
         this.#ensureDreams();
+        this.#updateCivic();   // #94: seat the first Town Manager + post day-one directive
     }
 
     // Roll a dream for any farmer without one (founders after ensureFounderVariety; any future
@@ -1871,6 +1877,15 @@ export class World {
             townLevel: this.townLevel, townXP: this.townXP, coffers: { ...this.coffers },
             merchantNextDay: this.merchantNextDay, merchantVisit: this.merchantVisit,
             projectIndex: this.projectIndex, exploredTiles: this.exploredTiles, ringCount: this.ringCount,
+            roles: {   // #94: Sets/Maps flattened to arrays so the snapshot is structured-clone-plain
+                manager: this.roles.manager, approval: this.roles.approval, lowDays: this.roles.lowDays,
+                directiveSeq: this.roles.directiveSeq, cooldown: this.roles.cooldown,
+                directive: this.roles.directive ? {
+                    id: this.roles.directive.id, kind: this.roles.directive.kind,
+                    text: this.roles.directive.text, day: this.roles.directive.day,
+                    heeders: [...this.roles.directive.heeders], refusers: [...this.roles.directive.refusers],
+                } : null,
+            },
 
             tiles: this.tiles.slice(),
             chunks: new Map([...this.chunks].map(([k, a]) => [k, a.slice()])),
@@ -1959,6 +1974,14 @@ export class World {
         this.merchantNextDay = Math.max(d.merchantNextDay, d.day + 1);   // a visit active at save time reschedules cleanly
         this.merchantVisit = d.merchantVisit; this.projectIndex = d.projectIndex;
         this.exploredTiles = d.exploredTiles; this.ringCount = d.ringCount;
+        this.roles = d.roles ? {   // #94 (guarded: pre-roles saves resume with a fresh, unseated chair)
+            manager: d.roles.manager, approval: d.roles.approval, lowDays: d.roles.lowDays || 0,
+            directiveSeq: d.roles.directiveSeq || 0, cooldown: d.roles.cooldown || 0,
+            directive: d.roles.directive ? {
+                ...d.roles.directive,
+                heeders: new Set(d.roles.directive.heeders), refusers: new Map(d.roles.directive.refusers),
+            } : null,
+        } : { manager: null, approval: 0.6, lowDays: 0, directive: null, directiveSeq: 0, cooldown: 0 };
 
         this.tiles.set(d.tiles);
         this.chunks = new Map(); for (const [k, a] of d.chunks) this.chunks.set(k, Uint8Array.from(a));
@@ -2060,6 +2083,80 @@ export class World {
                 if (top.sheet.personality.competitiveness > 0.55) { top.say('TOP OF THE TOWN!', '#f0d060'); top.sparkle = 2; }
             }
         }
+    }
+
+    // ---- CIVIC ROLES (#94 P1): the Town Manager -----------------------------------
+
+    managerFarmer() { return this.roles.manager != null ? this.farmers.find(f => f.sheet.seed === this.roles.manager) : null; }
+
+    // Fitness for the manager's chair: presence (CHA), civic temperament (collaboration), a good
+    // name (reputation), and seasoning (level). Pure + seeded — no rng, stable tie-break by seed.
+    #managerFitness(f) {
+        const s = f.sheet, p = s.personality;
+        return mod(s.stats.cha) * 0.5 + p.collaboration + f.reputation + (s.level || 1) * 0.08;
+    }
+    #appointManager(exclude = null) {
+        const pool = [...this.farmers]
+            .filter(f => f !== exclude && f.health !== 'sick' && !f.downed)
+            .sort((a, b) => a.sheet.seed - b.sheet.seed);   // stable order before the fitness pick
+        let best = null, bestV = -1e9;
+        for (const f of pool) { const v = this.#managerFitness(f); if (v > bestV) { bestV = v; best = f; } }
+        if (!best && exclude) best = exclude;   // town of one sick/downed soul: keep who we have
+        return best;
+    }
+
+    // Once per day: seat a manager if the chair's empty, tally the outgoing directive into approval,
+    // recall a chronically-unpopular manager, then post the day's directive. Seeded + in-sim.
+    #updateCivic() {
+        const r = this.roles;
+        if (!this.farmers.length) return;
+
+        // seat a manager if there's none (founding / after a departure)
+        if (r.manager == null || !this.managerFarmer()) {
+            const m = this.#appointManager();
+            if (m) { r.manager = m.sheet.seed; r.approval = 0.6; r.lowDays = 0;
+                this.addChronicle('town', `${shortName(m)} took up the Manager's chair.`, m, null, '#e0c060'); }
+        }
+
+        // fold the day's directive result into approval = how much of the town RALLIED to the call.
+        // Measured against an expectation (~half the town), so a Manager who's actively refused OR
+        // simply ignored erodes toward recall, while one the town answers keeps their chair.
+        const d = r.directive;
+        if (d) {
+            const weighed = d.heeders.size + d.refusers.size;
+            const expect = Math.max(1, Math.ceil((this.farmers.length - 1) / 2));
+            const heedRate = d.heeders.size / Math.max(weighed, expect);
+            r.approval = Math.max(0, Math.min(1, r.approval * 0.7 + heedRate * 0.3));
+        }
+        r.lowDays = r.approval < 0.25 ? r.lowDays + 1 : 0;
+
+        // recall: a manager the town has soured on for days steps down; the chair passes to the
+        // next-fittest DIFFERENT hand (forced turnover keeps P1 dynamic before elections exist)
+        if (r.lowDays >= 3 && this.farmers.length > 1) {
+            const out = this.managerFarmer();
+            const next = this.#appointManager(out);
+            if (next && next !== out) {
+                r.manager = next.sheet.seed; r.approval = 0.5; r.lowDays = 0;
+                this.addChronicle('rift', `${out ? shortName(out) : 'The Manager'} was stood down; ${shortName(next)} takes the Manager's chair.`, next, out, '#d08cc8');
+            }
+        }
+
+        this.#postDirective();
+    }
+
+    // The Manager reads the town and posts ONE directive for the day (or none if there's no need):
+    // rally to the current communal project, else call for donations to level the town.
+    #postDirective() {
+        const r = this.roles, m = this.managerFarmer();
+        if (!m) { r.directive = null; return; }
+        let kind = null, text = null;
+        if (this.project) {
+            kind = 'project'; text = `${shortName(m)} calls the town to raise the ${this.project.label ? this.project.label.toLowerCase() : 'town project'}.`;
+        } else if (this.townLevel < TOWN_MAX_LEVEL) {
+            kind = 'donate'; text = `${shortName(m)} asks for surplus at the silo to grow the town.`;
+        }
+        if (!kind) { r.directive = null; return; }
+        r.directive = { id: ++r.directiveSeq, kind, text, day: this.day, heeders: new Set(), refusers: new Map() };
     }
 
     // ---- farmers -----------------------------------------------------------------
@@ -3700,6 +3797,7 @@ export class World {
             for (const [k, d] of this.fishedAt) if (this.day - d > FISH_COOLDOWN) this.fishedAt.delete(k);
             this.#recomputeTownTraits();
             this.#ensureDreams();   // safety net: any future arrival rolls their dream at first dawn
+            this.#updateCivic();    // #94: tally yesterday's directive -> approval/recall, post today's
             this.#dailyHealthCheck();
             this.#advanceSeason();
             this.#decayTilled();
@@ -4785,6 +4883,60 @@ export class Farmer {
                  build: 'BUILD', visit: 'CALL ON A NEIGHBOUR', trade: 'GO TRADING', hunt: 'HUNT' }[kind] || 'DO THAT';
     }
 
+    // ---- CIVIC (#94 P1): heeding the Town Manager's directive ---------------
+    // Lazy civic state on the SHEET (rides the save wholesale, like conscience).
+    get civic() {
+        let c = this.sheet.civic;
+        if (!c) c = this.sheet.civic = { decided: null, acceptedDay: { day: -1, count: 0 } };
+        return c;
+    }
+    isManager() { return this.world.roles.manager === this.sheet.seed; }
+
+    // Decide ONCE per directive whether to take it up (cached on the sheet so re-deciding each tick
+    // never re-rolls or floods rng). Returns 'heed' | 'refuse' | 'skip'. The Manager leads by doing
+    // (exempt); loners and the Manager's enemies always refuse; a daily budget caps the claim. The
+    // roll uses this.rand (the per-farmer SIM stream) — seeded + deterministic.
+    #considerDirective(dir) {
+        if (this.isManager()) return 'skip';
+        const c = this.civic;
+        if (c.decided && c.decided.id === dir.id) return c.decided.verdict;   // one decision per directive
+
+        const m = this.world.managerFarmer();
+        const record = (verdict, reason) => {
+            c.decided = { id: dir.id, verdict };
+            if (verdict === 'heed') {
+                dir.heeders.add(this.sheet.seed);
+                if (c.acceptedDay.day !== this.world.day) c.acceptedDay = { day: this.world.day, count: 0 };
+                c.acceptedDay.count++;
+            } else if (verdict === 'refuse') {
+                dir.refusers.set(this.sheet.seed, reason);
+            }
+            return verdict;
+        };
+
+        if (this.goal === 'lone wolf') return record('refuse', 'keeps to their own fence');
+        if (m && this.opinionOf(m) < -0.3) return record('refuse', 'no love for the Manager');
+        const todayHeeds = c.acceptedDay.day === this.world.day ? c.acceptedDay.count : 0;
+        if (todayHeeds >= 2) return record('refuse', 'done their share today');
+
+        // acceptance = temperament x regard for the Manager x task fit x the town's confidence in them.
+        // Tuned so a NEUTRAL town settles above the recall floor (no death spiral), a LIKED manager
+        // earns strong compliance, and a resented one withers toward recall.
+        const opinionWeight = Math.max(0.3, Math.min(1.5, 1.0 + (m ? this.opinionOf(m) : 0)));   // neutral = 1.0
+        const fit = dir.kind === 'donate' ? 0.7 + this.p.collaboration * 0.5 : 0.7 + this.p.diligence * 0.5;
+        const approvalFactor = 0.6 + this.world.roles.approval * 0.4;
+        const chance = Math.max(0, Math.min(0.9, 0.6 * (0.5 + this.effCollab()) * opinionWeight * fit * approvalFactor));
+        if (this.rand() < chance) return record('heed', null);
+        return record('refuse', this.dream('grandhouse') || (this.sheet.dream && !this.sheet.dreamDone && this.p.competitiveness > 0.55) ? 'set on their own ambitions' : 'had their own plans');
+    }
+
+    // Do the directed town work by reusing the existing pursuit. Returns true if it acted.
+    #doDirective(dir) {
+        if (dir.kind === 'project') return this.world.project ? this.#pursueProject() : false;
+        if (dir.kind === 'donate') return this.#pursueDonation();
+        return false;
+    }
+
     // #89: the dream ARC, checked each dawn in reflect(). Fulfillment is a big public beat
     // (chronicle + sparkle + a strong journal memory + XP); a shaken dream is a quiet one-shot
     // crisis in the journal. Both live on the sheet, so a reload keeps the arc where it was.
@@ -5099,22 +5251,17 @@ export class Farmer {
         const push = (id, count, cap) => { if (count > 0 && ITEMS[id]) out.push({ id, name: ITEMS[id].name, icon: ITEMS[id].icon, count, cap }); };
         push('wood', this.wood, caps.wood);
         push('ore', this.ore, caps.ore);
-        // crops broken out by TYPE with their provenance (raised on the farm / stolen / foraged in the
-        // wilds). Foraged WILD wheat (goods.wheat) is FOLDED into the wheat stack as "foraged" — it's the
-        // same grain in the pouch, so we don't split wild from grown for now (may become "wild grass" later).
+        // crops broken out by TYPE with their provenance (raised on the farm / stolen / found).
         const g = this.sheet.goods || {};
         const cs = this.sheet.cropStock || {};
-        const wildWheat = g.wheat || 0;
-        const cropTypes = new Set(Object.keys(cs));
-        if (wildWheat > 0) cropTypes.add('wheat');
-        for (const type of cropTypes) {
+        for (const type of Object.keys(cs)) {
             const e = cs[type] || { grown: 0, stolen: 0, found: 0 };
-            const found = (e.found || 0) + (type === 'wheat' ? wildWheat : 0);
-            const count = (e.grown || 0) + (e.stolen || 0) + found;
+            const count = (e.grown || 0) + (e.stolen || 0) + (e.found || 0);
             if (count > 0) out.push({ id: 'crop:' + type, crop: type, name: type.charAt(0).toUpperCase() + type.slice(1),
-                                      count, sources: { grown: e.grown || 0, stolen: e.stolen || 0, found } });
+                                      count, sources: { grown: e.grown || 0, stolen: e.stolen || 0, found: e.found || 0 } });
         }
-        for (const key of ['flower']) push(key, g[key] || 0);   // wheat folded above; flower stays a foraged good
+        // foraged wild goods — grass (from grass clumps + bushes) and flowers (from bushes)
+        for (const key of ['grass', 'flower']) push(key, g[key] || 0);
         // wild-caught goods drawn with a procedural sprite (resolved renderer-side): fish is its own
         // item, lilies too — the yield of the wild-water fishing bounty.
         for (const key of ['fish', 'lily']) { const n = g[key] || 0; if (n > 0) out.push({ id: key, good: key, name: key === 'fish' ? 'Fish' : 'Lily pad', count: n }); }
@@ -6120,14 +6267,26 @@ export class Farmer {
         // 1c2. the crows have taken enough: raise a scarecrow over the fields
         if (!w.isNight() && this.birdLosses >= SCARECROW_LOSSES && this.#pursueScarecrow()) return;
 
-        // 1d. town project: shared infrastructure beats low-priority fill work. Statues
-        //     want their stone and timber HAULED first; the carving starts once it's all in.
-        //     (Storm-driven guardian-raising already ran far higher up, right after crop care.)
-        if (w.project && this.p.collaboration > 0.35 && this.energy > 0.3 && this.#pursueProject()) return;
-
-        // 1d.5 grow the TOWN: with no build to fund, a civic settler hauls surplus timber to the
-        //      silo (levelling the town toward its next unlock) — or cuts some expressly to give.
-        if (!w.project && this.#pursueDonation()) return;
+        // 1d. TOWN WORK (#94): shared infrastructure + donations, now MEDIATED by the Town Manager.
+        //     The Manager always pitches in (leads by doing). Everyone else weighs the Manager's posted
+        //     DIRECTIVE through the autonomy kernel — opinion x personality x task-fit x town approval,
+        //     one decision per directive, a daily budget, refusals logged (and shown in TOWN HALL); a
+        //     heeder then works the town task freely all day. With no directive up, the legacy
+        //     collaboration-gated pull stands. Sits above fill/idle work, below all personal/urgent work.
+        if (!w.isNight() && this.energy > 0.3) {
+            const dir = w.roles.directive;
+            if (this.isManager()) {
+                if (w.project ? this.#pursueProject() : this.#pursueDonation()) return;
+            } else if (dir) {
+                if (this.#considerDirective(dir) === 'heed' && this.#doDirective(dir)) {
+                    this.think(dir.kind === 'donate' ? "THE MANAGER'S RIGHT - SOMETHING FOR THE SILO" : "RALLYING TO THE MANAGER'S CALL");
+                    return;
+                }
+            } else {
+                if (w.project && this.p.collaboration > 0.35 && this.#pursueProject()) return;
+                if (!w.project && this.#pursueDonation()) return;
+            }
+        }
 
         // #93: we've cleared urgent crop + facility work to reach here, so a BARGAIN urge ("when the
         //      work is in") now ARMS and starts biasing decisions from the next pass on.
@@ -6201,7 +6360,7 @@ export class Farmer {
         // 5b. forage wild wheat / wildflowers growing nearby (free food + goods)
         if (!w.isNight() && this.energy > 0.3) {
             const wild = w.nearestForage(this.pos, 15);
-            if (wild) { this.think(wild.tile === T.FLOWER ? 'WILDFLOWERS! WORTH GATHERING.' : 'WILD WHEAT! A FREE FORAGE.'); this.forageTarget = wild; this.#goTo(wild.i + 0.5, wild.j + 0.5, 'forage'); return; }
+            if (wild) { this.think(wild.tile === T.FLOWER ? 'A WILD BUSH - GRASS AND FLOWERS.' : 'WILD GRASS - A FREE FORAGE.'); this.forageTarget = wild; this.#goTo(wild.i + 0.5, wild.j + 0.5, 'forage'); return; }
         }
 
         // 5b-2. fish a wild lake nearby — a patient angler's bounty (fish + the odd lily to trade). Wild
@@ -7022,12 +7181,22 @@ export class Farmer {
             }
             w.rockWork.delete(key);
             w.set(tgt.i, tgt.j, T.GRASS);
-            const yieldN = (1 + (mod(s.stats.wis) > 1 || this.rand() < 0.4 ? 1 : 0)) * (tier + 1);   // bulk = more forage
-            s.harvested += yieldN; w.harvestTotal += yieldN;
-            const good = t === T.FLOWER ? 'flower' : 'wheat';
             s.goods = s.goods || {};
-            s.goods[good] = (s.goods[good] || 0) + yieldN;
-            this.say(`+${yieldN} ${t === T.FLOWER ? 'flowers' : 'wild wheat'}`, t === T.FLOWER ? '#e878b0' : '#e8c860');
+            // NEW forage model: a grass CLUMP gives 1 grass; a BUSH gives grass by its size PLUS a
+            // randomized handful of flowers (the big counts are rare — rand^2 skews the roll low).
+            if (t === T.FLOWER) {
+                const big = tier >= 1;                                   // small bush vs larger bush
+                const grassN = big ? 3 : 1;
+                const flowerN = 1 + Math.floor(this.rand() * this.rand() * (big ? 5 : 3));   // small 1-3, large 1-5, high end rare
+                s.goods.grass = (s.goods.grass || 0) + grassN;
+                s.goods.flower = (s.goods.flower || 0) + flowerN;
+                s.harvested += grassN + flowerN; w.harvestTotal += grassN + flowerN;
+                this.say(`+${grassN} grass +${flowerN} flowers`, '#e878b0');
+            } else {
+                s.goods.grass = (s.goods.grass || 0) + 1;               // a grass clump = 1 grass
+                s.harvested += 1; w.harvestTotal += 1;
+                this.say('+1 wild grass', '#8fd06a');
+            }
             this.gainXP(1);
         }
         this.forageTarget = null;

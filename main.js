@@ -2452,18 +2452,18 @@ function drawSpeakerIcon(x, y, on) {
     }
 }
 
-// a little gear cog (icon-only) for the settings button
+// a clean, symmetric gear cog (icon-only) for the settings button — drawn procedurally on a
+// 9x9 field so the round body, 8 teeth, and centre hole all stay uniform at pixel scale.
 function drawGearIcon(x, y, active) {
     ctx.fillStyle = active ? '#7dd069' : '#c8ccd8';
-    const cx = x + 5, cy = y + 4;
-    // four spokes/teeth around the hub
-    ctx.fillRect(cx - 1, y, 2, 9);       // vertical teeth (top+bottom)
-    ctx.fillRect(x, cy - 1, 11, 2);      // horizontal teeth (left+right)
-    ctx.fillRect(cx - 3, cy - 3, 2, 2); ctx.fillRect(cx + 2, cy - 3, 2, 2);   // diagonal nubs
-    ctx.fillRect(cx - 3, cy + 2, 2, 2); ctx.fillRect(cx + 2, cy + 2, 2, 2);
-    ctx.fillRect(cx - 2, cy - 2, 5, 5);  // hub
-    ctx.fillStyle = '#12141c';
-    ctx.fillRect(cx - 1, cy - 1, 3, 3);  // hub hole
+    const R = 4;   // field is (2R+1)=9 wide, centre at (R,R)
+    for (let gy = 0; gy <= 2 * R; gy++) for (let gx = 0; gx <= 2 * R; gx++) {
+        const dx = gx - R, dy = gy - R, ax = Math.abs(dx), ay = Math.abs(dy), r = Math.hypot(dx, dy);
+        const body = r <= 2.9;                                        // round hub/body
+        const tooth = r <= 3.9 && (ax <= 1 || ay <= 1 || ax === ay);  // 8 teeth: 4 cardinal + 4 diagonal
+        const hole = r <= 1.25;                                       // centre bore
+        if ((body || tooth) && !hole) ctx.fillRect(x + gx, y + gy, 1, 1);
+    }
 }
 
 function drawUI() {
@@ -2533,7 +2533,7 @@ function drawUI() {
     // sound toggle — RIGHTMOST (drawn first), a speaker icon (with an X when muted), no text
     barIconBtn(SND_BTN, 15, (x, y) => drawSpeakerIcon(x + 3, y + 2, audio.enabled));
     // settings cog — folds in New Town + music/SFX volume (sound on/off stays a top-bar quick action)
-    barIconBtn(SETTINGS_BTN, 15, (x, y) => drawGearIcon(x + 2, y + 2, settingsOpen));
+    barIconBtn(SETTINGS_BTN, 15, (x, y) => drawGearIcon(x + 3, y + 1, settingsOpen));
 
     // speed controls in the corner: > = 5x, >> = 20x; a 1X revert appears while sped up
     const spd = world._speedMult || 1;
@@ -2865,6 +2865,12 @@ const SHEET_LABEL = '#8f8570', SHEET_VAL = '#e8e0cc', SHEET_GOLD = '#c9a45a';
 // A one-line "what they're doing + why" for the card — EXPLAINS the symbol hovering over their head on
 // the map (wound bar / hunt paw / barter coin / help plus / grudge-scowl or bond-heart / kill trophy),
 // falling back to a plain description of their current activity.
+// #94: the civic role a farmer currently holds (P1: Manager only; the roster + card show it).
+function farmerRole(f) {
+    if (f.world && f.world.roles && f.world.roles.manager === f.sheet.seed) return 'MANAGER';
+    return null;
+}
+
 function currentStatus(f) {
     if (f.downed) return 'RECOVERING AT HOME';
     if (f.carryTrophy) return 'CARRYING HOME A FRESH KILL';
@@ -2917,6 +2923,9 @@ function drawSheet(f) {
     ctx.fillStyle = '#2b2016'; ctx.fillRect(IX - 2, PY + 16, IW + 4, 21);
     ctx.fillStyle = SHEET_GOLD; ctx.fillRect(IX - 2, PY + 16, IW + 4, 1); ctx.fillRect(IX - 2, PY + 36, IW + 4, 1);
     drawText(ctx, s.name, IX, PY + 19, '#ffffff', 1);
+    // #94: a civic role a farmer holds shows in gold at the end of the name line
+    const role = farmerRole(f);
+    if (role) drawText(ctx, role, IX + IW - textWidth(role), PY + 19, '#e8c860');
     drawText(ctx, `${s.archetype.toUpperCase()} LV${s.level}`, IX, PY + 28, SHEET_GOLD);
     const hStr = f.downed ? 'RECOVERING' : f.health === 'sick' ? 'SICK' : f.tired ? 'TIRED' : 'WELL';
     drawText(ctx, hStr, IX + IW - textWidth(hStr), PY + 28, eCol);
