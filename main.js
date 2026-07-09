@@ -3200,11 +3200,11 @@ function drawSheet(f) {
             drawText(ctx, f.sheet.dreamDone ? `WON ON DAY ${f.sheet.dreamDone}` : 'STILL CHASING IT', IX + 2, y, f.sheet.dreamDone ? '#7dd069' : SHEET_LABEL); y += 8;
             if (f.goal) { drawText(ctx, `COURSE THIS SEASON: ${f.goal.toUpperCase()}`, IX + 2, y, '#d08cc8'); y += 7; }
 
-            // #91 KEEPSAKES — the values distilled from this farmer's source memory. These are what the
+            // #91 CREEDS — the values distilled from this farmer's source memory. These are what the
             // sim quotes when they refuse or hold their ground, so behaviour traces back to the document.
             y += 2;
-            y = sectionBand(IX, y, IW, 'KEEPSAKES');
-            const ks = f.keepsakes || [];
+            y = sectionBand(IX, y, IW, 'CREEDS');
+            const ks = f.creeds || [];
             if (!ks.length) { drawText(ctx, 'nothing carried yet', IX + 2, y, SHEET_LABEL); y += 8; }
             else for (const k of ks) {
                 ctx.fillStyle = '#c8a0e0'; ctx.fillRect(IX + 2, y + 2, 2, 2);
@@ -3621,8 +3621,17 @@ function drawChronicleRoles(PX, top, PW, bot) {
     if (!h) drawText(ctx, 'No offices seated yet — the town is still finding its feet.', PX + 8, top + 4, '#6a6f7c');
 }
 
-// RECIPES tab (#97): what the town has invented, and who knows how to make each. Base remedies are
-// universal; invented recipes are listed with their knowers so the spread of know-how is legible.
+// The elements a recipe is made from, e.g. "2 GRASS + 1 FLOWER" — so a recipe reads as a formula,
+// not just a name. Reads the stable inputs off RECIPE_BY_ID (base + invented share the same shape).
+function recipeInputs(id) {
+    const r = RECIPE_BY_ID[id];
+    if (!r || !r.inputs) return '';
+    return Object.entries(r.inputs).map(([g, q]) => `${q} ${g}`).join(' + ').toUpperCase();
+}
+
+// RECIPES tab (#97): what the town has invented, WHAT it's made from, and who knows how to make each.
+// Base remedies are universal; invented recipes are listed with their ingredients + knowers so both
+// the formula and the spread of know-how are legible.
 function drawChronicleRecipes(PX, top, PW, bot) {
     const IX = PX + 8; let y = top + 2;
     // town-known invented recipes -> the farmers who know them (stable order by first-seen id)
@@ -3632,9 +3641,15 @@ function drawChronicleRecipes(PX, top, PW, bot) {
         known.get(id).push(f.sheet.name.split(' ')[0]);
     }
     const totalInvent = ['remedy', 'tool', 'utility'].reduce((n, k) => n + INVENTION_TABLE[k].filter(e => !e.locked).length, 0);
+    const INGR = '#8ad0a0';   // ingredient list colour
 
-    drawText(ctx, 'EVERYONE KNOWS', IX, y, '#8a8f9c');
-    drawText(ctx, 'Soup, Salve, Tonic'.toUpperCase(), IX + textWidth('EVERYONE KNOWS '), y, '#7dd069'); y += 10;
+    // base recipes everyone knows — now shown WITH their ingredients, one per line
+    drawText(ctx, 'EVERYONE KNOWS', IX, y, '#8a8f9c'); y += 8;
+    for (const id of ['soup', 'salve', 'tonic']) {
+        drawText(ctx, RECIPE_BY_ID[id].name.toUpperCase(), IX + 4, y, '#7dd069');
+        drawText(ctx, recipeInputs(id), IX + 4 + 66, y, INGR); y += 7;
+    }
+    y += 3;
 
     drawText(ctx, 'DISCOVERED', IX, y, CHRON_ACCENT);
     const tally = `${known.size} / ${totalInvent}`;
@@ -3643,9 +3658,10 @@ function drawChronicleRecipes(PX, top, PW, bot) {
     if (!known.size) { drawText(ctx, 'The town has invented nothing yet — give it time.', IX, y, '#6a6f7c'); return; }
     const maxChars = Math.max(24, Math.floor((PW - 24) / 4.2));
     for (const [id, names] of known) {
-        if (y > bot - 14) break;   // no scroll on this tab yet — cap to the panel
+        if (y > bot - 20) break;   // no scroll on this tab yet — cap to the panel
         const r = RECIPE_BY_ID[id];
-        drawText(ctx, (r ? r.name : id).toUpperCase(), IX, y, '#ffd24a'); y += 7;
+        drawText(ctx, (r ? r.name : id).toUpperCase(), IX, y, '#ffd24a');
+        drawText(ctx, recipeInputs(id), IX + 100, y, INGR); y += 7;   // the formula, right of the name
         for (const ln of wrapText('known by ' + names.join(', '), maxChars)) { drawText(ctx, ln.toUpperCase(), IX + 4, y, '#8a8f9c'); y += 7; }
         y += 3;
     }
@@ -4346,7 +4362,7 @@ function frame(now) {
     // building hover tooltip — only when hovering the world (not over a panel, not dragging,
     // and not while an inventory-slot tooltip is already showing on the open sheet)
     let worldHover = false;
-    if (booted && mouse.x >= 0 && !mouse.dragging && !rosterOpen && !boardOpen && mouse.y > 18 &&
+    if (booted && mouse.x >= 0 && !mouse.dragging && !rosterOpen && !boardOpen && !chronOpen && !settingsOpen && mouse.y > 18 &&
         !(selected && inRect(mouse, SHEET_RECT)) && !inRect(mouse, MINIMAP)) {
         const info = buildingUnder(mouse.x, mouse.y);
         if (info) { drawInfoBox(mouse.x, mouse.y, info); worldHover = true; }

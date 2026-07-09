@@ -9,7 +9,7 @@
 // livestock pen (milk) — each with its own "producers" the farmer tends and
 // collects from. Which facility comes first reflects the farmer's archetype.
 
-import { mulberry32, mod, growFarmer, personalityLabel, compileKeepsakes, ALL_CROPS } from './dna.js';
+import { mulberry32, mod, growFarmer, personalityLabel, compileCreeds, ALL_CROPS } from './dna.js';
 export { ALL_CROPS };   // re-exported so tools/tests can pull the crop list from the sim entrypoint
 
 // The FOUNDING VALLEY: the hand-tuned region generated with the original global algorithm
@@ -2349,6 +2349,7 @@ export class World {
     // the beat land (bond, gratitude, a chronicle line, the Healer's standing). Returns true if applied.
     applyRemedy(healer, patient, recipeId) {
         if (!this.#consumeRecipe(healer, recipeId)) return false;
+        patient.tendedDay = this.day;   // one remedy per patient per day (see the Healer triage)
         const nm = RECIPES[recipeId].name, cured = recipeId === 'tonic';
         if (cured) { patient.health = 'healthy'; patient.sickDays = 0; patient.energy = Math.min(1, patient.energy + 0.25); patient.strain = 0; patient.sparkle = 2; }
         else if (recipeId === 'salve') { patient.sickDays = Math.max(1, Math.ceil(patient.sickDays / 2)); patient.strain = Math.max(0, patient.strain - 0.5); patient.energy = Math.min(1, patient.energy + 0.1); }
@@ -4646,7 +4647,7 @@ const PROJECT_DEFS = [
 // lever (capped below personality scale — a dream colors a farmer, never overrides
 // them) and has a visible arc: card line -> pursuit -> a fulfillment beat (or crisis).
 // This is deliberately the PROCEDURAL generator: Path A later swaps in memory-derived
-// keepsakes as a second source, giving the council's A/B (can you tell whose inner
+// creeds as a second source, giving the council's A/B (can you tell whose inner
 // life came from a real memory?) for free.
 // ---------------------------------------------------------------------------
 
@@ -4921,6 +4922,7 @@ export class Farmer {
         this.reputation = 0.55;
         this.poachCooldown = 6 + this.rand() * 10;
         this.visitedSick = new Set();
+        this.tendedDay = -1;   // the day this farmer last received a remedy (one tend per day; see the Healer)
         // MOOD: a -1..1 emotional weather that random-walks each dawn, its swing scaled by the
         // `volatility` trait. It shifts how collaborative the bot ACTS today (effCollab), so a
         // mercurial farmer helps in warm streaks then withdraws when they're out of sorts.
@@ -5139,16 +5141,16 @@ export class Farmer {
     isHealer() { return this.world.roles.healer === this.sheet.seed; }
     get grass() { return (this.sheet.goods && this.sheet.goods.grass) || 0; }
 
-    // #91 KEEPSAKES — the long-term memory the sim consults. Compiled once from the source doc and
+    // #91 CREEDS — the long-term memory the sim consults. Compiled once from the source doc and
     // cached on the sheet; loaded saves (older towns) backfill lazily + deterministically here.
-    get keepsakes() {
-        if (!this.sheet.keepsakes) this.sheet.keepsakes = compileKeepsakes(this.sheet.memory || {}, this.sheet.seed);
-        return this.sheet.keepsakes;
+    get creeds() {
+        if (!this.sheet.creeds) this.sheet.creeds = compileCreeds(this.sheet.memory || {}, this.sheet.seed);
+        return this.sheet.creeds;
     }
-    // The keepsake most relevant to a moment: prefer one whose tags match the context, else the
+    // The creed most relevant to a moment: prefer one whose tags match the context, else the
     // heaviest. Deterministic (no rng) — a farmer refuses the SAME way for the SAME reason every run.
-    keepsakeFor(prefTags = []) {
-        const ks = this.keepsakes; if (!ks.length) return null;
+    creedFor(prefTags = []) {
+        const ks = this.creeds; if (!ks.length) return null;
         let best = null, bestScore = -1;
         for (const k of ks) {
             const match = prefTags.some(t => k.tags.includes(t)) ? 1 : 0;
@@ -5263,11 +5265,11 @@ export class Farmer {
         };
 
         // #91 — a VALUES refusal (keeping to your own fence, going your own way) is the farmer acting
-        // on who they ARE, so it's NAMED with the keepsake distilled from their source memory: the
+        // on who they ARE, so it's NAMED with the creed distilled from their source memory: the
         // reason shown in the Roles tab quotes it, and they mutter it on-camera. Attribution only — the
         // DECISION is unchanged (personality-guarded: memory never tips the vote, just explains it).
         const refuseWith = (fallback, prefTags) => {
-            const k = this.keepsakeFor(prefTags);
+            const k = this.creedFor(prefTags);
             if (!k) return record('refuse', fallback);
             this.say(`"${k.short.toUpperCase()}"`, '#c8a0e0');
             return record('refuse', k.short);
@@ -6540,7 +6542,9 @@ export class Farmer {
         // need, brew the best remedy their herbs allow at the bedside, and never run to exhaustion
         // (they rest early to stay available). Reliable — not a collaborator's coin-flip.
         if (this.isHealer() && !w.isNight()) {
-            const sick = w.farmers.filter(o => o !== this && o.health === 'sick' && !o.downed)
+            // a patient gets ONE remedy a day — tend them, then move on; illness mends over days, not
+            // in one afternoon of endless soup (so the Healer spreads their care across the sick)
+            const sick = w.farmers.filter(o => o !== this && o.health === 'sick' && !o.downed && o.tendedDay !== w.day)
                 .sort((a, b) => (b.sickDays - b.energy) - (a.sickDays - a.energy))[0];   // worst first
             if (sick && this.energy > 0.2) {
                 this.careTarget = sick;
@@ -6568,7 +6572,7 @@ export class Farmer {
         }
 
         if (this.effCollab() > 0.55 && !w.isNight()) {
-            const sick = w.farmers.find(o => o !== this && o.health === 'sick' && !this.visitedSick.has(o.sheet.seed) &&
+            const sick = w.farmers.find(o => o !== this && o.health === 'sick' && o.tendedDay !== w.day && !this.visitedSick.has(o.sheet.seed) &&
                 Math.abs(o.pos.i - this.pos.i) + Math.abs(o.pos.j - this.pos.j) < 16);
             if (sick && this.rand() < (this.goal === 'good neighbor' ? 0.8 : 0.5)) {
                 this.visitedSick.add(sick.sheet.seed); this.careTarget = sick;
@@ -7059,7 +7063,24 @@ export class Farmer {
                 }
             }
         }
+        if (best) best.unfair = this.#wantsLowball(best.partner);   // #91 Slice 2: some drive a hard bargain
         return best;
+    }
+
+    // #91 Slice 2 — does this farmer angle for a LOPSIDED trade (give one less than they take)? The
+    // DRIVE is personality: a crooked streak (low honesty), a sharp-trader's identity, a hungry edge
+    // (competitiveness). A thrift creed from their source memory only SHARPENS the instinct a touch —
+    // a colour, never the cause — and becomes the quote that names it. They never chisel a real friend.
+    #wantsLowball(B) {
+        if (this.opinionOf(B) > 0.35) return false;                                // never chisel a friend
+        let drive = 0;
+        if (this.p.honesty < 0.45) drive += (0.45 - this.p.honesty) * 1.4;         // the crooked angle for an edge
+        if (this.goal === 'sharp trader') drive += 0.4;
+        drive += this.p.competitiveness * 0.15;
+        const k = this.creedFor(['thrift']);
+        if (k && k.tags.includes('thrift')) drive += 0.12;                         // the creed sharpens, never causes
+        if (drive < 0.15) return false;
+        return this.rand() < Math.min(0.6, drive);
     }
 
     // Meet the neighbour and make the swap — a fair N-for-N (up to 3 each way), where N is what BOTH
@@ -7073,8 +7094,42 @@ export class Farmer {
         const B = deal.partner;
         if (B.downed || Math.hypot(B.pos.i - this.pos.i, B.pos.j - this.pos.j) > 3.5) { this.say('...gone', '#9a9a8a'); return; }
         const stock = (f, g) => g === 'crops' ? (f.sheet.produce || 0) : ((f.sheet.goods && f.sheet.goods[g]) || 0);
-        const n = Math.min(3, stock(this, deal.give), stock(B, deal.get));   // fair, symmetric, affordable
+        const n = Math.min(3, stock(this, deal.give), stock(B, deal.get));   // the affordable size of a square deal
         if (n <= 0) { this.say('...no deal', '#9a9a8a'); return; }
+
+        // #91 Slice 2 — a LOWBALL: the proposer offers one LESS than they take. B weighs the slight
+        // (their honesty/pride/regard for the proposer vs how agreeable/needy they are). If B won't
+        // stomach it the deal collapses; if B swallows it, they carry a GRIEVANCE — and both the chisel
+        // and the resentment are NAMED with a creed, so the friction traces to who these two are.
+        if (deal.unfair && n >= 2) {
+            const bk = B.creedFor(['pride', 'guard', 'loyalty']);
+            const bProud = bk && (bk.tags.includes('pride') || bk.tags.includes('guard') || bk.tags.includes('loyalty'));
+            const tolerance = 0.35 + B.effCollab() * 0.45 + Math.max(0, B.opinionOf(this)) * 0.5 - (bProud ? 0.35 : 0) - (B.p.honesty - 0.5) * 0.5;
+            const myEdge = this.creedFor(['thrift', 'pride']);       // the creed that rationalises taking an edge
+            const edgeQuote = myEdge && (myEdge.tags.includes('thrift') || myEdge.tags.includes('pride')) ? `"${myEdge.short.toUpperCase()}"` : "A HARD BARGAIN'S STILL A BARGAIN";
+            if (this.rand() >= tolerance) {                       // B refuses to be shortchanged
+                B.say(bProud && bk ? `"${bk.short.toUpperCase()}"` : "THAT'S NO FAIR TRADE", '#e0955a');
+                this.say('...suit yourself', '#9a9a8a');
+                B.adjustOpinion(this, -0.1, 'tried to lowball me on a trade');
+                this.adjustReputation(-0.03);                     // word gets around that they chisel
+                B.remember('event', `${this.sheet.name.split(' ')[0]} tried to shortchange me in a trade`, this, 0.55);
+                return;
+            }
+            const gave = w.transferGood(this, B, deal.give, n - 1);   // give one LESS
+            const got = w.transferGood(B, this, deal.get, n);        // take the full count
+            if (gave > 0 && got > 0) {
+                this.facing = B.pos.i > this.pos.i ? 1 : -1;
+                this.say(edgeQuote, '#c8a0e0');
+                B.say('...fine', '#c0a060'); this.sparkle = 0.4;
+                this.adjustOpinion(B, 0.04, 'came out ahead on a trade'); B.adjustOpinion(this, -0.16, 'shortchanged me in a trade');
+                this.adjustReputation(-0.05);
+                this.gainXP(2);
+                B.remember('event', `${this.sheet.name.split(' ')[0]} shortchanged me - ${gave} ${deal.give} for my ${got} ${deal.get}`, this, 0.7);
+                w.addChronicle('rift', `${this.sheet.name.split(' ')[0]} drove a hard bargain with ${B.sheet.name.split(' ')[0]} - ${gave} ${deal.give} for ${got} ${deal.get}.`, this, B, '#c05840');
+            } else if (gave > got) w.transferGood(B, this, deal.give, gave - got);
+            return;
+        }
+
         const gave = w.transferGood(this, B, deal.give, n);
         const got = w.transferGood(B, this, deal.get, n);
         if (gave > 0 && got > 0) {
@@ -7991,13 +8046,14 @@ export class Farmer {
                 this.careTimer -= dt;
                 if (this.careTimer <= 0) {
                     const sick = this.careTarget;
-                    if (sick && sick.health === 'sick') {
+                    if (sick && sick.health === 'sick' && sick.tendedDay !== this.world.day) {   // one tend a day
                         // #97 Slice 1 — the HEALER brews + applies the best remedy their herbs allow
                         // (tonic cures, salve halves, soup eases). A neighbour just brings soup.
                         const rem = this.isHealer() ? this.world.bestRemedy(this, sick) : null;
                         if (rem && this.world.applyRemedy(this, sick, rem)) {
-                            // applyRemedy handled the beat + effect
+                            // applyRemedy handled the beat + effect (+ stamped tendedDay)
                         } else {
+                            sick.tendedDay = this.world.day;
                             sick.sickDays = Math.max(1, sick.sickDays - 1); sick.energy = Math.min(1, sick.energy + 0.15);
                             sick.say('THANK YOU...', '#7dd069'); this.say('REST UP, FRIEND', '#7dd069');
                             this.world.addBond(this, sick); this.adjustReputation(0.06);

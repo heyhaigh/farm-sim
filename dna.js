@@ -246,14 +246,14 @@ export function growPersonality(rand, text) {
 }
 
 // ---------------------------------------------------------------------------
-// KEEPSAKES (#91): the LONG-TERM tier of a farmer's memory — a small, stable set of identity themes
+// CREEDS (#91): the LONG-TERM tier of a farmer's memory — a small, stable set of identity themes
 // distilled ONCE from their source SuperMemory document. This is the council's "compile, don't query":
 // a deterministic keyword pass at generation, cached on the sheet. The SIM reads only the TAGS (to
 // know which values a decision touches); the QUOTE text is used purely for narration — a refusal or
 // remark that traces plainly back to the document a farmer was grown from. No live search(), ever.
 // ---------------------------------------------------------------------------
 
-const KEEPSAKE_THEMES = [
+const CREED_THEMES = [
     { id: 'craft',   tags: ['craft', 'pride'],          keywords: ['design', 'pottery', 'wheel', 'clay', 'craft', 'figma', ' ui', ' ux', 'build', 'wearable', 'interface'],
       short: 'a thing done right or not at all',      quote: 'years at the wheel taught them a thing is only finished when it is finished right.' },
     { id: 'grit',    tags: ['thrift', 'independence'],  keywords: ['startup', 'zero', 'launch', 'hustle', 'consult', 'business', 'scratch', 'zero-to-one'],
@@ -270,17 +270,17 @@ const KEEPSAKE_THEMES = [
       short: 'peace, a fence, rain on the roof',       quote: 'all they ever wanted fits behind a fence: peace, and the sound of rain on the roof.' },
     { id: 'word',    tags: ['pride', 'word'],           keywords: ['writing', 'story', 'guidance', 'contact', 'about', 'site', 'changelog', 'navigation', 'visitors'],
       short: 'the right word, said plain',             quote: 'they always held that the right word, said plainly, outlasts any shout.' },
-    { id: 'steady',  tags: ['loyalty', 'service'],      keywords: [],   // generic fallback so every doc yields keepsakes
+    { id: 'steady',  tags: ['loyalty', 'service'],      keywords: [],   // generic fallback so every doc yields creeds
       short: 'a promise kept is a promise kept',       quote: 'they were raised on one plain rule: a promise kept is a promise kept.' },
 ];
 
-// Distill 3–5 weighted keepsakes from a memory doc. Deterministic: keyword hits set the weight, a
-// small seeded jitter breaks ties, and the same doc always yields the same keepsakes (so they ride
+// Distill 3–5 weighted creeds from a memory doc. Deterministic: keyword hits set the weight, a
+// small seeded jitter breaks ties, and the same doc always yields the same creeds (so they ride
 // the save and never need re-querying). Returns [{ theme, tags, weight, short, quote }].
-export function compileKeepsakes(memory, seed) {
-    const rand = mulberry32(hashString('keepsake:' + (memory.id || memory.title || 'ry') + ':' + (seed >>> 0)));
+export function compileCreeds(memory, seed) {
+    const rand = mulberry32(hashString('creed:' + (memory.id || memory.title || 'ry') + ':' + (seed >>> 0)));
     const text = ` ${(memory.title || '')} ${(memory.summary || '')} ${(memory.content || '')}`.toLowerCase();
-    const scored = KEEPSAKE_THEMES.map(t => {
+    const scored = CREED_THEMES.map(t => {
         let hits = 0; for (const kw of t.keywords) if (text.includes(kw)) hits++;
         return { t, hits, w: Math.min(1, hits * 0.3 + rand() * 0.25) };
     }).sort((a, b) => b.w - a.w);
@@ -356,7 +356,7 @@ export function growFarmer(memory, mutation = 0) {
             pants: rand() < 0.5 ? '#4a5570' : '#6a5540',
             hatColor: ['#d8c088', '#e8e0d0', '#c05840', '#f0d040', '#7dd069', '#e0e8f0'][Math.floor(rand() * 6)],
         },
-        keepsakes: compileKeepsakes(memory, seed),   // #91: long-term identity distilled from the source doc
+        creeds: compileCreeds(memory, seed),   // #91: long-term identity distilled from the source doc
         memory,
         mutation,
     };
