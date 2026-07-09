@@ -428,7 +428,8 @@ export class World {
         // time; farmers weigh it through the autonomy kernel (below survival/dream/urgent work, capped
         // budget, logged refusals) and heed or refuse. `manager` is a seed; `approval` drives fatigue
         // + recall so a poor leader is unseated even before elections exist. Sim-driven + seeded.
-        this.roles = { manager: null, approval: 0.6, lowDays: 0, directive: null, directiveSeq: 0, cooldown: 0 };
+        this.roles = { manager: null, approval: 0.6, lowDays: 0, directive: null, directiveSeq: 0, cooldown: 0,
+                       watch: null, watchApproval: 0.6, watchLowDays: 0, caseSeq: 0 };   // #94 P2: the Town Watch
         this.board = null;    // no bulletin board until the town builds one together (first communal project)
         this.merchant = null;                             // the wandering trader, present only during a visit
         this.merchantNextDay = 4 + Math.floor(this.rand() * 3);   // first caravan rolls in around day 4-6
@@ -1893,7 +1894,8 @@ export class World {
             projectIndex: this.projectIndex, exploredTiles: this.exploredTiles, ringCount: this.ringCount,
             roles: {   // #94: Sets/Maps flattened to arrays so the snapshot is structured-clone-plain
                 manager: this.roles.manager, approval: this.roles.approval, lowDays: this.roles.lowDays,
-                directiveSeq: this.roles.directiveSeq, cooldown: this.roles.cooldown,
+                watch: this.roles.watch, watchApproval: this.roles.watchApproval, watchLowDays: this.roles.watchLowDays,
+                directiveSeq: this.roles.directiveSeq, cooldown: this.roles.cooldown, caseSeq: this.roles.caseSeq,
                 directive: this.roles.directive ? {
                     id: this.roles.directive.id, kind: this.roles.directive.kind,
                     text: this.roles.directive.text, day: this.roles.directive.day,
@@ -1991,12 +1993,13 @@ export class World {
         this.exploredTiles = d.exploredTiles; this.ringCount = d.ringCount;
         this.roles = d.roles ? {   // #94 (guarded: pre-roles saves resume with a fresh, unseated chair)
             manager: d.roles.manager, approval: d.roles.approval, lowDays: d.roles.lowDays || 0,
-            directiveSeq: d.roles.directiveSeq || 0, cooldown: d.roles.cooldown || 0,
+            watch: d.roles.watch ?? null, watchApproval: d.roles.watchApproval ?? 0.6, watchLowDays: d.roles.watchLowDays || 0,
+            directiveSeq: d.roles.directiveSeq || 0, cooldown: d.roles.cooldown || 0, caseSeq: d.roles.caseSeq || 0,
             directive: d.roles.directive ? {
                 ...d.roles.directive,
                 heeders: new Set(d.roles.directive.heeders), refusers: new Map(d.roles.directive.refusers),
             } : null,
-        } : { manager: null, approval: 0.6, lowDays: 0, directive: null, directiveSeq: 0, cooldown: 0 };
+        } : { manager: null, approval: 0.6, lowDays: 0, watch: null, watchApproval: 0.6, watchLowDays: 0, directive: null, directiveSeq: 0, cooldown: 0, caseSeq: 0 };
 
         this.tiles.set(d.tiles);
         this.chunks = new Map(); for (const [k, a] of d.chunks) this.chunks.set(k, Uint8Array.from(a));
@@ -2100,64 +2103,132 @@ export class World {
         }
     }
 
-    // ---- CIVIC ROLES (#94 P1): the Town Manager -----------------------------------
+    // ---- CIVIC ROLES (#94): the Town Manager (P1) + the Town Watch (P2) -----------
 
     managerFarmer() { return this.roles.manager != null ? this.farmers.find(f => f.sheet.seed === this.roles.manager) : null; }
-
-    // Fitness for the manager's chair: presence (CHA), civic temperament (collaboration), a good
-    // name (reputation), and seasoning (level). Pure + seeded — no rng, stable tie-break by seed.
-    #managerFitness(f) {
-        const s = f.sheet, p = s.personality;
-        return mod(s.stats.cha) * 0.5 + p.collaboration + f.reputation + (s.level || 1) * 0.08;
+    watchFarmer() { return this.roles.watch != null ? this.farmers.find(f => f.sheet.seed === this.roles.watch) : null; }
+    roleOf(f) {   // the civic role a farmer holds (or null) — for the card/roster label
+        if (!f) return null;
+        if (this.roles.manager === f.sheet.seed) return 'MANAGER';
+        if (this.roles.watch === f.sheet.seed) return 'WATCH';
+        return null;
     }
-    #appointManager(exclude = null) {
-        const pool = [...this.farmers]
-            .filter(f => f !== exclude && f.health !== 'sick' && !f.downed)
-            .sort((a, b) => a.sheet.seed - b.sheet.seed);   // stable order before the fitness pick
+
+    // Manager: presence (CHA) + civic temperament (collaboration) + a good name. Watch: strength/grit
+    // (STR/CON) + honesty (a fair hand) + a good name. Both pure + seeded (stable tie-break by seed).
+    #managerFitness(f) { const s = f.sheet; return mod(s.stats.cha) * 0.5 + s.personality.collaboration + f.reputation + (s.level || 1) * 0.08; }
+    #watchFitness(f) { const s = f.sheet; return (mod(s.stats.str) + mod(s.stats.con)) * 0.35 + s.personality.honesty + f.reputation + (s.level || 1) * 0.06; }
+    #bestFor(fitFn, ...exclude) {
+        const ex = new Set(exclude.filter(Boolean).map(x => x.sheet ? x.sheet.seed : x));
+        const pool = [...this.farmers].filter(f => !ex.has(f.sheet.seed) && f.health !== 'sick' && !f.downed).sort((a, b) => a.sheet.seed - b.sheet.seed);
         let best = null, bestV = -1e9;
-        for (const f of pool) { const v = this.#managerFitness(f); if (v > bestV) { bestV = v; best = f; } }
-        if (!best && exclude) best = exclude;   // town of one sick/downed soul: keep who we have
+        for (const f of pool) { const v = fitFn(f); if (v > bestV) { bestV = v; best = f; } }
         return best;
     }
 
-    // Once per day: seat a manager if the chair's empty, tally the outgoing directive into approval,
-    // recall a chronically-unpopular manager, then post the day's directive. Seeded + in-sim.
+    // Once per day: seat the roles if a chair's empty, fold the day's outcomes into approval, recall a
+    // chronically-unpopular office-holder, then post the Manager's directive. Seeded + in-sim.
     #updateCivic() {
         const r = this.roles;
         if (!this.farmers.length) return;
 
-        // seat a manager if there's none (founding / after a departure)
+        // seat the MANAGER if empty
         if (r.manager == null || !this.managerFarmer()) {
-            const m = this.#appointManager();
+            const m = this.#bestFor(f => this.#managerFitness(f));
             if (m) { r.manager = m.sheet.seed; r.approval = 0.6; r.lowDays = 0;
                 this.addChronicle('town', `${shortName(m)} took up the Manager's chair.`, m, null, '#e0c060'); }
         }
+        // seat the WATCH if empty (one farmer holds at most one role -> exclude the Manager)
+        if (r.watch == null || !this.watchFarmer()) {
+            const wch = this.#bestFor(f => this.#watchFitness(f), this.managerFarmer());
+            if (wch) { r.watch = wch.sheet.seed; r.watchApproval = 0.6; r.watchLowDays = 0;
+                this.addChronicle('town', `${shortName(wch)} was made the Town Watch.`, wch, null, '#e0c060'); }
+        }
 
-        // fold the day's directive result into approval = how much of the town RALLIED to the call.
-        // Measured against an expectation (~half the town), so a Manager who's actively refused OR
-        // simply ignored erodes toward recall, while one the town answers keeps their chair.
+        // MANAGER approval = how much of the town RALLIED to the day's directive (vs ~half expected).
         const d = r.directive;
         if (d) {
             const weighed = d.heeders.size + d.refusers.size;
             const expect = Math.max(1, Math.ceil((this.farmers.length - 1) / 2));
-            const heedRate = d.heeders.size / Math.max(weighed, expect);
-            r.approval = Math.max(0, Math.min(1, r.approval * 0.7 + heedRate * 0.3));
+            r.approval = Math.max(0, Math.min(1, r.approval * 0.7 + (d.heeders.size / Math.max(weighed, expect)) * 0.3));
         }
         r.lowDays = r.approval < 0.25 ? r.lowDays + 1 : 0;
+        // WATCH approval drifts toward the town's regard for them (trials nudge it directly); an
+        // unpopular or heavy-handed Watch erodes toward recall between cases.
+        const wf = this.watchFarmer();
+        if (wf) {
+            let sum = 0, n = 0;
+            for (const f of this.farmers) if (f !== wf) { sum += f.opinionOf(wf); n++; }
+            r.watchApproval = Math.max(0, Math.min(1, r.watchApproval * 0.9 + (0.55 + (n ? sum / n : 0)) * 0.1));
+        }
+        r.watchLowDays = r.watchApproval < 0.25 ? r.watchLowDays + 1 : 0;
 
-        // recall: a manager the town has soured on for days steps down; the chair passes to the
-        // next-fittest DIFFERENT hand (forced turnover keeps P1 dynamic before elections exist)
+        // recall a chronically-unpopular office-holder; the chair passes to the next-fittest DIFFERENT
+        // hand (forced turnover keeps it dynamic before elections exist).
         if (r.lowDays >= 3 && this.farmers.length > 1) {
-            const out = this.managerFarmer();
-            const next = this.#appointManager(out);
-            if (next && next !== out) {
-                r.manager = next.sheet.seed; r.approval = 0.5; r.lowDays = 0;
-                this.addChronicle('rift', `${out ? shortName(out) : 'The Manager'} was stood down; ${shortName(next)} takes the Manager's chair.`, next, out, '#d08cc8');
-            }
+            const out = this.managerFarmer(), next = this.#bestFor(f => this.#managerFitness(f), out);
+            if (next && next !== out) { r.manager = next.sheet.seed; r.approval = 0.5; r.lowDays = 0;
+                this.addChronicle('rift', `${out ? shortName(out) : 'The Manager'} was stood down; ${shortName(next)} takes the Manager's chair.`, next, out, '#d08cc8'); }
+        }
+        if (r.watchLowDays >= 3 && this.farmers.length > 1) {
+            const out = this.watchFarmer(), next = this.#bestFor(f => this.#watchFitness(f), out, this.managerFarmer());
+            if (next && next !== out) { r.watch = next.sheet.seed; r.watchApproval = 0.5; r.watchLowDays = 0;
+                this.addChronicle('rift', `${out ? shortName(out) : 'The Watch'} lost the town's trust; ${shortName(next)} takes up the Watch.`, next, out, '#d08cc8'); }
         }
 
         this.#postDirective();
     }
+
+    // #94 P2: a WITNESSED theft, with a Watch seated, is answered at a communal TRIAL. Each eligible
+    // farmer casts a seeded vote (guilt weighted by their opinion of the accused, their own honesty,
+    // being the victim, and the accused's repute + record). The margin + the record set the verdict —
+    // warning -> fine -> shun (a season). Deterministic (a per-case seeded stream). Called from the
+    // theft-witnessed moment in #completePoach.
+    holdTrial(thief, victim, name) {
+        const r = this.roles, wch = this.watchFarmer();
+        if (!wch || thief === wch) return;                       // no Watch, or the Watch is the accused
+        const jurors = this.farmers.filter(f => f !== thief && f.health !== 'sick' && !f.downed);
+        if (jurors.length < 2) return;                            // too small a town to try anyone
+        const caseId = ++r.caseSeq;
+        const roll = mulberry32((this.seed ^ thief.sheet.seed ^ (this.day * 0x51ed) ^ caseId) >>> 0);
+        let guilty = 0;
+        for (const j of jurors) {
+            const g = 0.5 - j.opinionOf(thief) * 0.6 + (j.p.honesty - 0.5) * 0.5 + (j === victim ? 0.4 : 0) + (0.55 - thief.reputation) * 0.5;
+            if (roll() < Math.max(0.05, Math.min(0.95, g))) guilty++;
+        }
+        const share = guilty / jurors.length;
+        const priors = thief.sheet.crimes || 0;
+        thief.sheet.crimes = priors + 1;
+        this.addChronicle('crime', `${shortName(wch)} called ${shortName(thief)} to answer for the theft of ${name}.`, thief, wch, '#c05840');
+        const verdict = (share < 0.4 && priors === 0) ? 'warn' : (share < 0.7 || priors === 0) ? 'fine' : 'shun';
+        this.#applyVerdict(verdict, thief, victim, wch, share);
+    }
+    #applyVerdict(verdict, thief, victim, wch, share) {
+        const s = thief.sheet;
+        if (verdict === 'warn') {
+            thief.adjustReputation(-0.04); thief.mood = Math.max(-1, thief.mood - 0.2);
+            thief.remember('lesson', 'The town let me off with a warning - I felt every eye on me', null, 1.0);
+            this.addChronicle('crime', `The town let ${shortName(thief)} off with a warning.`, thief, null, '#e0a03c');
+        } else if (verdict === 'fine') {
+            const payee = (victim && victim !== thief) ? victim : wch;   // reparations to the wronged, else the town's hand
+            const paid = this.transferGood(thief, payee, 'crops', 3);
+            thief.adjustReputation(-0.08); thief.mood = Math.max(-1, thief.mood - 0.35);
+            thief.remember('lesson', `Fined ${paid} crops for the theft - a lesson in the ledger`, victim, 1.1);
+            this.addChronicle('crime', `${shortName(thief)} was fined ${paid} crops in reparation.`, thief, victim, '#e0a03c');
+        } else {   // shun — a season out in the cold (never blocks sick-care; see #shunned)
+            s.shunUntil = this.day + SEASON_LENGTH;
+            thief.adjustReputation(-0.12); thief.mood = Math.max(-1, thief.mood - 0.5);
+            thief.remember('lesson', 'Shunned for a season - the town turned its back on me', null, 1.3);
+            this.addChronicle('rift', `${shortName(thief)} was shunned for a season - helped and traded with no more.`, thief, null, '#c05840');
+        }
+        // the Watch's standing: a lopsided-guilty verdict affirms them; a divisive punishment (they
+        // pushed where the town wasn't sure) costs them, feeding toward recall.
+        const r = this.roles;
+        r.watchApproval = Math.max(0, Math.min(1, r.watchApproval + (share > 0.6 ? 0.08 : verdict === 'warn' ? 0 : -0.12)));
+    }
+    // Is this farmer under an active shunning? (Expires after a season; NEVER blocks mercy — sick-care
+    // ignores it, so a shun can't spiral a farmer into an unrecoverable state.)
+    isShunned(f) { return f && f.sheet.shunUntil != null && this.day < f.sheet.shunUntil; }
 
     // The Manager reads the town and posts ONE directive for the day (or none if there's no need):
     // rally to the current communal project, else call for donations to level the town.
@@ -3430,6 +3501,7 @@ export class World {
             if (op <= -0.35 && hc < 0.85) continue;   // won't lift a finger for someone they resent
             if (req.farmer.opinionOf(helper) <= -0.35) continue;   // ...and the poster won't accept a resented hand either
             if (req.farmer.reputation < 0.3 && op < 0.2 && this.rand() > hc) continue;   // shun bad names (unless a personal friend)
+            if (this.isShunned(req.farmer) && op < 0.5) continue;   // #94 P2: a shunned neighbour goes unhelped (save a true friend)
             const friend = op >= 0.4;
             // #89: a BELOVED-dreamer works for thanks — being needed IS the pay
             const altruist = friend || hc > 0.7 || helper.goal === 'good neighbor' || helper.dream('beloved') || (helper.sheet.stats.cha >= 15 && hp.honesty > 0.5);
@@ -6649,6 +6721,7 @@ export class Farmer {
         for (const B of w.farmers) {
             if (B === this || !B.plot || B.downed || B.plot.built.level < 1 || B.health === 'sick') continue;
             if (this.opinionOf(B) <= -0.2 || B.opinionOf(this) <= -0.2) continue;   // #87 — no fair trade across distrust (a thief gets frozen out)
+            if (w.isShunned(B) || w.isShunned(this)) continue;   // #94 P2: no trade with a shunned neighbour, either way
             const d = Math.hypot(B.pos.i - this.pos.i, B.pos.j - this.pos.j);
             if (d > 26) continue;
             const bg = B.sheet.goods || {}, warmth = Math.max(0, this.opinionOf(B));
@@ -7163,6 +7236,8 @@ export class Farmer {
                     if (Math.abs(o.pos.i - pos.i) + Math.abs(o.pos.j - pos.j) > 10) continue;
                     o.adjustOpinion(this, -0.12, `heard they stole ${name}`); o.noteRumor(witness, this);
                 }
+                // #94 P2: a witnessed theft is answered at a communal trial when a Watch is seated.
+                w.holdTrial(this, victim, name);
             }
             else w.addLog(`${s.name} quietly made off with a ${name}`, '#e0a03c');
             // #86 — an HONEST streak: a poacher near the upper end of "shady" can be guilt-stricken and
@@ -7202,11 +7277,11 @@ export class Farmer {
             if (t === T.FLOWER) {
                 const big = tier >= 1;                                   // small bush vs larger bush
                 const grassN = big ? 3 : 1;
-                const flowerN = 1 + Math.floor(this.rand() * this.rand() * (big ? 5 : 3));   // small 1-3, large 1-5, high end rare
+                const flowerN = Math.floor(this.rand() * this.rand() * (big ? 5 : 3));   // small 0-2, large 0-4 (often none; high end rare)
                 s.goods.grass = (s.goods.grass || 0) + grassN;
-                s.goods.flower = (s.goods.flower || 0) + flowerN;
+                if (flowerN > 0) s.goods.flower = (s.goods.flower || 0) + flowerN;
                 s.harvested += grassN + flowerN; w.harvestTotal += grassN + flowerN;
-                this.say(`+${grassN} grass +${flowerN} flowers`, '#e878b0');
+                this.say(flowerN > 0 ? `+${grassN} grass +${flowerN} flowers` : `+${grassN} grass`, '#8fd06a');
             } else {
                 s.goods.grass = (s.goods.grass || 0) + 1;               // a grass clump = 1 grass
                 s.harvested += 1; w.harvestTotal += 1;

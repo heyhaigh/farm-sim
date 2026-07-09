@@ -2865,10 +2865,9 @@ const SHEET_LABEL = '#8f8570', SHEET_VAL = '#e8e0cc', SHEET_GOLD = '#c9a45a';
 // A one-line "what they're doing + why" for the card — EXPLAINS the symbol hovering over their head on
 // the map (wound bar / hunt paw / barter coin / help plus / grudge-scowl or bond-heart / kill trophy),
 // falling back to a plain description of their current activity.
-// #94: the civic role a farmer currently holds (P1: Manager only; the roster + card show it).
+// #94: the civic role a farmer currently holds (MANAGER / WATCH), shown on their card.
 function farmerRole(f) {
-    if (f.world && f.world.roles && f.world.roles.manager === f.sheet.seed) return 'MANAGER';
-    return null;
+    return (f && f.world && f.world.roleOf) ? f.world.roleOf(f) : null;
 }
 
 function currentStatus(f) {
@@ -3552,6 +3551,18 @@ function drawCivicBand(PX, y, PW) {
             const txt = 'PASSED - ' + whys.join('  -  ');
             drawText(ctx, txt.slice(0, Math.floor((PW - 24) / 4.2 - 12)), IX + textWidth(`RALLIED: ${heeded}  `), ty, '#8a8f9c');
         }
+        ty += 8;
+    }
+    // the Watch (#94 P2), if one is seated: name + their standing with the town
+    const wch = world.watchFarmer && world.watchFarmer();
+    if (wch) {
+        drawText(ctx, 'WATCH', IX, ty, '#9a7fc0');
+        drawText(ctx, wch.sheet.name.split(' ')[0].toUpperCase(), IX + textWidth('WATCH '), ty, '#e8c860');
+        const wa = Math.max(0, Math.min(1, roles.watchApproval));
+        const wbW = 46, wbx = RX - wbW;
+        drawText(ctx, 'TRUST', wbx - textWidth('TRUST '), ty, '#6a6f7c');
+        ctx.fillStyle = '#171a22'; ctx.fillRect(wbx, ty, wbW, 4);
+        ctx.fillStyle = wa > 0.5 ? '#7dd069' : wa > 0.28 ? '#e0a03c' : '#e05040'; ctx.fillRect(wbx, ty, Math.round(wbW * wa), 4);
         ty += 8;
     }
     ctx.fillStyle = '#171a22'; ctx.fillRect(PX + 4, ty, PW - 8, 1);
