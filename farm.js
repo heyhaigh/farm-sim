@@ -1293,38 +1293,60 @@ export class World {
         this.#ensureBackstories();   // the DM writes each new sheet's story once its dream is known
     }
 
-    // The procedural DUNGEON MASTER's character pass (#92a): every farmer gets a 5e-style
-    // identity block - BACKGROUND (an archetype earned by their stats + personality),
-    // a short origin tale woven from their source memory, and the classic sheet quartet's
-    // IDEAL (their dream), BOND (rival or the memory that made them) and FLAW (their
-    // weakest stat, or a vice). Seeded per (town x farmer), stored on the sheet so it
-    // persists and never re-rolls; a fresh town retells every life. Idempotent.
+    // The procedural DUNGEON MASTER's character pass (#92): every farmer gets a 5e-style
+    // identity block - BACKGROUND (an archetype earned by their stats + personality), a
+    // four-beat origin tale composed from the STORY_* fragment pools (childhood, leaving,
+    // keepsake carrying their source memory, arrival pointed at their dream), and the
+    // classic sheet quartet's IDEAL / BOND / FLAW. Seeded per (town x farmer), stored on
+    // the sheet so it persists and never re-rolls; a fresh town retells every life.
+    // story.v marks the composer generation - older stories are rewritten in place at the
+    // next pass (same seed, so the BACKGROUND and FLAW the player already saw are kept).
     #ensureBackstories() {
         for (const f of this.farmers) {
             const s = f.sheet;
-            if (s.story || !s.dream) continue;
+            if ((s.story && (s.story.v || 1) >= 2) || !s.dream) continue;
             const r = mulberry32((this.seed ^ s.seed ^ 0xBA5E) >>> 0);
             const p = f.p, st = s.stats;
             const scores = [
-                ['OUTLANDER',     (p.curiosity ?? 0.5) * 2,                 'came in off the far roads, and the roads never quite let go'],
-                ['FOLK HERO',     p.collaboration + mod(st.str) * 0.15,     'once stood up for a place that could not stand up for itself'],
-                ['GUILD ARTISAN', p.diligence * 1.7,                        'apprenticed hard years under a master who praised nothing'],
-                ['CHARLATAN',     (1 - p.honesty) * 1.8,                    'has sold things that did not strictly exist'],
-                ['HERMIT',        (1 - p.collaboration) * 1.6,              'spent long seasons alone, and learned to prefer it'],
-                ['SOLDIER',       (mod(st.str) + mod(st.con)) * 0.35 + 0.4, 'marched under someone else\'s banner before choosing their own field'],
-                ['SAGE',          (mod(st.int) + mod(st.wis)) * 0.35 + 0.4, 'read everything they could hold onto, and remembers most of it'],
-                ['ENTERTAINER',   mod(st.cha) * 0.5 + 0.4,                  'can hold a room, and knows exactly how long to hold it'],
+                ['OUTLANDER',     (p.curiosity ?? 0.5) * 2],
+                ['FOLK HERO',     p.collaboration + mod(st.str) * 0.15],
+                ['GUILD ARTISAN', p.diligence * 1.7],
+                ['CHARLATAN',     (1 - p.honesty) * 1.8],
+                ['HERMIT',        (1 - p.collaboration) * 1.6],
+                ['SOLDIER',       (mod(st.str) + mod(st.con)) * 0.35 + 0.4],
+                ['SAGE',          (mod(st.int) + mod(st.wis)) * 0.35 + 0.4],
+                ['ENTERTAINER',   mod(st.cha) * 0.5 + 0.4],
             ];
-            const bg = scores.reduce((a, b) => (b[1] + r() * 0.3 > a[1] + r() * 0.3 ? b : a));
+            // the reduce always runs (fixed rand consumption keeps the pick stream aligned with a
+            // fresh boot), but a farmer migrating from an older story KEEPS the background, bond and
+            // flaw the player already saw - stats drift with level-ups, so recomputing would retcon.
+            const rolled = scores.reduce((a, b) => (b[1] + r() * 0.3 > a[1] + r() * 0.3 ? b : a))[0];
+            const old = s.story;
+            const bg = (old && STORY_ORIGINS[old.bg]) ? old.bg : rolled;
             const memT = String((s.memory && s.memory.title) || 'a life before the valley').slice(0, 40);
+            const name = shortName(f);
+            const pick = arr => arr[Math.floor(r() * arr.length)];
+            const leaving =
+                p.honesty < 0.35                ? STORY_DEPARTURES.shady :
+                (p.volatility ?? 0.5) > 0.7     ? STORY_DEPARTURES.burned :
+                (p.curiosity ?? 0.5) > 0.65     ? STORY_DEPARTURES.called :
+                p.collaboration < 0.3           ? STORY_DEPARTURES.crowded :
+                p.diligence > 0.7               ? STORY_DEPARTURES.resolved : STORY_DEPARTURES.hardyear;
+            const rival = s.dream.rivalName || 'their rival';
             s.story = {
-                bg: bg[0],
-                tale: `${/^[aeiou]/i.test(s.archetype) ? 'An' : 'A'} ${s.archetype.toLowerCase()} who ${bg[2]}. What brought them to the valley they mostly keep to themselves - but "${memT}" comes up when they've had a long day.`,
+                v: 2,
+                bg,
+                tale: [
+                    pick(STORY_ORIGINS[bg])(name),
+                    pick(leaving)(name),
+                    pick(STORY_TALISMANS)(memT),
+                    (STORY_ARRIVALS[s.dream.id] || STORY_ARRIVALS.quietlife)(name, rival),
+                ].join(' '),
                 ideal: s.dream.yearn,
-                bond: s.dream.id === 'outdo' && s.dream.rivalName
+                bond: (old && old.bond) || (s.dream.id === 'outdo' && s.dream.rivalName
                     ? `${s.dream.rivalName} - rival, measure, and the itch they can't scratch`
-                    : `the memory that made them: "${memT}"`,
-                flaw: this.#pickFlaw(f, r),
+                    : `the memory that made them: "${memT}"`),
+                flaw: (old && old.flaw) || this.#pickFlaw(f, r),
             };
         }
     }
@@ -4295,6 +4317,106 @@ export const DREAM_DEFS = [
     { id: 'craft',      yearn: 'TO MASTER EVERY TOOL OF THE TRADE',    fulfil: 'mastered the tools of the trade',   aff: p => 0.2 + p.diligence * 1.0 },
     { id: 'quietlife',  yearn: 'PEACE, A FENCE, AND RAIN ON THE ROOF', fulfil: 'kept the quiet life they wanted',   aff: p => 0.25 + (1 - p.competitiveness) * 0.7 + (1 - (p.volatility ?? 0.5)) * 0.5 },
 ];
+
+// ---------------------------------------------------------------------------
+// The DM's story fragments (#92): the prose the procedural dungeon master
+// composes into each farmer's origin tale - one childhood per background, one
+// leaving keyed to temperament, one keepsake carrying the source memory, one
+// arrival pointed at the dream. Bitmap-font-safe: ASCII only, spaced hyphens
+// for dashes (the font has no em-dash); ' and " render fine. Templates take
+// the farmer's short name so the same seeded pick retells the same life on
+// every load.
+// ---------------------------------------------------------------------------
+
+const STORY_ORIGINS = {
+    'OUTLANDER': [
+        n => `${n} was born in a wagon on the old salt road, in the year the geese flew north twice, and could read sky and hoofprint long before letters.`,
+        n => `${n} comes from no town at all - a childhood of ridgelines and river fords, warming their hands at strangers' fires and memorizing the stars for company.`,
+        n => `${n} grew up at the ragged edge of the maps, where the last signpost points at nothing, and learned early that a horizon is a door and not a wall.`,
+    ],
+    'FOLK HERO': [
+        n => `${n} was a miller's child in a village the lords forgot, until the flood year - when somebody had to hold the levee through the black of the night, and it turned out to be them.`,
+        n => `${n} grew up smallest in a town of big fists, and was fourteen the winter they stared down a granary thief with nothing but a lantern and a level voice.`,
+        n => `${n} came up on borrowed bread in a half-burned village, and swore into the ashes that no neighbor of theirs would ever stand alone again.`,
+    ],
+    'GUILD ARTISAN': [
+        n => `${n} was prenticed at nine to a joiner who praised nothing and measured everything, in a workshop where sawdust hung like snow in the lamplight.`,
+        n => `${n} spent a childhood among ledgers and lathes in the low guild quarter, and can still hear the old master's rule crack across the bench: again, and this time properly.`,
+        n => `${n} was raised to the smell of glue and cut oak, third apprentice of a house whose mark once meant something in three cities.`,
+    ],
+    'CHARLATAN': [
+        n => `${n} was raised in market crowds by an aunt who sold miracle tonic in four counties under three names, and who taught the twin arts of the wink and the exit.`,
+        n => `${n} grew up two steps ahead of the magistrates, through fairs and ferry towns, learning that a story told well is worth more than the thing it sells.`,
+        n => `${n} learned the trade young: shuffling shells on an upturned crate while the real coin was lifted elsewhere, always somebody else's somewhere else.`,
+    ],
+    'HERMIT': [
+        n => `${n} was left at a hillside shrine as a child, and passed the long seasons with bees, bells, and one patient old keeper who spoke perhaps twice a week.`,
+        n => `${n} took to the high woods after the fever year took everyone else, and found the silence there kinder than any condolence.`,
+        n => `${n} kept a fire tower alone through nine winters, where the only voices were the wind, the wolves, and the creak of the stairs.`,
+    ],
+    'SOLDIER': [
+        n => `${n} took a levy coin at sixteen and marched under somebody else's banner, through mud seasons and siege lines that never made it into the songs.`,
+        n => `${n} was a drummer's child, raised between campfires and columns, and can still sleep through anything except a night that has gone too quiet.`,
+        n => `${n} carried a pike in the border wars, kept the watches nobody wanted, and buried better farmers than they ever expected to become.`,
+    ],
+    'SAGE': [
+        n => `${n} was the candle-runt of a mountain scriptorium, copying star charts and herbals until the letters swam, and loving every hour they should have slept.`,
+        n => `${n} grew up in the back of a bookbinder's shop, reading everything that came in for mending, and asking the kind of questions that get a child sent outside.`,
+        n => `${n} spent their youth trailing a wandering scholar from ruin to ruin, holding the lantern, remembering everything the old one wrote down and half of what they didn't.`,
+    ],
+    'ENTERTAINER': [
+        n => `${n} was born backstage in a traveling show, was a crowd's darling by six, and learned that applause is a meal you get hungry for twice a day.`,
+        n => `${n} grew up singing for suppers in taproom light, and knows a hundred songs - and exactly which three of them make grown farmers cry.`,
+        n => `${n} was a festival child, raised on stilts and fiddle strings, and never once met a silence they could not fill.`,
+    ],
+};
+
+// why they left the old life - branched on temperament in #ensureBackstories
+const STORY_DEPARTURES = {
+    shady: [   // low honesty
+        n => `Then a deal went wrong in the old country - whose fault depends entirely on who is telling it - and the road out front suddenly looked like the safest one.`,
+        n => `They left in a hurry, one jump ahead of a debt with their name spelled almost right on it, and saw no reason to stop and correct the spelling.`,
+    ],
+    burned: [  // high volatility
+        n => `It ended, as such things do, with shouting - a bridge burned so thoroughly that even the river remembers - and a long walk that slowly cooled into a journey.`,
+        n => `One bad night and one worse word tore them loose of the old life, and they walked until the anger wore down to boot leather.`,
+    ],
+    called: [  // high curiosity
+        n => `No disaster drove them out; the horizon simply would not stop asking, and one green morning they answered it.`,
+        n => `They left the old life folded on the bed like an outgrown coat, and followed a rumor of a valley somewhere past the fog.`,
+    ],
+    crowded: [ // low collaboration
+        n => `In time the old country grew crowded with other people's opinions, so they packed what fit on one back and went looking for a horizon with nobody standing in it.`,
+        n => `They quarreled with no one and said goodbye to fewer, slipping out before dawn the way some people prefer to.`,
+    ],
+    resolved: [ // high diligence
+        n => `When the old place ran out of work worth doing well, they sharpened every tool they owned, settled their accounts to the last copper, and set out to find soil that deserved the effort.`,
+        n => `The day the old master died, the work there stopped meaning anything - so they wrapped the good chisels in oilcloth and went to find work that would.`,
+    ],
+    hardyear: [ // default: the hard year
+        n => `Then came the hard year - blight in the fields, ice on the roads, new names on old stones - and when spring finally broke, they walked out of it and simply kept walking.`,
+        n => `The old life ended the way old lives do, quietly and all at once, and the westward road was the only door still open.`,
+    ],
+};
+
+// the one thing carried from before: the source memory, worn as a keepsake
+const STORY_TALISMANS = [
+    m => `All they carried out of that life fits in one pocket: a keepsake they call "${m}", which they touch like a hinge when the day runs long.`,
+    m => `Sewn into their coat lining is a single relic of before - "${m}" - and on hard nights they turn it over like a coin that will not spend.`,
+    m => `Ask what they saved from the old life and they will show you nothing; but late by the fire they will speak, quietly, of "${m}".`,
+];
+
+// how they arrived in the valley - each pointed square at the dream they rolled
+const STORY_ARRIVALS = {
+    farshore:   (n, rv) => `They crossed the ridge into this valley and never quite unpacked all the way - because the fog past the fences is not a wall to them, it is an invitation.`,
+    grandhouse: (n, rv) => `Now they walk this valley pacing out foundations in their head, resolved to raise a house so sound that strangers will shelter in it long after their name wears off the gate.`,
+    beloved:    (n, rv) => `They came over the ridge with everything they own and one unspoken hope: to matter here - to be the name this town calls first when the water rises.`,
+    outdo:      (n, rv) => `They chose this valley the day ${rv} did, and they mean to out-plant, out-build and outlast them if it takes every season they have left.`,
+    neverpoor:  (n, rv) => `They reached this valley with dust in their cuffs and a vow between their teeth: the lean years end here, and the cellar will never echo again.`,
+    deed:       (n, rv) => `They came to this green valley the way some come to a battlefield - certain that somewhere in it waits the one great deed worth a standing stone.`,
+    craft:      (n, rv) => `They walked into this valley with their tools oiled and wrapped like relics, meaning to master every last trade of it, from whetstone to windmill.`,
+    quietlife:  (n, rv) => `And so they came to this quiet valley asking nothing grand of it - a fence, a roof, rain on that roof - which may be the rarest dream anyone here carries.`,
+};
 
 // ---------------------------------------------------------------------------
 // Farmer agent
