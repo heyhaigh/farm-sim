@@ -1,6 +1,6 @@
 // main.js — Ry Farms: rendering, camera, input, UI, boot.
 
-import { fetchMemories, mod, fmtMod, STAT_NAMES, TRAIT_NAMES, TRAIT_LABELS, hashString } from './dna.js';
+import { fetchMemories, generateCrew, mod, fmtMod, STAT_NAMES, TRAIT_NAMES, TRAIT_LABELS, hashString } from './dna.js';
 import { audio } from './audio.js';
 import { World, CHUNK, T, DAY_LENGTH, NIGHT_LENGTH, ITEMS, CRAFTABLES, RECIPE_BY_ID, INVENTION_TABLE, xpForLevel, obstacleTier, treeVariant, treeIsFruit, SEASONS } from './farm.js';
 import {
@@ -4445,10 +4445,6 @@ function drawBootScreen(t) {
     requestAnimationFrame(frame);
     loadAssetArt();
 
-    const result = await fetchMemories();
-    memories = result.memories;
-    memorySource = result.source;
-
     // PERSISTENCE (#88): a plain visit RESUMES the last-played town from IndexedDB — the town
     // remembers itself. ?seed=N resumes that seed's save (or founds it fresh if none exists);
     // ?fresh=1 always founds a new town (random seed unless &seed pins it) — the reset hatch
@@ -4457,6 +4453,12 @@ function drawBootScreen(t) {
     const urlSeed = bootParams.get('seed');
     const wantFresh = bootParams.get('fresh') != null;
     const worldSeed = urlSeed != null && urlSeed !== '' ? (parseInt(urlSeed, 10) >>> 0) : Math.floor(Math.random() * 0x7fffffff);
+
+    // Grow the cast from a REAL self-hosted SuperMemory corpus if one is reachable; otherwise from
+    // INVENTED past lives, seeded by this world so the default town is unique + untethered (no real docs).
+    const result = await fetchMemories();
+    memories = (result.memories && result.memories.length) ? result.memories : generateCrew(worldSeed);
+    memorySource = (result.memories && result.memories.length) ? result.source : 'invented';
 
     let resumed = false;
     if (!wantFresh) {

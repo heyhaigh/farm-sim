@@ -7,15 +7,62 @@
 // proxy 404s and we fall back to the embedded offline crew below.
 const MEMORY_ENDPOINT = '/api/knowledge-graph';
 
-// Small offline crew so the page still works if the API is unreachable.
-const FALLBACK_MEMORIES = [
-    { id: 'fb-voice', title: "Ryan's Seven-Year Experience in Voice Technologies for Elder Care", summary: 'Ryan spent seven years building voice-first experiences for elder care at Aloe Care Health, including a patented voice-enabled emergency triage system.' },
-    { id: 'fb-soccer', title: "Ryan's Soccer Career as a Sweeper Defender", summary: 'Ryan played sweeper through high school, anchoring the defense from freshman to senior year.' },
-    { id: 'fb-design', title: "Ryan's Design Work for Samsung Wearable Launch at iHeartRadio", summary: 'Ryan led design for first-release products, including the iHeartRadio app for the Samsung wearable launch.' },
-    { id: 'fb-startup', title: "Ryan's Zero-to-One Startup Expertise", summary: 'Twelve years of early-stage startup consulting, taking products from zero to one.' },
-    { id: 'fb-pottery', title: "Ryan's Enjoyment of Wheel-Throwing Pottery Classes", summary: 'Ryan takes wheel-throwing pottery classes and enjoys working with clay.' },
-    { id: 'fb-site', title: 'Guidelines for Contacting Ryan', summary: 'Visitors should be pointed to the About page or LinkedIn — there is no contact form.' },
+// A default town's farmers are grown from INVENTED past lives — no longer tethered to any real personal
+// documents. Each "life" is a former vocation that carries the same keyword clusters the growth pipeline
+// reads (so it yields a coherent archetype, stat bias, and creed), with a place + span that vary per
+// farmer so no two lives — or towns — read alike. A user's OWN self-hosted SuperMemory still overrides
+// this (see fetchMemories / main.js boot): point the game at a real corpus and it grows farmers from that.
+const LIFE_PLACES = ['the northern reach', 'Blackbriar', 'the low fens', 'Hollowmere', 'the coast road',
+    'Greywater', 'the high pasture', 'Thistledown', 'the salt marshes', 'Redhollow', 'the pinewood',
+    'Duskvale', 'the river bend', 'Amberford', 'the far downs', 'Stonebrook', 'Marrow Hollow', 'Wychelm'];
+const LIVES = [
+    { kw: 'pottery wheel clay craft kiln glaze design build interface',      title: p => `a potter's years at the wheel in ${p}`,       tail: 'and their hands still remember the clay' },
+    { kw: 'the village watch gate defense guard protect sweeper sport',       title: p => `a season on the watch, holding the gate at ${p}`, tail: 'where they learned to stand and hold a line' },
+    { kw: 'tending the sick care elder health fever herbs triage patient',    title: p => `tending the sick at a waystation near ${p}`,    tail: 'and never once turned a soul away' },
+    { kw: 'maps roads charting travel explore horizon frontier edge journey', title: p => `a mapmaker's years charting the roads past ${p}`, tail: 'always one valley past the last' },
+    { kw: 'the foundry forge building hauling team crew launch product',      title: p => `years at the foundry raising great works in ${p}`, tail: 'no beam of which they raised alone' },
+    { kw: 'writing letters the town record guidance contact plain story site',title: p => `keeping the record and the letters at ${p}`,     tail: 'where a plain word settled more than any fist' },
+    { kw: 'the high pasture a quiet croft home rest dog family partner hobby', title: p => `a shepherd's quiet years on the crofts of ${p}`,  tail: 'wanting little but a fence and the rain' },
+    { kw: 'the market trade hustle coin a hard bargain scratch business',      title: p => `working the markets and driving bargains in ${p}`, tail: 'and learned early that nothing comes free' },
+    { kw: 'the sea a long voyage storms sailing frontier edge road weather',   title: p => `a sailor's long voyages out of ${p}`,           tail: 'weathered by every storm that found them' },
+    { kw: 'teaching the young leading a school patience team guidance',        title: p => `teaching the young at a schoolhouse in ${p}`,   tail: 'sure that no one gets far alone' },
+    { kw: 'the deep seams ore digging mining the strike frontier lode',        title: p => `a prospector's years down the seams near ${p}`,  tail: 'chasing the one strike over the next rise' },
+    { kw: 'the inn hosting welcome the hearth travelers gathering team',       title: p => `keeping the inn and the hearth at ${p}`,        tail: 'a town in miniature, every night' },
+    { kw: 'the orchard grafting seasons patience harvest pruning quiet home',  title: p => `tending the old orchard rows of ${p}`,          tail: 'learning the long patience of growing things' },
+    { kw: 'the courier post roads riding fast far messages travel edge',       title: p => `riding courier on the post roads out of ${p}`,  tail: 'who could read a sky and a hoofprint alike' },
 ];
+function shuffled(n, rand) {
+    const a = Array.from({ length: n }, (_, i) => i);
+    for (let i = n - 1; i > 0; i--) { const j = Math.floor(rand() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
+    return a;
+}
+
+// One invented past-life memory, seeded (same seed -> same life).
+export function generateMemory(seed) {
+    const rand = mulberry32((seed >>> 0) || 1);
+    const life = LIVES[Math.floor(rand() * LIVES.length)];
+    const place = LIFE_PLACES[Math.floor(rand() * LIFE_PLACES.length)];
+    const yrs = 3 + Math.floor(rand() * 15);
+    const title = life.title(place);
+    return { id: 'life:' + (seed >>> 0), title: title[0].toUpperCase() + title.slice(1),
+        summary: `${yrs} years of ${title}, ${life.tail}.`, content: `${life.kw} ${place}` };
+}
+
+// A whole town's founding cast of invented lives — DISTINCT vocations + places spread across the crew so a
+// town varies, deterministic per world seed (so a given town always has the same people).
+export function generateCrew(seed, count = 16) {
+    const rand = mulberry32(hashString('crew:' + (seed >>> 0)));
+    const lifeOrder = shuffled(LIVES.length, rand), placeOrder = shuffled(LIFE_PLACES.length, rand);
+    const out = [];
+    for (let i = 0; i < count; i++) {
+        const life = LIVES[lifeOrder[i % LIVES.length]], place = LIFE_PLACES[placeOrder[i % LIFE_PLACES.length]];
+        const yrs = 3 + (hashString('life:' + seed + ':' + i) % 15);
+        const title = life.title(place);
+        out.push({ id: 'life:' + (seed >>> 0) + ':' + i, title: title[0].toUpperCase() + title.slice(1),
+            summary: `${yrs} years of ${title}, ${life.tail}.`, content: `${life.kw} ${place}` });
+    }
+    return out;
+}
 
 // ---------------------------------------------------------------------------
 // Deterministic RNG seeded from a string (memory id)
@@ -437,7 +484,9 @@ export async function fetchMemories() {
         if (docs.length === 0) throw new Error(data.error || 'no usable documents');
         return { memories: docs, source: data.source || 'supermemory' };
     } catch (err) {
-        console.warn('[ry-bots] falling back to offline memories:', err.message);
-        return { memories: FALLBACK_MEMORIES, source: 'offline' };
+        // no self-hosted corpus reachable -> the caller grows the town from INVENTED lives (generateCrew),
+        // seeded by the world so the default town is unique + untethered from any real documents.
+        console.warn('[ry-bots] no memory corpus; growing farmers from invented lives:', err.message);
+        return { memories: null, source: 'invented' };
     }
 }
