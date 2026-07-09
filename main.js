@@ -2,7 +2,7 @@
 
 import { fetchMemories, mod, fmtMod, STAT_NAMES, TRAIT_NAMES, TRAIT_LABELS, hashString } from './dna.js';
 import { audio } from './audio.js';
-import { World, CHUNK, T, DAY_LENGTH, NIGHT_LENGTH, ITEMS, CRAFTABLES, xpForLevel, obstacleTier, treeVariant, treeIsFruit, SEASONS } from './farm.js';
+import { World, CHUNK, T, DAY_LENGTH, NIGHT_LENGTH, ITEMS, CRAFTABLES, RECIPE_BY_ID, xpForLevel, obstacleTier, treeVariant, treeIsFruit, SEASONS } from './farm.js';
 import {
     TILE_W, TILE_H, makeCanvas, drawText, textWidth,
     makeFarmerSprites, makeCropSprites, makeHouse, makeWell, makeBoard, makeFencePost,
@@ -2473,8 +2473,15 @@ function drawUI() {
     ctx.fillStyle = '#20242f';
     ctx.fillRect(0, 18, GW, 1);
 
-    drawText(ctx, (world.name || 'RY FARMS').toUpperCase(), 4, 4, '#7dd069', 2);
-    let hx = 74;
+    // town name sits in a container that grows to fit its characters; the day/time info starts
+    // AFTER it (dynamic, not a fixed x) so a long name like "SEDGEMARCH" never overlaps the clock
+    const nameStr = (world.name || 'RY FARMS').toUpperCase();
+    const nameW = textWidth(nameStr, 2);
+    ctx.fillStyle = 'rgba(125,208,105,0.10)';
+    ctx.fillRect(2, 2, nameW + 8, 14);
+    drawText(ctx, nameStr, 6, 4, '#7dd069', 2);
+    let hx = 6 + nameW + 12;
+    ctx.fillStyle = '#2a2f3a'; ctx.fillRect(hx - 6, 4, 1, 10);   // a slim divider between name + clock
     hx += drawText(ctx, `DAY ${world.day}`, hx, 7, '#c8ccd8') + 8;
 
     // time of day — always shown (morning / afternoon / evening / night)
@@ -3063,6 +3070,16 @@ function drawSheet(f) {
         } else {
             drawText(ctx, 'no tools yet', tx, y + 6, SHEET_LABEL); y += PITCH;
         }
+
+        // #97 Slice 2 — KNOWN RECIPES: what this farmer has INVENTED (base remedies are universal, so
+        // only their own discoveries are worth listing). Wraps to fit; a quiet line when they've made none.
+        y = sectionBand(IX, y, IW, 'RECIPES');
+        const invented = (f.knownRecipes() || []).filter(id => id.indexOf('inv:') === 0)
+            .map(id => (RECIPE_BY_ID[id] && RECIPE_BY_ID[id].name) || id);
+        if (!invented.length) { drawText(ctx, 'no discoveries yet', IX, y, SHEET_LABEL); y += 8; }
+        else for (const ln of wrapText(invented.join(', '), Math.floor(IW / 4.2))) { drawText(ctx, ln, IX, y, '#ffd24a'); y += 7; }
+        y += 2;
+
         // clicked-slot label line + a hover/selected tooltip drawn on top at the very end of drawSheet
         if (selectedSlotKey) {
             const sel = sheetSlots.find(s => s.key === selectedSlotKey);

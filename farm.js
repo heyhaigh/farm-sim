@@ -58,6 +58,45 @@ export const RECIPES = {
     salve: { id: 'salve', name: 'Salve', inputs: { grass: 3, flower: 1 }, kind: 'remedy', tier: 2 },
     tonic: { id: 'tonic', name: 'Tonic', inputs: { grass: 6, flower: 2 }, kind: 'remedy', tier: 3 },
 };
+// the base recipes every farmer knows from the start (invented recipes are learned, see #experiment)
+export const BASE_RECIPES = ['soup', 'salve', 'tonic'];
+
+// #97 CRAFTING (Slice 2): the BOUNDED, ENUMERATED invention space. A farmer never conjures a recipe
+// from an inventory hash (a determinism landmine) — they roll an IDENTITY-seeded experiment against
+// this hand-authored table (see #experiment). Each entry is stable DATA: a fixed id (never derived
+// from a display name / LLM text), input costs, and a pure `effect` id the sim applies on craft.
+// `weight(f)` biases the OUTCOME CLASS by personality AND present state (surrounded by the sick →
+// remedy, behind on work → tool, curious → utility) so there's no "good farmer / bad farmer" caricature.
+// `harm` entries exist but are `locked` — UNREACHABLE until Slice 4 ships covert-crime detection.
+export const INVENTION_TABLE = {
+    remedy: [
+        { id: 'inv:remedy:0', name: 'Fever Tonic',      inputs: { grass: 4, flower: 1 }, effect: 'cure',     tier: 2 },
+        { id: 'inv:remedy:1', name: 'Poultice',         inputs: { grass: 3, crops: 1 },  effect: 'mendhp',   tier: 2 },
+        { id: 'inv:remedy:2', name: 'Sleeping Draught', inputs: { flower: 2, grass: 2 }, effect: 'deeprest', tier: 2 },
+    ],
+    tool: [
+        { id: 'inv:tool:0', name: 'Compost',     inputs: { crops: 2, grass: 2 }, effect: 'growboost', tier: 2 },
+        { id: 'inv:tool:1', name: 'Whetstone',   inputs: { grass: 2, flower: 1 }, effect: 'workboost', tier: 2 },
+        { id: 'inv:tool:2', name: 'Lantern Oil', inputs: { crops: 1, flower: 2 }, effect: 'refresh',   tier: 2 },
+    ],
+    utility: [
+        { id: 'inv:utility:0', name: 'Preserves',  inputs: { crops: 3 },           effect: 'refresh',   tier: 1 },
+        { id: 'inv:utility:1', name: 'Fertilizer', inputs: { flower: 3, grass: 1 }, effect: 'growboost', tier: 1 },
+        { id: 'inv:utility:2', name: 'Rain Charm', inputs: { flower: 2 },           effect: 'none',      tier: 1 },
+    ],
+    harm: [   // Slice 4 — table entries exist for determinism/registry stability but are UNREACHABLE now
+        { id: 'inv:harm:0', name: 'Bitter Draught', inputs: { grass: 3 },  effect: 'sicken', tier: 2, locked: true },
+        { id: 'inv:harm:1', name: 'Blight Dust',    inputs: { flower: 3 }, effect: 'blight', tier: 2, locked: true },
+        { id: 'inv:harm:2', name: 'Sour Mash',      inputs: { crops: 3 },  effect: 'weaken', tier: 2, locked: true },
+    ],
+};
+// flat id -> recipe lookup across base + invented, built once (stable ids, order-independent)
+export const RECIPE_BY_ID = (() => {
+    const m = {};
+    for (const id in RECIPES) m[id] = RECIPES[id];
+    for (const kind in INVENTION_TABLE) for (const e of INVENTION_TABLE[kind]) m[e.id] = { ...e, kind };
+    return m;
+})();
 
 // wood economy
 const TREE_WOOD = [1, 3, 5];   // wood from felling a tree, by growth stage: sapling 1 / young 3 / mature 5
@@ -2284,12 +2323,12 @@ export class World {
     // ---- CRAFTING (#97 Slice 1): recipes consume real inventory — nothing from thin air ---------
     #haveGood(f, g) { return g === 'crops' ? (f.sheet.produce || 0) : g === 'wood' ? f.wood : g === 'ore' ? f.ore : ((f.sheet.goods && f.sheet.goods[g]) || 0); }
     canCraft(f, recipeId) {
-        const r = RECIPES[recipeId]; if (!r) return false;
+        const r = RECIPE_BY_ID[recipeId]; if (!r || r.locked) return false;
         for (const g in r.inputs) if (this.#haveGood(f, g) < r.inputs[g]) return false;
         return true;
     }
     #consumeRecipe(f, recipeId) {
-        const r = RECIPES[recipeId]; if (!r || !this.canCraft(f, recipeId)) return false;
+        const r = RECIPE_BY_ID[recipeId]; if (!r || !this.canCraft(f, recipeId)) return false;
         for (const g in r.inputs) {
             const q = r.inputs[g];
             if (g === 'crops') { f.sheet.produce -= q; spendCropStock(f.sheet, q); }
@@ -2323,6 +2362,29 @@ export class World {
             ? `${shortName(healer)} nursed ${shortName(patient)} back to health with a tonic.`
             : `${shortName(healer)} eased ${shortName(patient)}'s illness with a ${nm.toLowerCase()}.`, healer, patient, '#7dd069');
         return true;
+    }
+
+    // #97 Slice 2 — craft a KNOWN invented recipe and apply its pure effect. Inputs are consumed from
+    // the farmer's own inventory; the effect (a stable id on the recipe) is applied immediately to the
+    // crafter (remedies mend/energize, tools grant a short 2-day self-buff, utility is minor/flavour).
+    // Returns the recipe on success (for the caller's beat) or null. All effects are one-shot + local
+    // so nothing here touches world.rand — the digest self-compares clean.
+    applyInvention(f, recipeId) {
+        const r = RECIPE_BY_ID[recipeId];
+        if (!r || r.locked || !this.#consumeRecipe(f, recipeId)) return null;
+        const s = f.sheet; s.boosts = s.boosts || {};
+        switch (r.effect) {
+            case 'cure':     if (f.health === 'sick') { f.health = 'healthy'; f.sickDays = 0; f.energy = Math.min(1, f.energy + 0.2); f.sparkle = 2; } break;
+            case 'mendhp':   f.hp = Math.min(f.maxHp, f.hp + Math.ceil(f.maxHp * 0.3)); break;
+            case 'deeprest': f.energy = 1; f.strain = 0; break;
+            case 'refresh':  f.energy = Math.min(1, f.energy + 0.3); break;
+            case 'growboost': s.boosts.grow = this.day + 2; break;
+            case 'workboost': s.boosts.work = this.day + 2; break;
+            case 'none':     f.sparkle = Math.max(f.sparkle || 0, 1); break;   // a harmless curiosity
+        }
+        s.items = s.items || {}; s.items[recipeId] = (s.items[recipeId] || 0) + 1;   // ledger of what they've made
+        f.gainXP(1);
+        return r;
     }
 
     // The Manager reads the town and posts ONE directive for the day (or none if there's no need):
@@ -3720,8 +3782,9 @@ export class World {
                 // grow->ripe ~1 day, so a crop ripens about day 6 under good care. BEAN STALKS grow
                 // in half the time (crop.fastGrow). Water/weather/int/season modulate around this.
                 const greenThumb = 1 + mod(crop.owner.sheet.stats.int) * 0.06;
+                const compost = crop.owner.hasBoost('grow') ? 1.15 : 1;   // #97 Slice 2 — fresh compost/fertiliser feeds the soil
                 const waterFactor = 0.35 + 0.65 * crop.water;
-                crop.growth += (dt / DAY_LENGTH) * waterFactor * growthBonus * greenThumb * this.growthMult * season.growth;
+                crop.growth += (dt / DAY_LENGTH) * waterFactor * growthBonus * greenThumb * compost * this.growthMult * season.growth;
                 const need = CROP_STAGE_DAYS[crop.stage] * (crop.fastGrow || 1);
                 if (crop.growth >= need) { crop.growth = 0; crop.stage++; }
             }
@@ -5076,6 +5139,88 @@ export class Farmer {
     isHealer() { return this.world.roles.healer === this.sheet.seed; }
     get grass() { return (this.sheet.goods && this.sheet.goods.grass) || 0; }
 
+    // ---- #97 Slice 2: procedural invention ---------------------------------------------------------
+    // Every farmer is born knowing the base remedies; invented recipes are LEARNED (see #experiment)
+    // and ride the sheet so they persist. A recipe id is "known" if it's a base recipe or in the set.
+    knowsRecipe(id) { return BASE_RECIPES.includes(id) || (this.sheet.recipes && this.sheet.recipes.includes(id)); }
+    knownRecipes() { return [...BASE_RECIPES, ...((this.sheet.recipes) || [])]; }
+
+    // A boost is active while the current day is before its stamped expiry (invented tool self-buffs).
+    hasBoost(kind) { const b = this.sheet.boosts; return !!(b && b[kind] != null && this.world.day < b[kind]); }
+
+    // The OUTCOME CLASS a farmer leans toward, weighted by personality AND present state — not a flat
+    // trait map. Surrounded by the sick / caring → remedy; hungry or behind → tool; curious → utility.
+    #inventBias() {
+        const p = this.p, w = this.world;
+        const nearSick = w.farmers.some(o => o !== this && o.health === 'sick' &&
+            Math.abs(o.pos.i - this.pos.i) + Math.abs(o.pos.j - this.pos.j) < 14) || this.health === 'sick';
+        return {
+            remedy:  0.4 + p.collaboration * 0.6 + (nearSick ? 0.8 : 0) + (this.isHealer() ? 0.6 : 0),
+            tool:    0.4 + p.diligence * 0.6 + (this.energy < 0.5 ? 0.4 : 0) + p.competitiveness * 0.3,
+            utility: 0.4 + p.curiosity * 0.9,
+        };
+    }
+
+    // Try an experiment. Invention is TRIAL AND ERROR: a single tinker usually FAILS — it costs a
+    // little material and teaches a little (inventSkill creeps up), and only a breakthrough roll yields
+    // a real recipe. So a discovery is earned over many attempts, not handed over on the first try.
+    // The outcome is IDENTITY-seeded — mulberry32(world ^ farmer ^ day ^ inventCount) — never a hash of
+    // inventory, so it can't depend on JS map order / float drift / a mid-tick barter.
+    #experiment() {
+        const s = this.sheet, w = this.world, day = w.day;
+        const roll = mulberry32(((w.seed ^ s.seed ^ Math.imul(day, 0x9e3779b1) ^ ((s.inventCount || 0) >>> 0)) >>> 0));
+        s.inventCount = (s.inventCount || 0) + 1;
+        this.inventCd = day + 2 + Math.floor(roll() * 3);   // a couple of days between tinkers (seeded)
+        this.state = 'decide';
+
+        // every attempt costs something — nothing from thin air, even a failure burns a bit of stock
+        const scrap = this.grass >= 2 ? ['grass', 2] : (s.goods?.flower >= 1 ? ['flower', 1] : (s.produce >= 1 ? ['crops', 1] : null));
+        if (scrap) { if (scrap[0] === 'crops') { s.produce -= scrap[1]; spendCropStock(s, scrap[1]); } else { s.goods[scrap[0]] = Math.max(0, (s.goods[scrap[0]] || 0) - scrap[1]); } }
+
+        // skill built from past failures + wits raises the odds; a breakthrough is still the exception
+        const skill = s.inventSkill || 0;
+        const chance = Math.min(0.6, 0.06 + Math.max(0, mod(s.stats.int)) * 0.035 + this.p.curiosity * 0.12 + this.p.diligence * 0.06 + skill * 0.45);
+        if (roll() >= chance) {   // FAILED — learned a little, wasted a little; try again another day
+            s.inventSkill = Math.min(0.9, skill + 0.07);
+            this.gainXP(1);
+            this.think(roll() < 0.5 ? 'HMM — THAT DIDN\'T WORK. NOT YET.' : 'BACK TO THE DRAWING BOARD...');
+            return;
+        }
+        // a breakthrough — the accumulated insight is spent on it
+        s.inventSkill = skill * 0.4;
+        // pick the outcome class, then a concrete entry from that class's table (harm entries excluded)
+        const bias = this.#inventBias();
+        const kinds = Object.keys(bias); let total = 0; for (const k of kinds) total += bias[k];
+        let pickK = kinds[0], acc = roll() * total; for (const k of kinds) { acc -= bias[k]; if (acc <= 0) { pickK = k; break; } }
+        const table = INVENTION_TABLE[pickK].filter(e => !e.locked);
+        const entry = table[Math.floor(roll() * table.length)];
+        if (this.knowsRecipe(entry.id)) {   // duplicate → a NEAR-MISS: refined it, learned nothing new (council #4)
+            this.think('ALMOST SOMETHING NEW... JUST A REFINEMENT'); this.gainXP(2);
+            return;
+        }
+        s.recipes = s.recipes || []; s.recipes.push(entry.id);
+        this.gainXP(6); this.sparkle = 2; this.say('AHA!', '#ffd24a'); this.think(`I WORKED OUT ${entry.name.toUpperCase()}`);
+        w.addChronicle('discovery', `${shortName(this)} hit on a way to make ${entry.name.toLowerCase()}.`, this, null, '#ffd24a');
+        w.addLog(`${s.name} discovered how to make ${entry.name.toLowerCase()} after much trial and error`, '#ffd24a');
+    }
+
+    // The soonest useful invented recipe to craft right now: a remedy when it would help THIS farmer,
+    // else a tool/utility buff when idle and not already boosted. Returns an id they know + can afford.
+    #usefulInvention() {
+        const w = this.world;
+        for (const id of this.knownRecipes()) {
+            const r = RECIPE_BY_ID[id]; if (!r || r.locked || r.id.indexOf('inv:') !== 0 || !w.canCraft(this, id)) continue;
+            if (r.effect === 'cure' && this.health !== 'sick') continue;
+            if (r.effect === 'mendhp' && this.hp >= this.maxHp * 0.7) continue;
+            if (r.effect === 'deeprest' && this.energy > 0.4) continue;
+            if (r.effect === 'refresh' && this.energy > 0.7) continue;
+            if (r.effect === 'growboost' && this.hasBoost('grow')) continue;
+            if (r.effect === 'workboost' && this.hasBoost('work')) continue;
+            return id;
+        }
+        return null;
+    }
+
     // Decide ONCE per directive whether to take it up (cached on the sheet so re-deciding each tick
     // never re-rolls or floods rng). Returns 'heed' | 'refuse' | 'skip'. The Manager leads by doing
     // (exempt); loners and the Manager's enemies always refuse; a daily budget caps the claim. The
@@ -5307,6 +5452,7 @@ export class Farmer {
         let s = (1 + mod(this.sheet.stats.dex) * 0.08) * this.world.workMult;
         s *= (0.55 + 0.45 * Math.max(0, this.energy));
         if (this.health === 'sick') s *= 0.4;
+        if (this.hasBoost('work')) s *= 1.15;   // #97 Slice 2 — a fresh whetstone puts an edge on the day's work
         for (const other of this.world.farmers) {
             if (other === this || other.sheet.stats.cha < 14) continue;
             const d = Math.abs(other.pos.i - this.pos.i) + Math.abs(other.pos.j - this.pos.j);
@@ -6638,6 +6784,26 @@ export class Farmer {
                     if (this.#goTo(t.pos.i + 0.5, t.pos.j + 0.5, 'wander')) return;
                 }
             }
+        }
+
+        // 5e. #97 Slice 2 — CRAFT a known invented recipe that would help right now (mend, rest, or a
+        //     short work/grow buff). Instant + local; a bubble makes it readable. Cheap self-care/upkeep,
+        //     so it sits below real work but above aimless wandering.
+        if (!w.isNight()) {
+            const useId = this.#usefulInvention();
+            if (useId) {
+                const made = w.applyInvention(this, useId);
+                if (made) { this.say(`MADE ${made.name.toUpperCase()}`, '#8fd0d0'); this.think(`A FRESH ${made.name.toUpperCase()} — HANDY`); }
+            }
+        }
+
+        // 5f. #97 Slice 2 — EXPERIMENT: an idle, well-stocked, curious/diligent farmer tinkers and may
+        //     discover a new recipe (identity-seeded, never inventory-hashed). Urgent work already
+        //     preempted this; a multi-day cooldown keeps invention a genuine, occasional beat.
+        if (!w.isNight() && this.energy > 0.4 && (this.inventCd || 0) <= w.day &&
+            (this.grass >= 8 || (this.grass >= 4 && (s.goods?.flower || 0) >= 3) || (s.produce || 0) >= 4) &&
+            this.rand() < 0.12 + this.p.curiosity * 0.4 + this.p.diligence * 0.2) {
+            this.think('WHAT IF I TRIED SOMETHING NEW...'); this.#experiment(); return;
         }
 
         // 6. wander + muse — but if someone I can't stand has drifted close, I keep my distance
