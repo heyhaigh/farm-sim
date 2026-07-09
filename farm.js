@@ -97,6 +97,9 @@ export const RECIPE_BY_ID = (() => {
     for (const kind in INVENTION_TABLE) for (const e of INVENTION_TABLE[kind]) m[e.id] = { ...e, kind };
     return m;
 })();
+// how many helpful recipes there are to discover in total — once a farmer knows them all, tinkering has
+// nothing left to find, so they stop burning stock on it (W3 throttle).
+const HELPFUL_INVENTIONS = ['remedy', 'tool', 'utility'].reduce((n, k) => n + INVENTION_TABLE[k].filter(e => !e.locked).length, 0);
 
 // wood economy
 const TREE_WOOD = [1, 3, 5];   // wood from felling a tree, by growth stage: sapling 1 / young 3 / mature 5
@@ -2496,6 +2499,12 @@ export class World {
         }
         s.items = s.items || {}; s.items[recipeId] = (s.items[recipeId] || 0) + 1;   // ledger of what they've made
         f.gainXP(1);
+        // W3 observe-valve — crafting isn't secret: a neighbour close enough to watch HEARS of the recipe
+        // (heard-of, not known), so a hoarded recipe can still surface + spread by being seen made.
+        for (const o of this.farmers) {
+            if (o === f || o.health !== 'healthy') continue;
+            if (Math.abs(o.pos.i - f.pos.i) + Math.abs(o.pos.j - f.pos.j) < 4 && o.hearOf(recipeId)) o.think(`SO THAT'S HOW ${r.name.toUpperCase()} IS MADE...`);
+        }
         return r;
     }
 
@@ -7252,6 +7261,7 @@ export class Farmer {
         //     discover a new recipe (identity-seeded, never inventory-hashed). Urgent work already
         //     preempted this; a multi-day cooldown keeps invention a genuine, occasional beat.
         if (!w.isNight() && this.energy > 0.4 && (this.inventCd || 0) <= w.day &&
+            this.invented().filter(id => !(RECIPE_BY_ID[id] && RECIPE_BY_ID[id].locked)).length < HELPFUL_INVENTIONS &&   // W3: nothing left to discover -> don't burn stock tinkering
             (this.grass >= 8 || (this.grass >= 4 && (s.goods?.flower || 0) >= 3) || (s.produce || 0) >= 4) &&
             this.rand() < 0.12 + this.p.curiosity * 0.4 + this.p.diligence * 0.2) {
             this.think('WHAT IF I TRIED SOMETHING NEW...'); this.#experiment(); return;
