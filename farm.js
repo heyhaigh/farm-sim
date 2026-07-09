@@ -280,9 +280,11 @@ function addCropStock(sheet, type, n, source) {
 // Physical crops leave the farm (traded / donated / eaten) — drain `n` units from cropStock so the
 // by-type inventory reflects CURRENT holdings, not lifetime provenance. Largest type first, grown ->
 // found -> stolen within it. Deterministic (stable key order + count sort). Called wherever `produce`
-// (the untyped spendable wallet) is decremented; the type breakdown is our best record of what left.
+// (the untyped spendable wallet) is decremented. Returns a {type: n} map of what it drained, so a
+// TRANSFER can credit the same types to the receiver (keeping the provenance ledger conservation-safe).
 function spendCropStock(sheet, n) {
-    const cs = sheet.cropStock; if (!cs || n <= 0) return;
+    const drained = {};
+    const cs = sheet.cropStock; if (!cs || n <= 0) return drained;
     const tot = t => (cs[t].grown || 0) + (cs[t].stolen || 0) + (cs[t].found || 0);
     const types = Object.keys(cs).sort((a, b) => tot(b) - tot(a));
     let left = Math.round(n);
@@ -290,10 +292,11 @@ function spendCropStock(sheet, n) {
         if (left <= 0) break;
         for (const src of ['grown', 'found', 'stolen']) {
             const take = Math.min(left, cs[t][src] || 0);
-            cs[t][src] -= take; left -= take;
+            if (take > 0) { cs[t][src] -= take; left -= take; drained[t] = (drained[t] || 0) + take; }
             if (left <= 0) break;
         }
     }
+    return drained;
 }
 
 function cleanChatText(text, max = CHAT_LINE_MAX) {
@@ -1249,6 +1252,10 @@ export class World {
         // seed the activity feed with the town's founding, so it reads as an ongoing chronicle from
         // the moment the game loads (rather than an empty bar until the first event fires).
         this.#seedFoundingLog();
+
+        // town CHARACTER is now knowable (all founder personalities final) — compute it up front so
+        // day-1 effCollab + the tooltip reflect the actual roster, not the 0.5 default (Codex r11 #5).
+        this.#recomputeTownTraits();
     }
 
     #seedFoundingLog() {
@@ -2960,8 +2967,14 @@ export class World {
         if (n <= 0) return 0;
         if (good === 'wood') { from.wood -= n; to.wood += n; }
         else if (good === 'ore') { from.ore -= n; to.ore += n; }
-        // crops move a spendable produce balance, NOT lifetime `harvested` (which gates leveling/upgrades)
-        else if (good === 'crops') { from.sheet.produce -= n; spendCropStock(from.sheet, n); to.sheet.produce = (to.sheet.produce || 0) + n; }
+        // crops move a spendable produce balance, NOT lifetime `harvested` (which gates leveling/upgrades).
+        // Drain the sender's provenance by type + credit those SAME types to the receiver ('found' via
+        // trade), so the by-type inventory ledger is conserved end-to-end (Codex r11 #2).
+        else if (good === 'crops') {
+            from.sheet.produce -= n; to.sheet.produce = (to.sheet.produce || 0) + n;
+            const drained = spendCropStock(from.sheet, n);
+            for (const t in drained) addCropStock(to.sheet, t, drained[t], 'found');
+        }
         else { from.sheet.goods[good] -= n; to.sheet.goods = to.sheet.goods || {}; to.sheet.goods[good] = (to.sheet.goods[good] || 0) + n; }
         return n;
     }
@@ -3728,7 +3741,15 @@ export class World {
         // #85 — felling a RAIDING FOE (orc/assassin) is a rare, heroic deed: raise a lasting MONUMENT
         // on the spot + an 'legend' epic beat, so the stand becomes permanent town history.
         if (e.def.kind === 'foe') {
-            const mi = Math.round(f.pos.i), mj = Math.round(f.pos.j);
+            let mi = Math.round(f.pos.i), mj = Math.round(f.pos.j);
+            // don't stack two stones on one tile — nudge to the nearest clear, unmonumented spot (Codex r11 #3)
+            const taken = (i, j) => this.monuments.some(m => m.i === i && m.j === j);
+            if (taken(mi, mj) || this.pathBlocked(mi, mj)) {
+                outer: for (let r = 1; r <= 3; r++) for (let dj = -r; dj <= r; dj++) for (let di = -r; di <= r; di++) {
+                    const ni = mi + di, nj = mj + dj;
+                    if (!taken(ni, nj) && this.isRevealed(ni, nj) && !this.pathBlocked(ni, nj)) { mi = ni; mj = nj; break outer; }
+                }
+            }
             this.monuments.push({ i: mi, j: mj, heroSeed: f.sheet.seed, hero: f.sheet.name.split(' ')[0], foe: e.def.name, day: this.day, party: fighters.length });
             if (this.monuments.length > 40) this.monuments.shift();
             for (const ff of fighters) ff.gainXP(6);
@@ -5175,7 +5196,9 @@ export class Farmer {
     // A wounded farmer eats meat to heal past what rest can mend — smallest cut first (don't burn a
     // prime cut on a scratch). Returns true if they ate (heals instantly; re-decide next tick).
     #maybeEatMeat() {
-        if (this.hp >= this.maxHp * 0.6 || this.state === 'fight' || this.state === 'flee') return false;
+        // eat to finish healing whenever notably wounded — ABOVE the 0.6 rest cap, so meat can carry them
+        // the "last stretch" to full (a farmer parked at the rest cap with meat must not stall — Codex r11 #4)
+        if (this.hp >= this.maxHp * 0.9 || this.state === 'fight' || this.state === 'flee') return false;
         const g = this.sheet.goods; if (!g) return false;
         for (const m of MEAT_GOODS) {
             if ((g[m] || 0) <= 0) continue;
@@ -5681,7 +5704,7 @@ export class Farmer {
         const w = this.world, mine = this.sheet.goods || {}, myProd = this.producedGoods();
         const mySurplus = [];   // anything I'm sitting on plenty of AND value little (so I can spare it)
         for (const g in mine) if (mine[g] >= 4 && this.goodValue(g) <= 0.85) mySurplus.push(g);
-        if ((this.produce || 0) >= 8) mySurplus.push('crops');
+        if ((this.sheet.produce || 0) >= 8) mySurplus.push('crops');   // the spendable crop wallet lives on sheet (Codex r11 #1)
         if (!mySurplus.length) return null;
         let best = null, bestScore = 0.4;
         for (const B of w.farmers) {
@@ -5713,7 +5736,7 @@ export class Farmer {
         if (!deal || !w.farmers.includes(deal.partner)) return;
         const B = deal.partner;
         if (B.downed || Math.hypot(B.pos.i - this.pos.i, B.pos.j - this.pos.j) > 3.5) { this.say('...gone', '#9a9a8a'); return; }
-        const stock = (f, g) => g === 'crops' ? (f.produce || 0) : ((f.sheet.goods && f.sheet.goods[g]) || 0);
+        const stock = (f, g) => g === 'crops' ? (f.sheet.produce || 0) : ((f.sheet.goods && f.sheet.goods[g]) || 0);
         const n = Math.min(3, stock(this, deal.give), stock(B, deal.get));   // fair, symmetric, affordable
         if (n <= 0) { this.say('...no deal', '#9a9a8a'); return; }
         const gave = w.transferGood(this, B, deal.give, n);
