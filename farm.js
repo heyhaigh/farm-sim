@@ -4998,6 +4998,8 @@ export class Farmer {
         this.huntTarget = null;   // a world.prey animal this bot is running down (see the 'hunt' state)
         this.huntTimer = 0;       // how much longer they'll keep up a chase before giving up
         this.barterDeal = null;   // a pending goods-for-goods swap being walked to (see #findBarter/#completeBarter)
+        this.teachCooldown = 5 + (sheet.seed >>> 9) % 15;   // #97 Slice 3: paces recipe-teaching visits
+        this.teachTarget = null;  // { student, id } — a recipe they're walking over to demonstrate
         this.tools = new Set();   // crafted tools owned (see CRAFTABLES) — unlock at level, cost ore
         this.craftTarget = null;  // the recipe a farmer has walked home to build
 
@@ -5330,6 +5332,24 @@ export class Farmer {
     // and ride the sheet so they persist. A recipe id is "known" if it's a base recipe or in the set.
     knowsRecipe(id) { return BASE_RECIPES.includes(id) || (this.sheet.recipes && this.sheet.recipes.includes(id)); }
     knownRecipes() { return [...BASE_RECIPES, ...((this.sheet.recipes) || [])]; }
+    invented() { return this.sheet.recipes || []; }   // the invented recipes they can actually craft
+
+    // #97 Slice 3 DIFFUSION — knowing-OF is decoupled from knowing-HOW. A recipe HEARD of (via gossip)
+    // can't be crafted; only being TAUGHT (direct) turns heard-of into known. So a useful recipe takes
+    // time to spread, and the inventor keeps an edge for a while.
+    hasHeardOf(id) { return !!(this.sheet.heardOf && this.sheet.heardOf.includes(id)); }
+    heardOf() { return this.sheet.heardOf || []; }
+    hearOf(id) {   // returns true if this is genuinely NEW word to them
+        if (this.knowsRecipe(id) || this.hasHeardOf(id)) return false;
+        (this.sheet.heardOf = this.sheet.heardOf || []).push(id);
+        return true;
+    }
+    learnRecipe(id) {   // heard-of (or not) -> known; the moment know-how actually passes hands
+        if (this.knowsRecipe(id)) return false;
+        (this.sheet.recipes = this.sheet.recipes || []).push(id);
+        if (this.sheet.heardOf) this.sheet.heardOf = this.sheet.heardOf.filter(x => x !== id);
+        return true;
+    }
 
     // A boost is active while the current day is before its stamped expiry (invented tool self-buffs).
     hasBoost(kind) { const b = this.sheet.boosts; return !!(b && b[kind] != null && this.world.day < b[kind]); }
@@ -6469,10 +6489,42 @@ export class Farmer {
                 other.adjustOpinion(this, -0.05, 'spreads nasty rumours');   // the smear backfires on the smearer
             }
         }
+        // #97 Slice 3 — word of a new recipe travels in conversation: the speaker mentions something
+        // they've worked out, and the listener HEARS of it. Heard-of only — they still can't make it
+        // until someone actually shows them how (see #maybeTeach). This is how the rumour outruns the skill.
+        if (this.invented().length && this.rand() < 0.3 + this.p.curiosity * 0.2) {
+            const mine = this.invented();
+            const id = mine[Math.floor(this.rand() * mine.length)];
+            if (other.hearOf(id)) other.think(`SO ${shortName(this).toUpperCase()} WORKED OUT ${(RECIPE_BY_ID[id] ? RECIPE_BY_ID[id].name : id).toUpperCase()}...`);
+        }
         const fallback = this.#scriptedChat(other, op, rop, grudge, vivid);
         if (w.tryLlmChat(this, other, { op, rop, grudge, vivid, fallback })) return true;
         w.applyChatLines(this, other, fallback, { weight: fallback.weight });
         return true;
+    }
+
+    // #97 Slice 3 — DIRECT TEACH: turning heard-of into known. A generous inventor seeks out a liked
+    // neighbour who's HEARD of one of their recipes and shows them how — the only way know-how truly
+    // passes hands. The crooked HOARD (their recipe is their edge). Cooldown-paced, so a useful recipe
+    // still takes a while to become common. Returns true if they set off to teach.
+    #maybeTeach() {
+        const w = this.world;
+        if (this.teachCooldown > 0 || w.isNight() || !this.invented().length) return false;
+        if (this.p.honesty < 0.35) return false;                              // the crooked keep their secrets
+        if (this.effCollab() < 0.4 && this.goal !== 'good neighbor') return false;
+        let best = null;
+        for (const o of w.farmers) {
+            if (o === this || o.health !== 'healthy' || this.opinionOf(o) < 0.15) continue;
+            if (Math.abs(o.pos.i - this.pos.i) + Math.abs(o.pos.j - this.pos.j) > 22) continue;
+            const id = this.invented().find(r => o.hasHeardOf(r));           // they want it — they've heard of it
+            if (id) { best = { student: o, id }; break; }
+        }
+        if (!best) return false;
+        this.teachTarget = best;
+        this.teachCooldown = 60 + this.rand() * 60;
+        this.think(`I'LL SHOW ${shortName(best.student).toUpperCase()} HOW TO MAKE ${(RECIPE_BY_ID[best.id] ? RECIPE_BY_ID[best.id].name : best.id).toUpperCase()}`);
+        if (this.#goTo(best.student.pos.i + 0.5, best.student.pos.j + 0.5, 'teach')) return true;
+        this.teachTarget = null; return false;
     }
     // Save toward the next dwelling tier; upgrade when affordable. Low priority (runs after
     // normal farm work), so L2/L3 accrete slowly from surplus timber/stone over many days.
@@ -6967,6 +7019,10 @@ export class Farmer {
                 this.barterDeal = null;
             } else this.barterCooldown = 12;   // nothing worth trading right now — don't re-scan every tick
         }
+
+        // 5b-5. #97 Slice 3 — TEACH a recipe: a generous inventor walks over to a neighbour who's heard
+        //       of one of their recipes and shows them how (turning heard-of into known — real diffusion).
+        if (!w.isNight() && this.energy > 0.35 && this.#maybeTeach()) return;
 
         // 5c. mine a nearby rock for ore — diligent/strong bots do this on downtime (but not
         //     when the store's already full: over-cap ore is discarded, so it'd be a wasted swing)
@@ -7991,6 +8047,7 @@ export class Farmer {
         this.oreExpedCooldown = Math.max(0, this.oreExpedCooldown - dt);
         this.tradeCooldown = Math.max(0, this.tradeCooldown - dt);
         this.barterCooldown = Math.max(0, this.barterCooldown - dt);
+        this.teachCooldown = Math.max(0, this.teachCooldown - dt);
         this.annexCooldown = Math.max(0, this.annexCooldown - dt);
         // every farmer lifts the fog around wherever they walk — the map grows with the town
         {
@@ -8110,6 +8167,7 @@ export class Farmer {
                     else if (then === 'donate') { this.#completeDonate(); this.state = 'decide'; }
                     else if (then === 'care') { this.state = 'care'; this.careTimer = 1.2; }
                     else if (then === 'herbrun') this.state = 'herbrun';
+                    else if (then === 'teach') this.state = 'teach';
                     else if (then === 'explore') this.#completeExplore();
                     else if (then === 'trade') this.#completeTrade();
                     else if (then === 'barter') this.#completeBarter();
@@ -8244,6 +8302,22 @@ export class Farmer {
                         if (gave > 0) { this.say(`+${gave} grass`, '#8fd06a'); hf.say('BLESS YOU', '#7dd069'); this.world.addBond(this, hf); hf.adjustOpinion(this, 0.15, 'brought me herbs for the sick'); this.world.addLog(`${this.sheet.name} brought ${gave} grass to healer ${hf.sheet.name}`, '#7dd069'); }
                     }
                     this.herbTarget = null; this.state = 'decide';
+                }
+                break;
+            }
+            case 'teach': {   // #97 Slice 3 — demonstrate a recipe; heard-of becomes known
+                const t = this.teachTarget; this.teachTarget = null; this.state = 'decide';
+                const w = this.world;
+                if (t && w.farmers.includes(t.student) && t.student.hasHeardOf(t.id) &&
+                    Math.abs(t.student.pos.i - this.pos.i) + Math.abs(t.student.pos.j - this.pos.j) < 3.5) {
+                    if (t.student.learnRecipe(t.id)) {
+                        const nm = (RECIPE_BY_ID[t.id] ? RECIPE_BY_ID[t.id].name : t.id);
+                        this.facing = t.student.pos.i > this.pos.i ? 1 : -1;
+                        this.say('LIKE THIS -', '#8ad0e0'); t.student.say('AH, I SEE!', '#8ad0e0'); t.student.sparkle = 1;
+                        w.addBond(this, t.student); this.gainXP(2); t.student.gainXP(2);
+                        t.student.adjustOpinion(this, 0.15, `taught me to make ${nm.toLowerCase()}`);
+                        w.addChronicle('bond', `${shortName(this)} showed ${shortName(t.student)} how to make ${nm.toLowerCase()}.`, this, t.student, '#8ad0e0');
+                    }
                 }
                 break;
             }

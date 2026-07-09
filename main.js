@@ -3649,10 +3649,13 @@ function recipeInputs(id) {
 function drawChronicleRecipes(PX, top, PW, bot) {
     const IX = PX + 8; let y = top + 2;
     // town-known invented recipes -> the farmers who know them (stable order by first-seen id)
-    const known = new Map();
-    for (const f of world.farmers) for (const id of (f.sheet.recipes || [])) {
-        if (!known.has(id)) known.set(id, []);
-        known.get(id).push(f.sheet.name.split(' ')[0]);
+    const known = new Map(), heard = new Map();
+    for (const f of world.farmers) {
+        for (const id of (f.sheet.recipes || [])) {
+            if (!known.has(id)) known.set(id, []);
+            known.get(id).push(f.sheet.name.split(' ')[0]);
+        }
+        for (const id of (f.sheet.heardOf || [])) heard.set(id, (heard.get(id) || 0) + 1);
     }
     const totalInvent = ['remedy', 'tool', 'utility'].reduce((n, k) => n + INVENTION_TABLE[k].filter(e => !e.locked).length, 0);
     const INGR = '#8ad0a0';   // ingredient list colour
@@ -3676,7 +3679,9 @@ function drawChronicleRecipes(PX, top, PW, bot) {
         const r = RECIPE_BY_ID[id];
         drawText(ctx, (r ? r.name : id).toUpperCase(), IX, y, '#ffd24a');
         drawText(ctx, recipeInputs(id), IX + 100, y, INGR); y += 7;   // the formula, right of the name
-        for (const ln of wrapText('known by ' + names.join(', '), maxChars)) { drawText(ctx, ln.toUpperCase(), IX + 4, y, '#8a8f9c'); y += 7; }
+        const h = heard.get(id) || 0;   // #97 Slice 3 — how many have HEARD of it but can't make it yet
+        const suffix = h ? `   (${h} have heard of it)` : '';
+        for (const ln of wrapText('known by ' + names.join(', ') + suffix, maxChars)) { drawText(ctx, ln.toUpperCase(), IX + 4, y, '#8a8f9c'); y += 7; }
         y += 3;
     }
 }
