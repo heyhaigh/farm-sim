@@ -3199,6 +3199,18 @@ function drawSheet(f) {
             for (const ln of wrapText(f.sheet.dream ? f.sheet.dream.yearn : 'none yet', 34)) { drawText(ctx, ln, IX + 2, y, '#e8c860'); y += 7; }
             drawText(ctx, f.sheet.dreamDone ? `WON ON DAY ${f.sheet.dreamDone}` : 'STILL CHASING IT', IX + 2, y, f.sheet.dreamDone ? '#7dd069' : SHEET_LABEL); y += 8;
             if (f.goal) { drawText(ctx, `COURSE THIS SEASON: ${f.goal.toUpperCase()}`, IX + 2, y, '#d08cc8'); y += 7; }
+
+            // #91 KEEPSAKES — the values distilled from this farmer's source memory. These are what the
+            // sim quotes when they refuse or hold their ground, so behaviour traces back to the document.
+            y += 2;
+            y = sectionBand(IX, y, IW, 'KEEPSAKES');
+            const ks = f.keepsakes || [];
+            if (!ks.length) { drawText(ctx, 'nothing carried yet', IX + 2, y, SHEET_LABEL); y += 8; }
+            else for (const k of ks) {
+                ctx.fillStyle = '#c8a0e0'; ctx.fillRect(IX + 2, y + 2, 2, 2);
+                for (const ln of wrapText(k.quote, 33)) { drawText(ctx, ln, IX + 7, y, '#c8a0e0'); y += 7; }
+                y += 2;
+            }
         }
     }
 

@@ -246,6 +246,50 @@ export function growPersonality(rand, text) {
 }
 
 // ---------------------------------------------------------------------------
+// KEEPSAKES (#91): the LONG-TERM tier of a farmer's memory — a small, stable set of identity themes
+// distilled ONCE from their source SuperMemory document. This is the council's "compile, don't query":
+// a deterministic keyword pass at generation, cached on the sheet. The SIM reads only the TAGS (to
+// know which values a decision touches); the QUOTE text is used purely for narration — a refusal or
+// remark that traces plainly back to the document a farmer was grown from. No live search(), ever.
+// ---------------------------------------------------------------------------
+
+const KEEPSAKE_THEMES = [
+    { id: 'craft',   tags: ['craft', 'pride'],          keywords: ['design', 'pottery', 'wheel', 'clay', 'craft', 'figma', ' ui', ' ux', 'build', 'wearable', 'interface'],
+      short: 'a thing done right or not at all',      quote: 'years at the wheel taught them a thing is only finished when it is finished right.' },
+    { id: 'grit',    tags: ['thrift', 'independence'],  keywords: ['startup', 'zero', 'launch', 'hustle', 'consult', 'business', 'scratch', 'zero-to-one'],
+      short: 'nothing in this world comes free',       quote: 'twelve years taking things from zero to one taught them nothing in this world comes free.' },
+    { id: 'service', tags: ['care', 'service'],         keywords: ['care', 'elder', 'triage', 'voice', 'health', 'emergency', 'aloe', 'patient'],
+      short: 'you do not walk past a soul in need',    quote: 'years spent tending folk who could not ask twice - you do not walk past a soul in need.' },
+    { id: 'team',    tags: ['care', 'pride'],           keywords: ['team', 'lead', 'product', 'iheartradio', 'samsung', 'launch', 'leadership'],
+      short: "a town's only as strong as who it carries", quote: 'they led a launch once; a town is only as strong as the ones it carries.' },
+    { id: 'guard',   tags: ['loyalty', 'pride'],        keywords: ['soccer', 'defender', 'sweeper', 'defense', 'guard', 'protect', 'sport'],
+      short: 'nothing gets past the line',             quote: "a sweeper's creed, drilled in young: hold the line, and nothing gets past you." },
+    { id: 'wander',  tags: ['wander'],                  keywords: ['road', 'travel', 'journey', 'map', 'explore', 'horizon', 'wander', 'edge'],
+      short: 'a horizon is a door, not a wall',        quote: 'the open road raised them: a horizon is a door, and never a wall.' },
+    { id: 'quiet',   tags: ['independence', 'quiet'],   keywords: ['home', 'quiet', 'personal', 'dog', 'rest', 'partner', 'family', 'hobby'],
+      short: 'peace, a fence, rain on the roof',       quote: 'all they ever wanted fits behind a fence: peace, and the sound of rain on the roof.' },
+    { id: 'word',    tags: ['pride', 'word'],           keywords: ['writing', 'story', 'guidance', 'contact', 'about', 'site', 'changelog', 'navigation', 'visitors'],
+      short: 'the right word, said plain',             quote: 'they always held that the right word, said plainly, outlasts any shout.' },
+    { id: 'steady',  tags: ['loyalty', 'service'],      keywords: [],   // generic fallback so every doc yields keepsakes
+      short: 'a promise kept is a promise kept',       quote: 'they were raised on one plain rule: a promise kept is a promise kept.' },
+];
+
+// Distill 3–5 weighted keepsakes from a memory doc. Deterministic: keyword hits set the weight, a
+// small seeded jitter breaks ties, and the same doc always yields the same keepsakes (so they ride
+// the save and never need re-querying). Returns [{ theme, tags, weight, short, quote }].
+export function compileKeepsakes(memory, seed) {
+    const rand = mulberry32(hashString('keepsake:' + (memory.id || memory.title || 'ry') + ':' + (seed >>> 0)));
+    const text = ` ${(memory.title || '')} ${(memory.summary || '')} ${(memory.content || '')}`.toLowerCase();
+    const scored = KEEPSAKE_THEMES.map(t => {
+        let hits = 0; for (const kw of t.keywords) if (text.includes(kw)) hits++;
+        return { t, hits, w: Math.min(1, hits * 0.3 + rand() * 0.25) };
+    }).sort((a, b) => b.w - a.w);
+    const picks = scored.filter(s => s.hits > 0).slice(0, 5);
+    for (let i = 0; picks.length < 3 && i < scored.length; i++) if (!picks.includes(scored[i])) picks.push(scored[i]);
+    return picks.map(s => ({ theme: s.t.id, tags: s.t.tags, weight: +s.w.toFixed(3), short: s.t.short, quote: s.t.quote }));
+}
+
+// ---------------------------------------------------------------------------
 // Farmer sheet generation
 // ---------------------------------------------------------------------------
 
@@ -312,6 +356,7 @@ export function growFarmer(memory, mutation = 0) {
             pants: rand() < 0.5 ? '#4a5570' : '#6a5540',
             hatColor: ['#d8c088', '#e8e0d0', '#c05840', '#f0d040', '#7dd069', '#e0e8f0'][Math.floor(rand() * 6)],
         },
+        keepsakes: compileKeepsakes(memory, seed),   // #91: long-term identity distilled from the source doc
         memory,
         mutation,
     };

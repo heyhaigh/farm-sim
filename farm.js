@@ -9,7 +9,7 @@
 // livestock pen (milk) — each with its own "producers" the farmer tends and
 // collects from. Which facility comes first reflects the farmer's archetype.
 
-import { mulberry32, mod, growFarmer, personalityLabel, ALL_CROPS } from './dna.js';
+import { mulberry32, mod, growFarmer, personalityLabel, compileKeepsakes, ALL_CROPS } from './dna.js';
 export { ALL_CROPS };   // re-exported so tools/tests can pull the crop list from the sim entrypoint
 
 // The FOUNDING VALLEY: the hand-tuned region generated with the original global algorithm
@@ -5139,6 +5139,25 @@ export class Farmer {
     isHealer() { return this.world.roles.healer === this.sheet.seed; }
     get grass() { return (this.sheet.goods && this.sheet.goods.grass) || 0; }
 
+    // #91 KEEPSAKES — the long-term memory the sim consults. Compiled once from the source doc and
+    // cached on the sheet; loaded saves (older towns) backfill lazily + deterministically here.
+    get keepsakes() {
+        if (!this.sheet.keepsakes) this.sheet.keepsakes = compileKeepsakes(this.sheet.memory || {}, this.sheet.seed);
+        return this.sheet.keepsakes;
+    }
+    // The keepsake most relevant to a moment: prefer one whose tags match the context, else the
+    // heaviest. Deterministic (no rng) — a farmer refuses the SAME way for the SAME reason every run.
+    keepsakeFor(prefTags = []) {
+        const ks = this.keepsakes; if (!ks.length) return null;
+        let best = null, bestScore = -1;
+        for (const k of ks) {
+            const match = prefTags.some(t => k.tags.includes(t)) ? 1 : 0;
+            const score = match * 10 + k.weight;
+            if (score > bestScore) { bestScore = score; best = k; }
+        }
+        return best;
+    }
+
     // ---- #97 Slice 2: procedural invention ---------------------------------------------------------
     // Every farmer is born knowing the base remedies; invented recipes are LEARNED (see #experiment)
     // and ride the sheet so they persist. A recipe id is "known" if it's a base recipe or in the set.
@@ -5243,7 +5262,17 @@ export class Farmer {
             return verdict;
         };
 
-        if (this.goal === 'lone wolf') return record('refuse', 'keeps to their own fence');
+        // #91 — a VALUES refusal (keeping to your own fence, going your own way) is the farmer acting
+        // on who they ARE, so it's NAMED with the keepsake distilled from their source memory: the
+        // reason shown in the Roles tab quotes it, and they mutter it on-camera. Attribution only — the
+        // DECISION is unchanged (personality-guarded: memory never tips the vote, just explains it).
+        const refuseWith = (fallback, prefTags) => {
+            const k = this.keepsakeFor(prefTags);
+            if (!k) return record('refuse', fallback);
+            this.say(`"${k.short.toUpperCase()}"`, '#c8a0e0');
+            return record('refuse', k.short);
+        };
+        if (this.goal === 'lone wolf') return refuseWith('keeps to their own fence', ['independence', 'quiet', 'wander']);
         if (m && this.opinionOf(m) < -0.3) return record('refuse', 'no love for the Manager');
         const todayHeeds = c.acceptedDay.day === this.world.day ? c.acceptedDay.count : 0;
         if (todayHeeds >= 2) return record('refuse', 'done their share today');
@@ -5256,7 +5285,8 @@ export class Farmer {
         const approvalFactor = 0.6 + this.world.roles.approval * 0.4;
         const chance = Math.max(0, Math.min(0.9, 0.6 * (0.5 + this.effCollab()) * opinionWeight * fit * approvalFactor));
         if (this.rand() < chance) return record('heed', null);
-        return record('refuse', this.dream('grandhouse') || (this.sheet.dream && !this.sheet.dreamDone && this.p.competitiveness > 0.55) ? 'set on their own ambitions' : 'had their own plans');
+        return refuseWith(this.dream('grandhouse') || (this.sheet.dream && !this.sheet.dreamDone && this.p.competitiveness > 0.55) ? 'set on their own ambitions' : 'had their own plans',
+            ['independence', 'pride', 'craft', 'wander']);
     }
 
     // Do the directed town work by reusing the existing pursuit. Returns true if it acted.
