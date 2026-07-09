@@ -327,10 +327,24 @@ function clamp(n, lo, hi) {
 // World
 // ---------------------------------------------------------------------------
 
+// Each town gets its own name, generated deterministically from the world seed on a DEDICATED
+// mulberry32 stream (never world.rand — so naming a town doesn't shift the sim's digest). A frontier
+// place-name: a nature root + a settlement tail, e.g. "Thornbrook", "Foxvale", "Greenfield".
+const TOWN_ROOTS = ['Oak', 'Elm', 'Mill', 'Fox', 'Bram', 'Thorn', 'Ash', 'Rye', 'Clay', 'Stone', 'Green',
+    'Silver', 'Hazel', 'Dun', 'Barley', 'Wren', 'Otter', 'Fen', 'Marsh', 'Pine', 'Birch', 'Rook', 'Amber',
+    'Honey', 'Corn', 'Crook', 'Hart', 'Bell', 'Ember', 'Wold', 'Marl', 'Nettle', 'Sedge', 'Holly', 'Larch'];
+const TOWN_TAILS = ['brook', 'field', 'hollow', 'vale', 'stead', 'ford', 'wick', 'bury', 'ton', 'dale',
+    'mere', 'grove', 'crest', 'reach', 'moor', 'haven', 'ridge', 'bend', 'cross', 'march', 'gate', 'row'];
+export function generateTownName(seed) {
+    const r = mulberry32((seed ^ 0x7047) >>> 0);
+    return TOWN_ROOTS[Math.floor(r() * TOWN_ROOTS.length)] + TOWN_TAILS[Math.floor(r() * TOWN_TAILS.length)];
+}
+
 export class World {
     constructor(seed = 1337) {
         this.seed = seed >>> 0;
         this.rand = mulberry32(seed);
+        this.name = generateTownName(this.seed);   // each town's own name (seeded, dedicated stream)
         this.tiles = new Uint8Array(GRID * GRID).fill(T.GRASS);
         this.rockWork = new Map();   // tilekey -> mining shifts landed on a big rock (persists till it breaks)
         this.treePlanted = new Map();// tilekey -> world.day a REGROWN tree sprouted (so it starts a sapling + grows)
@@ -1142,7 +1156,7 @@ export class World {
         if (this.seasonDay >= SEASON_LENGTH) {
             this.seasonDay = 0;
             this.season = (this.season + 1) % SEASONS.length;
-            if (this.season === 0) { this.year++; this.addLog(`A new year dawns on Ry Farms — Year ${this.year}!`, '#f0d060'); this.addChronicle('season', `Year ${this.year} dawns on Ry Farms.`, null, null, '#e0c060'); }
+            if (this.season === 0) { this.year++; this.addLog(`A new year dawns on ${this.name} — Year ${this.year}!`, '#f0d060'); this.addChronicle('season', `Year ${this.year} dawns on ${this.name}.`, null, null, '#e0c060'); }
             const def = SEASONS[this.season];
             this.addLog(`${def.name} has arrived.`, def.accent);
             // winter kills the garden: standing crops die back so the fields go dead, and the
@@ -1375,7 +1389,7 @@ export class World {
         const loner = fs.reduce((a, b) => this.#ventureOf(a) >= this.#ventureOf(b) ? a : b);
         const B = '#8a9ade', G = '#c9a45a';
         this.addLog(`${fs.length} settlers crossed the ridge into an empty valley, seeking new ground.`, B);
-        this.addLog(`They mustered at the old well and named the place RY FARMS.`, G);
+        this.addLog(`They mustered at the old well and named the place ${this.name.toUpperCase()}.`, G);
         this.addLog(`${first(social)}, who thrives in company, staked a claim close by the plaza.`, B);
         this.addLog(`${first(loner)}, a lone spirit, struck out for the far wilds to farm alone.`, B);
         this.addLog(`The first ${this.seasonName.toLowerCase()} dawned over the valley — and the work began.`, G);
@@ -1861,7 +1875,7 @@ export class World {
     serialize() {
         const plotIdx = new Map(this.plots.map((p, i) => [p, i]));
         const snap = {
-            v: World.SAVE_VERSION, seed: this.seed,
+            v: World.SAVE_VERSION, seed: this.seed, name: this.name,
             // continue the RNG from a save-derived seed WITHOUT consuming the live stream
             // (saving must never be observable to the sim)
             randSeed: (this.seed ^ Math.imul(this.day, 2654435761) ^ ((this.time * 997) | 0)) >>> 0,
@@ -1960,6 +1974,7 @@ export class World {
     }
 
     #restoreFrom(d) {
+        this.name = d.name || generateTownName(this.seed);   // (pre-name saves regenerate deterministically)
         this.rand = mulberry32(d.randSeed >>> 0);
         this.time = d.time; this.day = d.day; this.clock = d.clock;
         this.season = d.season; this.seasonDay = d.seasonDay; this.year = d.year;
@@ -2848,8 +2863,8 @@ export class World {
         while (this.townLevel < TOWN_MAX_LEVEL && this.townXP >= need) {
             this.townXP -= need; this.townLevel++;
             this.townLevelFlash = 2.5;
-            this.addLog(`RY FARMS GREW TO TOWN LEVEL ${this.townLevel}! The settlement is thriving.`, '#f0d060');
-            this.addChronicle('town', `Ry Farms grew to town level ${this.townLevel}.`, null, null, '#e0c060');
+            this.addLog(`${this.name.toUpperCase()} GREW TO TOWN LEVEL ${this.townLevel}! The settlement is thriving.`, '#f0d060');
+            this.addChronicle('town', `${this.name} grew to town level ${this.townLevel}.`, null, null, '#e0c060');
             need = townXpForLevel(this.townLevel);
         }
         if (this.townLevel >= TOWN_MAX_LEVEL) this.townXP = 0;
@@ -3806,7 +3821,7 @@ export class World {
             this.#maybeSpawnTreasure();
             this.#tickCoops();
             this.#maybeHatchRooster();
-            this.addLog(`Day ${this.day} begins on Ry Farms`, '#f0d060');
+            this.addLog(`Day ${this.day} begins on ${this.name}`, '#f0d060');
             // END-OF-DAY RECAP: gather the day's notable beats (from the chronicle) + the harvest tally,
             // so the UI can surface what happened in a self-playing town where the action is off-screen.
             const beats = this.chronicle.filter(e => e.day === endedDay);

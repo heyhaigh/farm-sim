@@ -2473,7 +2473,7 @@ function drawUI() {
     ctx.fillStyle = '#20242f';
     ctx.fillRect(0, 18, GW, 1);
 
-    drawText(ctx, 'RY FARMS', 4, 4, '#7dd069', 2);
+    drawText(ctx, (world.name || 'RY FARMS').toUpperCase(), 4, 4, '#7dd069', 2);
     let hx = 74;
     hx += drawText(ctx, `DAY ${world.day}`, hx, 7, '#c8ccd8') + 8;
 
@@ -2819,7 +2819,7 @@ function buildingUnder(mx, my) {
       let ghx = Math.floor(sx - gcw / 2), ghw = gcw;
       if (world.townLevel >= 5) { const glw = Math.round(GH_LWING.w * gsc), grwg = Math.round(GH_RWING.w * gsc); ghx -= glw; ghw += glw + grwg; }
       push(ghx - 2, gTop, ghw + 4, gFoot - gTop,
-        [{ t: `TOWN SILO — LV ${world.townLevel}`, c: TT_G }, { t: world.townCharacter(), c: TT_L },
+        [{ t: `${(world.name || 'TOWN').toUpperCase()} SILO — LV ${world.townLevel}`, c: TT_G }, { t: world.townCharacter(), c: TT_L },
          { t: 'Settlers give surplus goods here', c: TT_GR },
          { t: maxed ? 'The town is fully grown' : `${world.townXP} / ${world.townXpNeed()} to level ${world.townLevel + 1}`, c: TT_B }]); }
     // legend monuments — hover to read the deed they mark (#85)
@@ -3300,8 +3300,6 @@ function drawRoster() {
         ctx.fillRect(PX + PW - 3, Math.floor(thumbY), 2, Math.floor(thumbH));
     }
 
-    drawText(ctx, 'CLICK A RY FOR DETAILS', PX + 6, splitY - 8, '#4a4f5c');
-
     // the bottom half: the conscience chat
     drawConscienceChat(PX, splitY, PW, PY + PH - splitY);
 
@@ -3728,7 +3726,7 @@ function drawResumeCard() {
     ctx.fillStyle = '#e8c860'; ctx.fillRect(PX, PY, PW, 1); ctx.fillRect(PX, PY + PH - 1, PW, 1);
     ctx.fillRect(PX, PY, 1, PH); ctx.fillRect(PX + PW - 1, PY, 1, PH);
 
-    drawText(ctx, 'PREVIOUSLY ON RY FARMS', PX + 6, PY + 6, '#f0d060', 1);
+    drawText(ctx, `PREVIOUSLY ON ${(world.name || 'RY FARMS').toUpperCase()}`, PX + 6, PY + 6, '#f0d060', 1);
     const sd = SEASONS[rc.season];
     const sub = `DAY ${rc.day} - ${sd ? sd.name : ''} OF YEAR ${rc.year}`;
     drawText(ctx, sub, PX + 6, PY + 15, '#9ad0e0');
@@ -3889,10 +3887,13 @@ out.addEventListener('pointerup', (e) => {
             if (chatEntryRect && p.x >= chatEntryRect.x0 && p.x <= chatEntryRect.x1 && p.y >= chatEntryRect.y0 && p.y <= chatEntryRect.y1) {
                 focusChatInput(); return;
             }
-            // list rows (top half): open that farmer's detail sheet
+            // list rows (top half): open that farmer's detail sheet AND follow them, so picking a
+            // name in the roster jumps the camera to that Ry (roster select + follow are one action)
             for (const row of rosterRows) {
                 if (p.y >= row.y0 && p.y <= row.y1 && p.x > rv.x && p.x < rv.x + rv.w) {
-                    selected = row.farmer; sheetScroll = 0; rosterOpen = false; blurChatInput(); return;
+                    selected = row.farmer; sheetScroll = 0; sheetTab = 0; rosterOpen = false; blurChatInput();
+                    followMode = true; followTarget = row.farmer;
+                    return;
                 }
             }
             // a click elsewhere in the panel drops keyboard focus
