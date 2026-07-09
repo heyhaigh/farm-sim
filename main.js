@@ -2846,7 +2846,7 @@ function drawSheet(f) {
 
     // --- tab bar (fixed, below the title band) — the long scroll is now split into four
     //     views so nothing important stays buried below the fold ---
-    const TAB_LABELS = ['STATS', 'ACTIVITY', 'TIES', 'MEMORY', 'STORY'];
+    const TAB_LABELS = ['STATS', 'ACTIVITY', 'TIES', 'STORY'];
     const tabY = PY + 39, tabH = 12, tseg = (IW + 4) / TAB_LABELS.length;
     SHEET_TABS = [];
     for (let t = 0; t < TAB_LABELS.length; t++) {
@@ -3020,60 +3020,9 @@ function drawSheet(f) {
             for (const line of wrapText(lesson, 32).slice(0, 3)) { drawText(ctx, line, IX + 2, y, '#c9a45a'); y += 7; }
             y += 3;
         }
-    } else if (sheetTab === 2) {
-        // ===== TIES: every meaningful relationship (strongest first) + overheard gossip =====
-        const friends = f.allRegard(1), grudges = f.allRegard(-1);
-        y = sectionBand(IX, y, IW, 'TOWN TIES');
-        if (!friends.length && !grudges.length) { drawText(ctx, 'no strong ties yet', IX + 2, y, SHEET_LABEL); y += 8; }
-        for (const fr of friends) {
-            drawText(ctx, `Trusts ${fr.who.sheet.name.split(' ')[0]}`, IX + 2, y, '#7dd069'); y += 7;
-            const rec = f.opinionReasons && f.opinionReasons.get(fr.who.sheet.seed);
-            const r = rec && rec.pos;   // a POSITIVE tie shows why they warmed to them (never a soured memory)
-            if (r) for (const line of wrapText(`- ${r}`, 30).slice(0, 1)) { drawText(ctx, line, IX + 6, y, SHEET_LABEL); y += 7; }
-        }
-        for (const gr of grudges) {
-            const verb = gr.v <= -0.35 ? 'Avoids' : 'Wary of';   // strong resentment = active avoidance
-            drawText(ctx, `${verb} ${gr.who.sheet.name.split(' ')[0]}`, IX + 2, y, '#c05840'); y += 7;
-            const rec = f.opinionReasons && f.opinionReasons.get(gr.who.sheet.seed);
-            const r = rec && rec.neg;   // a NEGATIVE tie shows what soured it (never a warm memory)
-            if (r) for (const line of wrapText(`- ${r}`, 30).slice(0, 1)) { drawText(ctx, line, IX + 6, y, SHEET_LABEL); y += 7; }
-        }
-        y += 3;
-        // rumors this farmer has OVERHEARD about others, separate from first-hand memories
-        if (f.gossip && f.gossip.length) {
-            y = sectionBand(IX, y, IW, `TOWN GOSSIP (${f.gossip.length})`);
-            const heard = [...f.gossip].reverse().slice(0, 5);
-            for (const g of heard) {
-                const col = g.strength > 0.6 ? '#c8a86a' : g.strength > 0.4 ? '#9a8a5a' : '#6a5f45';
-                drawText(ctx, `d${g.day}`, IX, y, '#a08050');
-                for (const line of wrapText(`${g.from}: don't trust ${g.about}`, 27).slice(0, 2)) { drawText(ctx, line, IX + 17, y, col); y += 7; }
-                y += 1;
-            }
-            y += 3;
-        }
-    } else if (sheetTab === 4) {
-        // ===== STORY (#92a): the DM's 5e-style identity block — background, origin tale,
-        // and the classic sheet quartet (ideal / bond / flaw), plus where the dream stands =====
-        const st = f.sheet.story;
-        if (!st) { drawText(ctx, 'their story is still being written', IX + 2, y, SHEET_LABEL); }
-        else {
-            y = sectionBand(IX, y, IW, `BACKGROUND: ${st.bg}`);
-            for (const ln of wrapText(st.tale, 34)) { drawText(ctx, ln, IX + 2, y, '#c8ccd8'); y += 7; }
-            y += 3;
-            const quartet = [['IDEAL', st.ideal, '#e8c860'], ['BOND', st.bond, '#8fc7e8'], ['FLAW', st.flaw, '#d08c74']];
-            for (const [label, text, col] of quartet) {
-                drawText(ctx, label, IX + 2, y, SHEET_LABEL); y += 7;
-                for (const ln of wrapText(text, 34)) { drawText(ctx, ln, IX + 4, y, col); y += 7; }
-                y += 2;
-            }
-            y += 1;
-            y = sectionBand(IX, y, IW, 'THE DREAM');
-            for (const ln of wrapText(f.sheet.dream ? f.sheet.dream.yearn : 'none yet', 34)) { drawText(ctx, ln, IX + 2, y, '#e8c860'); y += 7; }
-            drawText(ctx, f.sheet.dreamDone ? `WON ON DAY ${f.sheet.dreamDone}` : 'STILL CHASING IT', IX + 2, y, f.sheet.dreamDone ? '#7dd069' : SHEET_LABEL); y += 8;
-            if (f.goal) { drawText(ctx, `COURSE THIS SEASON: ${f.goal.toUpperCase()}`, IX + 2, y, '#d08cc8'); y += 7; }
-        }
-    } else {
-        // ===== MEMORY: the episodic journal (newest first, paginated) + the source doc =====
+
+        // ===== MEMORIES (folded in from the old MEMORY tab): the episodic journal, newest
+        // first + paginated, below the pinned activity section; then the source doc =====
         if (f.journal.length) {
             const perPage = 6;
             const pages = Math.ceil(f.journal.length / perPage);
@@ -3107,6 +3056,58 @@ function drawSheet(f) {
         drawText(ctx, 'FROM MEMORY', IX, y, SHEET_LABEL); y += 7;
         for (const line of wrapText(s.memory.title, 32).slice(0, 3)) { drawText(ctx, line, IX + 2, y, '#8a9ade'); y += 7; }
         y += 5;
+    } else if (sheetTab === 2) {
+        // ===== TIES: every meaningful relationship (strongest first) + overheard gossip =====
+        const friends = f.allRegard(1), grudges = f.allRegard(-1);
+        y = sectionBand(IX, y, IW, 'TOWN TIES');
+        if (!friends.length && !grudges.length) { drawText(ctx, 'no strong ties yet', IX + 2, y, SHEET_LABEL); y += 8; }
+        for (const fr of friends) {
+            drawText(ctx, `Trusts ${fr.who.sheet.name.split(' ')[0]}`, IX + 2, y, '#7dd069'); y += 7;
+            const rec = f.opinionReasons && f.opinionReasons.get(fr.who.sheet.seed);
+            const r = rec && rec.pos;   // a POSITIVE tie shows why they warmed to them (never a soured memory)
+            if (r) for (const line of wrapText(`- ${r}`, 30).slice(0, 1)) { drawText(ctx, line, IX + 6, y, SHEET_LABEL); y += 7; }
+        }
+        for (const gr of grudges) {
+            const verb = gr.v <= -0.35 ? 'Avoids' : 'Wary of';   // strong resentment = active avoidance
+            drawText(ctx, `${verb} ${gr.who.sheet.name.split(' ')[0]}`, IX + 2, y, '#c05840'); y += 7;
+            const rec = f.opinionReasons && f.opinionReasons.get(gr.who.sheet.seed);
+            const r = rec && rec.neg;   // a NEGATIVE tie shows what soured it (never a warm memory)
+            if (r) for (const line of wrapText(`- ${r}`, 30).slice(0, 1)) { drawText(ctx, line, IX + 6, y, SHEET_LABEL); y += 7; }
+        }
+        y += 3;
+        // rumors this farmer has OVERHEARD about others, separate from first-hand memories
+        if (f.gossip && f.gossip.length) {
+            y = sectionBand(IX, y, IW, `TOWN GOSSIP (${f.gossip.length})`);
+            const heard = [...f.gossip].reverse().slice(0, 5);
+            for (const g of heard) {
+                const col = g.strength > 0.6 ? '#c8a86a' : g.strength > 0.4 ? '#9a8a5a' : '#6a5f45';
+                drawText(ctx, `d${g.day}`, IX, y, '#a08050');
+                for (const line of wrapText(`${g.from}: don't trust ${g.about}`, 27).slice(0, 2)) { drawText(ctx, line, IX + 17, y, col); y += 7; }
+                y += 1;
+            }
+            y += 3;
+        }
+    } else {
+        // ===== STORY (#92a): the DM's 5e-style identity block — background, origin tale,
+        // and the classic sheet quartet (ideal / bond / flaw), plus where the dream stands =====
+        const st = f.sheet.story;
+        if (!st) { drawText(ctx, 'their story is still being written', IX + 2, y, SHEET_LABEL); }
+        else {
+            y = sectionBand(IX, y, IW, `BACKGROUND: ${st.bg}`);
+            for (const ln of wrapText(st.tale, 34)) { drawText(ctx, ln, IX + 2, y, '#c8ccd8'); y += 7; }
+            y += 3;
+            const quartet = [['IDEAL', st.ideal, '#e8c860'], ['BOND', st.bond, '#8fc7e8'], ['FLAW', st.flaw, '#d08c74']];
+            for (const [label, text, col] of quartet) {
+                drawText(ctx, label, IX + 2, y, SHEET_LABEL); y += 7;
+                for (const ln of wrapText(text, 34)) { drawText(ctx, ln, IX + 4, y, col); y += 7; }
+                y += 2;
+            }
+            y += 1;
+            y = sectionBand(IX, y, IW, 'THE DREAM');
+            for (const ln of wrapText(f.sheet.dream ? f.sheet.dream.yearn : 'none yet', 34)) { drawText(ctx, ln, IX + 2, y, '#e8c860'); y += 7; }
+            drawText(ctx, f.sheet.dreamDone ? `WON ON DAY ${f.sheet.dreamDone}` : 'STILL CHASING IT', IX + 2, y, f.sheet.dreamDone ? '#7dd069' : SHEET_LABEL); y += 8;
+            if (f.goal) { drawText(ctx, `COURSE THIS SEASON: ${f.goal.toUpperCase()}`, IX + 2, y, '#d08cc8'); y += 7; }
+        }
     }
 
     ctx.restore();
