@@ -253,40 +253,88 @@ export function growPersonality(rand, text) {
 // remark that traces plainly back to the document a farmer was grown from. No live search(), ever.
 // ---------------------------------------------------------------------------
 
+// Each theme carries SEVERAL phrasings (so no two farmers of the same theme sound alike, and one farmer
+// never repeats themselves) — and many slot a `{t}` term drawn from the farmer's OWN document lexicon, so
+// even a fallback-theme creed names the real memory it grew from. Every theme keeps at least one term-free
+// phrasing as a graceful fallback when a doc yields no usable lexicon.
 const CREED_THEMES = [
     { id: 'craft',   tags: ['craft', 'pride'],          keywords: ['design', 'pottery', 'wheel', 'clay', 'craft', 'figma', ' ui', ' ux', 'build', 'wearable', 'interface'],
-      short: 'a thing done right or not at all',      quote: 'years at the wheel taught them a thing is only finished when it is finished right.' },
+      shorts: ['a thing done right or not at all', 'good enough never is', 'the {t} taught me to finish clean'],
+      quotes: ['years at the {t} taught them a thing is only finished when it is finished right.', 'they were raised to one rule at the bench: do it right, or do not do it at all.'] },
     { id: 'grit',    tags: ['thrift', 'independence'],  keywords: ['startup', 'zero', 'launch', 'hustle', 'consult', 'business', 'scratch', 'zero-to-one'],
-      short: 'nothing in this world comes free',       quote: 'twelve years taking things from zero to one taught them nothing in this world comes free.' },
+      shorts: ['nothing in this world comes free', 'you earn what you get', '{t} taught me the price of things'],
+      quotes: ['{t} taught them, the long way, that nothing in this world comes free.', 'they learned it early and hard: you pay for every good thing, usually twice.'] },
     { id: 'service', tags: ['care', 'service'],         keywords: ['care', 'elder', 'triage', 'voice', 'health', 'emergency', 'aloe', 'patient'],
-      short: 'you do not walk past a soul in need',    quote: 'years spent tending folk who could not ask twice - you do not walk past a soul in need.' },
+      shorts: ['you do not walk past a soul in need', 'no one should have to ask twice', '{t} taught me to stop and help'],
+      quotes: ['years of {t} taught them you do not walk past a soul who cannot ask twice.', 'they were shaped tending folk who could not ask for help - so now they never wait to be asked.'] },
     { id: 'team',    tags: ['care', 'pride'],           keywords: ['team', 'lead', 'product', 'iheartradio', 'samsung', 'launch', 'leadership'],
-      short: "a town's only as strong as who it carries", quote: 'they led a launch once; a town is only as strong as the ones it carries.' },
+      shorts: ["a town's only as strong as who it carries", 'no one wins it alone', '{t} taught me we go together'],
+      quotes: ['they led through {t}; a town is only as strong as the ones it carries.', 'they learned it running with others: nobody crosses the line alone.'] },
     { id: 'guard',   tags: ['loyalty', 'pride'],        keywords: ['soccer', 'defender', 'sweeper', 'defense', 'guard', 'protect', 'sport'],
-      short: 'nothing gets past the line',             quote: "a sweeper's creed, drilled in young: hold the line, and nothing gets past you." },
+      shorts: ['nothing gets past the line', 'you cover your own', 'hold the line, like in {t}'],
+      quotes: ['a creed drilled in through {t}: hold the line, and nothing gets past you.', 'they were taught young to stand at the back and let nothing through.'] },
     { id: 'wander',  tags: ['wander'],                  keywords: ['road', 'travel', 'journey', 'map', 'explore', 'horizon', 'wander', 'edge'],
-      short: 'a horizon is a door, not a wall',        quote: 'the open road raised them: a horizon is a door, and never a wall.' },
+      shorts: ['a horizon is a door, not a wall', 'always the next hill', '{t} put the road in me'],
+      quotes: ['{t} put the open road in them: a horizon is a door, and never a wall.', 'they were raised at the edge of the map, and never stopped walking toward it.'] },
     { id: 'quiet',   tags: ['independence', 'quiet'],   keywords: ['home', 'quiet', 'personal', 'dog', 'rest', 'partner', 'family', 'hobby'],
-      short: 'peace, a fence, rain on the roof',       quote: 'all they ever wanted fits behind a fence: peace, and the sound of rain on the roof.' },
+      shorts: ['peace, a fence, rain on the roof', 'a small life, kept well', '{t} is enough for me'],
+      quotes: ['all they ever wanted, since {t}, fits behind a fence: peace, and rain on the roof.', 'they ask little of the world: a quiet plot, and the sound of rain.'] },
     { id: 'word',    tags: ['pride', 'word'],           keywords: ['writing', 'story', 'guidance', 'contact', 'about', 'site', 'changelog', 'navigation', 'visitors'],
-      short: 'the right word, said plain',             quote: 'they always held that the right word, said plainly, outlasts any shout.' },
+      shorts: ['the right word, said plain', 'say it straight', '{t} taught me plain speech'],
+      quotes: ['{t} taught them the right word, said plainly, outlasts any shout.', 'they always held that a thing said clearly beats a thing said loud.'] },
     { id: 'steady',  tags: ['loyalty', 'service'],      keywords: [],   // generic fallback so every doc yields creeds
-      short: 'a promise kept is a promise kept',       quote: 'they were raised on one plain rule: a promise kept is a promise kept.' },
+      shorts: ['a promise kept is a promise kept', 'steady wins it', '{t} made me who I am'],
+      quotes: ['{t} shaped them into one plain rule: a promise kept is a promise kept.', 'they were raised on one plain rule: your word is your word.'] },
 ];
 
-// Distill 3–5 weighted creeds from a memory doc. Deterministic: keyword hits set the weight, a
-// small seeded jitter breaks ties, and the same doc always yields the same creeds (so they ride
-// the save and never need re-querying). Returns [{ theme, tags, weight, short, quote }].
+// A per-document LEXICON: the handful of most DISTINCTIVE words in a farmer's source doc (proper nouns,
+// domain terms, vivid rare words — stopwords + the ubiquitous "ryan" dropped). Deterministic; used to make
+// even a mundane/technical document yield a creed that names ITS own subject, so no two farmers read alike.
+const LEX_STOP = new Set(['ryan', 'ryans', 'experience', 'work', 'working', 'includes', 'including', 'into', 'over', 'about', 'than', 'that', 'this', 'with', 'from', 'their', 'they', 'them', 'have', 'been', 'were', 'years', 'year', 'seven', 'twelve', 'first', 'second', 'enjoyment', 'guidelines', 'contacting', 'career', 'expertise', 'various', 'through', 'while', 'where', 'which', 'there', 'these', 'those', 'other', 'across', 'using', 'based']);
+export function docLexicon(memory, seed) {
+    const rand = mulberry32(hashString('lex:' + (memory.id || memory.title || 'ry') + ':' + (seed >>> 0)));
+    const seen = new Map();   // lower-word -> best score
+    const scan = (str, inTitle) => {
+        for (const raw of String(str || '').split(/\s+/)) {
+            const w = raw.replace(/[^A-Za-z'-]/g, '');
+            if (w.length < 4) continue;
+            const lo = w.toLowerCase();
+            if (LEX_STOP.has(lo)) continue;
+            const score = (inTitle ? 2 : 0) + (/^[A-Z]/.test(w) ? 1 : 0) + Math.min(1.5, (w.length - 4) * 0.25) + rand() * 0.5;
+            if (!seen.has(lo) || score > seen.get(lo)) seen.set(lo, score);
+        }
+    };
+    scan(memory.title, true);
+    scan(memory.summary, false);
+    scan(memory.content, false);
+    return [...seen.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8).map(e => e[0]);
+}
+
+// Distill 3–5 weighted creeds from a memory doc. Deterministic: keyword hits set the weight + theme, a
+// seeded jitter breaks ties, and each creed's PHRASING is composed from the theme's templates with a term
+// from the doc's own lexicon slotted in — so the same doc always yields the same creeds AND they name it.
+// Returns [{ theme, tags, weight, short, shorts, quote }]. `shorts` = variants the sim rotates when muttering.
 export function compileCreeds(memory, seed) {
     const rand = mulberry32(hashString('creed:' + (memory.id || memory.title || 'ry') + ':' + (seed >>> 0)));
     const text = ` ${(memory.title || '')} ${(memory.summary || '')} ${(memory.content || '')}`.toLowerCase();
+    const lex = docLexicon(memory, seed);
     const scored = CREED_THEMES.map(t => {
         let hits = 0; for (const kw of t.keywords) if (text.includes(kw)) hits++;
         return { t, hits, w: Math.min(1, hits * 0.3 + rand() * 0.25) };
     }).sort((a, b) => b.w - a.w);
     const picks = scored.filter(s => s.hits > 0).slice(0, 5);
     for (let i = 0; picks.length < 3 && i < scored.length; i++) if (!picks.includes(scored[i])) picks.push(scored[i]);
-    return picks.map(s => ({ theme: s.t.id, tags: s.t.tags, weight: +s.w.toFixed(3), short: s.t.short, quote: s.t.quote }));
+    // give each creed its OWN lexicon term (spread across the doc's words so a farmer's creeds vary)
+    return picks.map((s, i) => {
+        const term = lex.length ? lex[i % lex.length] : null;
+        const fill = arr => {
+            const usable = term ? arr : arr.filter(x => !x.includes('{t}'));
+            const chosen = (usable.length ? usable : arr.filter(x => !x.includes('{t}')))[Math.floor(rand() * (usable.length || 1))] || arr[0];
+            return chosen.replace(/\{t\}/g, term || '');
+        };
+        const shorts = (term ? s.t.shorts : s.t.shorts.filter(x => !x.includes('{t}'))).map(x => x.replace(/\{t\}/g, term || ''));
+        return { theme: s.t.id, tags: s.t.tags, weight: +s.w.toFixed(3), short: shorts[0], shorts, quote: fill(s.t.quotes) };
+    });
 }
 
 // ---------------------------------------------------------------------------

@@ -2455,7 +2455,7 @@ export class World {
     // justice done), and the denied farmer is left to reckon with it (Farmer.reckonWithRefusal).
     healerRefuse(healer, patient) {
         const jc = healer.creedFor(['pride', 'loyalty', 'guard']);
-        healer.say(jc ? `"${jc.short.toUpperCase()}"` : "I'LL NOT TEND A SCOUNDREL", '#c05840');
+        healer.say(jc ? `"${healer.creedLine(jc).toUpperCase()}"` : "I'LL NOT TEND A SCOUNDREL", '#c05840');
         patient.say('...', '#9a9a8a');
         for (const o of this.farmers) {
             if (o === healer || o === patient) continue;
@@ -5341,6 +5341,12 @@ export class Farmer {
         }
         return best;
     }
+    // The line a farmer MUTTERS when acting on a creed — rotated across the creed's phrasings by day so
+    // they never repeat the same words back to back (Workstream 1). Old saves w/o `shorts` fall back gracefully.
+    creedLine(creed) {
+        const arr = (creed && creed.shorts && creed.shorts.length) ? creed.shorts : [creed ? creed.short : ''];
+        return arr[(this.world.day + (this.sheet.seed >>> 3)) % arr.length] || (creed ? creed.short : '');
+    }
 
     // #96 — a Healer's conscience toward an OUTCAST. Mercy is the strong default (illness self-resolves,
     // so care is never withheld to fatal effect). A refusal needs THREE things to align: a hard heart
@@ -5543,7 +5549,7 @@ export class Farmer {
         const refuseWith = (fallback, prefTags) => {
             const k = this.creedFor(prefTags);
             if (!k) return record('refuse', fallback);
-            this.say(`"${k.short.toUpperCase()}"`, '#c8a0e0');
+            this.say(`"${this.creedLine(k).toUpperCase()}"`, '#c8a0e0');   // the SAID line rotates; the recorded reason stays stable
             return record('refuse', k.short);
         };
         if (this.goal === 'lone wolf') return refuseWith('keeps to their own fence', ['independence', 'quiet', 'wander']);
@@ -7451,9 +7457,9 @@ export class Farmer {
             const bProud = bk && (bk.tags.includes('pride') || bk.tags.includes('guard') || bk.tags.includes('loyalty'));
             const tolerance = 0.35 + B.effCollab() * 0.45 + Math.max(0, B.opinionOf(this)) * 0.5 - (bProud ? 0.35 : 0) - (B.p.honesty - 0.5) * 0.5;
             const myEdge = this.creedFor(['thrift', 'pride']);       // the creed that rationalises taking an edge
-            const edgeQuote = myEdge && (myEdge.tags.includes('thrift') || myEdge.tags.includes('pride')) ? `"${myEdge.short.toUpperCase()}"` : "A HARD BARGAIN'S STILL A BARGAIN";
+            const edgeQuote = myEdge && (myEdge.tags.includes('thrift') || myEdge.tags.includes('pride')) ? `"${this.creedLine(myEdge).toUpperCase()}"` : "A HARD BARGAIN'S STILL A BARGAIN";
             if (this.rand() >= tolerance) {                       // B refuses to be shortchanged
-                B.say(bProud && bk ? `"${bk.short.toUpperCase()}"` : "THAT'S NO FAIR TRADE", '#e0955a');
+                B.say(bProud && bk ? `"${B.creedLine(bk).toUpperCase()}"` : "THAT'S NO FAIR TRADE", '#e0955a');
                 this.say('...suit yourself', '#9a9a8a');
                 B.adjustOpinion(this, -0.1, 'tried to lowball me on a trade');
                 this.adjustReputation(-0.03);                     // word gets around that they chisel
