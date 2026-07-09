@@ -486,6 +486,8 @@ export class World {
         this.roles = { manager: null, approval: 0.6, lowDays: 0, directive: null, directiveSeq: 0, cooldown: 0,
                        watch: null, watchApproval: 0.6, watchLowDays: 0, caseSeq: 0,        // #94 P2: the Town Watch
                        healer: null, healerApproval: 0.6, healerLowDays: 0 };              // #94 P3: the Town Healer
+        this.sabotage = [];    // #97 Slice 4: planted-but-not-yet-sprung harm ({perp,victim,kind,effectDay})
+        this.suspicion = {};   // #97 Slice 4: the Watch's slow-building trail on unsolved crimes (seed -> score)
         this.board = null;    // no bulletin board until the town builds one together (first communal project)
         this.merchant = null;                             // the wandering trader, present only during a visit
         this.merchantNextDay = 4 + Math.floor(this.rand() * 3);   // first caravan rolls in around day 4-6
@@ -1959,6 +1961,8 @@ export class World {
                     heeders: [...this.roles.directive.heeders], refusers: [...this.roles.directive.refusers],
                 } : null,
             },
+            sabotage: this.sabotage.map(s => ({ ...s })),   // #97 Slice 4: pending harm + the Watch's trail
+            suspicion: { ...this.suspicion },
 
             tiles: this.tiles.slice(),
             chunks: new Map([...this.chunks].map(([k, a]) => [k, a.slice()])),
@@ -2058,6 +2062,8 @@ export class World {
                 heeders: new Set(d.roles.directive.heeders), refusers: new Map(d.roles.directive.refusers),
             } : null,
         } : { manager: null, approval: 0.6, lowDays: 0, watch: null, watchApproval: 0.6, watchLowDays: 0, healer: null, healerApproval: 0.6, healerLowDays: 0, directive: null, directiveSeq: 0, cooldown: 0, caseSeq: 0 };
+        this.sabotage = Array.isArray(d.sabotage) ? d.sabotage.map(s => ({ ...s })) : [];   // #97 Slice 4
+        this.suspicion = d.suspicion ? { ...d.suspicion } : {};
 
         this.tiles.set(d.tiles);
         this.chunks = new Map(); for (const [k, a] of d.chunks) this.chunks.set(k, Uint8Array.from(a));
@@ -2274,7 +2280,7 @@ export class World {
     // being the victim, and the accused's repute + record). The margin + the record set the verdict —
     // warning -> fine -> shun (a season). Deterministic (a per-case seeded stream). Called from the
     // theft-witnessed moment in #completePoach.
-    holdTrial(thief, victim, name) {
+    holdTrial(thief, victim, name, crimeLabel = null) {
         const r = this.roles, wch = this.watchFarmer();
         if (!wch || thief === wch) return;                       // no Watch, or the Watch is the accused
         const jurors = this.farmers.filter(f => f !== thief && f.health !== 'sick' && !f.downed);
@@ -2289,9 +2295,85 @@ export class World {
         const share = guilty / jurors.length;
         const priors = thief.sheet.crimes || 0;
         thief.sheet.crimes = priors + 1;
-        this.addChronicle('crime', `${shortName(wch)} called ${shortName(thief)} to answer for the theft of ${name}.`, thief, wch, '#c05840');
+        this.addChronicle('crime', `${shortName(wch)} called ${shortName(thief)} to answer for ${crimeLabel || `the theft of ${name}`}.`, thief, wch, '#c05840');
         const verdict = (share < 0.4 && priors === 0) ? 'warn' : (share < 0.7 || priors === 0) ? 'fine' : 'shun';
         this.#applyVerdict(verdict, thief, victim, wch, share);
+    }
+
+    // ---- #97 Slice 4: COVERT SABOTAGE + detection --------------------------------------------------
+    // A deeply crooked farmer with a real grudge crafts a HARM item (blight/poison) and plants it on
+    // the victim's farm; the effect is DEFERRED (it springs a day or two later, so there's no live
+    // witness). This is the only way the locked harm recipes get made — through a hostile hand, not the
+    // open invention loop. Returns the recipe id planted, or null if they couldn't afford any.
+    plantSabotage(perp, victim) {
+        if (!victim || !victim.plot) return null;
+        const hasCrop = [...this.crops.values()].some(c => c.owner === victim && !c.withered);
+        const order = hasCrop ? ['inv:harm:1', 'inv:harm:0', 'inv:harm:2'] : ['inv:harm:0', 'inv:harm:2'];
+        for (const id of order) {
+            const r = RECIPE_BY_ID[id];
+            if (!r || !Object.keys(r.inputs).every(g => this.#haveGood(perp, g) >= r.inputs[g])) continue;
+            for (const g in r.inputs) {   // consume the harm inputs (harm recipes bypass the open craft path)
+                const q = r.inputs[g];
+                if (g === 'crops') { perp.sheet.produce -= q; spendCropStock(perp.sheet, q); }
+                else if (g === 'wood') perp.wood -= q; else if (g === 'ore') perp.ore -= q;
+                else { perp.sheet.goods = perp.sheet.goods || {}; perp.sheet.goods[g] = Math.max(0, (perp.sheet.goods[g] || 0) - q); }
+            }
+            this.sabotage.push({ perp: perp.sheet.seed, victim: victim.sheet.seed, kind: r.effect, name: r.name, effectDay: this.day + 1 + Math.floor(perp.rand() * 2) });
+            return id;
+        }
+        return null;
+    }
+
+    // Day-rollover: spring any sabotage that's come due, then let the Watch investigate.
+    #fireSabotage() {
+        if (!this.sabotage.length) return;
+        const due = this.sabotage.filter(s => this.day >= s.effectDay);
+        this.sabotage = this.sabotage.filter(s => this.day < s.effectDay);
+        for (const s of due) {
+            const victim = this.farmers.find(f => f.sheet.seed === s.victim);
+            const perp = this.farmers.find(f => f.sheet.seed === s.perp);
+            if (!victim || !perp) continue;
+            if (s.kind === 'blight') {
+                const hit = [...this.crops.values()].find(c => c.owner === victim && !c.withered);
+                if (hit) { hit.withered = true; this.addChronicle('rift', `A blight with no natural cause took ${shortName(victim)}'s ${hit.type}.`, victim, null, '#c05840'); this.addLog(`A strange blight struck ${victim.sheet.name}'s crops`, '#c05840'); }
+            } else if (s.kind === 'sicken') {
+                if (victim.health === 'healthy') { victim.fallIll(2 + Math.floor(perp.rand() * 2), 'a sickness with no cause they could name'); this.addChronicle('rift', `${shortName(victim)} fell ill of a sickness with no natural cause.`, victim, null, '#c05840'); }
+            } else if (s.kind === 'weaken') {
+                victim.energy = Math.max(0.1, victim.energy - 0.4); victim.strain += 3;
+                this.addLog(`${victim.sheet.name} woke drained and aching for no reason they knew`, '#c05840');
+            }
+            victim.remember('lesson', `Something struck my farm that shouldn't have - someone means me harm`, null, 1.1);
+            this.#investigateSabotage(perp, victim);
+        }
+    }
+
+    // Detection is a SUSPICION TRAIL, not a caught-in-the-act witness: MOTIVE (a standing grudge against
+    // the victim) + OPPORTUNITY (the real hand was there) + PATTERN (a known repeat) + what the Watch has
+    // already been piecing together. Cross the bar and the Watch convenes a trial (the P2 justice vote);
+    // fall short and the crime goes unsolved, but the trail on the true hand grows warmer for next time.
+    #investigateSabotage(perp, victim) {
+        const wch = this.watchFarmer();
+        if (!wch || wch === perp) { this.suspicion[perp.sheet.seed] = (this.suspicion[perp.sheet.seed] || 0) + 0.3; return; }
+        let topSeed = null, topScore = 0;
+        for (const f of this.farmers) {
+            if (f === victim || f === wch) continue;
+            const motive = Math.max(0, -f.opinionOf(victim));
+            if (motive < 0.2 && f !== perp) continue;                      // no grudge, no suspicion
+            const opportunity = f === perp ? 0.4 : 0;                      // the true hand was actually there
+            const pattern = Math.min(0.5, (f.sheet.sabotages || 0) * 0.2);
+            const score = motive + opportunity + pattern + (this.suspicion[f.sheet.seed] || 0);
+            if (score > topScore) { topScore = score; topSeed = f.sheet.seed; }
+        }
+        const accused = this.farmers.find(f => f.sheet.seed === topSeed);
+        if (accused && topScore >= 0.9) {
+            accused.sheet.sabotages = (accused.sheet.sabotages || 0) + 1;
+            this.suspicion[accused.sheet.seed] = 0;
+            this.addChronicle('crime', `${shortName(wch)} traced the harm on ${shortName(victim)}'s farm to ${shortName(accused)}.`, accused, wch, '#c05840');
+            this.holdTrial(accused, victim, null, `the harm done to ${shortName(victim)}`);
+        } else {
+            this.suspicion[perp.sheet.seed] = (this.suspicion[perp.sheet.seed] || 0) + 0.3;
+            this.addChronicle('crime', `The Watch could find no proof behind the blight on ${shortName(victim)}'s farm.`, victim, null, '#8a8f9c');
+        }
     }
     #applyVerdict(verdict, thief, victim, wch, share) {
         const s = thief.sheet;
@@ -4063,6 +4145,7 @@ export class World {
             this.#recomputeTownTraits();
             this.#ensureDreams();   // safety net: any future arrival rolls their dream at first dawn
             this.#updateCivic();    // #94: tally yesterday's directive -> approval/recall, post today's
+            this.#fireSabotage();   // #97 Slice 4: spring any due sabotage, then the Watch investigates
             this.#dailyHealthCheck();
             this.#advanceSeason();
             this.#decayTilled();
@@ -5000,6 +5083,8 @@ export class Farmer {
         this.barterDeal = null;   // a pending goods-for-goods swap being walked to (see #findBarter/#completeBarter)
         this.teachCooldown = 5 + (sheet.seed >>> 9) % 15;   // #97 Slice 3: paces recipe-teaching visits
         this.teachTarget = null;  // { student, id } — a recipe they're walking over to demonstrate
+        this.sabotageCooldown = 30 + (sheet.seed >>> 11) % 40;   // #97 Slice 4: paces covert sabotage (rare)
+        this.sabotageTarget = null;
         this.tools = new Set();   // crafted tools owned (see CRAFTABLES) — unlock at level, cost ore
         this.craftTarget = null;  // the recipe a farmer has walked home to build
 
@@ -6526,6 +6611,34 @@ export class Farmer {
         if (this.#goTo(best.student.pos.i + 0.5, best.student.pos.j + 0.5, 'teach')) return true;
         this.teachTarget = null; return false;
     }
+
+    // #97 Slice 4 — COVERT SABOTAGE: a deeply crooked farmer nursing a real grudge slips over to the one
+    // they resent and plants a harm item on their farm. Rare, gated hard (only the genuinely malicious),
+    // and never a friend. The effect is deferred + there's no witness — the town only learns of it if the
+    // Watch pieces the trail together (see #investigateSabotage). Returns true if they set off.
+    #maybeSabotage() {
+        const w = this.world;
+        if (this.sabotageCooldown > 0 || w.isNight() || this.p.honesty >= 0.28) return false;
+        if (w.isShunned(this) && this.rand() < 0.5) { /* the shunned are angrier, but still not always */ }
+        let victim = null, worst = -0.45;
+        for (const o of w.farmers) {
+            if (o === this || !o.plot || o.plot.built.level < 1 || o.downed) continue;
+            const op = this.opinionOf(o);
+            if (op < worst) { worst = op; victim = o; }
+        }
+        if (!victim) return false;
+        // need the makings of a harm item on hand (grass/flower/crops) — else the spite has nowhere to go
+        const canMake = INVENTION_TABLE.harm.some(e => Object.keys(e.inputs).every(g =>
+            (g === 'crops' ? (this.sheet.produce || 0) : g === 'wood' ? this.wood : g === 'ore' ? this.ore : ((this.sheet.goods && this.sheet.goods[g]) || 0)) >= e.inputs[g]));
+        if (!canMake) return false;
+        this.sabotageCooldown = 140 + this.rand() * 160;   // rare, whether or not it lands
+        if (this.rand() > 0.5 + Math.max(0, -worst - 0.45) * 0.8) return false;   // even the spiteful don't always act
+        this.sabotageTarget = victim;
+        this.think(`${shortName(victim).toUpperCase()} WILL REGRET CROSSING ME...`);
+        const cx = victim.plot.x + Math.floor(victim.plot.w / 2), cy = victim.plot.y + Math.floor(victim.plot.h / 2);
+        if (this.#goTo(cx + 0.5, cy + 0.5, 'sabotage')) return true;
+        this.sabotageTarget = null; return false;
+    }
     // Save toward the next dwelling tier; upgrade when affordable. Low priority (runs after
     // normal farm work), so L2/L3 accrete slowly from surplus timber/stone over many days.
     #maybeUpgradeHome() {
@@ -6945,6 +7058,10 @@ export class Farmer {
             }
             this.exploreCooldown = Math.max(this.exploreCooldown, 12);   // probes aren't free — don't spam them
         }
+
+        // 2b-6. #97 Slice 4 — the deeply crooked don't just steal; a real GRUDGE can turn to SABOTAGE:
+        //       a harm item planted covertly on the one they resent. Rare, malicious, gated hard.
+        if (this.#maybeSabotage()) return;
 
         // 2c. an AGENT OF CHAOS would rather lift a neighbor's ripe crop than till their own
         //     row — for the deeply crooked, easy theft outranks honest fill work (they range
@@ -8048,6 +8165,7 @@ export class Farmer {
         this.tradeCooldown = Math.max(0, this.tradeCooldown - dt);
         this.barterCooldown = Math.max(0, this.barterCooldown - dt);
         this.teachCooldown = Math.max(0, this.teachCooldown - dt);
+        this.sabotageCooldown = Math.max(0, this.sabotageCooldown - dt);
         this.annexCooldown = Math.max(0, this.annexCooldown - dt);
         // every farmer lifts the fog around wherever they walk — the map grows with the town
         {
@@ -8168,6 +8286,7 @@ export class Farmer {
                     else if (then === 'care') { this.state = 'care'; this.careTimer = 1.2; }
                     else if (then === 'herbrun') this.state = 'herbrun';
                     else if (then === 'teach') this.state = 'teach';
+                    else if (then === 'sabotage') this.state = 'sabotage';
                     else if (then === 'explore') this.#completeExplore();
                     else if (then === 'trade') this.#completeTrade();
                     else if (then === 'barter') this.#completeBarter();
@@ -8302,6 +8421,15 @@ export class Farmer {
                         if (gave > 0) { this.say(`+${gave} grass`, '#8fd06a'); hf.say('BLESS YOU', '#7dd069'); this.world.addBond(this, hf); hf.adjustOpinion(this, 0.15, 'brought me herbs for the sick'); this.world.addLog(`${this.sheet.name} brought ${gave} grass to healer ${hf.sheet.name}`, '#7dd069'); }
                     }
                     this.herbTarget = null; this.state = 'decide';
+                }
+                break;
+            }
+            case 'sabotage': {   // #97 Slice 4 — plant a harm item on the victim's farm (deferred, covert)
+                const v = this.sabotageTarget; this.sabotageTarget = null; this.state = 'decide';
+                const w = this.world;
+                if (v && w.farmers.includes(v) && v.plot) {
+                    const planted = w.plantSabotage(this, v);
+                    if (planted) { this.say('...', '#9a7a9a'); this.think(`LET THEM WONDER WHO.`); }
                 }
                 break;
             }
