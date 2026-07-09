@@ -4419,8 +4419,46 @@ const STORY_ARRIVALS = {
 };
 
 // ---------------------------------------------------------------------------
-// Farmer agent
+// CONSCIENCE (#93): the player as a stray inner voice. A whisper is CLASSIFIED
+// (LLM, offline: keyword) into one bounded urge KIND, then this sim-side check
+// decides — deterministically — whether the farmer heeds it. The check is the
+// whole point of the feature's honesty: it consumes a DEDICATED rng stream seeded
+// per (world seed ^ farmer seed ^ urge kind ^ day), NEVER world.rand and NEVER the
+// message text. So (a) headless digests never touch it (no whispers in a harness),
+// and (b) rephrasing or re-asking the SAME kind on the SAME day returns the SAME
+// verdict — you cannot reroll a mind by nagging. Six verdicts, an influence budget
+// capped BELOW the dream levers (a voice colors a farmer, never commands one), and
+// containment: whispers never leak into gossip, chat, or the chronicle.
 // ---------------------------------------------------------------------------
+
+// the bounded urge vocabulary — the ONLY things the voice can be understood to want.
+// A visit urge carries a target name; everything else is target-free.
+export const URGE_KINDS = ['chop', 'plant', 'water', 'rest', 'explore', 'build', 'visit', 'trade', 'hunt', 'none'];
+
+// how strongly a HEEDED urge tilts a decision. Deliberately BELOW the dream bumps
+// (0.08-0.12 in the decide loop) so who they are always outweighs a passing thought.
+const URGE_WEIGHT = 0.07;
+const URGE_MAX_PRESSURE = 5;        // asks of one kind before the well runs dry
+const URGE_DAILY_HEEDS = 2;         // new nudges a single farmer will take per day
+const URGE_TOWN_CAP = 4;            // active urges town-wide (anti "town manager")
+const CONSCIENCE_LOG_CAP = 40;      // transcript lines kept per farmer (FIFO)
+
+// a stable small integer per urge kind, folded into the check seed so different
+// kinds roll independently on the same day (re-asking "chop" can't move "rest").
+function urgeKindSeed(kind) {
+    const i = URGE_KINDS.indexOf(kind);
+    return (i < 0 ? 31 : i + 1) * 0x9e37;
+}
+
+// the STANCE a farmer holds toward the voice — fixed at first contact from personality,
+// one flavor line for the reply prompt. Not an evolving metaphysics; just a lens.
+function deriveStance(f) {
+    const s = f.sheet.stats, p = f.p;
+    if (mod(s.wis) + mod(s.int) >= 3) return 'skeptic';        // "a trick of tired ears"
+    if ((p.curiosity ?? 0.5) > 0.6 && f.volatility < 0.45) return 'believer';  // quiet awe
+    if (p.honesty < 0.4) return 'bargainer';                    // negotiates with it
+    return 'unbothered';                                        // "thoughts don't till fields"
+}
 
 const ACTION_TIME = { till: 3.2, plant: 2.2, water: 1.6, harvest: 2.6, clear: 2.0 };
 
@@ -4572,6 +4610,180 @@ export class Farmer {
     effCollab() { return Math.max(0, Math.min(1, this.p.collaboration + this.mood * this.volatility * 0.6 + ((this.world.townCollab ?? 0.5) - 0.5) * 0.3)); }
     // is this farmer still CHASING dream `k`? (a fulfilled dream stops pushing — the arc is done)
     dream(k) { const d = this.sheet.dream; return !!(d && d.id === k && !this.sheet.dreamDone); }
+
+    // ---- CONSCIENCE (#93) --------------------------------------------------
+    // Lazily-created inner-voice state, kept on the SHEET so it rides the existing save
+    // wholesale (transcripts are stored text, never regenerated). stance is fixed once.
+    get conscience() {
+        let c = this.sheet.conscience;
+        if (!c) {
+            c = this.sheet.conscience = { stance: deriveStance(this), log: [], pressure: {}, asks: {}, verdicts: {}, verdictDay: -1, heededDay: { day: -1, count: 0 }, urge: null };
+        }
+        return c;
+    }
+
+    // The active, unexpired urge (or null). An urge is a WANT, not a task: it survives a
+    // reload but lapses at the end of the day after it was planted.
+    activeUrge() {
+        const u = this.sheet.conscience && this.sheet.conscience.urge;
+        if (!u) return null;
+        if (this.world.day > u.expiresDay) return null;                       // lapsed
+        if (u.condition === 'backlog' && !u.armed) return null;              // a BARGAIN, still waiting its moment
+        return u;
+    }
+
+    // The one opt-in hook the decide loop reads: a small additive bias toward `kind` when
+    // the voice's active urge matches it. Returns 0 whenever there's no matching urge — so
+    // a headless run (no whispers, no urge) is byte-for-byte identical and consumes no rng.
+    urgeBias(kind) {
+        const u = this.activeUrge();
+        return (u && u.kind === kind) ? URGE_WEIGHT : 0;
+    }
+
+    // The deterministic heart of the feature. Given a classified whisper (kind + optional
+    // target name + tone), decide what this farmer makes of the thought — WITHOUT world.rand
+    // and WITHOUT reading the raw text, so the same (farmer, kind, day) always lands the same
+    // way. Returns { verdict, kind, reason } and applies the effect (urge / journal / pressure)
+    // right here at whisper time, before the reply text is ever written.
+    conscienceCheck(kind, targetName = null, tone = 'suggest') {
+        const w = this.world, c = this.conscience, p = this.p, s = this.sheet;
+        if (!URGE_KINDS.includes(kind)) kind = 'none';
+
+        // 'none' / small talk: always DISMISS-as-chatter, carries no state.
+        if (kind === 'none') return { verdict: 'DISMISS', kind, reason: 'chatter' };
+
+        // new day: reset the same-day trackers (verdict memo + per-kind ask counts).
+        if (c.verdictDay !== w.day) { c.verdictDay = w.day; c.verdicts = {}; c.asks = {}; }
+        c.asks[kind] = (c.asks[kind] || 0) + 1;   // drives reply TONE + folds into tomorrow's pressure
+
+        // MEMOIZED verdict per (kind, day): a kind already judged today returns the SAME verdict
+        // and re-applies NOTHING (no re-roll, no budget spend, no journal) — so rephrasing or
+        // re-asking, even fifty times, can never move a mind on the day it was asked. Nagging
+        // still raises pressure via c.asks (folded at dawn), lowering the odds on LATER days only.
+        if (c.verdicts[kind]) return { verdict: c.verdicts[kind], kind, reason: 'the same thought' };
+
+        // roll-affecting pressure is DAY-STABLE: only folded/decayed at dawn in reflect(), never
+        // mutated here — that's what keeps same-day re-asks landing identically.
+        const priorPressure = c.pressure[kind] || 0;
+        const record = verdict => { c.verdicts[kind] = verdict; };
+
+        // already SET ON this kind (a HEED/BARGAIN planted earlier — even earlier today, even
+        // pre-reload): re-asking just acknowledges it. No re-roll, no double-spend of budget.
+        if (c.urge && c.urge.kind === kind && w.day <= c.urge.expiresDay) {
+            record('ALREADY'); return { verdict: 'ALREADY', kind, reason: 'already set on it' };
+        }
+        // ALREADY — matches what they were going to do anyway (before the roll, costs nothing).
+        if (this.#urgeMatchesIntent(kind, targetName)) {
+            record('ALREADY'); return { verdict: 'ALREADY', kind, reason: 'already intended' };
+        }
+
+        // budgets: a mind can only be nudged so much. The town-wide cap counts EVERY outstanding
+        // urge — armed or a still-disarmed BARGAIN (activeUrge() hides the latter) — so a wave of
+        // deferred bargains can't smuggle the town past the cap.
+        const todayHeeds = c.heededDay.day === w.day ? c.heededDay.count : 0;
+        const townPending = w.farmers.reduce((n, f) => {
+            const u = f.sheet.conscience && f.sheet.conscience.urge;
+            return n + (u && w.day <= u.expiresDay ? 1 : 0);
+        }, 0);
+        const budgetLeft = todayHeeds < URGE_DAILY_HEEDS && townPending < URGE_TOWN_CAP;
+
+        // the roll: a dedicated stream, seeded by identity + kind + day (NOT the message, NOT pressure).
+        const roll = mulberry32((w.seed ^ s.seed ^ urgeKindSeed(kind) ^ (w.day * 0x1f1f)) >>> 0)();
+        const fit = this.#urgeFit(kind);                        // -0.4..+0.4 personality/dream/state fit
+        const pressurePenalty = Math.min(0.5, priorPressure * 0.13);   // nagging on PRIOR days lowered the odds
+        const chance = Math.max(0, Math.min(0.9, 0.4 + fit - pressurePenalty));
+
+        // DEFY — rare, and only for a mind primed to bristle AND worn down over days. The spite
+        // act must be SAFE (never self-harming), so it's gated hard and re-checked here.
+        const defiant = (p.collaboration < 0.3 || this.volatility > 0.7) && priorPressure >= 2 && (tone === 'press');
+        if (defiant && roll < 0.28 && this.#defySafe(kind)) {
+            record('DEFY'); return { verdict: 'DEFY', kind, reason: 'bristles at being pushed' };
+        }
+
+        if (budgetLeft && roll < chance) {
+            // BARGAIN — a diligent/collaborative mind that's busy defers the heed to when the
+            // current backlog clears, rather than dropping a ripe field to chase a whim.
+            const busy = this.#hasUrgentBacklog();
+            if (busy && (p.diligence > 0.6 || p.collaboration > 0.6) && priorPressure < 2) {
+                this.#plantUrge(kind, targetName, 'backlog');
+                record('BARGAIN'); return { verdict: 'BARGAIN', kind, reason: 'when the work is in' };
+            }
+            this.#plantUrge(kind, targetName, null);
+            record('HEED'); return { verdict: 'HEED', kind, reason: 'the thought takes' };
+        }
+
+        // QUESTION — instead of acting, they turn the thought over. A private musing (memoized
+        // above, so once per kind per day) that can surface in their own dawn reflection.
+        if (roll < chance + 0.18) {
+            this.remember('lesson', `A strange thought today - why did I want to ${this.#urgeVerb(kind)}?`, null, 0.5);
+            record('QUESTION'); return { verdict: 'QUESTION', kind, reason: 'wonders at the thought' };
+        }
+
+        record('DISMISS'); return { verdict: 'DISMISS', kind, reason: 'shrugged off' };
+    }
+
+    // Plant (or replace) the single active urge and spend a daily heed. A BARGAIN starts
+    // disarmed (condition 'backlog') and arms when the urgent backlog next clears.
+    #plantUrge(kind, targetName, condition) {
+        const w = this.world, c = this.conscience;
+        c.urge = { kind, target: targetName || null, weight: URGE_WEIGHT, expiresDay: w.day + 1, condition: condition || null, armed: !condition };
+        if (c.heededDay.day !== w.day) c.heededDay = { day: w.day, count: 0 };
+        c.heededDay.count++;
+    }
+
+    // Does the classified urge line up with what they were already about to do? Kept coarse
+    // and side-effect-free — it only reads current goal / plot need / dream.
+    #urgeMatchesIntent(kind, targetName) {
+        if (kind === 'explore' && (this.dream('farshore') || this.exploreCooldown <= 0 && this.wanderlust > 0.6)) return true;
+        if (kind === 'build' && (this.wantExpand || this.wantUpgrade || this.dream('grandhouse'))) return true;
+        if (kind === 'trade' && this.goal === 'sharp trader') return true;
+        if (kind === 'rest' && (this.tired || this.health === 'sick')) return true;
+        if (kind === 'hunt' && this.huntTarget) return true;
+        if ((kind === 'plant' || kind === 'water' || kind === 'chop') && this.#hasUrgentBacklog()) return true;
+        if (kind === 'visit' && targetName) {
+            const t = this.world.farmers.find(o => o !== this && shortName(o).toLowerCase() === String(targetName).toLowerCase());
+            if (t && this.opinionOf(t) > 0.3) return true;   // already fond of them
+        }
+        return false;
+    }
+
+    // -0.4..+0.4 fit: how NATURAL this urge is for them right now (dream + personality + state).
+    #urgeFit(kind) {
+        const p = this.p, s = this.sheet.stats;
+        let x = 0;
+        switch (kind) {
+            case 'explore': x = (p.curiosity ?? 0.5) - 0.5 + (this.dream('farshore') ? 0.2 : 0); break;
+            case 'build':   x = (p.diligence - 0.5) * 0.8 + (this.dream('grandhouse') ? 0.2 : 0); break;
+            case 'trade':   x = (this.effCollab() - 0.5) * 0.7 + (this.goal === 'sharp trader' ? 0.2 : 0); break;
+            case 'hunt':    x = (p.competitiveness - 0.5) * 0.7 + Math.max(0, mod(s.dex)) * 0.05 + (this.hp < this.maxHp * 0.6 ? 0.15 : 0); break;
+            case 'rest':    x = (this.tired ? 0.3 : -0.2) + (1 - p.diligence - 0.5) * 0.3; break;
+            case 'visit':   x = (this.effCollab() - 0.5) * 0.8; break;
+            case 'chop':    x = (p.diligence - 0.5) * 0.5 + Math.max(0, mod(s.str)) * 0.04; break;
+            case 'plant':
+            case 'water':   x = (p.diligence - 0.5) * 0.5; break;
+            default:        x = 0;
+        }
+        // a low-honesty mind is a touch more suggestible; a headstrong (volatile) one less so.
+        x += (0.5 - (this.p.honesty ?? 0.5)) * 0.1 - (this.volatility - 0.5) * 0.1;
+        return Math.max(-0.4, Math.min(0.4, x));
+    }
+
+    #hasUrgentBacklog() {
+        return !!this.#nextTaskOnPlot(this.plot, 0.32, true, false);
+    }
+
+    // A DEFY act is only allowed when the OPPOSITE is safe — never defy "rest" into working
+    // yourself sick, never defy "hunt"/"explore" while wounded. Spite has limits.
+    #defySafe(kind) {
+        if (kind === 'rest') return this.energy > 0.4 && this.health !== 'sick';   // safe to keep working
+        if (kind === 'hunt' || kind === 'explore') return this.hp > this.maxHp * 0.6 && this.energy > 0.4;
+        return true;
+    }
+
+    #urgeVerb(kind) {
+        return { chop: 'CHOP WOOD', plant: 'PLANT', water: 'WATER THE FIELDS', rest: 'REST', explore: 'WANDER OFF',
+                 build: 'BUILD', visit: 'CALL ON A NEIGHBOUR', trade: 'GO TRADING', hunt: 'HUNT' }[kind] || 'DO THAT';
+    }
 
     // #89: the dream ARC, checked each dawn in reflect(). Fulfillment is a big public beat
     // (chronicle + sparkle + a strong journal memory + XP); a shaken dream is a quiet one-shot
@@ -5228,6 +5440,25 @@ export class Farmer {
             if (hadCourse) this.world.addChronicle('found',
                 `${this.sheet.name.split(' ')[0]} had a change of heart — now set on the ${goal} path.`, this, null, '#d08cc8');
         }
+
+        // #93: a new day for the inner voice. Yesterday's nagging (c.asks) folds into pressure —
+        // this is the ONLY place roll-affecting pressure changes, so a whole day's re-asks land the
+        // same and only wear the well dry across DAYS. Then pressure ebbs (a volatile mind holds a
+        // grievance longer), the same-day verdict memo resets, and a lapsed urge is cleared. No rng,
+        // and it no-ops entirely for a farmer who's never been whispered to (conscience stays null).
+        const c = this.sheet.conscience;
+        if (c) {
+            if (c.asks) for (const k of Object.keys(c.asks)) {
+                if (c.asks[k] > 0) c.pressure[k] = Math.min(URGE_MAX_PRESSURE, (c.pressure[k] || 0) + 1);
+            }
+            const ebb = 1 - this.volatility * 0.5;
+            for (const k of Object.keys(c.pressure)) {
+                c.pressure[k] = Math.max(0, c.pressure[k] - ebb);
+                if (c.pressure[k] <= 0) delete c.pressure[k];
+            }
+            c.asks = {}; c.verdicts = {}; c.verdictDay = this.world.day;
+            if (c.urge && this.world.day > c.urge.expiresDay) c.urge = null;
+        }
     }
 
     #maybeAskForHelp() {
@@ -5747,7 +5978,7 @@ export class Farmer {
         // exhaustion: worn down and still grinding -> pushed to rest; pushing through deep
         // strain can make you collapse and fall ill on the spot. Bots that have been sick before
         // rest EARLIER (learned caution) so they stop repeating the collapse.
-        if (!w.isNight() && this.energy < 0.16 + this.caution * 0.05) {
+        if (!w.isNight() && this.energy < 0.16 + this.caution * 0.05 + this.urgeBias('rest')) {   // #93: a whispered "rest" pulls bedtime a touch earlier
             if (this.strain >= 8) {
                 const save = d20(this.rand, mod(s.stats.con));
                 if (save.total < 12 && !save.crit) {
@@ -5839,6 +6070,11 @@ export class Farmer {
         //      highlands for it, so a farmer short on stone makes the trip to the stall.
         if (this.#pursueMerchant()) return;
 
+        // #93: a whispered urge to BUILD or CHOP tips a hand into growth work (gather wood ->
+        //      clear land -> fence/build) even before a milestone would have set wantExpand. The
+        //      urgeBias short-circuits to 0 with no active urge, so a headless run never enters here.
+        if (!w.isNight() && this.energy > 0.3 && (this.urgeBias('build') || this.urgeBias('chop')) && this.#pursueGrowth()) return;
+
         // 1c. grow the homestead: gather wood, clear land, fence/build. This is a FINITE goal
         //     (expand once, then wantExpand clears until the next harvest milestone), so it must
         //     sit ABOVE the endless facility-collection treadmill or it never gets a turn —
@@ -5893,6 +6129,13 @@ export class Farmer {
         //      silo (levelling the town toward its next unlock) — or cuts some expressly to give.
         if (!w.project && this.#pursueDonation()) return;
 
+        // #93: we've cleared urgent crop + facility work to reach here, so a BARGAIN urge ("when the
+        //      work is in") now ARMS and starts biasing decisions from the next pass on.
+        {
+            const bu = this.sheet.conscience && this.sheet.conscience.urge;
+            if (bu && bu.condition === 'backlog' && !bu.armed && w.day <= bu.expiresDay) bu.armed = true;
+        }
+
         // 1e. fill work: sow seeds, till new ground
         const fill = this.#nextTaskOnPlot(this.plot, thirstThreshold, false);
 
@@ -5917,7 +6160,7 @@ export class Farmer {
         // 2b. wanderlust: an ADVENTURE, not idle filler — it outranks yet another till-row,
         //     because the map is infinite and whoever walks farthest, the town knows more.
         //     The long cooldown keeps it a few treks a day at most; fill work resumes after.
-        if (!w.isNight() && this.energy > 0.5 && this.exploreCooldown <= 0 && this.rand() < this.wanderlust * 0.5) {
+        if (!w.isNight() && this.energy > 0.5 && this.exploreCooldown <= 0 && this.rand() < this.wanderlust * 0.5 + this.urgeBias('explore')) {
             const tgt = this.#frontierTarget();
             if (tgt) {
                 this.exploreCooldown = 70 + this.rand() * 110;
@@ -5977,7 +6220,8 @@ export class Farmer {
             if (a) {
                 const knack = 0.1 + Math.max(0, mod(s.stats.dex)) * 0.06 + this.p.competitiveness * 0.18
                             + this.p.curiosity * 0.12 + (this.hp < this.maxHp * 0.6 ? 0.25 : 0)
-                            + (this.dream('deed') ? 0.08 : 0);   // #89: a deed-dreamer takes the chase
+                            + (this.dream('deed') ? 0.08 : 0)   // #89: a deed-dreamer takes the chase
+                            + this.urgeBias('hunt');            // #93: a whispered urge to hunt
                 if (this.rand() < knack) {
                     this.think(`WILD ${a.kind.toUpperCase()} — MEAT IF I CAN CATCH IT`);
                     // proud/competitive hands overextend (chase long); the timid quit early (#86)
@@ -5990,7 +6234,7 @@ export class Farmer {
         //       plenty of for what it lacks (see #findBarter). Reward x risk x personality all fold into
         //       the pick's score; a cooldown keeps trips occasional.
         if (!w.isNight() && this.energy > 0.35 && this.barterCooldown <= 0 &&
-            this.rand() < 0.08 + this.effCollab() * 0.22 + this.p.curiosity * 0.1 + (this.goal === 'sharp trader' ? 0.35 : 0)) {
+            this.rand() < 0.08 + this.effCollab() * 0.22 + this.p.curiosity * 0.1 + (this.goal === 'sharp trader' ? 0.35 : 0) + this.urgeBias('trade')) {
             const deal = this.#findBarter();
             if (deal) {
                 this.think(`TRADE MY ${deal.give.toUpperCase()} FOR ${deal.partner.sheet.name.split(' ')[0].toUpperCase()}'S ${deal.get.toUpperCase()}`);
@@ -6006,6 +6250,20 @@ export class Farmer {
             this.rand() < 0.3 + this.p.diligence * 0.4 + Math.max(0, mod(s.stats.str)) * 0.05) {
             const rock = w.nearestRock(this.pos, 9);
             if (rock) { this.think('GOOD STONE HERE — ORE FOR BUILDING.'); this.mineTarget = rock; this.#goTo(rock.i + 0.5, rock.j + 0.5, 'mine'); return; }
+        }
+
+        // 5d. #93: a whispered urge to VISIT someone — with nothing pressing left, drift over toward
+        //     the named neighbour (where #maybeChat can strike up a conversation). Only if the target
+        //     exists and isn't someone they can't stand. No active urge -> this whole block is skipped.
+        {
+            const vu = this.activeUrge();
+            if (vu && vu.kind === 'visit' && vu.target && !w.isNight()) {
+                const t = w.farmers.find(o => o !== this && shortName(o).toLowerCase() === String(vu.target).toLowerCase());
+                if (t && this.opinionOf(t) > -0.35) {
+                    this.think(`I SHOULD LOOK IN ON ${shortName(t).toUpperCase()}.`);
+                    if (this.#goTo(t.pos.i + 0.5, t.pos.j + 0.5, 'wander')) return;
+                }
+            }
         }
 
         // 6. wander + muse — but if someone I can't stand has drifted close, I keep my distance

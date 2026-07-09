@@ -34,6 +34,10 @@ With `OPENAI_API_KEY` in the environment or a gitignored `.env` next to
 - `api/ry-farms-dm.js` — the chronicler: a 5e-DM/fantasy-writer rewrites each
   farmer's procedural origin tale as richer prose, once per town, cached on the
   sheet and carried by the save (`dm.js` is the client side).
+- `api/ry-farms-conscience.js` — the conscience channel (see below): a two-stage
+  call that CLASSIFIES a player's whisper into one bounded urge, then writes the
+  farmer's in-character REACTION to the verdict the sim decided (`conscience.js`
+  is the client side). Offline it falls back to a keyword classifier + templates.
 
 `RY_FARMS_LLM_MODEL` can override the model. Both channels are display-text
 only and fall back to the procedural versions on any failure, so the seeded
@@ -124,6 +128,30 @@ Farmers aren't on fixed scripts — each runs a small decision loop every tick:
   first ring of homesteads fills up, a new ring opens farther out and the town
   grows.
 
+## The conscience — whispering to a farmer
+
+In the bottom half of the ROSTER window you can **whisper a thought** to any
+farmer. You are not a character they can see; you're a stray inner voice. What
+happens next is decided by the *sim*, not the words:
+
+1. The whisper is **classified** into one bounded urge (chop, plant, explore,
+   build, rest, hunt, trade, visit someone, or nothing).
+2. A **deterministic check** — seeded by the farmer, the urge, and the day, never
+   by the message — returns one of six verdicts: **HEED** (takes it up as their
+   own idea), **ALREADY** (they were going to anyway), **BARGAIN** (later, once
+   the work's in), **DISMISS**, **QUESTION** (wonders where the thought came
+   from), or **DEFY** (bristles and does the opposite).
+3. The farmer **replies** in character, coloured by a fixed *stance* toward the
+   voice (skeptic / believer / bargainer / unbothered).
+
+Because the roll is seeded by the *kind* of thing you ask and the day — not the
+sentence — **asking fifty times won't change a mind.** A heeded urge only ever
+*nudges* a decision (capped below the pull of their lifelong dream), expires by
+the next day, and is bounded by a daily and town-wide budget so the voice can
+never turn the town into a puppet show. Whispers stay private: they never leak
+into gossip, the chronicle, or farmer-to-farmer chat. The whole conversation is
+saved with the town.
+
 ## Controls
 
 - **Drag** to pan the camera.
@@ -132,6 +160,9 @@ Farmers aren't on fixed scripts — each runs a small decision loop every tick:
   they were grown from).
 - **ROSTER** (top-right) opens a scrollable town-wide list — every Ry's level
   and stats at a glance, sorted by yield. Click a row to jump to their sheet.
+  The bottom half is the **CONSCIENCE CHAT**: whisper a thought to any farmer
+  (pick who with the name dropdown) and they'll act on it, ignore it, or wonder
+  where it came from — never simply obey. See below.
 - **+RY** (top-right) grows a new farmer from an unused memory.
 
 ## Files
@@ -142,7 +173,8 @@ Farmers aren't on fixed scripts — each runs a small decision loop every tick:
 | `farm.js` | The simulation: world grid, crops, weather, day/night, the farmer agent loop, help board, communal builds, expansion |
 | `pixel.js` | All procedural pixel art — farmers, crops, buildings, props, and a 3×5 bitmap font |
 | `crt.js` | WebGL CRT post-process (scanlines, RGB mask, chromatic aberration, corner vignette, flicker) |
-| `main.js` | Rendering, camera, input, HUD, and boot |
+| `main.js` | Rendering, camera, input, HUD, boot, and the roster/conscience-chat UI |
+| `conscience.js` | Client for the conscience channel — classify, sim check, reply, offline fallbacks |
 | `v1-3d/` | A preserved first experiment: Three.js SDF smooth-min creatures with seamless blended bodies |
 
 ## Credits

@@ -29,6 +29,7 @@ try {
 const API = {
     '/api/ry-farms-chat': require('./api/ry-farms-chat.js'),
     '/api/ry-farms-dm': require('./api/ry-farms-dm.js'),
+    '/api/ry-farms-conscience': require('./api/ry-farms-conscience.js'),
 };
 
 const MIME = {

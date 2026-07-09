@@ -14,6 +14,7 @@ import {
 import { CRT } from './crt.js';
 import { saveTown, loadTown, wipeTown, undoWipe } from './save.js';
 import { enrichStories } from './dm.js';
+import { whisper } from './conscience.js';
 
 // ---------------------------------------------------------------------------
 // Canvases
@@ -56,6 +57,17 @@ let bootTime = 0;
 let booted = false;
 let rosterOpen = false;
 let rosterScroll = 0;
+// CONSCIENCE CHAT (#93): the bottom half of the roster window is a chat with one farmer, where
+// the player's lines land as a stray inner voice. State here; the DOM capture input is built lazily.
+let chatFarmer = null;            // the farmer currently being whispered to
+let chatScroll = 0;               // history scroll (px), independent of the roster list scroll
+let chatThinking = false;         // awaiting the classify+reply round-trip (shows a "..." shimmer)
+let chatDropdownOpen = false;     // the "switch farmer" picker is expanded over the list
+let chatDropRows = [];            // { farmer, y0, y1 } hit regions for the open dropdown
+let chatEntryRect = null;         // screen-px rect of the entry row (for click-to-focus + input overlay)
+let chatFocused = false;          // is the hidden input focused (blocks world keyboard shortcuts)
+let chatInputEl = null;           // the hidden DOM <input> that actually captures keystrokes/IME/paste
+let chatViewport = null;          // { x, y, w, h, bodyTop, bodyBot, maxScroll } of the history area
 let chronOpen = false;            // town chronicle panel (the settlement's saga)
 let chronScroll = 0;
 let followMode = false;           // camera tracks followTarget (F/crosshair toggles; drag/Esc cancels)
@@ -3178,9 +3190,12 @@ function drawRoster() {
     ctx.fillStyle = '#20242f';
     ctx.fillRect(PX + 4, hy + 8, PW - 8, 1);
 
-    // scrollable body (clipped)
+    // the window splits: the roster LIST is locked to the top, the CONSCIENCE CHAT to the bottom
+    const splitY = PY + Math.floor(PH * 0.46);
+
+    // scrollable body (clipped) — ends above the split, leaving a line for the hint + divider
     const bodyTop = hy + 11;
-    const bodyBot = PY + PH - 5;
+    const bodyBot = splitY - 12;
     const rowH = 11;
     const rows = rosterSorted();
     const maxScroll = Math.max(0, rows.length * rowH - (bodyBot - bodyTop));
@@ -3222,7 +3237,200 @@ function drawRoster() {
         ctx.fillRect(PX + PW - 3, Math.floor(thumbY), 2, Math.floor(thumbH));
     }
 
-    drawText(ctx, 'CLICK A RY FOR DETAILS - SCROLL TO SEE MORE', PX + 6, PY + PH - 9, '#4a4f5c');
+    drawText(ctx, 'CLICK A RY FOR DETAILS', PX + 6, splitY - 8, '#4a4f5c');
+
+    // the bottom half: the conscience chat
+    drawConscienceChat(PX, splitY, PW, PY + PH - splitY);
+
+    // if the farmer-switch dropdown is open, it draws LAST so it overlays the list above it
+    if (chatDropdownOpen) drawChatDropdown(PX, PW, splitY);
+}
+
+// ---------------------------------------------------------------------------
+// Conscience chat — the player's whispers to one farmer, locked to the bottom
+// half of the roster window. The sim decides what the farmer makes of each
+// thought (farm.js conscienceCheck); this only renders the exchange + captures input.
+// ---------------------------------------------------------------------------
+
+const VERDICT_GLYPH = { HEED: '~', ALREADY: '=', BARGAIN: '>', DISMISS: '.', QUESTION: '?', DEFY: '!' };
+const VERDICT_COL   = { HEED: '#7dd069', ALREADY: '#7db0d0', BARGAIN: '#e8c860', DISMISS: '#8a8f9c', QUESTION: '#c8a0e0', DEFY: '#e0703c' };
+
+// the dropdown caret: a compact 2-row caret (the same shape as the "^" font glyph). `up` draws
+// it pointing up (dropdown OPEN); flipped vertically it points down (CLOSED) — one shape, mirrored.
+function drawCaret(x, y, up, color) {
+    ctx.fillStyle = color;
+    const X = Math.round(x), Y = Math.round(y);
+    if (up) { ctx.fillRect(X + 1, Y, 1, 1); ctx.fillRect(X, Y + 1, 1, 1); ctx.fillRect(X + 2, Y + 1, 1, 1); }
+    else    { ctx.fillRect(X, Y, 1, 1); ctx.fillRect(X + 2, Y, 1, 1); ctx.fillRect(X + 1, Y + 1, 1, 1); }
+}
+
+function activeChatFarmer() {
+    if (chatFarmer && world.farmers.includes(chatFarmer)) return chatFarmer;
+    chatFarmer = (selected && world.farmers.includes(selected)) ? selected : world.farmers[0] || null;
+    return chatFarmer;
+}
+
+// wrap `text` to `maxChars`-wide lines (the 3x5 font is fixed-width: ~4px/char)
+function wrapLine(text, maxChars) {
+    const words = String(text).split(' ');
+    const out = [];
+    let cur = '';
+    for (const w of words) {
+        if (!cur) cur = w;
+        else if ((cur + ' ' + w).length <= maxChars) cur += ' ' + w;
+        else { out.push(cur); cur = w; }
+        while (cur.length > maxChars) { out.push(cur.slice(0, maxChars)); cur = cur.slice(maxChars); }
+    }
+    if (cur) out.push(cur);
+    return out;
+}
+
+function drawConscienceChat(x, y, w, h) {
+    const f = activeChatFarmer();
+    ctx.fillStyle = '#20242f';
+    ctx.fillRect(x + 4, y - 1, w - 8, 1);
+
+    if (!f) { drawText(ctx, 'NO ONE TO TALK TO YET', x + 6, y + 6, '#6a6f7c'); return; }
+    const c = f.conscience;
+
+    // header: INSIDE THE HEAD OF: [NAME v]
+    const hy = y + 3;
+    drawText(ctx, 'INSIDE THE HEAD OF', x + 6, hy, '#9a7fc0');
+    const nm = f.sheet.name.split(' ')[0].toUpperCase();
+    const nmX = x + 6 + textWidth('INSIDE THE HEAD OF ', 1);
+    drawText(ctx, nm, nmX, hy, '#e8ecf5');
+    // dropdown caret button
+    const caretX = nmX + textWidth(nm + ' ', 1);
+    drawCaret(caretX, hy, chatDropdownOpen, '#7dd069');   // '^' open, same caret flipped for closed
+    chatNameHit = { x0: nmX - 2, y0: hy - 2, x1: caretX + 8, y1: hy + 8 };
+    // stance, quietly, at the right
+    drawText(ctx, c.stance.toUpperCase(), x + w - textWidth(c.stance, 1) - 6, hy, '#5a5f6c');
+    ctx.fillStyle = '#171a22';
+    ctx.fillRect(x + 4, hy + 8, w - 8, 1);
+
+    // history (clipped, scrollable) — build wrapped lines with speaker color
+    const bodyTop = hy + 11;
+    const entryH = 13;
+    const bodyBot = y + h - entryH - 3;
+    const maxChars = Math.max(20, Math.floor((w - 16) / 4));
+    const lines = [];
+    if (!c.log.length) {
+        lines.push({ text: 'a stray thought drifts into their', col: '#5a5f6c' });
+        lines.push({ text: 'head... whisper something.', col: '#5a5f6c' });
+    }
+    for (const e of c.log) {
+        const isVoice = e.who === 'voice';
+        const col = isVoice ? '#c8b060' : (VERDICT_COL[e.verdict] || '#c8ccd8');
+        const prefix = isVoice ? '> ' : '  ';
+        const glyph = (!isVoice && e.verdict && VERDICT_GLYPH[e.verdict]) ? ' ' + VERDICT_GLYPH[e.verdict] : '';
+        const wrapped = wrapLine(prefix + e.text + glyph, maxChars);
+        wrapped.forEach((ln, i) => lines.push({ text: (i === 0 ? ln : '  ' + ln), col }));
+    }
+    if (chatThinking) lines.push({ text: '  ' + '.'.repeat(1 + (Math.floor(Date.now() / 300) % 3)), col: '#7dd069' });
+
+    const lineH = 7;
+    const viewH = bodyBot - bodyTop;
+    const contentH = lines.length * lineH;
+    const maxScroll = Math.max(0, contentH - viewH);
+    // keep pinned to the newest unless the player has scrolled up
+    if (chatScroll > maxScroll) chatScroll = maxScroll;
+    chatScroll = Math.max(0, Math.min(chatScroll, maxScroll));
+    chatViewport = { x, y, w, h, bodyTop, bodyBot, maxScroll };
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x + 1, bodyTop - 1, w - 2, viewH + 1);
+    ctx.clip();
+    let ly = bodyTop - Math.round(chatScroll) + Math.max(0, viewH - contentH);
+    for (const ln of lines) {
+        if (ly + lineH >= bodyTop && ly <= bodyBot) drawText(ctx, ln.text, x + 6, ly, ln.col);
+        ly += lineH;
+    }
+    ctx.restore();
+
+    // entry row
+    const ey = y + h - entryH;
+    ctx.fillStyle = chatFocused ? 'rgba(125,208,105,0.14)' : 'rgba(255,255,255,0.05)';
+    ctx.fillRect(x + 4, ey, w - 8, entryH - 2);
+    ctx.strokeStyle = chatFocused ? '#7dd069' : '#3a3f4c';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x + 4.5, ey + 0.5, w - 9, entryH - 3);
+    const val = chatInputEl ? chatInputEl.value : '';
+    const shown = val || (chatFocused ? '' : 'WHISPER A THOUGHT...');
+    const caret = (chatFocused && Math.floor(Date.now() / 500) % 2 === 0) ? '_' : '';
+    drawText(ctx, (val ? shown : (chatFocused ? caret : shown)) + (val ? caret : ''), x + 8, ey + 4, val ? '#e8ecf5' : '#5a5f6c');
+    chatEntryRect = { x0: x + 4, y0: ey, x1: x + w - 4, y1: ey + entryH - 2 };
+}
+
+let chatNameHit = null;   // { x0,y0,x1,y1 } hit region for the header name/dropdown toggle
+
+function drawChatDropdown(PX, PW, splitY) {
+    chatDropRows = [];
+    const rowH = 10;
+    const list = rosterSorted();
+    const maxRows = Math.min(list.length, Math.floor((splitY - 44) / rowH));
+    const dw = 120;
+    const dx = PX + 6;
+    const dh = Math.min(list.length, maxRows) * rowH + 4;
+    const dy = splitY + 12;
+    ctx.fillStyle = '#0c0e14';
+    ctx.fillRect(dx, dy, dw, dh);
+    ctx.strokeStyle = '#7dd069';
+    ctx.strokeRect(dx + 0.5, dy + 0.5, dw - 1, dh - 1);
+    list.slice(0, maxRows).forEach((f, i) => {
+        const ry = dy + 2 + i * rowH;
+        if (f === chatFarmer) { ctx.fillStyle = 'rgba(125,208,105,0.18)'; ctx.fillRect(dx + 1, ry - 1, dw - 2, rowH); }
+        drawText(ctx, f.sheet.name.split(' ')[0].slice(0, 14), dx + 4, ry + 1, f === chatFarmer ? '#7dd069' : '#c8ccd8');
+        chatDropRows.push({ farmer: f, y0: ry - 1, y1: ry + rowH - 1, x0: dx, x1: dx + dw });
+    });
+}
+
+// ---- the hidden DOM input: the real keystroke/IME/paste surface, mirrored onto the canvas ----
+
+function ensureChatInput() {
+    if (chatInputEl) return chatInputEl;
+    const el = document.createElement('input');
+    el.type = 'text';
+    el.maxLength = 160;
+    el.setAttribute('autocomplete', 'off');
+    el.setAttribute('autocorrect', 'off');
+    el.setAttribute('spellcheck', 'false');
+    // invisible, but real — it captures focus, keys, IME and paste; we render its value ourselves.
+    // invisible + click-through (we focus it programmatically from the canvas entry-row click, and
+    // render its value ourselves) so it never intercepts pointer events meant for the game/canvas.
+    el.style.cssText = 'position:fixed;left:50%;bottom:6%;transform:translateX(-50%);width:60%;height:22px;opacity:0;border:0;padding:0;margin:0;background:transparent;color:transparent;caret-color:transparent;pointer-events:none;z-index:5;';
+    el.addEventListener('focus', () => { chatFocused = true; });
+    el.addEventListener('blur', () => { chatFocused = false; });
+    el.addEventListener('keydown', (e) => {
+        e.stopPropagation();   // never let the world shortcuts (W/F/T/arrows) see chat typing
+        if (e.key === 'Enter') { e.preventDefault(); submitWhisper(); }
+        else if (e.key === 'Escape') { e.preventDefault(); el.blur(); }
+    });
+    document.body.appendChild(el);
+    chatInputEl = el;
+    return el;
+}
+
+function focusChatInput() { ensureChatInput().focus(); }
+function blurChatInput() { if (chatInputEl) chatInputEl.blur(); }
+
+async function submitWhisper() {
+    const f = activeChatFarmer();
+    const el = chatInputEl;
+    if (!f || !el) return;
+    const text = el.value.trim();
+    if (!text || chatThinking) return;
+    el.value = '';
+    chatThinking = true;
+    chatScroll = 0;   // snap to newest
+    try {
+        await whisper(world, f, text, () => { if (world) saveTown(world); });
+    } catch (err) {
+        console.warn('ry-farms: whisper failed', err);
+    } finally {
+        chatThinking = false;
+        chatScroll = 0;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3492,8 +3700,8 @@ out.addEventListener('pointerup', (e) => {
         } else newConfirmUntil = performance.now() + 3000;
         return;
     }
-    if (inRect(p, ROSTER_BTN)) { rosterOpen = !rosterOpen; if (rosterOpen) { boardOpen = false; chronOpen = false; } return; }
-    if (CHRON_BTN.w && inRect(p, CHRON_BTN)) { chronOpen = !chronOpen; if (chronOpen) { boardOpen = false; rosterOpen = false; chronScroll = 0; } return; }
+    if (inRect(p, ROSTER_BTN)) { rosterOpen = !rosterOpen; if (rosterOpen) { boardOpen = false; chronOpen = false; } else { chatDropdownOpen = false; blurChatInput(); } return; }
+    if (CHRON_BTN.w && inRect(p, CHRON_BTN)) { chronOpen = !chronOpen; if (chronOpen) { boardOpen = false; rosterOpen = false; chronScroll = 0; blurChatInput(); } return; }
 
     // chronicle overlay (modal) — X or click-outside closes; a beat selects that Ry (its saga)
     if (chronOpen) {
@@ -3532,14 +3740,35 @@ out.addEventListener('pointerup', (e) => {
     // roster overlay (modal) — handle before any world/minimap clicks
     if (rosterOpen) {
         const rv = rosterView;
-        if (rv) {
-            if ((p.x > rv.x + rv.w - 14 && p.y < rv.y + 12) ||
-                p.x < rv.x || p.x > rv.x + rv.w || p.y < rv.y || p.y > rv.y + rv.h) { rosterOpen = false; return; }
-            for (const row of rosterRows) {
-                if (p.y >= row.y0 && p.y <= row.y1 && p.x > rv.x && p.x < rv.x + rv.w) {
-                    selected = row.farmer; sheetScroll = 0; rosterOpen = false; return;
+        // the farmer-switch dropdown, when open, eats clicks first
+        if (chatDropdownOpen) {
+            for (const row of chatDropRows) {
+                if (p.x >= row.x0 && p.x <= row.x1 && p.y >= row.y0 && p.y <= row.y1) {
+                    chatFarmer = row.farmer; chatScroll = 0; chatDropdownOpen = false; return;
                 }
             }
+            chatDropdownOpen = false; return;   // clicking off the list just closes it
+        }
+        if (rv) {
+            // close X / click well outside the panel
+            if ((p.x > rv.x + rv.w - 14 && p.y < rv.y + 12) ||
+                p.x < rv.x || p.x > rv.x + rv.w || p.y < rv.y || p.y > rv.y + rv.h) { rosterOpen = false; blurChatInput(); return; }
+            // chat: header name toggles the switcher
+            if (chatNameHit && p.x >= chatNameHit.x0 && p.x <= chatNameHit.x1 && p.y >= chatNameHit.y0 && p.y <= chatNameHit.y1) {
+                chatDropdownOpen = !chatDropdownOpen; return;
+            }
+            // chat: entry row focuses the hidden input
+            if (chatEntryRect && p.x >= chatEntryRect.x0 && p.x <= chatEntryRect.x1 && p.y >= chatEntryRect.y0 && p.y <= chatEntryRect.y1) {
+                focusChatInput(); return;
+            }
+            // list rows (top half): open that farmer's detail sheet
+            for (const row of rosterRows) {
+                if (p.y >= row.y0 && p.y <= row.y1 && p.x > rv.x && p.x < rv.x + rv.w) {
+                    selected = row.farmer; sheetScroll = 0; rosterOpen = false; blurChatInput(); return;
+                }
+            }
+            // a click elsewhere in the panel drops keyboard focus
+            blurChatInput();
         }
         return;
     }
@@ -3593,7 +3822,14 @@ out.addEventListener('pointerup', (e) => {
 
 // wheel scrolls whichever panel is open (roster or the detail card)
 out.addEventListener('wheel', (e) => {
-    if (rosterOpen) { e.preventDefault(); rosterScroll += e.deltaY * 0.5; return; }
+    if (rosterOpen) {
+        e.preventDefault();
+        // scroll the chat history when the pointer is over its viewport, else the roster list
+        const cv = chatViewport;
+        if (cv && mouse.y >= cv.bodyTop && mouse.y <= cv.y + cv.h) chatScroll += e.deltaY * 0.5;
+        else rosterScroll += e.deltaY * 0.5;
+        return;
+    }
     if (chronOpen) { e.preventDefault(); chronScroll = Math.max(0, Math.min(chronView ? chronView.maxScroll : 0, chronScroll + e.deltaY * 0.5)); return; }
     if (boardOpen) { e.preventDefault(); boardScroll = Math.max(0, Math.min(boardMaxScroll, boardScroll + e.deltaY * 0.5)); return; }
     if (selected) { e.preventDefault(); sheetScroll = Math.max(0, Math.min(maxSheetScroll, sheetScroll + e.deltaY * 0.5)); }
@@ -3662,6 +3898,7 @@ function mostInterestingFarmer() {
 }
 
 window.addEventListener('keydown', (e) => {
+    if (chatFocused) return;   // #93: typing a whisper — never fire world shortcuts (W/F/T/arrows)
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     if (resumeCard) { resumeCard = null; return; }   // any key dismisses the catch-up card
     if ((e.key === 't' || e.key === 'T') && world) {
@@ -3687,6 +3924,7 @@ window.addEventListener('keydown', (e) => {
         followMode = false; followTarget = null;
         selected = null; selectedSlotKey = null;
         rosterOpen = false; chronOpen = false; boardOpen = false;
+        chatDropdownOpen = false; blurChatInput();
     }
     // ← / → — cycle through the whole cast: moves the open card and/or the follow target together
     if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && world && booted) {
