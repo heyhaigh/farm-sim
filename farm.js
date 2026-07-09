@@ -2348,18 +2348,20 @@ export class World {
     }
 
     // Detection is a SUSPICION TRAIL, not a caught-in-the-act witness: MOTIVE (a standing grudge against
-    // the victim) + OPPORTUNITY (the real hand was there) + PATTERN (a known repeat) + what the Watch has
-    // already been piecing together. Cross the bar and the Watch convenes a trial (the P2 justice vote);
-    // fall short and the crime goes unsolved, but the trail on the true hand grows warmer for next time.
+    // the victim) + PATTERN (a known repeat) + what the Watch has been piecing together — but OPPORTUNITY
+    // (evidence the accused was actually THERE) is a PREREQUISITE to being tried. Motive alone never
+    // convicts, so a farmer who merely resented the victim can't be scapegoated for a crime they didn't
+    // commit (Codex r14 P1). Cross the bar with opportunity in hand and the Watch convenes a trial (the P2
+    // justice vote); fall short and it goes unsolved, but the trail on the true hand grows warmer.
     #investigateSabotage(perp, victim) {
         const wch = this.watchFarmer();
         if (!wch || wch === perp) { this.suspicion[perp.sheet.seed] = (this.suspicion[perp.sheet.seed] || 0) + 0.3; return; }
         let topSeed = null, topScore = 0;
         for (const f of this.farmers) {
             if (f === victim || f === wch) continue;
+            const opportunity = f === perp ? 0.4 : 0;                      // the only hand with evidence they were there
+            if (opportunity <= 0) continue;                                // no opportunity -> NOT triable (motive alone can't convict)
             const motive = Math.max(0, -f.opinionOf(victim));
-            if (motive < 0.2 && f !== perp) continue;                      // no grudge, no suspicion
-            const opportunity = f === perp ? 0.4 : 0;                      // the true hand was actually there
             const pattern = Math.min(0.5, (f.sheet.sabotages || 0) * 0.2);
             const score = motive + opportunity + pattern + (this.suspicion[f.sheet.seed] || 0);
             if (score > topScore) { topScore = score; topSeed = f.sheet.seed; }
