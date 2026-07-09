@@ -2365,6 +2365,25 @@ export class World {
         return true;
     }
 
+    // #96 — the Healer turns an OUTCAST away (mercy's rare exception, see Farmer.healerRefusesCare). The
+    // choice is PUBLIC: the healer quotes the creed they stand on, the town LEARNS and SPLITS by their
+    // own values (the kind-hearted think less of a healer who withholds care; the hard-nosed approve
+    // justice done), and the denied farmer is left to reckon with it (Farmer.reckonWithRefusal).
+    healerRefuse(healer, patient) {
+        const jc = healer.creedFor(['pride', 'loyalty', 'guard']);
+        healer.say(jc ? `"${jc.short.toUpperCase()}"` : "I'LL NOT TEND A SCOUNDREL", '#c05840');
+        patient.say('...', '#9a9a8a');
+        for (const o of this.farmers) {
+            if (o === healer || o === patient) continue;
+            const kind = o.effCollab() - (o.p.honesty - 0.5) * 0.4;   // >0.55 leans compassionate, <0.4 leans hard
+            if (kind > 0.55) o.adjustOpinion(healer, -0.12, `would not heal ${shortName(patient)}`);
+            else if (kind < 0.4) o.adjustOpinion(healer, 0.06, `stood firm against ${shortName(patient)}`);
+        }
+        this.addLog(`${healer.sheet.name} refused to heal ${patient.sheet.name}`, '#c05840');
+        this.addChronicle('rift', `${shortName(healer)} would not heal ${shortName(patient)}, outcast of the town.`, healer, patient, '#c05840');
+        patient.reckonWithRefusal(healer);
+    }
+
     // #97 Slice 2 — craft a KNOWN invented recipe and apply its pure effect. Inputs are consumed from
     // the farmer's own inventory; the effect (a stable id on the recipe) is applied immediately to the
     // crafter (remedies mend/energize, tools grant a short 2-day self-buff, utility is minor/flavour).
@@ -5160,6 +5179,51 @@ export class Farmer {
         return best;
     }
 
+    // #96 — a Healer's conscience toward an OUTCAST. Mercy is the strong default (illness self-resolves,
+    // so care is never withheld to fatal effect). A refusal needs THREE things to align: a hard heart
+    // (low teamwork), a real grievance (they're shunned or personally despised), AND a judgmental creed
+    // (pride/loyalty/guard) that gives them a principle to stand on. Rare, deterministic, characterful.
+    healerRefusesCare(patient) {
+        const w = this.world;
+        const grievance = w.isShunned(patient) || this.opinionOf(patient) < -0.3;
+        if (!grievance) return false;                       // no quarrel -> always the oath
+        if (this.effCollab() >= 0.4) return false;          // a warm heart tends anyone
+        const jc = this.creedFor(['pride', 'loyalty', 'guard']);
+        if (!(jc && (jc.tags.includes('pride') || jc.tags.includes('loyalty') || jc.tags.includes('guard')))) return false;
+        return true;   // all three align — this healer will not tend this one
+    }
+
+    // #91 Tier-3 seed — a BELIEF: a conviction FORMED from lived experience (as opposed to a creed,
+    // which is inherited from the source memory). Stored on the sheet so it persists + narrates.
+    formBelief(text, tag) {
+        this.sheet.beliefs = this.sheet.beliefs || [];
+        if (!this.sheet.beliefs.some(b => b.text === text)) this.sheet.beliefs.push({ text, tag, day: this.world.day });
+    }
+    get beliefs() { return this.sheet.beliefs || []; }
+
+    // #96 — the denied farmer RECKONS with being turned away in their sickness. Real introspection: they
+    // remember it, and it moves them — a soul with some good left feels shame and starts to mend (a step
+    // toward redemption); one already hardened curdles into "trust no one". Either way a belief is FORMED
+    // (their first Tier-3 memory) and a visible reflection lands. Deterministic (no rng).
+    reckonWithRefusal(healer) {
+        const w = this.world;
+        this.remember('lesson', `${shortName(healer)} turned me away when I was ill`, healer, 0.85);
+        const redeemable = this.p.honesty > 0.2 || this.effCollab() > 0.35;
+        if (redeemable) {
+            this.think('MAYBE I BROUGHT THIS ON MYSELF.');
+            this.p.honesty = Math.min(1, this.p.honesty + 0.05);        // the sting nudges them to change
+            this.formBelief('I have to earn back their trust', 'redeem');
+            if (this.sheet.shunUntil) this.sheet.shunUntil = Math.max(w.day, this.sheet.shunUntil - 3);   // begins to mend
+            w.addChronicle('reflection', `Turned away in their sickness, ${shortName(this)} resolved to change their ways.`, this, null, '#8fc7e8');
+        } else {
+            this.think('SO THAT IS HOW IT IS. FINE.');
+            this.adjustOpinion(healer, -0.3, 'refused to heal me when I was down');
+            this.formBelief('trust no one - fend for yourself', 'bitter');
+            this.goal = 'lone wolf';
+            w.addChronicle('rift', `Left to suffer, ${shortName(this)} hardened against a town that turned its back.`, this, null, '#c05840');
+        }
+    }
+
     // ---- #97 Slice 2: procedural invention ---------------------------------------------------------
     // Every farmer is born knowing the base remedies; invented recipes are LEARNED (see #experiment)
     // and ride the sheet so they persist. A recipe id is "known" if it's a base recipe or in the set.
@@ -6542,11 +6606,14 @@ export class Farmer {
         // need, brew the best remedy their herbs allow at the bedside, and never run to exhaustion
         // (they rest early to stay available). Reliable — not a collaborator's coin-flip.
         if (this.isHealer() && !w.isNight()) {
-            // a patient gets ONE remedy a day — tend them, then move on; illness mends over days, not
-            // in one afternoon of endless soup (so the Healer spreads their care across the sick)
-            const sick = w.farmers.filter(o => o !== this && o.health === 'sick' && !o.downed && o.tendedDay !== w.day)
+            // a patient gets ONE remedy a day (tendedDay), and the Healer weighs each sick soul once a
+            // day (visitedSick) — so a refusal isn't re-litigated every tick. Triage the worst first.
+            const sick = w.farmers.filter(o => o !== this && o.health === 'sick' && !o.downed && o.tendedDay !== w.day && !this.visitedSick.has(o.sheet.seed))
                 .sort((a, b) => (b.sickDays - b.energy) - (a.sickDays - a.energy))[0];   // worst first
             if (sick && this.energy > 0.2) {
+                // #96 — the conscience check: mercy by default, but a hard healer with a grudge + a
+                // principle may turn an outcast away (a public choice the town judges).
+                if (this.healerRefusesCare(sick)) { w.healerRefuse(this, sick); this.visitedSick.add(sick.sheet.seed); return; }
                 this.careTarget = sick;
                 const rem = w.bestRemedy(this, sick);
                 this.think(rem ? `${shortName(sick).toUpperCase()} IS ILL - A ${RECIPES[rem].name.toUpperCase()} WILL HELP` : `${shortName(sick).toUpperCase()} AILS - I NEED MORE HERBS`);

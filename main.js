@@ -3211,6 +3211,19 @@ function drawSheet(f) {
                 for (const ln of wrapText(k.quote, 33)) { drawText(ctx, ln, IX + 7, y, '#c8a0e0'); y += 7; }
                 y += 2;
             }
+
+            // #91 Tier-3 — BELIEFS: convictions FORMED from lived experience (not inherited like creeds).
+            // Only shown once a farmer has actually learned something the hard way (e.g. being denied care).
+            const bels = f.beliefs || [];
+            if (bels.length) {
+                y += 1;
+                y = sectionBand(IX, y, IW, 'HARD-WON BELIEFS');
+                for (const b of bels) {
+                    ctx.fillStyle = '#8fc7e8'; ctx.fillRect(IX + 2, y + 2, 2, 2);
+                    for (const ln of wrapText(`"${b.text}" (day ${b.day})`, 33)) { drawText(ctx, ln, IX + 7, y, '#8fc7e8'); y += 7; }
+                    y += 2;
+                }
+            }
         }
     }
 
