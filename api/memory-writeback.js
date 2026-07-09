@@ -62,6 +62,9 @@ module.exports = async function handler(req, res) {
     for (const f of farmers) {
         const doc = {
             content: lifeDoc(f, body.town),
+            // a STABLE id per (town, farmer) so re-posting the same life UPSERTS instead of piling up
+            // duplicate docs across repeated fresh boots (if the store honours customId; harmless if not)
+            customId: `ry-farms:${body.townSeed ?? 'x'}:${f.seed ?? 'x'}`,
             // container + metadata tag every generated life so the READ side can exclude it (no feedback loop)
             containerTags: ['ry-farms'],
             metadata: {

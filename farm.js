@@ -7500,6 +7500,10 @@ export class Farmer {
     // a colour, never the cause — and becomes the quote that names it. They never chisel a real friend.
     #wantsLowball(B) {
         if (this.opinionOf(B) > 0.35) return false;                                // never chisel a friend
+        // PERSONALITY-BASIS GATE (Codex/Fable): an honest farmer who isn't a sharp trader NEVER chisels,
+        // creed or not — so a thrift creed can only SHARPEN a crooked hand's instinct, never CAUSE one in
+        // an upstanding one. This keeps the doctrine honest: memory colours, personality decides.
+        if (this.p.honesty >= 0.45 && this.goal !== 'sharp trader') return false;
         let drive = 0;
         if (this.p.honesty < 0.45) drive += (0.45 - this.p.honesty) * 1.4;         // the crooked angle for an edge
         if (this.goal === 'sharp trader') drive += 0.4;
