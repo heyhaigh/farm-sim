@@ -406,6 +406,9 @@ export function growFarmer(memory, mutation = 0) {
             hatColor: ['#d8c088', '#e8e0d0', '#c05840', '#f0d040', '#7dd069', '#e0e8f0'][Math.floor(rand() * 6)],
         },
         creeds: compileCreeds(memory, seed),   // #91: long-term identity distilled from the source doc
+        // NB: the W2 birth-personality snapshot (`p0`) is taken AFTER founding trait-locks, in
+        // World.ensureFounderVariety / lazily at first drift — not here, or the chaos/mercurial locks
+        // would read as "lived drift" past the cap.
         memory,
         mutation,
     };

@@ -1321,6 +1321,10 @@ export class World {
         // the chaos-agent's drive was bumped and the wanderer's curiosity nudged — refresh their wanderlust
         for (const f of fs) f.recomputeWanderlust();
 
+        // W2: NOW personality is final — snapshot it as each founder's "birth" self, so lived belief drift
+        // is bounded to birth ±DRIFT_CAP (the founding trait-locks above are identity, not lived change).
+        for (const f of fs) if (!f.sheet.p0) { f.sheet.p0 = {}; for (const k of TRAIT_KEYS) f.sheet.p0[k] = f.p[k]; }
+
         // FREE-WILL SETTLEMENT: now that every founder's personality is final, let them choose where
         // to homestead. The sociable hug the plaza; lone wolves (and the curious) strike out into the
         // far, fogged corners of the valley to farm in isolation. Plots are still pristine (no ticks
@@ -4718,65 +4722,82 @@ const JOURNAL_FORGET = 0.12;   // below this strength a memory is gone for good
 // by the farmer + theme, and woven with the very person/event that crystallised it — so two farmers who
 // grow wary of the world say it differently, and name their own reasons. Distinct from CREEDS, which are
 // inherited from the source document — beliefs are EARNED from a lived life. (See #consolidateBeliefs.)
+// W2 tuning: a belief is not forever. Each dawn its STRENGTH rises when lived events keep rhyming with
+// it, falls when they CONTRADICT it (a `contra` regex — the opposite kind of experience), and slowly
+// decays if neither. Below the floor it is SHED, and the one-time personality nudge it caused is REVERSED
+// — so a wary farmer shown enough kindness softens back. Cumulative personality drift is also bounded
+// (#applyDrift clamps every trait to birth ±DRIFT_CAP), so tiny towns can't runaway-polarize.
+const BELIEF_FLOOR = 0.35;      // strength below which a belief lapses
+const BELIEF_DECAY = 0.045;     // baseline erosion per dawn when a belief isn't reinforced
+const DRIFT_CAP = 0.2;          // a lived life moves any personality trait at most this far from birth
+const TRAIT_KEYS = ['collaboration', 'competitiveness', 'honesty', 'diligence', 'volatility', 'curiosity'];
 const BELIEF_THEMES = [
-    { tag: 'wary', min: 3, apply: f => { f.p.collaboration = Math.max(0, f.p.collaboration - 0.06); },
+    { tag: 'wary', min: 3, trait: 'collaboration', nudge: -0.06,
       test: /shortchang|lowball|welch|trick|thiev|stole|haggled me|cheat|robbed/i,
+      contra: /soup|nursed|healed me|a hand|stood with me|for nothing|together|shares their well|showed up/i,
       lines: [
         s => s ? `After ${s}, I count my coins twice and trust half as fast.` : `I've been burned enough to count my coins twice.`,
         () => `A smile is just a smile - I look for the hook behind it now.`,
         s => s ? `${s} taught me what a handshake is really worth: not much.` : `A handshake means nothing till the goods are in hand.`,
         () => `Give freely and the world will empty your pockets - so I don't.`,
       ] },
-    { tag: 'kinship', min: 6, apply: f => { f.p.collaboration = Math.min(1, f.p.collaboration + 0.06); },
+    { tag: 'kinship', min: 6, trait: 'collaboration', nudge: 0.06,
       test: /soup|nursed|healed me|a hand|stood with me|dug (our|my)|for nothing|together|pulled them/i,
+      contra: /shortchang|lowball|stole|cheat|trick|turned me away|left me to it|robbed/i,
       lines: [
         s => s ? `When I was low, ${s} showed up - I know now what a neighbour is for.` : `A neighbour who shows up is worth more than any wall.`,
         () => `No fence is high enough to face a hard winter alone.`,
         s => s ? `${s} carried me once; now I carry whoever's next.` : `We carry each other, or none of us get through.`,
         () => `A town is just people deciding not to let each other fall.`,
       ] },
-    { tag: 'solitude', min: 2, apply: f => { f.p.collaboration = Math.max(0, f.p.collaboration - 0.05); },
+    { tag: 'solitude', min: 2, trait: 'collaboration', nudge: -0.05,
       test: /left me to it|nobody came|turned me away|refused to heal|on my own|keeps to their own|roofless/i,
+      contra: /soup|nursed|a hand|stood with me|for nothing|together|showed up|pulled them/i,
       lines: [
         () => `I asked once and no one came. I don't ask twice.`,
         s => s ? `${s} looked away when it mattered - so I lean on myself.` : `Your own two hands are the only ones that always come.`,
         () => `Quieter alone than let down again.`,
         () => `Depend on no one and no one can fail you.`,
       ] },
-    { tag: 'seeker', min: 3, apply: f => { f.p.curiosity = Math.min(1, f.p.curiosity + 0.06); },
+    { tag: 'seeker', min: 3, trait: 'curiosity', nudge: 0.06,
       test: /struck an ore|found a|unearthed|further than anyone|frontier|tree line|treasure|forgotten stash|relic/i,
+      contra: null,
       lines: [
         () => `Everything worth having was over a hill I almost didn't climb.`,
         () => `The map ends where the timid stop walking - so I keep walking.`,
         () => `There's always one more valley, and I mean to see it.`,
         () => `Standing still is the surest way to find nothing.`,
       ] },
-    { tag: 'grit', min: 2, apply: f => { f.p.diligence = Math.min(1, f.p.diligence + 0.05); },
+    { tag: 'grit', min: 2, trait: 'diligence', nudge: 0.05,
       test: /fell ill|took ill|overwork|worn out|shivered|collapsing|powers through|through the cold|mid-shift/i,
+      contra: null,
       lines: [
         () => `I've worked through worse than this and I'm still standing.`,
         () => `The body breaks and mends - what counts is you get up.`,
         () => `Comfort is a fair-weather friend. The work never is.`,
         () => `Nothing that laid me low ever kept me down for long.`,
       ] },
-    { tag: 'thrift', min: 2, apply: f => { f.p.diligence = Math.min(1, f.p.diligence + 0.05); },
+    { tag: 'thrift', min: 2, trait: 'diligence', nudge: 0.05,
       test: /withered|crow ate|storm|drought|came up empty|lost my|scarecrow/i,
+      contra: null,
       lines: [
         () => `I've watched a crop rot in the field - I keep the stores full now.`,
         () => `Feast today, famine tomorrow, so I never spend it all.`,
         () => `A full barn is the only promise the weather keeps.`,
         () => `Waste nothing; the lean season always comes.`,
       ] },
-    { tag: 'renown', min: 2, apply: f => { f.p.competitiveness = Math.min(1, f.p.competitiveness + 0.05); },
+    { tag: 'renown', min: 2, trait: 'competitiveness', nudge: 0.05,
       test: /harvest king|the leader|walked further|standing stone|raised my cottage|dream|won on|bumper|critical|beloved/i,
+      contra: null,
       lines: [
         () => `A name outlasts a harvest - I mean to leave one worth saying.`,
         () => `Second place is just the first to be forgotten.`,
         () => `Let them remember what I built when I'm gone.`,
         s => s ? `Ever since I outdid ${s}, I've known I wasn't made to be a footnote.` : `I didn't come this far to be a footnote.`,
       ] },
-    { tag: 'cunning', min: 2, apply: f => { f.p.honesty = Math.max(0, f.p.honesty - 0.04); },
+    { tag: 'cunning', min: 2, trait: 'honesty', nudge: -0.04,
       test: /warning|shunned|sharp trader|lowball offers|schem|nobody.?s watching|slip away/i,
+      contra: /fined|reparation|caught|the town let me off|stood with me|nursed/i,
       lines: [
         () => `The rules are for those too slow to bend them.`,
         () => `Everyone's running an angle - I just run mine better.`,
@@ -5370,10 +5391,25 @@ export class Farmer {
     }
     get beliefs() { return this.sheet.beliefs || []; }
 
-    // #91 Tier-3 CONSOLIDATION — at dawn, look back over the journal: has any THEME recurred enough to
-    // become a conviction? The best-supported un-held theme crystallises into a belief that reshapes
-    // them (a one-time personality nudge, its label re-derived) and lands a reflection beat. One a day,
-    // capped over a life — a farmer is shaped by what keeps happening to them, not every passing mood.
+    // W2 — the birth personality, snapshot once, so lived drift can be BOUNDED (never more than DRIFT_CAP
+    // from who they were born as) and REVERSED when a belief lapses. Lazily seeded for pre-W2 saves.
+    #p0() {
+        if (!this.sheet.p0) { this.sheet.p0 = {}; for (const k of TRAIT_KEYS) this.sheet.p0[k] = this.p[k]; }
+        return this.sheet.p0;
+    }
+    // Move a personality trait, clamped to birth ±DRIFT_CAP (and [0,1]); returns the delta ACTUALLY applied
+    // (which a lapsing belief reverses exactly). This is the one gate all lived personality change goes through.
+    #applyDrift(trait, delta) {
+        const base = this.#p0()[trait] ?? this.p[trait];
+        const before = this.p[trait];
+        this.p[trait] = Math.max(Math.max(0, base - DRIFT_CAP), Math.min(Math.min(1, base + DRIFT_CAP), before + delta));
+        return this.p[trait] - before;
+    }
+
+    // #91 Tier-3 CONSOLIDATION — at dawn, has any THEME recurred enough to become a conviction? The
+    // best-supported un-held theme crystallises into a belief that reshapes them (a bounded personality
+    // nudge, its label re-derived) and lands a reflection beat. The applied delta is recorded so the belief
+    // can be UNDONE if it later lapses (see #reviseBeliefs). One a day, capped over a life.
     #consolidateBeliefs() {
         const held = this.sheet.beliefs || [];
         if (held.length >= 6) return;                          // a life is more than its doctrines
@@ -5391,10 +5427,34 @@ export class Farmer {
         // and never touches the sim's rng, so the digest is unmoved by which words a belief happens to wear
         const roll = mulberry32(((this.sheet.seed ^ hashString('belief:' + best.tag) ^ Math.imul(this.world.day, 0x9e3779b1)) >>> 0));
         const text = best.lines[Math.floor(roll() * best.lines.length)](subject, roll);
-        this.formBelief(text, best.tag);
-        best.apply(this);
-        const id = personalityLabel(this.p); this.p.label = id.label; this.p.creed = id.creed;   // lived change can rename them
+        const delta = this.#applyDrift(best.trait, best.nudge);   // bounded; recorded for exact reversal
+        (this.sheet.beliefs = this.sheet.beliefs || []).push({ text, tag: best.tag, day: this.world.day, strength: 1, trait: best.trait, delta });
+        const id = personalityLabel(this.p); this.p.label = id.label; this.p.creed = id.creed;
         this.world.addChronicle('reflection', `${shortName(this)} has come to believe: ${text}`, this, null, '#8fc7e8');
+    }
+
+    // W2 — a belief is not forever. Each dawn its STRENGTH rises when recent life keeps rhyming with it,
+    // falls when experience CONTRADICTS it (the opposite kind of event), and slowly decays otherwise.
+    // Below the floor it LAPSES — the personality nudge it caused is reversed, and a quiet reflection marks
+    // the change. So a wary farmer shown enough kindness softens back; nothing about a life stays frozen.
+    #reviseBeliefs() {
+        const bel = this.sheet.beliefs; if (!bel || !bel.length) return;
+        const kept = [];
+        for (const b of bel) {
+            const theme = b.trait != null ? BELIEF_THEMES.find(t => t.tag === b.tag) : null;
+            if (!theme) { kept.push(b); continue; }             // narrative beliefs (redeem/bitter) don't erode
+            let reinforced = 0, contradicted = 0;
+            for (const m of this.journal) {
+                if (theme.test.test(m.text)) reinforced++;
+                else if (theme.contra && theme.contra.test(m.text)) contradicted++;
+            }
+            b.strength = Math.max(0, Math.min(1.5, (b.strength ?? 1) + Math.min(0.3, reinforced * 0.05) - Math.min(0.6, contradicted * 0.12) - BELIEF_DECAY));
+            if (b.strength < BELIEF_FLOOR) {
+                if (b.delta) this.#applyDrift(b.trait, -b.delta);   // undo the drift this belief caused
+                this.world.addChronicle('reflection', `${shortName(this)} let go of an old belief: ${b.text.replace(/[.!]$/, '')}.`, this, null, '#8a8f9c');
+            } else kept.push(b);
+        }
+        if (kept.length !== bel.length) { this.sheet.beliefs = kept; const id = personalityLabel(this.p); this.p.label = id.label; this.p.creed = id.creed; }
     }
 
     // #96 — the denied farmer RECKONS with being turned away in their sickness. Real introspection: they
@@ -5407,7 +5467,7 @@ export class Farmer {
         const redeemable = this.p.honesty > 0.2 || this.effCollab() > 0.35;
         if (redeemable) {
             this.think('MAYBE I BROUGHT THIS ON MYSELF.');
-            this.p.honesty = Math.min(1, this.p.honesty + 0.05);        // the sting nudges them to change
+            this.#applyDrift('honesty', 0.05);        // the sting nudges them to change (bounded like all drift)
             this.formBelief('I have to earn back their trust', 'redeem');
             if (this.sheet.shunUntil) this.sheet.shunUntil = Math.max(w.day, this.sheet.shunUntil - 3);   // begins to mend
             w.addChronicle('reflection', `Turned away in their sickness, ${shortName(this)} resolved to change their ways.`, this, null, '#8fc7e8');
@@ -6247,6 +6307,7 @@ export class Farmer {
             if (c.urge && this.world.day > c.urge.expiresDay) c.urge = null;
         }
 
+        this.#reviseBeliefs();        // W2: reinforce / erode / shed beliefs against recent life first
         this.#consolidateBeliefs();   // #91 Tier-3: a recurring lived theme may crystallise into a belief today
     }
 
