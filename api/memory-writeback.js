@@ -65,12 +65,15 @@ module.exports = async function handler(req, res) {
             // a STABLE id per (town, farmer) so re-posting the same life UPSERTS instead of piling up
             // duplicate docs across repeated fresh boots (if the store honours customId; harmless if not)
             customId: `ry-farms:${body.townSeed ?? 'x'}:${f.seed ?? 'x'}`,
-            // container + metadata tag every generated life so the READ side can exclude it (no feedback loop)
+            // container + metadata tag every generated life so the READ side can exclude it (no feedback loop).
+            // SuperMemory validates metadata values as STRINGS and rejects nulls — so stringify + drop empties.
             containerTags: ['ry-farms'],
             metadata: {
                 app: 'ry-farms', kind: 'farmer-life',
-                townSeed: body.townSeed ?? null, farmerSeed: f.seed ?? null,
-                sourceDocId: f.sourceDocId ?? null, name: f.name ?? null,
+                ...(body.townSeed != null ? { townSeed: String(body.townSeed) } : {}),
+                ...(f.seed != null ? { farmerSeed: String(f.seed) } : {}),
+                ...(f.sourceDocId != null ? { sourceDocId: String(f.sourceDocId) } : {}),
+                ...(f.name != null ? { name: String(f.name) } : {}),
             },
         };
         const controller = new AbortController();
@@ -78,7 +81,8 @@ module.exports = async function handler(req, res) {
         try {
             const r = await fetch(`${base}/v3/documents`, { method: 'POST', headers, body: JSON.stringify(doc), signal: controller.signal });
             if (r.ok) { written++; if (f.seed != null) persisted.push(f.seed); }
-        } catch { /* best-effort — a life that didn't persist is no worse than before */ }
+            else console.error('[writeback] non-ok', r.status, (await r.text()).slice(0, 200));
+        } catch (e) { console.error('[writeback] threw:', e?.message, e?.cause?.message || ''); }
         finally { clearTimeout(timer); }
     }
     // report which seeds landed so the client stamps exactly those (a partial write is fine + resumable)

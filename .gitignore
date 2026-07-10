@@ -18,3 +18,6 @@ assets/
 
 # local LLM key for the expressive channel (server.mjs) - NEVER commit
 .env
+
+# SuperMemory local self-hosted store (encrypted data + embedding models)
+.supermemory/
