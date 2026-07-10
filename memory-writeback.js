@@ -60,7 +60,10 @@ export async function persistTownHistory(world, isCurrent = () => true) {
 
 function lifeOf(f) {
     const s = f.sheet;
-    const episodic = (s.journal || []).slice().sort((a, b) => b.strength - a.strength).slice(0, 12).map(m => m.text);
+    // episodic memories live on the FARMER instance (`remember()` pushes to f.journal), NOT the sheet —
+    // reading s.journal silently dropped every lived memory from the writeback (so the portal had only
+    // creeds/beliefs and almost no ties). Read f.journal, strongest first.
+    const episodic = (f.journal || []).slice().sort((a, b) => b.strength - a.strength).slice(0, 12).map(m => m.text);
     return {
         seed: s.seed,
         name: s.name,
@@ -74,12 +77,22 @@ function lifeOf(f) {
     };
 }
 
-// Persist every not-yet-persisted farmer's life. `isCurrent` guards a response landing after a NEW-town
-// reset. Returns the count stamped this pass (0 = nothing to do, or the store was unreachable).
+// A cheap change-detector for a farmer's life: their creeds + beliefs + strongest memories. When it
+// changes (a new belief forms, a relationship memory lands, a fresh episodic beat), the life is RE-persisted
+// so SuperMemory holds the LIVING farmer, not a first-day snapshot. The customId upsert means each refresh
+// overwrites the same doc (no pile-up), and the read side still excludes these, so no echo loop.
+function lifeSig(f) {
+    const l = lifeOf(f);
+    return `${l.beliefs.length}|${l.creeds.length}|${l.episodic.join('¦')}`;
+}
+
+// Persist each farmer whose life has CHANGED since it was last written. `isCurrent` guards a response
+// landing after a NEW-town reset. Returns the count refreshed this pass (0 = nothing changed / store down).
 export async function persistLives(world, isCurrent = () => true) {
     if (typeof fetch !== 'function' || inflight) return 0;
     if (Date.now() - lastFailAt < RETRY_COOLDOWN_MS) return 0;
-    const pending = world.farmers.filter(f => !f.sheet.lifePersisted);
+    const pending = [];
+    for (const f of world.farmers) { const sig = lifeSig(f); if (sig !== f.sheet.lifeSig) pending.push({ f, sig }); }
     if (!pending.length) return 0;
 
     inflight = true;
@@ -89,7 +102,7 @@ export async function persistLives(world, isCurrent = () => true) {
         const res = await fetch(ENDPOINT, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ town: world.name || 'RY FARMS', townSeed: world.seed, farmers: pending.map(lifeOf) }),
+            body: JSON.stringify({ town: world.name || 'RY FARMS', townSeed: world.seed, farmers: pending.map(p => lifeOf(p.f)) }),
             signal: controller.signal,
         });
         if (!res.ok) throw new Error(`writeback ${res.status}`);
@@ -99,7 +112,7 @@ export async function persistLives(world, isCurrent = () => true) {
 
         const landed = new Set(data.persisted || []);
         let stamped = 0;
-        for (const f of pending) if (landed.has(f.sheet.seed)) { f.sheet.lifePersisted = true; stamped++; }
+        for (const { f, sig } of pending) if (landed.has(f.sheet.seed)) { f.sheet.lifeSig = sig; f.sheet.lifePersisted = true; stamped++; }
         if (stamped) world.addLog(`${stamped} settlers' lives were set down in the town's long memory.`, '#8ad0e0');
         return stamped;
     } catch (err) {
