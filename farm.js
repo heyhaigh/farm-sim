@@ -196,6 +196,18 @@ export const SEASONS = [
 ];
 export const SEASON_LENGTH = 15;
 
+// #94 P3 ELECTIONS: the last ELECTION_DAYS of Winter are the election window (nominations -> campaign
+// -> tally on the last winter day, right before the year turns). CAND_SLATE = how many stand per office.
+export const ELECTION_DAYS = 3;
+const CAND_SLATE = 3;
+// Recall is the EMERGENCY removal between elections — deliberately rare so tenures are meaningful and the
+// yearly ballot does the ordinary turnover. A holder must sit below RECALL_FLOOR for RECALL_DWELL days
+// running (a sustained rejection, not statistical noise near the line), and a town can recall at most
+// MAX_RECALLS_PER_YEAR before it simply waits for the vote — no perpetual churn through the same two names.
+const RECALL_FLOOR = 0.12;   // recall only on genuine COLLAPSE — seasonal approval dips don't count, so the
+const RECALL_DWELL = 12;      // yearly ELECTION stays the primary turnover and recall is the rare exception
+const MAX_RECALLS_PER_YEAR = 2;
+
 // #97 Slice 1 — Healer tuning: when the Healer's grass falls below this they call the town for herbs;
 // they keep a reserve + a higher energy floor so they stay AVAILABLE (never overwork themselves).
 const HEALER_HERB_LOW = 5;
@@ -488,7 +500,12 @@ export class World {
         // + recall so a poor leader is unseated even before elections exist. Sim-driven + seeded.
         this.roles = { manager: null, approval: 0.6, lowDays: 0, directive: null, directiveSeq: 0, cooldown: 0,
                        watch: null, watchApproval: 0.6, watchLowDays: 0, caseSeq: 0,        // #94 P2: the Town Watch
-                       healer: null, healerApproval: 0.6, healerLowDays: 0 };              // #94 P3: the Town Healer
+                       healer: null, healerApproval: 0.6, healerLowDays: 0,                // #94 P3: the Town Healer
+                       // #94 P3 ELECTIONS + civic memory: terms served (fatigue), when the current holder took
+                       // the chair (tenure), a live election in the winter window, and the town's remembered
+                       // roll of past office-holders (who, how long, how it ended, and why).
+                       managerTerms: 0, watchTerms: 0, managerSince: null, watchSince: null,
+                       managerRecalls: 0, watchRecalls: 0, election: null, history: [] };
         this.sabotage = [];    // #97 Slice 4: planted-but-not-yet-sprung harm ({perp,victim,kind,effectDay})
         this.suspicion = {};   // #97 Slice 4: the Watch's slow-building trail on unsolved crimes (seed -> score)
         this.board = null;    // no bulletin board until the town builds one together (first communal project)
@@ -1967,6 +1984,12 @@ export class World {
                     text: this.roles.directive.text, day: this.roles.directive.day,
                     heeders: [...this.roles.directive.heeders], refusers: [...this.roles.directive.refusers],
                 } : null,
+                // #94 P3: elections + the town's remembered civic record (already plain — clone as-is)
+                managerTerms: this.roles.managerTerms, watchTerms: this.roles.watchTerms,
+                managerSince: this.roles.managerSince, watchSince: this.roles.watchSince,
+                managerRecalls: this.roles.managerRecalls, watchRecalls: this.roles.watchRecalls,
+                election: this.roles.election ? { ...this.roles.election } : null,
+                history: this.roles.history.map(h => ({ ...h })),
             },
             sabotage: this.sabotage.map(s => ({ ...s })),   // #97 Slice 4: pending harm + the Watch's trail
             suspicion: { ...this.suspicion },
@@ -2068,7 +2091,12 @@ export class World {
                 ...d.roles.directive,
                 heeders: new Set(d.roles.directive.heeders), refusers: new Map(d.roles.directive.refusers),
             } : null,
-        } : { manager: null, approval: 0.6, lowDays: 0, watch: null, watchApproval: 0.6, watchLowDays: 0, healer: null, healerApproval: 0.6, healerLowDays: 0, directive: null, directiveSeq: 0, cooldown: 0, caseSeq: 0 };
+            managerTerms: d.roles.managerTerms || 0, watchTerms: d.roles.watchTerms || 0,
+            managerSince: d.roles.managerSince ?? null, watchSince: d.roles.watchSince ?? null,
+            managerRecalls: d.roles.managerRecalls || 0, watchRecalls: d.roles.watchRecalls || 0,
+            election: d.roles.election ? { ...d.roles.election } : null,
+            history: Array.isArray(d.roles.history) ? d.roles.history.map(h => ({ ...h })) : [],
+        } : { manager: null, approval: 0.6, lowDays: 0, watch: null, watchApproval: 0.6, watchLowDays: 0, healer: null, healerApproval: 0.6, healerLowDays: 0, directive: null, directiveSeq: 0, cooldown: 0, caseSeq: 0, managerTerms: 0, watchTerms: 0, managerSince: null, watchSince: null, managerRecalls: 0, watchRecalls: 0, election: null, history: [] };
         this.sabotage = Array.isArray(d.sabotage) ? d.sabotage.map(s => ({ ...s })) : [];   // #97 Slice 4
         this.suspicion = d.suspicion ? { ...d.suspicion } : {};
 
@@ -2207,16 +2235,19 @@ export class World {
         const r = this.roles;
         if (!this.farmers.length) return;
 
-        // seat the MANAGER if empty
+        // seat the MANAGER if empty (fitness fills a vacant chair between elections; elections handle
+        // the yearly turnover). Stamp the tenure + reset the term count for fatigue.
         if (r.manager == null || !this.managerFarmer()) {
-            const m = this.#bestFor(f => this.#managerFitness(f));
+            const m = this.#bestFor(f => this.#managerFitness(f), this.watchFarmer(), this.healerFarmer());
             if (m) { r.manager = m.sheet.seed; r.approval = 0.6; r.lowDays = 0;
+                r.managerSince = { year: this.year, day: this.day }; r.managerTerms = 1;
                 this.addChronicle('town', `${shortName(m)} took up the Manager's chair.`, m, null, '#e0c060'); }
         }
-        // seat the WATCH if empty (one farmer holds at most one role -> exclude the Manager)
+        // seat the WATCH if empty (one farmer holds at most one role -> exclude the Manager + Healer)
         if (r.watch == null || !this.watchFarmer()) {
-            const wch = this.#bestFor(f => this.#watchFitness(f), this.managerFarmer());
+            const wch = this.#bestFor(f => this.#watchFitness(f), this.managerFarmer(), this.healerFarmer());
             if (wch) { r.watch = wch.sheet.seed; r.watchApproval = 0.6; r.watchLowDays = 0;
+                r.watchSince = { year: this.year, day: this.day }; r.watchTerms = 1;
                 this.addChronicle('town', `${shortName(wch)} was made the Town Watch.`, wch, null, '#e0c060'); }
         }
         // seat the HEALER if empty (#97 Slice 1) — excludes the Manager + Watch (one role each)
@@ -2236,14 +2267,20 @@ export class World {
         const mgr = this.managerFarmer();
         const eligible = this.farmers.filter(f => f !== mgr && f.health !== 'sick' && !f.downed).length;
         if (eligible > 0) {
-            // MANAGER approval = how much of the AVAILABLE town rallied to the day's directive.
+            // MANAGER approval = how much of the AVAILABLE town rallied to the day's directive. Only move it
+            // when the town actually WEIGHED IN (someone heeded or refused). A directive that went out while
+            // everyone was heads-down on higher-priority personal work (the kernel keeps civic the lowest tier)
+            // is NO SIGNAL, not a rejection — so hold approval AND the recall clock, the same guard as a
+            // no-quorum day. Without this a manager is churned out every few days by a town that's simply busy.
             const d = r.directive;
-            if (d) {
-                const weighed = d.heeders.size + d.refusers.size;
+            const weighed = d ? d.heeders.size + d.refusers.size : 0;
+            if (d && weighed > 0) {
                 const expect = Math.max(1, Math.ceil(eligible / 2));
-                r.approval = Math.max(0, Math.min(1, r.approval * 0.7 + (d.heeders.size / Math.max(weighed, expect)) * 0.3));
+                // approval tracks a TREND, not a single day — a sticky average (0.85 carry) so one quiet day
+                // of unheeded calls doesn't crater the bar, and only SUSTAINED rejection walks it to the floor.
+                r.approval = Math.max(0, Math.min(1, r.approval * 0.85 + (d.heeders.size / Math.max(weighed, expect)) * 0.15));
+                r.lowDays = r.approval < RECALL_FLOOR ? r.lowDays + 1 : 0;
             }
-            r.lowDays = r.approval < 0.25 ? r.lowDays + 1 : 0;
             // WATCH approval drifts toward the AVAILABLE town's regard for them (trials nudge it directly).
             const wf = this.watchFarmer();
             if (wf) {
@@ -2251,36 +2288,239 @@ export class World {
                 for (const f of this.farmers) if (f !== wf && f.health !== 'sick' && !f.downed) { sum += f.opinionOf(wf); n++; }
                 if (n > 0) r.watchApproval = Math.max(0, Math.min(1, r.watchApproval * 0.9 + (0.55 + sum / n) * 0.1));
             }
-            r.watchLowDays = r.watchApproval < 0.25 ? r.watchLowDays + 1 : 0;
+            r.watchLowDays = r.watchApproval < RECALL_FLOOR ? r.watchLowDays + 1 : 0;
             // HEALER approval drifts toward the town's regard for them (a tend/cure nudges it directly).
             if (hf) {
                 let sum = 0, n = 0;
                 for (const f of this.farmers) if (f !== hf && f.health !== 'sick' && !f.downed) { sum += f.opinionOf(hf); n++; }
                 if (n > 0) r.healerApproval = Math.max(0, Math.min(1, r.healerApproval * 0.9 + (0.55 + sum / n) * 0.1));
             }
-            r.healerLowDays = r.healerApproval < 0.25 ? r.healerLowDays + 1 : 0;
+            r.healerLowDays = r.healerApproval < RECALL_FLOOR ? r.healerLowDays + 1 : 0;
         }
 
-        // recall a chronically-unpopular office-holder; the chair passes to the next-fittest DIFFERENT
-        // hand (forced turnover keeps it dynamic before elections exist).
-        if (r.lowDays >= 3 && this.farmers.length > 1) {
-            const out = this.managerFarmer(), next = this.#bestFor(f => this.#managerFitness(f), out);
-            if (next && next !== out) { r.manager = next.sheet.seed; r.approval = 0.5; r.lowDays = 0;
+        // recall a chronically-unpopular office-holder — the rare EMERGENCY removal between elections: a
+        // holder sunk below the floor for RECALL_DWELL days running, and only up to MAX_RECALLS_PER_YEAR
+        // before the town simply waits for the ballot (no perpetual churn through the same two names).
+        if (r.lowDays >= RECALL_DWELL && r.managerRecalls < MAX_RECALLS_PER_YEAR && this.farmers.length > 1) {
+            const out = this.managerFarmer(), next = this.#bestFor(f => this.#managerFitness(f), out, this.watchFarmer(), this.healerFarmer());
+            if (next && next !== out) {
+                this.#recordTerm('manager', 'recalled', 'the town lost faith in their calls');
+                r.manager = next.sheet.seed; r.approval = 0.5; r.lowDays = 0; r.managerRecalls++;
+                r.managerSince = { year: this.year, day: this.day }; r.managerTerms = 1;
                 this.addChronicle('rift', `${out ? shortName(out) : 'The Manager'} was stood down; ${shortName(next)} takes the Manager's chair.`, next, out, '#d08cc8'); }
         }
-        if (r.watchLowDays >= 3 && this.farmers.length > 1) {
-            const out = this.watchFarmer(), next = this.#bestFor(f => this.#watchFitness(f), out, this.managerFarmer());
-            if (next && next !== out) { r.watch = next.sheet.seed; r.watchApproval = 0.5; r.watchLowDays = 0;
+        if (r.watchLowDays >= RECALL_DWELL && r.watchRecalls < MAX_RECALLS_PER_YEAR && this.farmers.length > 1) {
+            const out = this.watchFarmer(), next = this.#bestFor(f => this.#watchFitness(f), out, this.managerFarmer(), this.healerFarmer());
+            if (next && next !== out) {
+                this.#recordTerm('watch', 'recalled', "the town lost trust in the Watch");
+                r.watch = next.sheet.seed; r.watchApproval = 0.5; r.watchLowDays = 0; r.watchRecalls++;
+                r.watchSince = { year: this.year, day: this.day }; r.watchTerms = 1;
                 this.addChronicle('rift', `${out ? shortName(out) : 'The Watch'} lost the town's trust; ${shortName(next)} takes up the Watch.`, next, out, '#d08cc8'); }
         }
-        if (r.healerLowDays >= 3 && this.farmers.length > 1) {
+        if (r.healerLowDays >= RECALL_DWELL && this.farmers.length > 1) {
             const out = this.healerFarmer(), next = this.#bestFor(f => this.#healerFitness(f), out, this.managerFarmer(), this.watchFarmer());
             if (next && next !== out) { r.healer = next.sheet.seed; r.healerApproval = 0.5; r.healerLowDays = 0;
                 this.addChronicle('rift', `${out ? shortName(out) : 'The Healer'} laid down the satchel; ${shortName(next)} takes up healing.`, next, out, '#d08cc8'); }
         }
 
+        this.#updateCivicImpressions();   // #94 P3: fold the day's civic experience into each farmer's leader-impressions
+        this.#electionCycle();            // #94 P3: run the winter election (nominations -> campaign -> tally)
         this.#postDirective();
     }
+
+    // ---- #94 P3: CIVIC MEMORY + ELECTIONS ----------------------------------------------------------
+    // The town remembers. Offices no longer just churn by fitness/recall — once a year the town VOTES,
+    // and each farmer votes from lived memory: an impression of who leads well (built day by day), plus
+    // regret/vindication over how their last vote turned out. Every completed term is written to the
+    // town's roll (history) so a leader's record outlives their chair. All deterministic + seeded.
+
+    // One role per farmer: when a farmer takes an office, vacate every OTHER office they hold (recording the
+    // Manager/Watch ones as stepped-aside; the Healer is a skill post, just cleared and re-seated by fitness).
+    #vacateOtherRoles(seed, keep) {
+        const r = this.roles;
+        if (keep !== 'manager' && r.manager === seed) { this.#recordTerm('manager', 'stepped-aside', 'took up another office'); r.manager = null; }
+        if (keep !== 'watch' && r.watch === seed) { this.#recordTerm('watch', 'stepped-aside', 'took up another office'); r.watch = null; }
+        if (keep !== 'healer' && r.healer === seed) { r.healer = null; }
+    }
+
+    // Close out the CURRENT holder's term into the town's remembered roll.
+    #recordTerm(office, endReason, why) {
+        const r = this.roles;
+        const seed = office === 'manager' ? r.manager : r.watch;
+        if (seed == null) return;
+        const f = this.farmers.find(x => x.sheet.seed === seed);
+        const since = office === 'manager' ? r.managerSince : r.watchSince;
+        const appr = office === 'manager' ? r.approval : r.watchApproval;
+        const terms = office === 'manager' ? r.managerTerms : r.watchTerms;
+        r.history.push({
+            office, seed, name: f ? f.sheet.name : '?',
+            fromYear: since ? since.year : this.year, toYear: this.year, toDay: this.day,
+            terms, endReason, approvalAtEnd: Math.round(appr * 100) / 100, why,
+        });
+        if (r.history.length > 60) r.history.shift();   // keep a deep-but-bounded civic memory
+    }
+
+    // Each day, fold the town's civic experience into every farmer's IMPRESSION of the office-holders —
+    // a memory of who leads well, distinct from whether they personally LIKE them. Heeding a leader whose
+    // calls pay off builds regard; bearing a failing leader's calls sours it; old impressions soften.
+    #updateCivicImpressions() {
+        const r = this.roles, m = this.managerFarmer(), w = this.watchFarmer(), d = r.directive;
+        for (const f of this.farmers) {
+            const imp = f.civic.impressions;
+            for (const k in imp) { imp[k] *= 0.997; if (Math.abs(imp[k]) < 0.005) delete imp[k]; }   // memories soften toward neutral
+            if (m && f !== m) {
+                let dv = (r.approval - 0.5) * 0.012;   // the whole town reads the leader's standing
+                if (d) { if (d.heeders.has(f.sheet.seed)) dv += (r.approval - 0.45) * 0.01; else if (d.refusers.has(f.sheet.seed)) dv -= 0.004; }
+                imp[m.sheet.seed] = clamp((imp[m.sheet.seed] || 0) + dv, -1, 1);
+            }
+            if (w && f !== w) {
+                const dv = f.opinionOf(w) * 0.006 + (r.watchApproval - 0.5) * 0.006;
+                imp[w.sheet.seed] = clamp((imp[w.sheet.seed] || 0) + dv, -1, 1);
+            }
+        }
+    }
+
+    // The winter election runs across the window: open the slates, a campaign beat, then tally on the
+    // last winter day (right before the year turns).
+    #electionCycle() {
+        const r = this.roles;
+        if (this.season !== 3 || this.seasonDay < SEASON_LENGTH - ELECTION_DAYS) return;
+        if (this.farmers.length < 2) return;
+        const forYear = this.year + 1, daysIn = this.seasonDay - (SEASON_LENGTH - ELECTION_DAYS);
+        if (!r.election || r.election.year !== forYear) {
+            r.managerRecalls = 0; r.watchRecalls = 0;   // a fresh year restores the town's recall budget
+            r.election = { year: forYear, phase: 'nominations',
+                mgrCands: this.#electionCandidates('manager'), watchCands: this.#electionCandidates('watch'), result: null };
+            const names = r.election.mgrCands.map(s => { const f = this.farmers.find(x => x.sheet.seed === s); return f ? shortName(f) : null; }).filter(Boolean);
+            if (names.length) this.addChronicle('town', `Talk turns to the year ahead — ${names.join(', ')} are spoken of for the Manager's chair.`, null, null, '#c8a860');
+        }
+        if (daysIn >= ELECTION_DAYS - 1) { if (r.election.phase !== 'tallied') this.holdElection(); }
+        else if (r.election.phase === 'nominations') { r.election.phase = 'campaign'; }
+    }
+
+    // The slate for an office: the incumbent (always stands) plus the fittest others, up to CAND_SLATE.
+    #electionCandidates(office) {
+        const fitFn = office === 'manager' ? (f => this.#managerFitness(f)) : (f => this.#watchFitness(f));
+        const incumbent = office === 'manager' ? this.managerFarmer() : this.watchFarmer();
+        const pool = this.farmers.filter(f => f.health !== 'sick' && !f.downed);
+        const ranked = [...pool].sort((a, b) => (fitFn(b) - fitFn(a)) || (a.sheet.seed - b.sheet.seed));
+        const slate = [];
+        if (incumbent && pool.includes(incumbent)) slate.push(incumbent.sheet.seed);
+        for (const f of ranked) { if (slate.length >= CAND_SLATE) break; if (!slate.includes(f.sheet.seed)) slate.push(f.sheet.seed); }
+        return slate;
+    }
+
+    // PUBLIC (like holdTrial): tally the election and seat the winners. Manager first, then the Watch
+    // from whoever's left (one role each). A pure count — no office-holder can bias it.
+    holdElection() {
+        const r = this.roles, el = r.election;
+        if (!el || el.phase === 'tallied') return;
+        el.phase = 'tallied';
+        const voters = this.farmers.filter(f => f.health !== 'sick' && !f.downed);
+        const mgrWinner = this.#electOffice('manager', el.mgrCands, voters);
+        const watchWinner = this.#electOffice('watch', el.watchCands.filter(s => s !== mgrWinner), voters);
+        el.result = { manager: mgrWinner, watch: watchWinner };
+    }
+
+    // Run ONE office: every eligible voter casts a memory-driven ballot (argmax preference); the count
+    // decides. Edge cases: no candidates or a town of one -> the incumbent carries on; a lone candidate
+    // is acclaimed. Returns the seated seed.
+    #electOffice(office, candSeeds, voters) {
+        const r = this.roles;
+        const incumbentSeed = office === 'manager' ? r.manager : r.watch;
+        const cands = candSeeds.map(s => this.farmers.find(f => f.sheet.seed === s)).filter(Boolean);
+        if (!cands.length) return incumbentSeed;
+        if (voters.length < 2) return incumbentSeed;                       // too small a town to hold a vote
+        const fitFn = office === 'manager' ? (f => this.#managerFitness(f)) : (f => this.#watchFitness(f));
+        const maxFit = Math.max(0.001, ...cands.map(fitFn));
+        const tally = new Map(cands.map(c => [c.sheet.seed, 0]));
+        const ballots = [];
+        if (cands.length === 1) { tally.set(cands[0].sheet.seed, voters.length); }
+        else {
+            for (const v of voters) {
+                let best = null, bestP = -1e9;
+                for (const c of cands) {
+                    const p = this.#ballotPref(v, c, office, incumbentSeed, r.election.year, fitFn, maxFit);
+                    if (p > bestP || (p === bestP && (best == null || c.sheet.seed < best.sheet.seed))) { bestP = p; best = c; }
+                }
+                tally.set(best.sheet.seed, tally.get(best.sheet.seed) + 1);
+                ballots.push({ v, choice: best.sheet.seed });
+                v.civic.voteLog.push({ year: r.election.year, office, forSeed: best.sheet.seed, incSeed: incumbentSeed,
+                    incAppr: office === 'manager' ? r.approval : r.watchApproval });
+                if (v.civic.voteLog.length > 24) v.civic.voteLog.shift();
+            }
+        }
+        // winner = most votes; ties break by fitness then seed (deterministic)
+        let winner = null, bestVotes = -1;
+        for (const c of [...cands].sort((a, b) => (fitFn(b) - fitFn(a)) || (a.sheet.seed - b.sheet.seed))) {
+            const vc = tally.get(c.sheet.seed); if (vc > bestVotes) { bestVotes = vc; winner = c; }
+        }
+        this.#seatElected(office, winner, incumbentSeed, bestVotes, voters.length, ballots, cands.length === 1);
+        return winner.sheet.seed;
+    }
+
+    // A voter's preference for a candidate: personal regard + remembered leadership + a nod to competence,
+    // an incumbent's record (helped by approval, worn down by terms served), regret over a past vote, a
+    // self-vote, and a little seeded human noise. Reads ONLY local sim memory (never SuperMemory).
+    #ballotPref(v, c, office, incumbentSeed, year, fitFn, maxFit) {
+        const r = this.roles;
+        const isInc = c.sheet.seed === incumbentSeed;
+        const terms = office === 'manager' ? r.managerTerms : r.watchTerms;
+        const appr = office === 'manager' ? r.approval : r.watchApproval;
+        const tag = office === 'manager' ? 0x1111 : 0x2222;
+        const jitter = mulberry32((this.seed ^ v.sheet.seed ^ c.sheet.seed ^ tag ^ (year * 0x9e37)) >>> 0)();
+        let p = 0.4 * clamp(v.opinionOf(c), -1, 1) + 0.3 * v.civicImpression(c.sheet.seed) + 0.2 * (fitFn(c) / maxFit);
+        if (v === c) p += 0.3;                                                  // people back themselves
+        if (isInc) p += (0.12 + (appr - 0.5) * 0.4) - 0.08 * Math.max(0, terms - 1);   // record helps/hurts; fatigue with tenure
+        p += this.#civicRegret(v, c, office);                                   // successor proved worse -> warm back
+        p += (jitter - 0.5) * 0.2;
+        return p;
+    }
+
+    // Does this voter regret how their last vote for this office turned out? If they helped unseat this
+    // candidate and the town is worse off since, the ousted looks like a better option again.
+    #civicRegret(v, c, office) {
+        const log = v.civic.voteLog;
+        for (let i = log.length - 1; i >= 0; i--) {
+            const e = log[i]; if (e.office !== office) continue;
+            if (e.incSeed === c.sheet.seed && e.forSeed !== c.sheet.seed) {     // I voted to replace c
+                const nowAppr = office === 'manager' ? this.roles.approval : this.roles.watchApproval;
+                return nowAppr < e.incAppr - 0.12 ? 0.22 : -0.04;              // worse since -> regret; better -> stay the course
+            }
+            if (e.forSeed === c.sheet.seed) return 0.05;                        // I backed c before, and here they are again
+        }
+        return 0;
+    }
+
+    // Seat the election winner: re-elected (term++/fatigue) or a changing of the guard (close the old
+    // term into history, stamp the new tenure, hand off any other office they held). Journal the vote for
+    // each farmer so the choice becomes a remembered, SuperMemory-persisted beat.
+    #seatElected(office, winner, incumbentSeed, winVotes, nVoters, ballots, acclaimed) {
+        const r = this.roles, winSeed = winner.sheet.seed, roleWord = office === 'manager' ? 'Manager' : 'Watch';
+        const reelected = winSeed === incumbentSeed;
+        const outF = incumbentSeed != null ? this.farmers.find(f => f.sheet.seed === incumbentSeed) : null;
+        const mandate = nVoters > 0 ? winVotes / nVoters : 1;
+        if (reelected) {
+            if (office === 'manager') r.managerTerms++; else r.watchTerms++;
+            this.addChronicle('town', `${shortName(winner)} was returned as ${roleWord} for Year ${r.election.year}${acclaimed ? ' unopposed' : ''}.`, winner, null, '#e0c060');
+        } else {
+            if (incumbentSeed != null) this.#recordTerm(office, 'voted-out', `the town chose ${winner.sheet.name.split(' ')[0]} instead`);
+            this.#vacateOtherRoles(winSeed, office);   // a winner who held ANY other office steps aside (one role each)
+            const freshAppr = 0.45 + 0.2 * clamp((mandate - 0.34) / 0.5, 0, 1);   // strong mandate vs a reluctant win
+            if (office === 'manager') { r.manager = winSeed; r.approval = freshAppr; r.lowDays = 0; r.managerTerms = 1; r.managerSince = { year: r.election.year, day: this.day }; }
+            else { r.watch = winSeed; r.watchApproval = freshAppr; r.watchLowDays = 0; r.watchTerms = 1; r.watchSince = { year: r.election.year, day: this.day }; }
+            this.addChronicle('town', `${acclaimed ? `${shortName(winner)} stood unopposed and took` : `The town chose ${shortName(winner)} for`} the ${roleWord}'s chair — Year ${r.election.year}.`, winner, outF, '#e0c060');
+        }
+        // each farmer's vote becomes a remembered beat (flows to the SuperMemory life-writeback)
+        for (const { v, choice } of ballots) {
+            if (v === winner) continue;
+            if (choice === winSeed) v.remember('event', `Voted for ${winner.sheet.name.split(' ')[0]} as ${roleWord}, and the town agreed.`, winner, 0.7);
+            else if (!reelected && choice === incumbentSeed && outF) v.remember('event', `Stood by ${outF.sheet.name.split(' ')[0]} for ${roleWord}, but the town turned to ${winner.sheet.name.split(' ')[0]}.`, outF, 0.7);
+            else { const cf = this.farmers.find(f => f.sheet.seed === choice); v.remember('event', `Cast my vote for ${cf ? cf.sheet.name.split(' ')[0] : 'another'} as ${roleWord} this year.`, cf || null, 0.55); }
+        }
+        winner.remember('event', reelected ? `The town returned me as ${roleWord} for another year.` : `The town chose me to serve as ${roleWord}.`, null, 0.9);
+    }
+
 
     // #94 P2: a WITNESSED theft, with a Watch seated, is answered at a communal TRIAL. Each eligible
     // farmer casts a seeded vote (guilt weighted by their opinion of the accused, their own honesty,
@@ -5351,8 +5591,16 @@ export class Farmer {
     get civic() {
         let c = this.sheet.civic;
         if (!c) c = this.sheet.civic = { decided: null, acceptedDay: { day: -1, count: 0 } };
+        // #94 P3 civic memory (lazy-added so old saves upgrade in place): `impressions` = a -1..1 read of
+        // each farmer AS a leader (distinct from personal opinionOf), built from lived civic experience;
+        // `voteLog` = how I voted in past elections + the incumbent's standing then, so regret/vindication
+        // can sway a later ballot. Both plain — ride the sheet-wholesale save.
+        if (!c.impressions) c.impressions = {};
+        if (!c.voteLog) c.voteLog = [];
         return c;
     }
+    // this farmer's remembered impression of `seed` as a leader (0 if never served over them)
+    civicImpression(seed) { return this.civic.impressions[seed] || 0; }
     isManager() { return this.world.roles.manager === this.sheet.seed; }
     isHealer() { return this.world.roles.healer === this.sheet.seed; }
     get grass() { return (this.sheet.goods && this.sheet.goods.grass) || 0; }
@@ -5631,12 +5879,14 @@ export class Farmer {
         if (todayHeeds >= 2) return record('refuse', 'done their share today');
 
         // acceptance = temperament x regard for the Manager x task fit x the town's confidence in them.
-        // Tuned so a NEUTRAL town settles above the recall floor (no death spiral), a LIKED manager
-        // earns strong compliance, and a resented one withers toward recall.
+        // Tuned so a COOPERATIVE town keeps its Manager comfortably above the recall floor (a healthy, not
+        // perpetually-red, approval bar), a LIKED manager earns strong compliance, and only a genuinely
+        // RESENTED one withers toward recall. The town's-confidence factor has a high floor (0.8) so a dip
+        // in approval can't spiral heeding to zero — a manager can always recover the town.
         const opinionWeight = Math.max(0.3, Math.min(1.5, 1.0 + (m ? this.opinionOf(m) : 0)));   // neutral = 1.0
         const fit = dir.kind === 'donate' ? 0.7 + this.p.collaboration * 0.5 : 0.7 + this.p.diligence * 0.5;
-        const approvalFactor = 0.6 + this.world.roles.approval * 0.4;
-        const chance = Math.max(0, Math.min(0.9, 0.6 * (0.5 + this.effCollab()) * opinionWeight * fit * approvalFactor));
+        const approvalFactor = 0.8 + this.world.roles.approval * 0.2;
+        const chance = Math.max(0, Math.min(0.9, 0.72 * (0.5 + this.effCollab()) * opinionWeight * fit * approvalFactor));
         if (this.rand() < chance) return record('heed', null);
         return refuseWith(this.dream('grandhouse') || (this.sheet.dream && !this.sheet.dreamDone && this.p.competitiveness > 0.55) ? 'set on their own ambitions' : 'had their own plans',
             ['independence', 'pride', 'craft', 'wander']);
@@ -5680,7 +5930,7 @@ export class Farmer {
                 const rv = w.farmers.find(o => o.sheet.seed === d.rivalSeed);
                 if (rv && rv.plot && this.plot && rv.plot.built.level >= 3 && this.plot.built.level < 3) {
                     d.crisis = w.day;
-                    this.remember('lesson', `${d.rivalName} raised a cottage first - the gap is real`, d.rivalName, 1.0);
+                    this.remember('lesson', `${d.rivalName} raised a cottage first - the gap is real`, rv, 1.0);
                     this.think(`${(d.rivalName || 'THE RIVAL').toUpperCase()} IS AHEAD. NOT FOR LONG.`);
                 }
             } else if (d.id === 'deed' && this.downed) {
@@ -5730,7 +5980,7 @@ export class Farmer {
     remember(kind, text, other = null, weight = 0.8) {
         this.journal.push({
             day: this.world.day, kind, text,
-            who: other ? other.sheet.seed : null,
+            who: other && other.sheet ? other.sheet.seed : null,   // tolerate a stray non-farmer arg
             strength: Math.min(1.5, weight),
         });
         if (this.journal.length > JOURNAL_MAX) {

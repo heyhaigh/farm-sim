@@ -15,6 +15,49 @@ const RETRY_COOLDOWN_MS = 5 * 60 * 1000;
 let inflight = false;
 let lastFailAt = -Infinity;
 
+// #94 P3: the town's evolving civic record is persisted separately from the one-shot farmer lives, because
+// it KEEPS CHANGING (each election adds a term) long after every farmer has been written once. Re-posts
+// only when the record actually changes (a cheap signature), upserting a single town-history document.
+let historyInflight = false;
+let lastHistorySig = null;
+let lastHistoryFailAt = -Infinity;
+function historySignature(world) {
+    const r = world.roles || {};
+    return `${(r.history || []).length}:${r.manager}:${r.watch}:${r.managerTerms}:${world.year}`;
+}
+export async function persistTownHistory(world, isCurrent = () => true) {
+    if (typeof fetch !== 'function' || historyInflight) return false;
+    if (Date.now() - lastHistoryFailAt < RETRY_COOLDOWN_MS) return false;
+    const r = world.roles;
+    if (!r || (!r.history?.length && r.manager == null)) return false;   // nothing civic to remember yet
+    const sig = historySignature(world);
+    if (sig === lastHistorySig) return false;                            // unchanged since last successful write
+
+    historyInflight = true;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    const nameOf = seed => { const f = world.farmers.find(x => x.sheet.seed === seed); return f ? f.sheet.name : null; };
+    try {
+        const res = await fetch(ENDPOINT, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
+            body: JSON.stringify({ town: world.name || 'RY FARMS', townSeed: world.seed, townHistory: {
+                manager: nameOf(r.manager), managerTerms: r.managerTerms, watch: nameOf(r.watch), year: world.year,
+                history: (r.history || []).map(h => ({ office: h.office, name: h.name, fromYear: h.fromYear, toYear: h.toYear, endReason: h.endReason, why: h.why })),
+            } }),
+        });
+        if (!res.ok) throw new Error(`town-history ${res.status}`);
+        const data = await res.json();
+        if (!isCurrent()) return false;
+        if (!data || !data.townHistoryWritten) { lastHistoryFailAt = Date.now(); return false; }
+        lastHistorySig = sig;
+        return true;
+    } catch (err) {
+        lastHistoryFailAt = Date.now();
+        console.warn('ry-farms: town-history writeback unavailable', err?.message || err);
+        return false;
+    } finally { clearTimeout(timer); historyInflight = false; }
+}
+
 function lifeOf(f) {
     const s = f.sheet;
     const episodic = (s.journal || []).slice().sort((a, b) => b.strength - a.strength).slice(0, 12).map(m => m.text);

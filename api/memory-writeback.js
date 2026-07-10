@@ -32,6 +32,24 @@ function readBody(req) {
     });
 }
 
+// Compose the town's CIVIC RECORD (#94 P3) — who has led, for how long, and how each term ended — as a
+// single town-level document so the town's political memory persists in SuperMemory alongside the lives.
+function townHistoryDoc(th, town) {
+    const lines = [`${town || 'The valley'} — the civic record.`];
+    if (th.manager) lines.push(`Manager: ${th.manager}${th.managerTerms ? ` (serving, ${th.managerTerms} year${th.managerTerms > 1 ? 's' : ''})` : ''}.`);
+    if (th.watch) lines.push(`Town Watch: ${th.watch}.`);
+    const past = Array.isArray(th.history) ? th.history : [];
+    if (past.length) {
+        lines.push('Past office-holders the town remembers:');
+        for (const h of past.slice(-24)) {
+            const office = h.office === 'manager' ? 'Manager' : 'Watch';
+            const span = h.fromYear === h.toYear ? `Year ${h.fromYear}` : `Years ${h.fromYear}-${h.toYear}`;
+            lines.push(` - ${office} ${String(h.name || '?').split(' ')[0]}: ${span}, ${h.endReason}${h.why ? ` (${h.why})` : ''}.`);
+        }
+    }
+    return lines.join('\n');
+}
+
 // Compose a readable "remembered life" from the compiled objects the client sends.
 function lifeDoc(f, town) {
     const lines = [`${f.name || 'A settler'} — a ${f.archetype || 'farmer'} of ${town || 'the valley'}.`];
@@ -50,12 +68,37 @@ module.exports = async function handler(req, res) {
     let body;
     try { body = await readBody(req); } catch (e) { return send(res, 200, { ok: false, written: 0, error: e?.message || 'bad body' }); }
     const farmers = Array.isArray(body?.farmers) ? body.farmers.slice(0, MAX_FARMERS) : [];
-    if (!farmers.length) return send(res, 200, { ok: true, written: 0 });
+    const townHistory = body?.townHistory && typeof body.townHistory === 'object' ? body.townHistory : null;
+    if (!farmers.length && !townHistory) return send(res, 200, { ok: true, written: 0 });
 
     const base = (process.env.SUPERMEMORY_URL || DEFAULT_URL).replace(/\/+$/, '');
     const key = process.env.SUPERMEMORY_API_KEY || '';
     const headers = { 'Content-Type': 'application/json', Accept: 'application/json' };
     if (key) headers.Authorization = `Bearer ${key}`;
+
+    // the town's civic record — one upserting document per town (customId keeps it a single evolving doc)
+    let townHistoryWritten = false;
+    if (townHistory) {
+        const doc = {
+            content: townHistoryDoc(townHistory, body.town),
+            customId: `ry-farms:townhistory:${body.townSeed ?? 'x'}`,
+            containerTags: ['ry-farms'],
+            metadata: {
+                app: 'ry-farms', kind: 'town-history',
+                ...(body.townSeed != null ? { townSeed: String(body.townSeed) } : {}),
+                ...(body.town != null ? { town: String(body.town) } : {}),
+            },
+        };
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), DEADLINE_MS);
+        try {
+            const r = await fetch(`${base}/v3/documents`, { method: 'POST', headers, body: JSON.stringify(doc), signal: controller.signal });
+            if (r.ok) townHistoryWritten = true;
+            else console.error('[writeback] town-history non-ok', r.status, (await r.text()).slice(0, 200));
+        } catch (e) { console.error('[writeback] town-history threw:', e?.message, e?.cause?.message || ''); }
+        finally { clearTimeout(timer); }
+    }
+    if (!farmers.length) return send(res, 200, { ok: true, written: townHistoryWritten ? 1 : 0, townHistoryWritten, source: base });
 
     let written = 0;
     const persisted = [];
@@ -86,5 +129,5 @@ module.exports = async function handler(req, res) {
         finally { clearTimeout(timer); }
     }
     // report which seeds landed so the client stamps exactly those (a partial write is fine + resumable)
-    return send(res, 200, { ok: true, written, of: farmers.length, persisted, source: base });
+    return send(res, 200, { ok: true, written, of: farmers.length, persisted, townHistoryWritten, source: base });
 };

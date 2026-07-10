@@ -14,7 +14,7 @@ import {
 import { CRT } from './crt.js';
 import { saveTown, loadTown, wipeTown, undoWipe } from './save.js';
 import { enrichStories } from './dm.js';
-import { persistLives } from './memory-writeback.js';
+import { persistLives, persistTownHistory } from './memory-writeback.js';
 import { whisper } from './conscience.js';
 
 // ---------------------------------------------------------------------------
@@ -3640,9 +3640,48 @@ function drawCivicBand(PX, y, PW) {
 
 // ROLES tab (#94): the town's civic offices — Manager + directive, Watch + trust, Healer + trust.
 // Reuses the civic band; a clear empty-state before a town has grown enough to seat a chair.
+const END_REASON_LABEL = {
+    'voted-out': 'voted out', recalled: 'recalled', 'stepped-aside': 'stepped aside',
+    elected: 'elected', reelected: 're-elected',
+};
 function drawChronicleRoles(PX, top, PW, bot) {
+    const IX = PX + 8;
     const h = drawCivicBand(PX, top + 2, PW);
-    if (!h) drawText(ctx, 'No offices seated yet — the town is still finding its feet.', PX + 8, top + 4, '#6a6f7c');
+    if (!h) { drawText(ctx, 'No offices seated yet — the town is still finding its feet.', IX, top + 4, '#6a6f7c'); return; }
+    let y = top + 2 + h + 2;
+    const roles = world.roles;
+
+    // #94 P3: this winter's vote, while it's live (nominations -> campaign -> tally)
+    const el = roles.election;
+    if (el && el.year === world.year + 1) {
+        drawText(ctx, `THIS WINTER'S VOTE - YEAR ${el.year}`, IX, y, '#c8a860'); y += 9;
+        const nameOf = s => { const f = world.farmers.find(x => x.sheet.seed === s); return f ? f.sheet.name.split(' ')[0] : '?'; };
+        const cands = (el.mgrCands || []).map(nameOf).join(', ');
+        const status = el.phase === 'tallied'
+            ? `The town chose ${el.result ? nameOf(el.result.manager) : '?'} to lead.`
+            : `Standing for Manager: ${cands}. The town is deciding.`;
+        for (const ln of wrapText(status, Math.floor((PW - 24) / 4.2))) { drawText(ctx, ln, IX + 4, y, '#9aa0b4'); y += 7; }
+        y += 3;
+    }
+
+    // #94 P3: the town's remembered roll of past office-holders — who served, how long, how it ended
+    const hist = roles.history;
+    if (hist && hist.length) {
+        drawText(ctx, 'PAST OFFICES', IX, y, CHRON_ACCENT); y += 9;
+        for (let i = hist.length - 1; i >= 0 && y < bot - 8; i--) {
+            const rec = hist[i];
+            const first = String(rec.name || '?').split(' ')[0].toUpperCase();
+            drawText(ctx, rec.office === 'manager' ? 'MANAGER' : 'WATCH', IX + 4, y, '#9a7fc0');
+            drawText(ctx, first, IX + 4 + textWidth('MANAGER '), y, '#e8c860');
+            const span = rec.fromYear === rec.toYear ? `Y${rec.fromYear}` : `Y${rec.fromYear}-${rec.toYear}`;
+            const tail = `${span} - ${END_REASON_LABEL[rec.endReason] || rec.endReason}`;
+            drawText(ctx, tail, PX + PW - 8 - textWidth(tail), y, '#8a8f9c'); y += 7;
+            if (rec.why) { for (const ln of wrapText(rec.why, Math.floor((PW - 40) / 4.2))) { drawText(ctx, ln, IX + 10, y, '#6a6f7c'); y += 7; } }
+            y += 2;
+        }
+    } else {
+        drawText(ctx, 'The town has held no elections yet — the first comes at winter\'s end.', IX, y, '#6a6f7c');
+    }
 }
 
 // The elements a recipe is made from, e.g. "2 GRASS + 1 FLOWER" — so a recipe reads as a formula,
@@ -4533,6 +4572,8 @@ function drawBootScreen(t) {
     const tryPersist = async () => {
         const w = world;
         if (await persistLives(w, () => world === w)) saveTown(w);
+        // #94 P3: also persist the town's evolving civic record (re-posts only when it changes)
+        persistTownHistory(w, () => world === w);
     };
     setTimeout(tryPersist, 20000);
     setInterval(tryPersist, 6 * 60 * 1000);
