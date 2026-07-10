@@ -2590,7 +2590,7 @@ function drawUI() {
 // Settings menu — New Town + music/SFX volume. Opened by the top-bar gear cog.
 // ---------------------------------------------------------------------------
 function drawSettings() {
-    const PW = Math.min(GW - 24, 240), PH = 118;
+    const PW = Math.min(GW - 24, 240), PH = 148;
     const PX = Math.floor((GW - PW) / 2), PY = Math.floor((GH - PH) / 2) - 6;
     ctx.fillStyle = 'rgba(6,7,11,0.72)'; ctx.fillRect(0, 18, GW, GH - 40);
     uiPanel(PX, PY, PW, PH);
@@ -2623,17 +2623,27 @@ function drawSettings() {
 
     ctx.fillStyle = '#20242f'; ctx.fillRect(PX + 4, PY + 56, PW - 8, 1);
 
+    // MEMORY PORTAL — opens the town's SuperMemory graph in a new tab
+    const mb = { x: IX, y: PY + 64, w: PW - 16, h: 14 };
+    ctx.fillStyle = '#1a1424'; ctx.fillRect(mb.x, mb.y, mb.w, mb.h);
+    ctx.strokeStyle = '#c8a0e0'; ctx.strokeRect(mb.x + 0.5, mb.y + 0.5, mb.w - 1, mb.h - 1);
+    const mlabel = 'VIEW THE TOWN\'S MEMORY';
+    drawText(ctx, mlabel, mb.x + Math.floor((mb.w - textWidth(mlabel)) / 2), mb.y + 4, '#d8b8ee');
+    settingsHits.portalBtn = mb;
+    drawText(ctx, 'EVERY FARMER\'S MEMORIES, LIVE FROM SUPERMEMORY.', IX, PY + 82, '#5a5f6c');
+
+    ctx.fillStyle = '#20242f'; ctx.fillRect(PX + 4, PY + 92, PW - 8, 1);
+
     // NEW TOWN — the two-step reset hatch, moved here out of the top bar
     const confirming = performance.now() < newConfirmUntil;
-    const nb = { x: IX, y: PY + 64, w: PW - 16, h: 14 };
+    const nb = { x: IX, y: PY + 100, w: PW - 16, h: 14 };
     ctx.fillStyle = confirming ? '#3a1010' : '#2a0e0e'; ctx.fillRect(nb.x, nb.y, nb.w, nb.h);
     ctx.strokeStyle = '#e05040'; ctx.strokeRect(nb.x + 0.5, nb.y + 0.5, nb.w - 1, nb.h - 1);
     const nlabel = confirming ? 'SURE? - THIS TOWN IS SET ASIDE' : 'START A NEW TOWN';
     drawText(ctx, nlabel, nb.x + Math.floor((nb.w - textWidth(nlabel)) / 2), nb.y + 4, confirming ? '#ff9080' : '#e07868');
     settingsHits.newBtn = nb;
-    drawText(ctx, 'A NEW TOWN GROWS A NEW CAST - THIS ONE IS SAVED, NOT LOST.', IX, PY + 84, '#5a5f6c');
-    drawText(ctx, 'SOUND ON/OFF STAYS ON THE TOP BAR AS A QUICK MUTE.', IX, PY + 92, '#4a4f5c');
-    drawText(ctx, 'ESC OR CLICK OUTSIDE TO CLOSE', IX, PY + 104, '#4a4f5c');
+    drawText(ctx, 'A NEW TOWN GROWS A NEW CAST - THIS ONE IS SAVED, NOT LOST.', IX, PY + 120, '#5a5f6c');
+    drawText(ctx, 'ESC OR CLICK OUTSIDE TO CLOSE', IX, PY + 134, '#4a4f5c');
     settingsHits.panel = { x: PX, y: PY, w: PW, h: PH };
 }
 
@@ -3994,6 +4004,7 @@ out.addEventListener('pointerup', (e) => {
         if (inRect(p, settingsHits.sfx)) { audio.ensure(); audio.toggleSfx(); return; }
         if (inRect(p, settingsHits.musicSlider)) { audio.setMusicVolume((p.x - settingsHits.musicSlider.x) / settingsHits.musicSlider.w); return; }
         if (inRect(p, settingsHits.sfxSlider)) { audio.setSfxVolume((p.x - settingsHits.sfxSlider.x) / settingsHits.sfxSlider.w); return; }
+        if (inRect(p, settingsHits.portalBtn)) { window.open('/memory-graph.html', '_blank', 'noopener'); return; }
         if (inRect(p, settingsHits.newBtn)) {
             // NEW TOWN: first click arms ("SURE?"), a second within 3s wipes the save + reloads fresh
             if (performance.now() < newConfirmUntil) { newConfirmUntil = 0; wipeTown(world.seed).finally(() => { location.href = location.pathname + '?fresh=1'; }); }
