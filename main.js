@@ -2,7 +2,7 @@
 
 import { fetchMemories, generateCrew, mod, fmtMod, STAT_NAMES, TRAIT_NAMES, TRAIT_LABELS, hashString } from './dna.js';
 import { audio } from './audio.js';
-import { World, CHUNK, T, DAY_LENGTH, NIGHT_LENGTH, ITEMS, CRAFTABLES, RECIPE_BY_ID, INVENTION_TABLE, xpForLevel, obstacleTier, treeVariant, treeIsFruit, SEASONS } from './farm.js';
+import { World, CHUNK, T, DAY_LENGTH, NIGHT_LENGTH, ITEMS, CRAFTABLES, RECIPE_BY_ID, INVENTION_TABLE, RARE_NAME, xpForLevel, obstacleTier, treeVariant, treeIsFruit, SEASONS } from './farm.js';
 import {
     TILE_W, TILE_H, makeCanvas, drawText, textWidth,
     makeFarmerSprites, makeCropSprites, makeHouse, makeWell, makeBoard, makeFencePost,
@@ -3685,32 +3685,28 @@ function drawChronicleRoles(PX, top, PW, bot) {
     }
 }
 
-// The elements a recipe is made from, e.g. "2 GRASS + 1 FLOWER" — so a recipe reads as a formula,
-// not just a name. Reads the stable inputs off RECIPE_BY_ID (base + invented share the same shape).
+// The elements a recipe is made from, e.g. "2 GRASS + 1 FLOWER" — reads as a formula, not just a name.
+// Routes through the registry so GENERATIVE recipes (their canonical example inputs) show too, not just base.
 function recipeInputs(id) {
-    const r = RECIPE_BY_ID[id];
+    const r = world.recipeById ? world.recipeById(id) : RECIPE_BY_ID[id];
     if (!r || !r.inputs) return '';
     return Object.entries(r.inputs).map(([g, q]) => `${q} ${g}`).join(' + ').toUpperCase();
 }
 
-// RECIPES tab (#97): what the town has invented, WHAT it's made from, and who knows how to make each.
-// Base remedies are universal; invented recipes are listed with their ingredients + knowers so both
-// the formula and the spread of know-how are legible.
+// RECIPES tab (#97 P6): the town's inventions — each generative discovery shown with its LLM-given name +
+// lore, its ingredients, who first worked it out, and who knows it; plus the TALES the town tells of the
+// rare ingredients (grown from its memories) and whether they've been proven real.
 function drawChronicleRecipes(PX, top, PW, bot) {
     const IX = PX + 8; let y = top + 2;
-    // town-known invented recipes -> the farmers who know them (stable order by first-seen id)
     const known = new Map(), heard = new Map();
     for (const f of world.farmers) {
-        for (const id of (f.sheet.recipes || [])) {
-            if (!known.has(id)) known.set(id, []);
-            known.get(id).push(f.sheet.name.split(' ')[0]);
-        }
+        for (const id of (f.sheet.recipes || [])) { if (!known.has(id)) known.set(id, []); known.get(id).push(f.sheet.name.split(' ')[0]); }
         for (const id of (f.sheet.heardOf || [])) heard.set(id, (heard.get(id) || 0) + 1);
     }
-    const totalInvent = ['remedy', 'tool', 'utility'].reduce((n, k) => n + INVENTION_TABLE[k].filter(e => !e.locked).length, 0);
-    const INGR = '#8ad0a0';   // ingredient list colour
+    const INGR = '#8ad0a0';
+    const maxChars = Math.max(24, Math.floor((PW - 24) / 4.2));
 
-    // base recipes everyone knows — now shown WITH their ingredients, one per line
+    // base remedies everyone knows
     drawText(ctx, 'EVERYONE KNOWS', IX, y, '#8a8f9c'); y += 8;
     for (const id of ['soup', 'salve', 'tonic']) {
         drawText(ctx, RECIPE_BY_ID[id].name.toUpperCase(), IX + 4, y, '#7dd069');
@@ -3718,21 +3714,42 @@ function drawChronicleRecipes(PX, top, PW, bot) {
     }
     y += 3;
 
-    drawText(ctx, 'DISCOVERED', IX, y, CHRON_ACCENT);
-    const tally = `${known.size} / ${totalInvent}`;
-    drawText(ctx, tally, PX + PW - 8 - textWidth(tally), y, '#9aa0b4'); y += 10;
+    // discovered recipes — rarest/most-potent first, so the charms and elixirs lead
+    drawText(ctx, 'INVENTED', IX, y, CHRON_ACCENT);
+    drawText(ctx, `${known.size}`, PX + PW - 8 - textWidth(`${known.size}`), y, '#9aa0b4'); y += 10;
+    if (!known.size) { drawText(ctx, 'The town has invented nothing yet — give it time.', IX, y, '#6a6f7c'); }
+    else {
+        const entries = [...known.entries()].sort((a, b) => ((world.recipeById(b[0])?.tier || 0) - (world.recipeById(a[0])?.tier || 0)));
+        for (let ei = 0; ei < entries.length; ei++) {
+            const [id, names] = entries[ei];
+            if (y > bot - 22) { drawText(ctx, `...and ${entries.length - ei} more`, IX, y, '#6a6f7c'); break; }
+            const nm = world.recipeName ? world.recipeName(id) : ((RECIPE_BY_ID[id] || {}).name || id);
+            drawText(ctx, nm.toUpperCase(), IX, y, '#ffd24a');
+            drawText(ctx, recipeInputs(id), IX + 108, y, INGR); y += 7;
+            const lore = world.recipeLore ? world.recipeLore(id) : null;   // LLM flavour, if named
+            if (lore) for (const ln of wrapText(lore, maxChars)) { drawText(ctx, ln.toUpperCase(), IX + 4, y, '#9a86c0'); y += 7; }
+            const rec = world.recipes && world.recipes[id];
+            const inv = rec && rec.discovererSeed != null ? (world.farmers.find(f => f.sheet.seed === rec.discovererSeed)?.sheet.name.split(' ')[0]) : null;
+            const h = heard.get(id) || 0;
+            const meta = (inv ? `invented by ${inv} - ` : '') + 'known by ' + names.join(', ') + (h ? `  (${h} have heard)` : '');
+            for (const ln of wrapText(meta, maxChars)) { drawText(ctx, ln.toUpperCase(), IX + 4, y, '#8a8f9c'); y += 7; }
+            y += 3;
+        }
+    }
 
-    if (!known.size) { drawText(ctx, 'The town has invented nothing yet — give it time.', IX, y, '#6a6f7c'); return; }
-    const maxChars = Math.max(24, Math.floor((PW - 24) / 4.2));
-    for (const [id, names] of known) {
-        if (y > bot - 20) break;   // no scroll on this tab yet — cap to the panel
-        const r = RECIPE_BY_ID[id];
-        drawText(ctx, (r ? r.name : id).toUpperCase(), IX, y, '#ffd24a');
-        drawText(ctx, recipeInputs(id), IX + 100, y, INGR); y += 7;   // the formula, right of the name
-        const h = heard.get(id) || 0;   // #97 Slice 3 — how many have HEARD of it but can't make it yet
-        const suffix = h ? `   (${h} have heard of it)` : '';
-        for (const ln of wrapText('known by ' + names.join(', ') + suffix, maxChars)) { drawText(ctx, ln.toUpperCase(), IX + 4, y, '#8a8f9c'); y += 7; }
-        y += 3;
+    // TALES of the rare ingredients — the town's myths, grown from its memories, and whether proven real
+    if ((world.tales || []).length && y < bot - 16) {
+        y += 2; drawText(ctx, 'TALES OF THE WILDS', IX, y, '#c8a860'); y += 9;
+        for (const t of world.tales) {
+            if (y > bot - 8) break;
+            const proven = world.farmers.some(f => f.sheet.rareBelief && f.sheet.rareBelief[t.ingredient] && f.sheet.rareBelief[t.ingredient].state === 'validated');
+            const nm = (RARE_NAME && RARE_NAME[t.ingredient]) || t.ingredient;
+            drawText(ctx, `${nm}`.toUpperCase(), IX + 4, y, proven ? '#7dd069' : '#9a86c0');
+            drawText(ctx, proven ? 'PROVEN REAL' : 'STILL A TALE', PX + PW - 8 - textWidth('STILL A TALE'), y, proven ? '#7dd069' : '#6a6f7c'); y += 7;
+            const from = t.originTitle ? `a tale from "${String(t.originTitle).slice(0, 34)}"` : 'a traveller\'s tale';
+            for (const ln of wrapText(from, maxChars)) { drawText(ctx, ln.toUpperCase(), IX + 8, y, '#6a6f7c'); y += 7; }
+            y += 2;
+        }
     }
 }
 
