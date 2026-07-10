@@ -182,6 +182,14 @@ export function deriveInvention(counts) {
     return { id, name, effect, tier, quality, dominant, second, magnitude: mag,
              dominantShare: Math.round(share * 100) / 100, rare, exampleInputs: { ...counts }, essence: e };
 }
+// the EXACT input multiset as a stable signature (sorted good×qty) — failure memory keys on this, NOT the
+// output key, so a farmer only "knows" the precise basket they tried (non-omniscient) and it can't straddle a
+// derivation threshold. Deterministic (explicit sort).
+function comboSig(combo) { return Object.keys(combo).filter(g => combo[g] > 0).sort().map(g => `${g}${combo[g]}`).join('.'); }
+function comboDesc(combo) {
+    const parts = Object.keys(combo).filter(g => combo[g] > 0).sort().map(g => `${combo[g]} ${g}${combo[g] > 1 ? 's' : ''}`);
+    return parts.length > 1 ? parts.slice(0, -1).join(', ') + ' and ' + parts[parts.length - 1] : (parts[0] || 'a few odds and ends');
+}
 
 // wood economy
 const TREE_WOOD = [1, 3, 5];   // wood from felling a tree, by growth stage: sapling 1 / young 3 / mature 5
@@ -604,6 +612,7 @@ export class World {
                        managerRecalls: 0, watchRecalls: 0, election: null, history: [] };
         this.sabotage = [];    // #97 Slice 4: planted-but-not-yet-sprung harm ({perp,victim,kind,effectDay})
         this.suspicion = {};   // #97 Slice 4: the Watch's slow-building trail on unsolved crimes (seed -> score)
+        this.recipes = {};     // #97 P3: the town's generatively-discovered recipes (canonical key -> record)
         this.board = null;    // no bulletin board until the town builds one together (first communal project)
         this.merchant = null;                             // the wandering trader, present only during a visit
         this.merchantNextDay = 4 + Math.floor(this.rand() * 3);   // first caravan rolls in around day 4-6
@@ -908,6 +917,7 @@ export class World {
         this.rareNodes.splice(idx, 1);
         const s = farmer.sheet; s.goods = s.goods || {};
         s.goods[node.kind] = (s.goods[node.kind] || 0) + 1;
+        s.dryStreak = 0;   // #97 P3 — a rare ingredient reopens the discovery space (new combinations to try)
         farmer.sparkle = 3; farmer.gainXP(8);
         farmer.remember('event', `Held a ${RARE_NAME[node.kind]} at last, out past the fog — the old tales were true`, null, 1.5);
         this.addChronicle('find', `${shortName(farmer)} found a ${RARE_NAME[node.kind]} in the deep wilds.`, farmer, null, RARE_COLOR[node.kind]);
@@ -2142,6 +2152,7 @@ export class World {
             },
             sabotage: this.sabotage.map(s => ({ ...s })),   // #97 Slice 4: pending harm + the Watch's trail
             suspicion: { ...this.suspicion },
+            recipes: Object.fromEntries(Object.entries(this.recipes).map(([k, v]) => [k, { ...v }])),   // #97 P3 registry
 
             tiles: this.tiles.slice(),
             chunks: new Map([...this.chunks].map(([k, a]) => [k, a.slice()])),
@@ -2248,6 +2259,7 @@ export class World {
         } : { manager: null, approval: 0.6, lowDays: 0, watch: null, watchApproval: 0.6, watchLowDays: 0, healer: null, healerApproval: 0.6, healerLowDays: 0, directive: null, directiveSeq: 0, cooldown: 0, caseSeq: 0, managerTerms: 0, watchTerms: 0, managerSince: null, watchSince: null, managerRecalls: 0, watchRecalls: 0, election: null, history: [] };
         this.sabotage = Array.isArray(d.sabotage) ? d.sabotage.map(s => ({ ...s })) : [];   // #97 Slice 4
         this.suspicion = d.suspicion ? { ...d.suspicion } : {};
+        this.recipes = d.recipes ? Object.fromEntries(Object.entries(d.recipes).map(([k, v]) => [k, { ...v }])) : {};
 
         this.tiles.set(d.tiles);
         this.chunks = new Map(); for (const [k, a] of d.chunks) this.chunks.set(k, Uint8Array.from(a));
@@ -2807,13 +2819,25 @@ export class World {
 
     // ---- CRAFTING (#97 Slice 1): recipes consume real inventory — nothing from thin air ---------
     #haveGood(f, g) { return g === 'crops' ? (f.sheet.produce || 0) : g === 'wood' ? f.wood : g === 'ore' ? f.ore : ((f.sheet.goods && f.sheet.goods[g]) || 0); }
+    // #97 P3 — recipe lookup spans the static base/invention tables AND the town's GENERATIVELY discovered
+    // recipes (world.recipes), so a crafted generative item consumes its canonical inputs like any other.
+    recipeById(recipeId) { return RECIPE_BY_ID[recipeId] || this.recipes[recipeId] || null; }
+    recipeKnownByTown(recipeId) { return !!this.recipes[recipeId] || this.farmers.some(f => (f.sheet.recipes || []).includes(recipeId)); }
+    // Crystallise a novel discovery into the town's registry (canonical key -> record). Idempotent.
+    registerInvention(inv, discoverer) {
+        if (this.recipes[inv.id]) return this.recipes[inv.id];
+        this.recipes[inv.id] = { id: inv.id, name: inv.name, effect: inv.effect, tier: inv.tier, quality: inv.quality,
+            dominant: inv.dominant, second: inv.second || null, inputs: { ...inv.exampleInputs },
+            discovererSeed: discoverer ? discoverer.sheet.seed : null, day: this.day };
+        return this.recipes[inv.id];
+    }
     canCraft(f, recipeId) {
-        const r = RECIPE_BY_ID[recipeId]; if (!r || r.locked) return false;
-        for (const g in r.inputs) if (this.#haveGood(f, g) < r.inputs[g]) return false;
+        const r = this.recipeById(recipeId); if (!r || r.locked) return false;
+        for (const g in r.inputs) if (this.#haveGood(f, g) < r.inputs[g]) return false;   // production consumes the (rare-gated) inputs
         return true;
     }
     #consumeRecipe(f, recipeId) {
-        const r = RECIPE_BY_ID[recipeId]; if (!r || !this.canCraft(f, recipeId)) return false;
+        const r = this.recipeById(recipeId); if (!r || !this.canCraft(f, recipeId)) return false;
         for (const g in r.inputs) {
             const q = r.inputs[g];
             if (g === 'crops') { f.sheet.produce -= q; spendCropStock(f.sheet, q); }
@@ -2878,7 +2902,7 @@ export class World {
     // Returns the recipe on success (for the caller's beat) or null. All effects are one-shot + local
     // so nothing here touches world.rand — the digest self-compares clean.
     applyInvention(f, recipeId) {
-        const r = RECIPE_BY_ID[recipeId];
+        const r = this.recipeById(recipeId);
         if (!r || r.locked || !this.#consumeRecipe(f, recipeId)) return null;
         const s = f.sheet; s.boosts = s.boosts || {};
         switch (r.effect) {
@@ -2888,6 +2912,7 @@ export class World {
             case 'refresh':  f.energy = Math.min(1, f.energy + 0.3); break;
             case 'growboost': s.boosts.grow = this.day + 2; break;
             case 'workboost': s.boosts.work = this.day + 2; break;
+            case 'charm':    s.boosts.charm = this.day + (1 + (r.tier || 1)); f.sparkle = 2; break;   // #97 P3: a small, time-boxed lucky charm (bounded; never touches discovery rng)
             case 'none':     f.sparkle = Math.max(f.sparkle || 0, 1); break;   // a harmless curiosity
         }
         s.items = s.items || {}; s.items[recipeId] = (s.items[recipeId] || 0) + 1;   // ledger of what they've made
@@ -5936,11 +5961,11 @@ export class Farmer {
         };
     }
 
-    // Try an experiment. Invention is TRIAL AND ERROR: a single tinker usually FAILS — it costs a
-    // little material and teaches a little (inventSkill creeps up), and only a breakthrough roll yields
-    // a real recipe. So a discovery is earned over many attempts, not handed over on the first try.
-    // The outcome is IDENTITY-seeded — mulberry32(world ^ farmer ^ day ^ inventCount) — never a hash of
-    // inventory, so it can't depend on JS map order / float drift / a mid-tick barter.
+    // #97 P3 — GENERATIVE invention: the farmer combines what they HOLD (a folk heuristic over their
+    // observable larder, never the hidden essence table) and the derivation says what it makes. A novel,
+    // useful, not-yet-known result crystallises into a recipe credited to them; anything incoherent or already
+    // known is a failed experiment, remembered by its EXACT input basket so they don't repeat it. Seeded by
+    // identity (world ^ farmer ^ day ^ inventCount) so the ATTEMPT can't depend on map order / float drift.
     #experiment() {
         const s = this.sheet, w = this.world, day = w.day;
         const roll = mulberry32(((w.seed ^ s.seed ^ Math.imul(day, 0x9e3779b1) ^ ((s.inventCount || 0) >>> 0)) >>> 0));
@@ -5948,35 +5973,61 @@ export class Farmer {
         this.inventCd = day + 2 + Math.floor(roll() * 3);   // a couple of days between tinkers (seeded)
         this.state = 'decide';
 
-        // every attempt costs something — nothing from thin air, even a failure burns a bit of stock
-        const scrap = this.grass >= 2 ? ['grass', 2] : (s.goods?.flower >= 1 ? ['flower', 1] : (s.produce >= 1 ? ['crops', 1] : null));
-        if (scrap) { if (scrap[0] === 'crops') { s.produce -= scrap[1]; spendCropStock(s, scrap[1]); } else { s.goods[scrap[0]] = Math.max(0, (s.goods[scrap[0]] || 0) - scrap[1]); } }
-
-        // skill built from past failures + wits raises the odds; a breakthrough is still the exception
-        const skill = s.inventSkill || 0;
-        const chance = Math.min(0.6, 0.06 + Math.max(0, mod(s.stats.int)) * 0.035 + this.p.curiosity * 0.12 + this.p.diligence * 0.06 + skill * 0.45);
-        if (roll() >= chance) {   // FAILED — learned a little, wasted a little; try again another day
-            s.inventSkill = Math.min(0.9, skill + 0.07);
-            this.gainXP(1);
-            this.think(roll() < 0.5 ? 'HMM — THAT DIDN\'T WORK. NOT YET.' : 'BACK TO THE DRAWING BOARD...');
+        const larder = this.#larder();
+        if (larder.length < 2) { this.think('NOTHING TO TINKER WITH YET.'); return; }
+        const combo = this.#folkCombo(larder, roll);        // folk pick: most-held + any rare, small amounts
+        const sig = comboSig(combo);
+        if ((s.triedCombos || []).includes(sig)) { this.gainXP(1); this.think("I'VE TRIED THAT MIX BEFORE..."); return; }
+        const inv = deriveInvention(combo);
+        this.#consumeCombo(combo);                           // production cost — every experiment spends real stock
+        if (!inv || w.recipeKnownByTown(inv.id) || this.knowsRecipe(inv.id)) {   // incoherent OR already known -> failed
+            this.#rememberTried(sig); s.dryStreak = (s.dryStreak || 0) + 1; this.gainXP(1);
+            this.think(inv ? 'THE SAME AS SOMETHING WE ALREADY KNOW.' : 'THAT DIDN\'T COHERE. HMM.');
             return;
         }
-        // a breakthrough — the accumulated insight is spent on it
-        s.inventSkill = skill * 0.4;
-        // pick the outcome class, then a concrete entry from that class's table (harm entries excluded)
-        const bias = this.#inventBias();
-        const kinds = Object.keys(bias); let total = 0; for (const k of kinds) total += bias[k];
-        let pickK = kinds[0], acc = roll() * total; for (const k of kinds) { acc -= bias[k]; if (acc <= 0) { pickK = k; break; } }
-        const table = INVENTION_TABLE[pickK].filter(e => !e.locked);
-        const entry = table[Math.floor(roll() * table.length)];
-        if (this.knowsRecipe(entry.id)) {   // duplicate → a NEAR-MISS: refined it, learned nothing new (council #4)
-            this.think('ALMOST SOMETHING NEW... JUST A REFINEMENT'); this.gainXP(2);
-            return;
+        // DISCOVERY — a novel, useful item crystallises. Register it, credit + spread, reopen the search.
+        w.registerInvention(inv, this);
+        this.learnRecipe(inv.id); s.dryStreak = 0;
+        this.gainXP(6); this.sparkle = 2; this.say('AHA!', '#ffd24a');
+        this.remember('event', `Worked out the ${inv.name} — ${comboDesc(combo)}`, null, 1.1);
+        this.think(`I MADE SOMETHING NEW — THE ${inv.name.toUpperCase()}!`);
+        w.addChronicle('discovery', `${shortName(this)} invented the ${inv.name} (${comboDesc(combo)}).`, this, null, '#ffd24a');
+        w.addLog(`${s.name} invented the ${inv.name} after much trial and error`, '#ffd24a');
+    }
+    // the OBSERVABLE larder — crafting ingredients the farmer holds, sorted stably (most-held first, then name)
+    // so iteration is order-independent. Folk knowledge only; never reads essences.
+    #larder() {
+        const s = this.sheet, out = [];
+        for (const g in INGREDIENT_ESSENCE) {
+            const have = g === 'crops' ? (s.produce || 0) : ((s.goods && s.goods[g]) || 0);
+            if (have >= 1) out.push({ good: g, have });
         }
-        s.recipes = s.recipes || []; s.recipes.push(entry.id);
-        this.gainXP(6); this.sparkle = 2; this.say('AHA!', '#ffd24a'); this.think(`I WORKED OUT ${entry.name.toUpperCase()}`);
-        w.addChronicle('discovery', `${shortName(this)} hit on a way to make ${entry.name.toLowerCase()}.`, this, null, '#ffd24a');
-        w.addLog(`${s.name} discovered how to make ${entry.name.toLowerCase()} after much trial and error`, '#ffd24a');
+        out.sort((a, b) => b.have - a.have || (a.good < b.good ? -1 : 1));
+        return out;
+    }
+    // pick 2-3 ingredients, favouring what they hold most and any rare find they're itching to try — small
+    // amounts (rares used sparingly). A seeded weighted draw; no reference to what the mix will MAKE.
+    #folkCombo(larder, roll) {
+        const RARE = new Set(['crystal', 'relic', 'emberbloom']);
+        const pool = larder.map(x => ({ good: x.good, have: x.have, w: Math.min(4, x.have) + (RARE.has(x.good) ? 3 : 0) + 0.5 }));
+        const draw = () => { let total = 0; for (const x of pool) total += x.w; let acc = roll() * total;
+            for (let k = 0; k < pool.length; k++) { acc -= pool[k].w; if (acc <= 0) return pool.splice(k, 1)[0]; }
+            return pool.length ? pool.pop() : null; };
+        const n = pool.length >= 3 && roll() < 0.5 ? 3 : 2;
+        const combo = {};
+        for (let k = 0; k < n && pool.length; k++) { const x = draw(); if (!x) break;
+            combo[x.good] = RARE.has(x.good) ? 1 : 1 + Math.floor(roll() * Math.min(2, x.have)); }
+        return combo;
+    }
+    #consumeCombo(combo) {
+        const s = this.sheet;
+        for (const g in combo) { const q = combo[g];
+            if (g === 'crops') { s.produce = Math.max(0, (s.produce || 0) - q); spendCropStock(s, q); }
+            else { s.goods = s.goods || {}; s.goods[g] = Math.max(0, (s.goods[g] || 0) - q); } }
+    }
+    #rememberTried(sig) {   // input-keyed failure memory, bounded FIFO
+        const s = this.sheet; s.triedCombos = s.triedCombos || [];
+        if (!s.triedCombos.includes(sig)) { s.triedCombos.push(sig); if (s.triedCombos.length > 40) s.triedCombos.shift(); }
     }
 
     // The soonest useful invented recipe to craft right now: a remedy when it would help THIS farmer,
@@ -5984,13 +6035,14 @@ export class Farmer {
     #usefulInvention() {
         const w = this.world;
         for (const id of this.knownRecipes()) {
-            const r = RECIPE_BY_ID[id]; if (!r || r.locked || r.id.indexOf('inv:') !== 0 || !w.canCraft(this, id)) continue;
+            const r = w.recipeById(id); if (!r || r.locked || !r.effect || !w.canCraft(this, id)) continue;   // inv: + gen: (base remedies have no effect — Healer path handles those)
             if (r.effect === 'cure' && this.health !== 'sick') continue;
             if (r.effect === 'mendhp' && this.hp >= this.maxHp * 0.7) continue;
             if (r.effect === 'deeprest' && this.energy > 0.4) continue;
             if (r.effect === 'refresh' && this.energy > 0.7) continue;
             if (r.effect === 'growboost' && this.hasBoost('grow')) continue;
             if (r.effect === 'workboost' && this.hasBoost('work')) continue;
+            if (r.effect === 'charm' && this.hasBoost('charm')) continue;
             return id;
         }
         return null;
@@ -7678,8 +7730,8 @@ export class Farmer {
         //     discover a new recipe (identity-seeded, never inventory-hashed). Urgent work already
         //     preempted this; a multi-day cooldown keeps invention a genuine, occasional beat.
         if (!w.isNight() && this.energy > 0.4 && (this.inventCd || 0) <= w.day &&
-            this.invented().filter(id => !(RECIPE_BY_ID[id] && RECIPE_BY_ID[id].locked)).length < HELPFUL_INVENTIONS &&   // W3: nothing left to discover -> don't burn stock tinkering
-            (this.grass >= 8 || (this.grass >= 4 && (s.goods?.flower || 0) >= 3) || (s.produce || 0) >= 4) &&
+            (s.dryStreak || 0) < 8 &&                         // #97 P3 saturation: stop burning stock once mined out
+            this.#larder().length >= 2 &&                     // ...needs at least a couple of ingredients to combine
             this.rand() < 0.12 + this.p.curiosity * 0.4 + this.p.diligence * 0.2) {
             this.think('WHAT IF I TRIED SOMETHING NEW...'); this.#experiment(); return;
         }
