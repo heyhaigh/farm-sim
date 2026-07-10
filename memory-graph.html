@@ -5,207 +5,227 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Ry Farms · the town's memory</title>
 <style>
-  :root { --bg:#0c0d12; --panel:#14161f; --line:#232634; --dim:#7a8090; --creed:#c8a0e0; --belief:#8fc7e8; --mem:#7dd069; --gold:#e8c860; }
-  * { box-sizing:border-box; }
-  html,body { margin:0; height:100%; background:var(--bg); color:#e6e8ef; font-family:'JetBrains Mono',ui-monospace,Menlo,monospace; overflow:hidden; }
-  #head { position:fixed; top:0; left:0; right:0; padding:14px 18px; z-index:5; pointer-events:none;
-    background:linear-gradient(#0c0d12ee,#0c0d1200); }
-  #head h1 { margin:0; font-size:15px; letter-spacing:2px; }
-  #head h1 b { color:var(--creed); }
-  #head .sub { margin-top:3px; font-size:11px; color:var(--dim); }
-  #legend { position:fixed; bottom:12px; left:14px; font-size:11px; color:var(--dim); z-index:5; line-height:1.7; }
-  #legend .k { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:5px; vertical-align:middle; }
-  canvas { display:block; cursor:grab; }
-  canvas:active { cursor:grabbing; }
-  #panel { position:fixed; top:0; right:0; width:340px; max-width:82vw; height:100%; background:var(--panel);
-    border-left:1px solid var(--line); transform:translateX(100%); transition:transform .18s ease; z-index:6;
-    padding:20px 18px; overflow-y:auto; }
-  #panel.open { transform:translateX(0); }
-  #panel h2 { margin:0 0 2px; font-size:17px; color:var(--gold); }
-  #panel .arch { font-size:11px; color:var(--dim); margin-bottom:16px; }
-  #panel .x { position:absolute; top:14px; right:16px; cursor:pointer; color:var(--dim); font-size:16px; }
-  #panel .x:hover { color:#fff; }
-  #panel .sect { font-size:10px; letter-spacing:1.5px; color:var(--dim); margin:16px 0 6px; }
-  #panel .mem { font-size:12.5px; line-height:1.5; padding:8px 10px; margin-bottom:7px; background:#0e0f16;
-    border-left:2px solid var(--creed); border-radius:3px; }
-  #empty { position:fixed; inset:0; display:none; align-items:center; justify-content:center; text-align:center;
-    color:var(--dim); font-size:13px; z-index:4; padding:24px; line-height:1.7; }
+  html,body { margin:0; height:100%; background:#08090c; overflow:hidden; }
+  /* the WebGL output canvas fills the screen; the graph is drawn to a hidden low-res canvas
+     and pushed through the same CRT shader the game uses, so this looks like the same tube. */
+  #out { display:block; width:100vw; height:100vh; image-rendering:pixelated; cursor:grab; }
+  #out:active { cursor:grabbing; }
+  #src { display:none; }
+  #boot { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; z-index:2;
+    color:#7dd069; font-family:ui-monospace,monospace; font-size:13px; letter-spacing:2px; background:#08090c; }
 </style>
 </head>
 <body>
-<div id="head">
-  <h1>RY FARMS · <b>the town's memory</b></h1>
-  <div class="sub" id="sub">reading live from self-hosted SuperMemory…</div>
-</div>
-<canvas id="c"></canvas>
-<div id="legend">
-  <span class="k" style="background:#b9a0d0"></span>farmer &nbsp;
-  <span class="k" style="background:var(--creed)"></span>creed &nbsp;
-  <span class="k" style="background:var(--belief)"></span>belief &nbsp;
-  <span class="k" style="background:var(--mem)"></span>memory &nbsp;·&nbsp;
-  <span class="k" style="background:#e05840"></span>a rift &nbsp;· hover a dot to read it · click a farmer for the full sheet
-</div>
-<div id="empty"></div>
-<div id="panel"><span class="x" onclick="closePanel()">✕</span><div id="pbody"></div></div>
+<canvas id="out"></canvas>
+<canvas id="src"></canvas>
+<div id="boot">TUNING CHANNEL…</div>
 
-<script>
-const cv = document.getElementById('c'), ctx = cv.getContext('2d');
-let W = 0, H = 0, DPR = Math.min(2, window.devicePixelRatio || 1);
-function resize() { W = innerWidth; H = innerHeight; cv.width = W*DPR; cv.height = H*DPR; cv.style.width=W+'px'; cv.style.height=H+'px'; ctx.setTransform(DPR,0,0,DPR,0,0); }
+<script type="module">
+import { drawText, textWidth } from './pixel.js';
+import { CRT } from './crt.js';
+
+const out = document.getElementById('out');
+const src = document.getElementById('src');
+const sctx = src.getContext('2d', { alpha: false });
+let crt = null;
+
+// ---- internal resolution: fix the height (like the game), derive width from the window aspect ----
+const GH = 340;
+let GW = 600, DPR = Math.min(2, window.devicePixelRatio || 1);
+function resize() {
+  GW = Math.max(360, Math.round(GH * window.innerWidth / window.innerHeight));
+  src.width = GW; src.height = GH;
+  out.width = Math.round(window.innerWidth * DPR); out.height = Math.round(window.innerHeight * DPR);
+  if (!crt) crt = new CRT(out, src);
+}
 addEventListener('resize', resize); resize();
 
-const view = { x: 0, y: 0, z: 1 };            // pan/zoom
-let nodes = [], links = [], farmerNodes = [], selected = null, hover = null;
-let alpha = 1;                                 // layout "heat": decays 1→0 so the graph settles and stops drifting
-function reheat(a=0.5){ alpha = Math.max(alpha, a); }   // nudge it back to life on interaction
-
-const KIND_COL = { creed:'#c8a0e0', belief:'#8fc7e8', mem:'#7dd069' };
-function nameColor(s){ let h=0; for(const c of s) h=(h*31+c.charCodeAt(0))>>>0; return `hsl(${h%360} 42% 62%)`; }
+// ---- palette (the game's warm tube tones) ----
+const C = { bg:'#0a0b0e', title:'#7dd069', sub:'#c9a45a', dim:'#6a6456', label:'#cfc6b0',
+            creed:'#c8a0e0', belief:'#8fc7e8', mem:'#7dd069', rift:'#e0584a', bond:'#7dd069',
+            wood:'#6d5334', woodHi:'#8a6b44', woodLo:'#4a3824', woodEdge:'#231a10', panelIn:'#191410', rivet:'#c9a45a' };
+const KIND_COL = { creed:C.creed, belief:C.belief, mem:C.mem };
 function kindOf(m){ if(/\bcreed|lives by|taught them|drilled|raised (them|to)/i.test(m)) return 'creed';
-                    if(/belief|come to believe|earned belief|no longer/i.test(m)) return 'belief'; return 'mem'; }
+                   if(/belief|come to believe|earned belief|no longer/i.test(m)) return 'belief'; return 'mem'; }
 const RIFT = /chiselled|wronged|fell out|feud/;
+function nameColor(s){ let h=0; for(const c of s) h=(h*31+c.charCodeAt(0))>>>0; return `hsl(${h%360} 42% 60%)`; }
+
+// wood-frame panel, same recipe as the game's uiPanel
+function panel(x, y, w, h) {
+  sctx.fillStyle='rgba(0,0,0,0.45)'; sctx.fillRect(x+2, y+3, w, h);
+  sctx.fillStyle=C.woodEdge; sctx.fillRect(x, y, w, h);
+  sctx.fillStyle=C.wood; sctx.fillRect(x+1, y+1, w-2, h-2);
+  sctx.fillStyle=C.woodHi; sctx.fillRect(x+1, y+1, w-2, 1);
+  sctx.fillStyle=C.woodLo; sctx.fillRect(x+1, y+h-2, w-2, 1);
+  sctx.fillStyle=C.panelIn; sctx.fillRect(x+3, y+3, w-6, h-6);
+  sctx.fillStyle=C.rivet;
+  for (const [rx,ry] of [[x+2,y+2],[x+w-4,y+2],[x+2,y+h-4],[x+w-4,y+h-4]]) sctx.fillRect(rx, ry, 2, 2);
+}
+function wrap(str, maxW) { const words=String(str).split(' '), out=[]; let cur='';
+  for (const w of words){ const t=cur?cur+' '+w:w; if(textWidth(t)>maxW){ if(cur)out.push(cur); cur=w; } else cur=t; }
+  if(cur) out.push(cur); return out; }
+
+// ---- state ----
+const view = { x:0, y:0, z:1 };
+let nodes=[], links=[], farmerNodes=[], selected=null, hover=null, alpha=1;
+let panelX=GW, sheetLines=[], sheetScroll=0, sheetH=0;
+function reheat(a=0.5){ alpha=Math.max(alpha,a); }
 
 async function load() {
-  let data;
-  try { data = await (await fetch('/api/memory-graph')).json(); }
-  catch { data = { farmers: [], links: [], source: 'offline' }; }
-  const farmers = data.farmers || [];
-  document.getElementById('sub').textContent =
-    farmers.length ? `${farmers.length} farmers · ${data.links.length} ties · live from SuperMemory (${data.source})` : '';
-  if (!farmers.length) {
-    const e = document.getElementById('empty'); e.style.display='flex';
-    e.innerHTML = data.source==='offline'
-      ? "SuperMemory isn't reachable.<br>start it with <b>./supermemory-start.sh</b>, then reload."
-      : "No farmer memories stored yet.<br>open a town, let it run a moment, and they'll persist here.";
-    return;
-  }
-  const cx = W/2, cy = H/2; nodes = []; farmerNodes = []; links = [];
-  const byName = new Map();
-  farmers.forEach((f,i) => {
-    const a = (i/farmers.length)*Math.PI*2;
-    const fn = { type:'farmer', name:f.name, first:f.name.split(' ')[0], memories:f.memories, mass:1,
-                 x: cx+Math.cos(a)*200, y: cy+Math.sin(a)*200, vx:0, vy:0,
-                 r: 12, col: nameColor(f.name) };
+  let data; try { data = await (await fetch('/api/memory-graph')).json(); }
+  catch { data = { farmers:[], links:[], source:'offline' }; }
+  document.getElementById('boot').style.display='none';
+  const farmers = data.farmers || []; window._src = data.source; window._ties = (data.links||[]).length;
+  if (!farmers.length) { window._empty = data.source==='offline'
+      ? 'SUPERMEMORY IS OFFLINE - RUN ./SUPERMEMORY-START.SH'
+      : 'NO MEMORIES STORED YET - OPEN A TOWN AND LET IT RUN'; requestAnimationFrame(tick); return; }
+  const cx=GW/2, cy=GH/2, byName=new Map();
+  farmers.forEach((f,i)=>{ const a=(i/farmers.length)*Math.PI*2;
+    const fn={ type:'farmer', name:f.name, first:f.name.split(' ')[0], memories:f.memories, mass:1,
+               x:cx+Math.cos(a)*100, y:cy+Math.sin(a)*100, vx:0, vy:0, r:9, col:nameColor(f.name) };
     nodes.push(fn); farmerNodes.push(fn); byName.set(f.name, fn);
-    // one satellite node per stored memory, orbiting the farmer, coloured by kind
-    f.memories.forEach((text,j) => {
-      const b = a + (j - f.memories.length/2)*0.5;
-      const kind = kindOf(text);
-      const mn = { type:'mem', kind, text, parent:fn, mass:0.28,
-                   x: fn.x+Math.cos(b)*55, y: fn.y+Math.sin(b)*55, vx:0, vy:0,
-                   r: 5, col: KIND_COL[kind] };
-      nodes.push(mn); links.push({ a:fn, b:mn, sat:true });
-    });
+    f.memories.forEach((text,j)=>{ const b=a+(j-f.memories.length/2)*0.5, kind=kindOf(text);
+      nodes.push({ type:'mem', kind, text, parent:fn, mass:0.28,
+        x:fn.x+Math.cos(b)*26, y:fn.y+Math.sin(b)*26, vx:0, vy:0, r:2.5, col:KIND_COL[kind] });
+      links.push({ a:fn, b:nodes[nodes.length-1], sat:true }); });
   });
-  // farmer↔farmer relationship edges (labelled)
-  (data.links||[]).forEach(l => { const a=byName.get(l.a), b=byName.get(l.b); if(a&&b) links.push({ a, b, label:l.label }); });
+  (data.links||[]).forEach(l=>{ const a=byName.get(l.a), b=byName.get(l.b); if(a&&b) links.push({ a, b, label:l.label }); });
   requestAnimationFrame(tick);
 }
 
-function tick() {
-  const cx=W/2, cy=H/2;
-  // once the graph is cool it holds still (dragging re-heats it); keep drawing so hover still works
-  const moving = alpha > 0.02 || dragNode;
-  if (moving) {
-    // repulsion (mass-weighted: farmers push hard, satellites barely)
-    for (let i=0;i<nodes.length;i++){ const n=nodes[i]; let fx=0, fy=0;
-      for (let k=0;k<nodes.length;k++){ if(k===i) continue; const m=nodes[k];
-        let dx=n.x-m.x, dy=n.y-m.y, d2=dx*dx+dy*dy+0.01, d=Math.sqrt(d2);
-        const rep = 4200*n.mass*m.mass/d2; fx+=dx/d*rep; fy+=dy/d*rep; }
-      // gravity: farmers to centre; satellites only feather so strays don't drift off
-      const g = n.type==='farmer' ? 0.006 : 0.001; fx+=(cx-n.x)*g; fy+=(cy-n.y)*g;
-      n.vx=(n.vx+fx*alpha)*0.82; n.vy=(n.vy+fy*alpha)*0.82;   // forces scaled by heat, then damped
-    }
-    for (const l of links) {
-      const dx=l.b.x-l.a.x, dy=l.b.y-l.a.y, d=Math.hypot(dx,dy)||1, ux=dx/d, uy=dy/d;
-      if (l.sat) { const k=(d-52)*0.09*alpha;                 // satellite: tight orbit, mostly moves the memory
-        if(l.b!==dragNode){ l.b.vx-=ux*k; l.b.vy-=uy*k; } if(l.a!==dragNode){ l.a.vx+=ux*k*0.12; l.a.vy+=uy*k*0.12; } }
-      else { const k=(d-200)*0.014*alpha;                     // relationship: long spring between farmers
-        if(l.a!==dragNode){ l.a.vx+=ux*k; l.a.vy+=uy*k; } if(l.b!==dragNode){ l.b.vx-=ux*k; l.b.vy-=uy*k; } }
-    }
-    for (const n of nodes) { if (n===dragNode) continue; n.x+=n.vx; n.y+=n.vy; }
-    if (!dragNode) alpha *= 0.985;                            // cool down toward rest
+function step() {
+  const cx=GW/2, cy=GH/2;
+  for (let i=0;i<nodes.length;i++){ const n=nodes[i]; let fx=0, fy=0;
+    for (let k=0;k<nodes.length;k++){ if(k===i) continue; const m=nodes[k];
+      let dx=n.x-m.x, dy=n.y-m.y, d2=dx*dx+dy*dy+0.01, d=Math.sqrt(d2);
+      const rep=780*n.mass*m.mass/d2; fx+=dx/d*rep; fy+=dy/d*rep; }
+    const g = n.type==='farmer' ? 0.008 : 0.0012; fx+=(cx-n.x)*g; fy+=(cy-n.y)*g;
+    n.vx=(n.vx+fx*alpha)*0.82; n.vy=(n.vy+fy*alpha)*0.82;
   }
+  for (const l of links){ const dx=l.b.x-l.a.x, dy=l.b.y-l.a.y, d=Math.hypot(dx,dy)||1, ux=dx/d, uy=dy/d;
+    if (l.sat){ const k=(d-24)*0.09*alpha;
+      if(l.b!==dragNode){ l.b.vx-=ux*k; l.b.vy-=uy*k; } if(l.a!==dragNode){ l.a.vx+=ux*k*0.12; l.a.vy+=uy*k*0.12; } }
+    else { const k=(d-90)*0.02*alpha;
+      if(l.a!==dragNode){ l.a.vx+=ux*k; l.a.vy+=uy*k; } if(l.b!==dragNode){ l.b.vx-=ux*k; l.b.vy-=uy*k; } }
+  }
+  for (const n of nodes){ if(n===dragNode) continue; n.x+=n.vx; n.y+=n.vy; }
+  if (!dragNode) alpha*=0.985;
+}
+
+function tick(t) {
+  if ((alpha>0.02 || dragNode) && nodes.length) step();
+  panelX += ((selected ? GW-PW : GW) - panelX) * 0.22;   // slide the sheet in/out
   draw();
+  crt.render((t||0)/1000);
   requestAnimationFrame(tick);
 }
 
+const PW = 118;
 function draw() {
-  ctx.clearRect(0,0,W,H);
-  ctx.save(); ctx.translate(view.x,view.y); ctx.scale(view.z,view.z);
-  const selFarmer = selected;   // highlight the selected farmer's own orbit
-  // links first
-  for (const l of links) {
-    if (l.sat) { const lit = selFarmer && l.a===selFarmer;
-      ctx.strokeStyle = lit ? 'rgba(200,200,220,.28)' : 'rgba(120,128,150,.13)'; ctx.lineWidth=1; }
-    else { ctx.strokeStyle = RIFT.test(l.label) ? 'rgba(224,88,64,.55)' : 'rgba(125,208,105,.5)'; ctx.lineWidth=1.5; }
-    ctx.beginPath(); ctx.moveTo(l.a.x,l.a.y); ctx.lineTo(l.b.x,l.b.y); ctx.stroke();
-    if (!l.sat) { const mx=(l.a.x+l.b.x)/2, my=(l.a.y+l.b.y)/2;
-      ctx.fillStyle='#8a90a0'; ctx.font='10px JetBrains Mono, monospace'; ctx.textAlign='center'; ctx.fillText(l.label, mx, my-4); }
+  sctx.fillStyle=C.bg; sctx.fillRect(0,0,GW,GH);
+  // faint starfield-ish speckle so the void isn't dead flat (cheap, deterministic by position)
+  sctx.save(); sctx.translate(view.x,view.y); sctx.scale(view.z,view.z);
+  // links
+  for (const l of links){
+    if (l.sat){ const lit=selected && l.a===selected; sctx.strokeStyle=lit?'rgba(201,164,90,.35)':'rgba(120,110,86,.16)'; sctx.lineWidth=1; }
+    else { sctx.strokeStyle=RIFT.test(l.label)?'rgba(224,88,74,.6)':'rgba(125,208,105,.55)'; sctx.lineWidth=1; }
+    sctx.beginPath(); sctx.moveTo(l.a.x,l.a.y); sctx.lineTo(l.b.x,l.b.y); sctx.stroke();
+    if(!l.sat){ const mx=(l.a.x+l.b.x)/2, my=(l.a.y+l.b.y)/2; drawText(sctx, l.label, mx-textWidth(l.label)/2, my-6, '#9a9078'); }
   }
-  // memory (satellite) nodes
-  for (const n of nodes) { if (n.type!=='mem') continue; const hov=n===hover, dim=selFarmer && n.parent!==selFarmer;
-    ctx.globalAlpha = dim?0.32:1; ctx.beginPath(); ctx.arc(n.x,n.y,hov?n.r+2:n.r,0,7); ctx.fillStyle=n.col; ctx.fill();
-    if(hov){ ctx.strokeStyle='#fff'; ctx.lineWidth=1.5; ctx.stroke(); } ctx.globalAlpha=1;
+  // memory satellites
+  for (const n of nodes){ if(n.type!=='mem') continue; const hov=n===hover, dim=selected&&n.parent!==selected;
+    sctx.globalAlpha=dim?0.3:1; const r=hov?n.r+1.5:n.r;
+    sctx.fillStyle=n.col; sctx.beginPath(); sctx.arc(n.x,n.y,r,0,7); sctx.fill();
+    if(hov){ sctx.strokeStyle='#fff'; sctx.lineWidth=0.8; sctx.stroke(); } sctx.globalAlpha=1;
   }
-  // farmer nodes on top
-  for (const n of farmerNodes) { const sel=n===selected, hov=n===hover;
-    ctx.beginPath(); ctx.arc(n.x,n.y,n.r,0,7); ctx.fillStyle=n.col; ctx.fill();
-    if(sel||hov){ ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.stroke(); }
-    ctx.fillStyle='#0c0d12'; ctx.font='bold 11px JetBrains Mono, monospace'; ctx.textAlign='center'; ctx.textBaseline='middle';
-    ctx.fillText(n.first.slice(0,4).toUpperCase(), n.x, n.y);
-    ctx.fillStyle='#cfd3df'; ctx.font='11px JetBrains Mono, monospace'; ctx.textBaseline='top';
-    ctx.fillText(n.first, n.x, n.y+n.r+3);
+  // farmer tokens: filled disc + gold rivet-ring, name below in the bitmap font
+  for (const n of farmerNodes){ const sel=n===selected, hov=n===hover;
+    sctx.fillStyle=n.col; sctx.beginPath(); sctx.arc(n.x,n.y,n.r,0,7); sctx.fill();
+    sctx.strokeStyle=(sel||hov)?'#fff':C.rivet; sctx.lineWidth=1; sctx.beginPath(); sctx.arc(n.x,n.y,n.r,0,7); sctx.stroke();
+    const nm=n.first.toUpperCase(); drawText(sctx, nm, Math.round(n.x-textWidth(nm)/2), Math.round(n.y+n.r+3), C.label);
   }
-  ctx.restore();
-  if (hover && hover.type==='mem') drawTip(hover);
+  sctx.restore();
+  if (hover && hover.type==='mem') tip(hover);
+  chrome();
+  if (panelX < GW-1) sheet();
 }
 
-// floating card showing a memory node's full text on hover
-function drawTip(n) {
-  const sx = n.x*view.z+view.x, sy = n.y*view.z+view.y;
-  const words = n.text.split(' '), lines=[]; let cur='';
-  ctx.font='12px JetBrains Mono, monospace';
-  for (const w of words){ const t=cur?cur+' '+w:w; if(ctx.measureText(t).width>250){ lines.push(cur); cur=w; } else cur=t; }
-  if(cur) lines.push(cur);
-  const pad=9, lh=16, bw=Math.min(268, Math.max(...lines.map(l=>ctx.measureText(l).width))+pad*2), bh=lines.length*lh+pad*2+10;
-  let bx=sx+14, by=sy+14; if(bx+bw>W) bx=sx-bw-14; if(by+bh>H) by=sy-bh-14;
-  ctx.fillStyle='rgba(14,15,22,.97)'; ctx.strokeStyle=n.col; ctx.lineWidth=1;
-  ctx.beginPath(); ctx.roundRect(bx,by,bw,bh,6); ctx.fill(); ctx.stroke();
-  ctx.fillStyle=n.col; ctx.font='9px JetBrains Mono, monospace'; ctx.textAlign='left'; ctx.textBaseline='top';
-  ctx.fillText(n.kind.toUpperCase()+' · '+n.parent.first, bx+pad, by+pad-1);
-  ctx.fillStyle='#e6e8ef'; ctx.font='12px JetBrains Mono, monospace';
-  lines.forEach((l,i)=> ctx.fillText(l, bx+pad, by+pad+11+i*lh));
+// top title bar + bottom legend, drawn in the game's font like its HUD
+function chrome() {
+  drawText(sctx, 'RY FARMS', 6, 6, C.title, 2);
+  drawText(sctx, "THE TOWN'S MEMORY", 6, 18, C.sub);
+  if (window._src) drawText(sctx, `${farmerNodes.length} FARMERS - ${window._ties||0} TIES - LIVE FROM SUPERMEMORY`, 6, 27, C.dim);
+  const leg = 'CREED  BELIEF  MEMORY  RIFT   HOVER A DOT - CLICK A FARMER';
+  const ly = GH-9; let lx=6;
+  const swatch=(col)=>{ sctx.fillStyle=col; sctx.fillRect(lx,ly,3,3); lx+=6; };
+  swatch(C.creed); drawText(sctx,'CREED',lx,ly,C.dim); lx+=textWidth('CREED')+7;
+  swatch(C.belief); drawText(sctx,'BELIEF',lx,ly,C.dim); lx+=textWidth('BELIEF')+7;
+  swatch(C.mem); drawText(sctx,'MEMORY',lx,ly,C.dim); lx+=textWidth('MEMORY')+7;
+  swatch(C.rift); drawText(sctx,'RIFT',lx,ly,C.dim); lx+=textWidth('RIFT')+10;
+  drawText(sctx,'HOVER A DOT - CLICK A FARMER',lx,ly,C.dim);
+  if (window._empty) { const w=textWidth(window._empty); drawText(sctx, window._empty, Math.round(GW/2-w/2), Math.round(GH/2), C.sub); }
 }
 
-// ---- interaction ----
+function tip(n) {
+  const lines=wrap(n.text, 96), lh=6, w=Math.min(112, Math.max(...lines.map(l=>textWidth(l)))+8), h=lines.length*lh+13;
+  let x=Math.round(n.x*view.z+view.x)+6, y=Math.round(n.y*view.z+view.y)+6;
+  if(x+w>GW-2) x=Math.round(n.x*view.z+view.x)-w-6; if(y+h>GH-2) y=GH-h-2;
+  panel(x,y,w,h);
+  drawText(sctx, (n.kind+' - '+n.parent.first).toUpperCase(), x+5, y+5, n.col);
+  lines.forEach((l,i)=> drawText(sctx, l, x+5, y+12+i*lh, C.label));
+}
+
+function buildSheet(n) {
+  const L=[]; L.push({t:n.name.toUpperCase(), c:C.title, s:2});
+  L.push({t:`${n.memories.length} ${n.memories.length===1?'MEMORY':'MEMORIES'} IN SUPERMEMORY`, c:C.dim, s:1}); L.push({gap:4});
+  const sec=(title,kind,col)=>{ const arr=n.memories.filter(m=>kindOf(m)===kind); if(!arr.length) return;
+    L.push({t:title, c:C.sub, s:1});
+    arr.forEach(m=> wrap(m, PW-16).forEach((ln,i)=> L.push({t:ln, c:C.label, bar:i===0?col:null}))); L.push({gap:3}); };
+  sec('CREEDS','creed',C.creed); sec('HARD-WON BELIEFS','belief',C.belief); sec('WHAT THEY REMEMBER','mem',C.mem);
+  sheetLines=L; sheetScroll=0;
+  sheetH = L.reduce((a,l)=> a + (l.gap||(l.s===2?12:7)), 0);
+}
+function sheet() {
+  const x=Math.round(panelX), w=GW-x, top=2, h=GH-4;
+  panel(x, top, w-2, h);
+  // close chip
+  drawText(sctx, 'X', x+w-11, top+5, C.dim);
+  sctx.save(); sctx.beginPath(); sctx.rect(x+5, top+5, w-12, h-10); sctx.clip();
+  let y=top+6-sheetScroll;
+  for (const l of sheetLines){ if(l.gap){ y+=l.gap; continue; }
+    if(l.bar){ sctx.fillStyle=l.bar; sctx.fillRect(x+6, y, 1, 5); }
+    drawText(sctx, l.t, x+(l.bar?10:7), y, l.c, l.s||1); y += l.s===2?12:7;
+  }
+  sctx.restore();
+}
+
+// ---- interaction (internal-pixel coords) ----
 let dragNode=null, panning=null, downAt=null;
-function toWorld(e){ return { x:(e.clientX-view.x)/view.z, y:(e.clientY-view.y)/view.z }; }
-function hit(e){ const p=toWorld(e);
-  for (const n of farmerNodes) if(Math.hypot(n.x-p.x,n.y-p.y)<=n.r+3) return n;   // farmers win ties
-  for (const n of nodes) if(n.type==='mem' && Math.hypot(n.x-p.x,n.y-p.y)<=n.r+3) return n;
+function ptr(e){ return { x:e.clientX/window.innerWidth*GW, y:e.clientY/window.innerHeight*GH }; }
+function world(e){ const p=ptr(e); return { x:(p.x-view.x)/view.z, y:(p.y-view.y)/view.z }; }
+function overSheet(e){ return panelX<GW-1 && ptr(e).x>panelX; }
+function hit(e){ const p=world(e);
+  for (const n of farmerNodes) if(Math.hypot(n.x-p.x,n.y-p.y)<=n.r+2) return n;
+  for (const n of nodes) if(n.type==='mem' && Math.hypot(n.x-p.x,n.y-p.y)<=n.r+2) return n;
   return null; }
 function far(e){ return downAt && Math.hypot(e.clientX-downAt.x, e.clientY-downAt.y) > 4; }
-cv.addEventListener('mousedown', e=>{ downAt={x:e.clientX,y:e.clientY}; const n=hit(e);
-  if(n && n.type==='farmer'){ dragNode=n; } else if(!n){ panning={x:e.clientX-view.x,y:e.clientY-view.y}; } });
-cv.addEventListener('mousemove', e=>{ hover=hit(e); cv.style.cursor=hover?'pointer':(panning?'grabbing':'grab');
-  if(dragNode && far(e)){ const p=toWorld(e); dragNode.x=p.x; dragNode.y=p.y; dragNode.vx=dragNode.vy=0; reheat(0.3); }
-  else if(panning){ view.x=e.clientX-panning.x; view.y=e.clientY-panning.y; } });
-addEventListener('mouseup', e=>{ if(!far(e)){ const n=hit(e); if(n) selectNode(n.type==='mem'?n.parent:n); }
-  dragNode=null; panning=null; downAt=null; });
-cv.addEventListener('wheel', e=>{ e.preventDefault(); const s=Math.exp(-e.deltaY*0.001), mx=e.clientX, my=e.clientY;
-  view.x=mx-(mx-view.x)*s; view.y=my-(my-view.y)*s; view.z=Math.max(0.4,Math.min(2.4,view.z*s)); }, {passive:false});
 
-function selectNode(n){ selected=n; const p=document.getElementById('pbody');
-  const g=k=>n.memories.filter(m=>kindOf(m)===k);
-  const sect=(t,arr,col)=>arr.length?`<div class="sect">${t}</div>`+arr.map(m=>`<div class="mem" style="border-color:${col}">${esc(m)}</div>`).join(''):'';
-  p.innerHTML = `<h2>${esc(n.name)}</h2><div class="arch">${n.memories.length} memories held in SuperMemory</div>`
-    + sect('CREEDS',g('creed'),'#c8a0e0') + sect('HARD-WON BELIEFS',g('belief'),'#8fc7e8') + sect('WHAT THEY REMEMBER',g('mem'),'#7dd069');
-  document.getElementById('panel').classList.add('open');
-}
-function esc(s){ return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
-function closePanel(){ selected=null; document.getElementById('panel').classList.remove('open'); }
-addEventListener('keydown', e=>{ if(e.key==='Escape') closePanel(); });
+out.addEventListener('mousedown', e=>{ downAt={x:e.clientX,y:e.clientY}; if(overSheet(e)) return;
+  const n=hit(e); if(n&&n.type==='farmer'){ dragNode=n; } else if(!n){ const p=ptr(e); panning={x:p.x-view.x,y:p.y-view.y}; } });
+out.addEventListener('mousemove', e=>{ hover=overSheet(e)?null:hit(e); out.style.cursor=hover?'pointer':(panning?'grabbing':'grab');
+  if(dragNode&&far(e)){ const p=world(e); dragNode.x=p.x; dragNode.y=p.y; dragNode.vx=dragNode.vy=0; reheat(0.3); }
+  else if(panning){ const p=ptr(e); view.x=p.x-panning.x; view.y=p.y-panning.y; } });
+addEventListener('mouseup', e=>{ if(!far(e)){
+    if(overSheet(e)){ const p=ptr(e); if(p.x>GW-14 && p.y<18) closeSheet(); }
+    else { const n=hit(e); if(n){ select(n.type==='mem'?n.parent:n); } else if(selected) closeSheet(); } }
+  dragNode=null; panning=null; downAt=null; });
+out.addEventListener('wheel', e=>{ e.preventDefault();
+  if(overSheet(e)){ sheetScroll=Math.max(0, Math.min(sheetScroll+e.deltaY*0.35, Math.max(0, sheetH-(GH-16)))); return; }
+  const p=ptr(e), s=Math.exp(-e.deltaY*0.001);
+  view.x=p.x-(p.x-view.x)*s; view.y=p.y-(p.y-view.y)*s; view.z=Math.max(0.5,Math.min(3,view.z*s)); }, {passive:false});
+addEventListener('keydown', e=>{ if(e.key==='Escape') closeSheet(); });
+function select(n){ selected=n; buildSheet(n); }
+function closeSheet(){ selected=null; }
 
 load();
 </script>
