@@ -50,6 +50,22 @@ function townHistoryDoc(th, town) {
     return lines.join('\n');
 }
 
+// #97 P5 — the town's book of INVENTIONS: each generatively-discovered recipe, its ingredients, and who
+// first worked it out — one town-level document (sibling of the civic record).
+function townInventionsDoc(ti, town) {
+    const lines = [`${town || 'The valley'} — the book of inventions.`];
+    const recipes = Array.isArray(ti.recipes) ? ti.recipes : [];
+    if (recipes.length) {
+        lines.push('Recipes the town has invented:');
+        for (const r of recipes.slice(-40)) {
+            const ing = Array.isArray(r.ingredients) ? r.ingredients.join(' + ') : '';
+            const who = r.inventor ? `, first worked out by ${String(r.inventor).split(' ')[0]}` : '';
+            lines.push(` - ${r.name} (from ${ing})${who}${r.lore ? `: ${r.lore}` : ''}.`);
+        }
+    }
+    return lines.join('\n');
+}
+
 // Compose a readable "remembered life" from the compiled objects the client sends.
 function lifeDoc(f, town) {
     const lines = [`${f.name || 'A settler'} — a ${f.archetype || 'farmer'} of ${town || 'the valley'}.`];
@@ -69,7 +85,8 @@ module.exports = async function handler(req, res) {
     try { body = await readBody(req); } catch (e) { return send(res, 200, { ok: false, written: 0, error: e?.message || 'bad body' }); }
     const farmers = Array.isArray(body?.farmers) ? body.farmers.slice(0, MAX_FARMERS) : [];
     const townHistory = body?.townHistory && typeof body.townHistory === 'object' ? body.townHistory : null;
-    if (!farmers.length && !townHistory) return send(res, 200, { ok: true, written: 0 });
+    const townInventions = body?.townInventions && typeof body.townInventions === 'object' ? body.townInventions : null;
+    if (!farmers.length && !townHistory && !townInventions) return send(res, 200, { ok: true, written: 0 });
 
     const base = (process.env.SUPERMEMORY_URL || DEFAULT_URL).replace(/\/+$/, '');
     const key = process.env.SUPERMEMORY_API_KEY || '';
@@ -98,7 +115,27 @@ module.exports = async function handler(req, res) {
         } catch (e) { console.error('[writeback] town-history threw:', e?.message, e?.cause?.message || ''); }
         finally { clearTimeout(timer); }
     }
-    if (!farmers.length) return send(res, 200, { ok: true, written: townHistoryWritten ? 1 : 0, townHistoryWritten, source: base });
+    // #97 P5 — the town's book of inventions (one upserting doc per town)
+    let townInventionsWritten = false;
+    if (townInventions) {
+        const doc = {
+            content: townInventionsDoc(townInventions, body.town),
+            customId: `ry-farms:towninventions:${body.townSeed ?? 'x'}`,
+            containerTags: ['ry-farms'],
+            metadata: { app: 'ry-farms', kind: 'town-inventions',
+                ...(body.townSeed != null ? { townSeed: String(body.townSeed) } : {}),
+                ...(body.town != null ? { town: String(body.town) } : {}) },
+        };
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), DEADLINE_MS);
+        try {
+            const r = await fetch(`${base}/v3/documents`, { method: 'POST', headers, body: JSON.stringify(doc), signal: controller.signal });
+            if (r.ok) townInventionsWritten = true;
+            else console.error('[writeback] town-inventions non-ok', r.status, (await r.text()).slice(0, 200));
+        } catch (e) { console.error('[writeback] town-inventions threw:', e?.message, e?.cause?.message || ''); }
+        finally { clearTimeout(timer); }
+    }
+    if (!farmers.length) return send(res, 200, { ok: true, written: (townHistoryWritten ? 1 : 0) + (townInventionsWritten ? 1 : 0), townHistoryWritten, townInventionsWritten, source: base });
 
     let written = 0;
     const persisted = [];
@@ -129,5 +166,5 @@ module.exports = async function handler(req, res) {
         finally { clearTimeout(timer); }
     }
     // report which seeds landed so the client stamps exactly those (a partial write is fine + resumable)
-    return send(res, 200, { ok: true, written, of: farmers.length, persisted, townHistoryWritten, source: base });
+    return send(res, 200, { ok: true, written, of: farmers.length, persisted, townHistoryWritten, townInventionsWritten, source: base });
 };

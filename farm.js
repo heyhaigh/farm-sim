@@ -614,6 +614,8 @@ export class World {
         this.suspicion = {};   // #97 Slice 4: the Watch's slow-building trail on unsolved crimes (seed -> score)
         this.recipes = {};     // #97 P3: the town's generatively-discovered recipes (canonical key -> record)
         this.tales = [];       // #97 P4: the town's founding myths of rare ingredients, grown from its founders' memories
+        this.recipeFlavor = {};// #97 P5: DISPLAY shadow store — LLM name+lore per recipe key. EXCLUDED from the sim
+                               //         digest (LLM-on ≡ LLM-off); the procedural name is the canonical one.
         this.board = null;    // no bulletin board until the town builds one together (first communal project)
         this.merchant = null;                             // the wandering trader, present only during a visit
         this.merchantNextDay = 4 + Math.floor(this.rand() * 3);   // first caravan rolls in around day 4-6
@@ -2204,6 +2206,7 @@ export class World {
             suspicion: { ...this.suspicion },
             recipes: Object.fromEntries(Object.entries(this.recipes).map(([k, v]) => [k, { ...v }])),   // #97 P3 registry
             tales: this.tales.map(t => ({ ...t, lexemes: [...(t.lexemes || [])] })),   // #97 P4 frozen myths
+            recipeFlavor: { ...this.recipeFlavor },   // #97 P5 display shadow (never in the sim digest)
 
             tiles: this.tiles.slice(),
             chunks: new Map([...this.chunks].map(([k, a]) => [k, a.slice()])),
@@ -2312,6 +2315,7 @@ export class World {
         this.suspicion = d.suspicion ? { ...d.suspicion } : {};
         this.recipes = d.recipes ? Object.fromEntries(Object.entries(d.recipes).map(([k, v]) => [k, { ...v }])) : {};
         this.tales = Array.isArray(d.tales) ? d.tales.map(t => ({ ...t, lexemes: [...(t.lexemes || [])] })) : [];
+        this.recipeFlavor = d.recipeFlavor ? { ...d.recipeFlavor } : {};
 
         this.tiles.set(d.tiles);
         this.chunks = new Map(); for (const [k, a] of d.chunks) this.chunks.set(k, Uint8Array.from(a));
@@ -2875,6 +2879,9 @@ export class World {
     // recipes (world.recipes), so a crafted generative item consumes its canonical inputs like any other.
     recipeById(recipeId) { return RECIPE_BY_ID[recipeId] || this.recipes[recipeId] || null; }
     recipeKnownByTown(recipeId) { return !!this.recipes[recipeId] || this.farmers.some(f => (f.sheet.recipes || []).includes(recipeId)); }
+    // #97 P5 — the DISPLAY name/lore: the LLM's evocative overlay when present, else the canonical procedural name.
+    recipeName(recipeId) { const fl = this.recipeFlavor[recipeId]; return (fl && fl.name) || (this.recipeById(recipeId) || {}).name || recipeId; }
+    recipeLore(recipeId) { const fl = this.recipeFlavor[recipeId]; return (fl && fl.lore) || null; }
     // Crystallise a novel discovery into the town's registry (canonical key -> record). Idempotent.
     registerInvention(inv, discoverer) {
         if (this.recipes[inv.id]) return this.recipes[inv.id];

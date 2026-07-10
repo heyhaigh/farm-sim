@@ -48,10 +48,11 @@ module.exports = async function handler(req, res) {
             return await r.json();
         } finally { clearTimeout(timer); }
     };
-    let data, civicData;
+    let data, civicData, inventData;
     try {
         data = await search('farmer creed belief memory dream town', 100);
         civicData = await search('the town civic record - manager watch voted in out elected recalled served', 24);
+        inventData = await search('the town book of inventions recipes crafted brewed charm poultice tonic', 24);
     } catch (e) {
         return send(res, 200, { farmers: [], links: [], source: 'offline', error: e?.message || 'supermemory unreachable' });
     }
@@ -81,6 +82,14 @@ module.exports = async function handler(req, res) {
         if (!civicTown) civicTown = m.town || null;
     }
     if (civicLines.length) townHistory = { town: civicTown, text: civicLines.join('\n') };
+    // #97 P5 — the town's inventions, as distilled fact-chunks, rendered as recipe nodes off the town hub
+    const inventions = [];
+    for (const row of (inventData?.results || [])) {
+        const m = row.metadata || {};
+        if (m.kind !== 'town-inventions') continue;
+        const text = String(row.memory || '').trim(); if (!text || inventions.includes(text)) continue;
+        inventions.push(text);
+    }
     const farmers = [...byName.values()].filter(f => f.memories.length);
     const firsts = new Map(farmers.map(f => [f.name.split(' ')[0], f.name]));   // "Mercurial" -> "Mercurial Ry"
 
@@ -100,5 +109,5 @@ module.exports = async function handler(req, res) {
             }
         }
     }
-    return send(res, 200, { farmers, links, townHistory, source: data.results ? 'supermemory-local' : 'empty', count: farmers.length });
+    return send(res, 200, { farmers, links, townHistory, inventions, source: data.results ? 'supermemory-local' : 'empty', count: farmers.length });
 };

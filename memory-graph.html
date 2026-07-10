@@ -44,7 +44,7 @@ addEventListener('resize', resize); resize();
 const C = { bg:'#0a0b0e', title:'#7dd069', sub:'#c9a45a', dim:'#6a6456', label:'#cfc6b0',
             creed:'#c8a0e0', belief:'#8fc7e8', mem:'#7dd069', rift:'#e0584a', bond:'#7dd069',
             wood:'#6d5334', woodHi:'#8a6b44', woodLo:'#4a3824', woodEdge:'#231a10', panelIn:'#191410', rivet:'#c9a45a' };
-const KIND_COL = { creed:C.creed, belief:C.belief, mem:C.mem };
+const KIND_COL = { creed:C.creed, belief:C.belief, mem:C.mem, invention:'#e0a848' };
 function kindOf(m){ if(/\bcreed|lives by|taught them|drilled|raised (them|to)/i.test(m)) return 'creed';
                    if(/belief|come to believe|earned belief|no longer/i.test(m)) return 'belief'; return 'mem'; }
 const RIFT = /chiselled|wronged|fell out|feud/;
@@ -94,10 +94,17 @@ async function load() {
   // orbit, and faint gold lines tie every farmer to it (the town remembers everyone). Click it to read
   // the town's political history (who was voted in/out, and why) as SuperMemory holds it.
   if (data.townHistory) {
-    townNode = { type:'town', name:(data.townHistory.town||'THE TOWN'), text:data.townHistory.text,
+    townNode = { type:'town', name:(data.townHistory.town||'THE TOWN'), first:(data.townHistory.town||'THE TOWN'), text:data.townHistory.text,
                  mass:3, x:cx, y:cy, vx:0, vy:0, r:13, col:'#e8c860' };
     nodes.push(townNode);
     window._town = townNode.name;
+  }
+  // #97 P5 — the town's INVENTIONS as amber recipe satellites off the town hub
+  if (townNode && (data.inventions||[]).length) {
+    data.inventions.forEach((text,j)=>{ const a=(j/data.inventions.length)*Math.PI*2;
+      nodes.push({ type:'mem', kind:'invention', text, parent:townNode, mass:0.3,
+        x:townNode.x+Math.cos(a)*30, y:townNode.y+Math.sin(a)*30, vx:0, vy:0, r:3, col:KIND_COL.invention });
+      links.push({ a:townNode, b:nodes[nodes.length-1], sat:true }); });
   }
   requestAnimationFrame(tick);
 }

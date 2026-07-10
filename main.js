@@ -15,6 +15,7 @@ import { CRT } from './crt.js';
 import { saveTown, loadTown, wipeTown, undoWipe } from './save.js';
 import { enrichStories } from './dm.js';
 import { persistLives, persistTownHistory } from './memory-writeback.js';
+import { enrichInventions, persistTownInventions } from './memory-invent.js';
 import { whisper } from './conscience.js';
 
 // ---------------------------------------------------------------------------
@@ -4574,6 +4575,9 @@ function drawBootScreen(t) {
         if (await persistLives(w, () => world === w)) saveTown(w);
         // #94 P3: also persist the town's evolving civic record (re-posts only when it changes)
         persistTownHistory(w, () => world === w);
+        // #97 P5: name each new invention (LLM flavour -> display shadow) + persist the town's book of inventions
+        if (await enrichInventions(w, () => world === w)) saveTown(w);
+        persistTownInventions(w, () => world === w);
     };
     setTimeout(tryPersist, 20000);
     setInterval(tryPersist, 6 * 60 * 1000);
