@@ -131,31 +131,56 @@ const ESSENCE_EFFECT = {
     warmth: 'refresh', mystic: 'charm', luck: 'charm', sweet: 'refresh', earthy: 'growboost',
 };
 const ESSENCE_ADJ = { vitality: 'Vital', hearty: 'Hearty', growth: 'Verdant', potency: 'Potent', warmth: 'Warming', mystic: 'Mystic', luck: 'Lucky', sweet: 'Sweet', earthy: 'Earthen', rare: 'Rare' };
-const EFFECT_FORM = { mendhp: 'Poultice', cure: 'Elixir', refresh: 'Cordial', growboost: 'Tonic', workboost: 'Brew', charm: 'Charm' };
+// tier-graded FORM per effect, so a tier-1 and a tier-2 item never share a procedural name (indexed tier-1).
+const FORM_TIERS = {
+    mendhp:    ['Salve', 'Poultice', 'Poultice', 'Poultice'],
+    cure:      ['Elixir', 'Elixir', 'Elixir', 'Panacea'],
+    refresh:   ['Cordial', 'Draught', 'Tonic', 'Nectar'],
+    growboost: ['Meal', 'Compost', 'Bloomfeed', 'Verdance'],
+    workboost: ['Brew', 'Stout', 'Vigor', 'Dynamo'],
+    charm:     ['Trinket', 'Charm', 'Talisman', 'Idol'],
+};
+const SECOND_NOTE = { vitality: 'Life', hearty: 'Hearth', growth: 'Green', potency: 'Might', warmth: 'Warmth', mystic: 'Mystery', luck: 'Fortune', sweet: 'Honey', earthy: 'Loam' };
+function formFor(effect, tier) { const a = FORM_TIERS[effect] || ['Concoction']; return a[Math.min(tier, a.length) - 1]; }
 
-// Derive the ITEM a set of ingredients makes: a pure, order-independent function of the counts. Returns
-// null for a combination too weak/incoherent to yield anything (a failed experiment). `counts` is
-// { good: qty }. The result is fully deterministic — the same ingredients always make the same item.
+const QUALITY_PREFIX = { plain: '', fine: 'Fine ', pristine: 'Pristine ' };
+const QUALITY_CODE = { plain: 'c', fine: 'f', pristine: 'p' };   // distinct letters (plain vs Pristine both start 'p')
+// Derive the ITEM a set of ingredients makes — a pure, order-independent, deterministic function of the
+// counts (P1 rework, post-council). Two changes kill the degeneracy the council flagged:
+//  • NOVELTY AT THE OUTPUT: the canonical id is `gen:<dominant>[-<second>].t<tier>.<qualityLetter>` — dozens
+//    of ingredient combos that yield the same output ARE THE SAME recipe (a rediscovery, credited but not
+//    re-minted), so the registry stays bounded and "discover the same thing five ways" is gone. (effect is a
+//    pure function of dominant+tier, so it's implied by the key, not part of it.)
+//  • TIER FROM CONCENTRATION + RARITY, NEVER RAW VOLUME: bulk cheap staples can't escalate into a cure; a
+//    potent item needs a FOCUSED brew (high dominant share) or a rare ingredient.
+// Returns null for a combination too weak/incoherent to yield anything (a failed experiment).
 export function deriveInvention(counts) {
-    const e = {}; let total = 0, rare = 0, kinds = 0;
+    const e = {}; let totalMag = 0, rare = 0, kinds = 0;
     for (const g in counts) {
-        const q = counts[g]; if (q <= 0) continue; total += q; kinds++;
+        const q = counts[g]; if (q <= 0) continue; kinds++;
         const es = INGREDIENT_ESSENCE[g] || INGREDIENT_FALLBACK;
-        for (const k in es) { e[k] = (e[k] || 0) + es[k] * q; if (k === 'rare') rare += es[k] * q; }
+        for (const k in es) { const v = es[k] * q; if (k === 'rare') rare += v; else { e[k] = (e[k] || 0) + v; totalMag += v; } }
     }
-    if (kinds < 2 || total < 2) return null;                       // a "recipe" needs at least two things combined
-    const rank = Object.entries(e).filter(([k]) => k !== 'rare').sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1));
-    if (!rank.length) return null;
+    if (kinds < 2 || totalMag < 3) return null;                    // a recipe needs at least two things, coherently
+    const rank = Object.entries(e).sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1));
     const [dominant, mag] = rank[0]; const second = rank[1] ? rank[1][0] : null;
-    if (mag < 3) return null;                                       // too faint an essence — nothing coheres
+    if (mag < 3) return null;                                       // too faint a dominant essence — nothing coheres
+    // TIER — rarity ABSOLUTELY gates the top tiers (council fix): commons cap at tier 2 (no cheap cure);
+    // a rare ingredient is REQUIRED for tier 3, more rare for tier 4. Concentration (the dominant essence's
+    // focus) only separates tier 1 from tier 2 within a band, or lifts a lightly-rare focused brew to tier 3.
+    const share = mag / totalMag;
+    const tier = rare >= 4 ? 4 : rare >= 2 ? 3 : rare >= 1 ? (share >= 0.6 ? 3 : 2) : (share >= 0.6 ? 2 : 1);
     let effect = ESSENCE_EFFECT[dominant] || 'refresh';
-    const tier = Math.max(1, Math.min(4, 1 + Math.floor((total + rare * 2) / 4)));
-    if (effect === 'mendhp' && tier >= 3) effect = 'cure';         // a potent vitality brew becomes a true cure
-    // a stable id from the sorted ingredient multiset -> the same combination is always the same discovery
-    const sig = Object.keys(counts).filter(g => counts[g] > 0).sort().map(g => `${g}${counts[g]}`).join('.');
-    const name = `${ESSENCE_ADJ[dominant] || 'Odd'} ${EFFECT_FORM[effect] || 'Concoction'}`;
-    return { id: `gen:${sig}`, name, effect, tier, magnitude: mag, rare, dominant, second,
-             inputs: { ...counts }, essence: e };
+    if (effect === 'mendhp' && tier >= 3) effect = 'cure';         // a cure is tier 3+, so it can only come from rarity
+    // QUALITY — an axis from RARITY ONLY (never quantity/magnitude, or doubling cheap stock would silently
+    // mint a different item and break output-dedup). Rare ingredients make finer goods; staples stay plain.
+    const quality = rare >= 4 ? 'pristine' : rare >= 1 ? 'fine' : 'plain';
+    const id = `gen:${dominant}${second ? '-' + second : ''}.t${tier}.${QUALITY_CODE[quality]}`;   // the canonical output key
+    // procedural name UNIQUE per canonical key (tier-graded form + the secondary essence's note) so the sim
+    // never gossips two different items under one name; the LLM name is a cosmetic overlay on top of this.
+    const name = `${QUALITY_PREFIX[quality]}${ESSENCE_ADJ[dominant] || 'Odd'} ${formFor(effect, tier)}${second ? ' of ' + (SECOND_NOTE[second] || second) : ''}`;
+    return { id, name, effect, tier, quality, dominant, second, magnitude: mag,
+             dominantShare: Math.round(share * 100) / 100, rare, exampleInputs: { ...counts }, essence: e };
 }
 
 // wood economy
