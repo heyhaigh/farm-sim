@@ -35,29 +35,52 @@ module.exports = async function handler(req, res) {
     const headers = { 'Content-Type': 'application/json', Accept: 'application/json' };
     if (key) headers.Authorization = `Bearer ${key}`;
 
-    // a broad query pulls the whole ry-farms corpus (a town is small); q is required by /v4/search
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), DEADLINE_MS);
-    let data;
+    // /v4/search is SEMANTIC + query-ranked (no list-all endpoint), so a single query can't reliably pull
+    // BOTH the farmer lives AND the one town-history doc — the civic record ranks below the farmer corpus.
+    // Run two targeted searches: one for the lives, a small dedicated one for the town's political record.
+    const search = async (q, limit) => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), DEADLINE_MS);
+        try {
+            const r = await fetch(`${base}/v4/search`, { method: 'POST', headers, signal: controller.signal,
+                body: JSON.stringify({ q, limit, containerTag: 'ry-farms' }) });
+            if (!r.ok) throw new Error(`search ${r.status}`);
+            return await r.json();
+        } finally { clearTimeout(timer); }
+    };
+    let data, civicData;
     try {
-        const r = await fetch(`${base}/v4/search`, { method: 'POST', headers, signal: controller.signal,
-            body: JSON.stringify({ q: 'farmer creed belief memory dream town', limit: 100, containerTag: 'ry-farms' }) });
-        if (!r.ok) throw new Error(`search ${r.status}`);
-        data = await r.json();
+        data = await search('farmer creed belief memory dream town', 100);
+        civicData = await search('the town civic record - manager watch voted in out elected recalled served', 24);
     } catch (e) {
         return send(res, 200, { farmers: [], links: [], source: 'offline', error: e?.message || 'supermemory unreachable' });
-    } finally { clearTimeout(timer); }
+    }
 
-    // group the distilled memories by farmer (newest town per name wins, so the graph is one town)
+    // group the distilled memories by farmer (newest town per name wins, so the graph is one town).
+    // the TOWN-HISTORY doc (#94 P3 — the civic record: who the town voted in/out, and why) has no farmer
+    // name, so it's pulled aside into its own node rather than dropped.
     const byName = new Map();
     for (const row of (data.results || [])) {
         const m = row.metadata || {};
+        if (m.kind === 'town-history') continue;   // the civic record comes from the dedicated search
         const name = m.name; if (!name) continue;
         const text = String(row.memory || '').trim(); if (!text) continue;
         let f = byName.get(name);
         if (!f) { f = { name, seed: String(m.farmerSeed ?? ''), town: String(m.townSeed ?? ''), memories: [] }; byName.set(name, f); }
         if (!f.memories.includes(text)) f.memories.push(text);
     }
+    // the town's political record, pulled from its own targeted search. SuperMemory distils a doc into
+    // several fact-chunks, so gather ALL the civic chunks into one record rather than a single line.
+    let townHistory = null, civicTown = null;
+    const civicLines = [];
+    for (const row of (civicData?.results || [])) {
+        const m = row.metadata || {};
+        if (m.kind !== 'town-history') continue;
+        const text = String(row.memory || '').trim(); if (!text) continue;
+        if (!civicLines.includes(text)) civicLines.push(text);
+        if (!civicTown) civicTown = m.town || null;
+    }
+    if (civicLines.length) townHistory = { town: civicTown, text: civicLines.join('\n') };
     const farmers = [...byName.values()].filter(f => f.memories.length);
     const firsts = new Map(farmers.map(f => [f.name.split(' ')[0], f.name]));   // "Mercurial" -> "Mercurial Ry"
 
@@ -77,5 +100,5 @@ module.exports = async function handler(req, res) {
             }
         }
     }
-    return send(res, 200, { farmers, links, source: data.results ? 'supermemory-local' : 'empty', count: farmers.length });
+    return send(res, 200, { farmers, links, townHistory, source: data.results ? 'supermemory-local' : 'empty', count: farmers.length });
 };

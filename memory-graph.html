@@ -67,7 +67,7 @@ function wrap(str, maxW) { const words=String(str).split(' '), out=[]; let cur='
 
 // ---- state ----
 const view = { x:0, y:0, z:1 };
-let nodes=[], links=[], farmerNodes=[], selected=null, hover=null, alpha=1;
+let nodes=[], links=[], farmerNodes=[], townNode=null, selected=null, hover=null, alpha=1;
 let panelX=GW, sheetLines=[], sheetScroll=0, sheetH=0;
 function reheat(a=0.5){ alpha=Math.max(alpha,a); }
 
@@ -90,6 +90,15 @@ async function load() {
       links.push({ a:fn, b:nodes[nodes.length-1], sat:true }); });
   });
   (data.links||[]).forEach(l=>{ const a=byName.get(l.a), b=byName.get(l.b); if(a&&b) links.push({ a, b, label:l.label }); });
+  // #94 P3: the TOWN node — the civic record hub, pinned at centre; its mass clears a ring the farmers
+  // orbit, and faint gold lines tie every farmer to it (the town remembers everyone). Click it to read
+  // the town's political history (who was voted in/out, and why) as SuperMemory holds it.
+  if (data.townHistory) {
+    townNode = { type:'town', name:(data.townHistory.town||'THE TOWN'), text:data.townHistory.text,
+                 mass:3, x:cx, y:cy, vx:0, vy:0, r:13, col:'#e8c860' };
+    nodes.push(townNode);
+    window._town = townNode.name;
+  }
   requestAnimationFrame(tick);
 }
 
@@ -108,7 +117,7 @@ function step() {
     else { const k=(d-90)*0.02*alpha;
       if(l.a!==dragNode){ l.a.vx+=ux*k; l.a.vy+=uy*k; } if(l.b!==dragNode){ l.b.vx-=ux*k; l.b.vy-=uy*k; } }
   }
-  for (const n of nodes){ if(n===dragNode) continue; n.x+=n.vx; n.y+=n.vy; }
+  for (const n of nodes){ if(n===dragNode || n.type==='town') continue; n.x+=n.vx; n.y+=n.vy; }   // town is pinned at centre
   if (!dragNode) alpha*=0.985;
 }
 
@@ -125,6 +134,9 @@ function draw() {
   sctx.fillStyle=C.bg; sctx.fillRect(0,0,GW,GH);
   // faint starfield-ish speckle so the void isn't dead flat (cheap, deterministic by position)
   sctx.save(); sctx.translate(view.x,view.y); sctx.scale(view.z,view.z);
+  // faint gold ties from the TOWN hub to every farmer (drawn first, under everything)
+  if (townNode){ sctx.strokeStyle='rgba(232,200,96,.16)'; sctx.lineWidth=1;
+    for (const f of farmerNodes){ sctx.beginPath(); sctx.moveTo(townNode.x,townNode.y); sctx.lineTo(f.x,f.y); sctx.stroke(); } }
   // links
   for (const l of links){
     if (l.sat){ const lit=selected && l.a===selected; sctx.strokeStyle=lit?'rgba(201,164,90,.35)':'rgba(120,110,86,.16)'; sctx.lineWidth=1; }
@@ -144,6 +156,14 @@ function draw() {
     sctx.strokeStyle=(sel||hov)?'#fff':C.rivet; sctx.lineWidth=1; sctx.beginPath(); sctx.arc(n.x,n.y,n.r,0,7); sctx.stroke();
     const nm=n.first.toUpperCase(); drawText(sctx, nm, Math.round(n.x-textWidth(nm)/2), Math.round(n.y+n.r+3), C.label);
   }
+  // the TOWN hub — a gold diamond (distinct from the round farmer tokens), name below
+  if (townNode){ const n=townNode, sel=n===selected, hov=n===hover, r=n.r;
+    sctx.fillStyle=n.col; sctx.beginPath();
+    sctx.moveTo(n.x,n.y-r); sctx.lineTo(n.x+r,n.y); sctx.lineTo(n.x,n.y+r); sctx.lineTo(n.x-r,n.y); sctx.closePath(); sctx.fill();
+    sctx.strokeStyle=(sel||hov)?'#fff':'#8a6b44'; sctx.lineWidth=1.5; sctx.stroke();
+    sctx.fillStyle='#3a2c10'; drawText(sctx,'TOWN', Math.round(n.x-textWidth('TOWN')/2), n.y-2, '#3a2c10');
+    const nm=n.name.toUpperCase(); drawText(sctx, nm, Math.round(n.x-textWidth(nm)/2), Math.round(n.y+r+3), C.sub);
+  }
   sctx.restore();
   if (hover && hover.type==='mem') tip(hover);
   chrome();
@@ -162,7 +182,7 @@ function chrome() {
   swatch(C.belief); drawText(sctx,'BELIEF',lx,ly,C.dim); lx+=textWidth('BELIEF')+7;
   swatch(C.mem); drawText(sctx,'MEMORY',lx,ly,C.dim); lx+=textWidth('MEMORY')+7;
   swatch(C.rift); drawText(sctx,'RIFT',lx,ly,C.dim); lx+=textWidth('RIFT')+10;
-  drawText(sctx,'HOVER A DOT - CLICK A FARMER',lx,ly,C.dim);
+  drawText(sctx, townNode?'CLICK THE GOLD TOWN FOR ITS VOTING RECORD':'HOVER A DOT - CLICK A FARMER', lx, ly, C.dim);
   if (window._empty) { const w=textWidth(window._empty); drawText(sctx, window._empty, Math.round(GW/2-w/2), Math.round(GH/2), C.sub); }
 }
 
@@ -176,7 +196,17 @@ function tip(n) {
 }
 
 function buildSheet(n) {
-  const L=[]; L.push({t:n.name.toUpperCase(), c:C.title, s:2});
+  const L=[];
+  if (n.type==='town') {   // the civic record: the town's political history, as SuperMemory holds it
+    L.push({t:n.name.toUpperCase(), c:C.sub, s:2}); L.push({t:"THE TOWN'S CIVIC RECORD", c:C.dim, s:1}); L.push({gap:4});
+    for (const raw of String(n.text).split(/\n|(?= - )/)) {
+      const line=raw.trim(); if(!line) continue;
+      const bullet=line.startsWith('-'); const t=bullet?line.replace(/^-\s*/,''):line;
+      wrap(t, PW-16).forEach((ln,i)=> L.push({t:ln, c:i===0&&bullet?C.mem:C.label, bar:i===0&&bullet?'#e8c860':null}));
+    }
+    sheetLines=L; sheetScroll=0; sheetH=L.reduce((a,l)=>a+(l.gap||(l.s===2?12:7)),0); return;
+  }
+  L.push({t:n.name.toUpperCase(), c:C.title, s:2});
   L.push({t:`${n.memories.length} ${n.memories.length===1?'MEMORY':'MEMORIES'} IN SUPERMEMORY`, c:C.dim, s:1}); L.push({gap:4});
   const sec=(title,kind,col)=>{ const arr=n.memories.filter(m=>kindOf(m)===kind); if(!arr.length) return;
     L.push({t:title, c:C.sub, s:1});
@@ -206,6 +236,7 @@ function world(e){ const p=ptr(e); return { x:(p.x-view.x)/view.z, y:(p.y-view.y
 function overSheet(e){ return panelX<GW-1 && ptr(e).x>panelX; }
 function hit(e){ const p=world(e);
   for (const n of farmerNodes) if(Math.hypot(n.x-p.x,n.y-p.y)<=n.r+2) return n;
+  if (townNode && Math.hypot(townNode.x-p.x,townNode.y-p.y)<=townNode.r+2) return townNode;
   for (const n of nodes) if(n.type==='mem' && Math.hypot(n.x-p.x,n.y-p.y)<=n.r+2) return n;
   return null; }
 function far(e){ return downAt && Math.hypot(e.clientX-downAt.x, e.clientY-downAt.y) > 4; }
