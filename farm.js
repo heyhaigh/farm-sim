@@ -9,7 +9,7 @@
 // livestock pen (milk) — each with its own "producers" the farmer tends and
 // collects from. Which facility comes first reflects the farmer's archetype.
 
-import { mulberry32, mod, growFarmer, personalityLabel, compileCreeds, hashString, ALL_CROPS } from './dna.js';
+import { mulberry32, mod, growFarmer, personalityLabel, compileCreeds, docLexicon, hashString, ALL_CROPS } from './dna.js';
 export { ALL_CROPS };   // re-exported so tools/tests can pull the crop list from the sim entrypoint
 
 // The FOUNDING VALLEY: the hand-tuned region generated with the original global algorithm
@@ -613,6 +613,7 @@ export class World {
         this.sabotage = [];    // #97 Slice 4: planted-but-not-yet-sprung harm ({perp,victim,kind,effectDay})
         this.suspicion = {};   // #97 Slice 4: the Watch's slow-building trail on unsolved crimes (seed -> score)
         this.recipes = {};     // #97 P3: the town's generatively-discovered recipes (canonical key -> record)
+        this.tales = [];       // #97 P4: the town's founding myths of rare ingredients, grown from its founders' memories
         this.board = null;    // no bulletin board until the town builds one together (first communal project)
         this.merchant = null;                             // the wandering trader, present only during a visit
         this.merchantNextDay = 4 + Math.floor(this.rand() * 3);   // first caravan rolls in around day 4-6
@@ -883,8 +884,8 @@ export class World {
     // #97 P2 — a RARE crafting ingredient surfaces in the DEEP WILDS (far from town), genuinely scarce:
     // at most a couple out at once, a long seeded reseed cadence, single-use. Mirrors the treasure spawn.
     #maybeSpawnRareNode() {
-        if (this.rareNodes.length >= 2 || this.day < this.rareCooldown) return;
-        if (this.rand() > 0.05) return;                       // ~1 in 20 eligible days
+        if (this.rareNodes.length >= 3 || this.day < this.rareCooldown) return;
+        if (this.rand() > 0.09) return;                       // ~1 in 11 eligible days — scarce, but findable by a seeker
         const R = this.revealRect;
         for (let tries = 0; tries < 60; tries++) {
             const i = R.i0 + Math.floor(this.rand() * (R.i1 - R.i0 + 1));
@@ -895,7 +896,7 @@ export class World {
             const r = tileHash(i, j, 0x9a1e) % 100;
             const kind = r < 55 ? 'crystal' : r < 85 ? 'emberbloom' : 'relic';   // relic the rarest
             this.rareNodes.push({ kind, i, j, claimant: null, spawnedDay: this.day });
-            this.rareCooldown = this.day + 6;                            // a long, scarce cadence
+            this.rareCooldown = this.day + 4;                            // a scarce but not-starving cadence
             this.addLog(`Something ${RARE_GLINT[kind]} far out in the deep wilds...`, RARE_COLOR[kind]);
             return;
         }
@@ -918,13 +919,42 @@ export class World {
         const s = farmer.sheet; s.goods = s.goods || {};
         s.goods[node.kind] = (s.goods[node.kind] || 0) + 1;
         s.dryStreak = 0;   // #97 P3 — a rare ingredient reopens the discovery space (new combinations to try)
+        // #97 P4 — VALIDATION: the myth becomes real. This ONE ingredient's track flips to validated; a small
+        // GLOBAL curiosity nudge warms the finder to OTHER tales (never validates them — no cascade).
+        s.rareBelief = s.rareBelief || {};
+        const hadTale = s.rareBelief[node.kind] && s.rareBelief[node.kind].state === 'tale';
+        s.rareBelief[node.kind] = { state: 'validated', strength: 1 };
+        for (const ing in s.rareBelief) if (ing !== node.kind && s.rareBelief[ing].state === 'tale') s.rareBelief[ing].strength = Math.min(1, s.rareBelief[ing].strength + 0.08);
+        // a non-believer who stumbles on one becomes the ORIGIN of a new tale (retroactively seeds it)
+        if (!hadTale && !this.tales.some(t => t.ingredient === node.kind)) this.tales.push({ ingredient: node.kind, lexemes: [], originSeed: s.seed, originTitle: 'a thing found out past the fog' });
         farmer.sparkle = 3; farmer.gainXP(8);
-        farmer.remember('event', `Held a ${RARE_NAME[node.kind]} at last, out past the fog — the old tales were true`, null, 1.5);
+        farmer.remember('event', hadTale
+            ? `Held a ${RARE_NAME[node.kind]} at last, out past the fog — the old tales were true`
+            : `Found a ${RARE_NAME[node.kind]} — I'd never heard its like. What else waits out there?`, null, 1.5);
         this.addChronicle('find', `${shortName(farmer)} found a ${RARE_NAME[node.kind]} in the deep wilds.`, farmer, null, RARE_COLOR[node.kind]);
         return node.kind;
     }
     #tickRareNodes() {   // release a stale claim if the seeker gave up
         for (const n of this.rareNodes) if (n.claimant && n.claimant.state !== 'walk' && n.claimant.state !== 'seekrare') n.claimant = null;
+    }
+    // #97 P4 — GOSSIP the tales: once a day, a believer/finder tells a seeded neighbour of a rare ingredient,
+    // nudging THAT ingredient's belief (never another). Bounded (one telling per teller×ingredient/day,
+    // attenuated by the listener's regard), deterministic (stable seed-sorted iteration + a seeded stream).
+    #spreadTales() {
+        const order = [...this.farmers].sort((a, b) => a.sheet.seed - b.sheet.seed);
+        for (const f of order) {
+            const rb = f.sheet.rareBelief; if (!rb) continue;
+            for (const ing of Object.keys(rb).sort()) {
+                const b = rb[ing];
+                if (b.state !== 'validated' && b.strength < 0.45) continue;   // only a real believer/finder spreads
+                const roll = mulberry32((this.seed ^ f.sheet.seed ^ hashString('gossip:' + ing) ^ Math.imul(this.day, 0x9e3779b1)) >>> 0);
+                const cand = order.filter(o => o !== f && o.health !== 'sick'); if (!cand.length) continue;
+                const listener = cand[Math.floor(roll() * cand.length)];
+                const cur = listener.sheet.rareBelief?.[ing]?.strength || 0;
+                const bump = Math.min(0.15, (b.state === 'validated' ? 0.5 : b.strength) * 0.3) * (0.6 + Math.max(0, listener.opinionOf(f)) * 0.4);
+                listener.hearTale(ing, cur + bump);
+            }
+        }
     }
     #tickBirds(dt) {
         if (this.isNight()) return;   // crows roost at night — no flying, hopping, or crop raids
@@ -1522,7 +1552,27 @@ export class World {
         // farmer's lifelong want fits who they finally are. Same town seed -> same dreams; a fresh
         // town rerolls the cast's inner lives.
         this.#ensureDreams();
+        this.#seedTales();     // #97 P4: the town's founding myths of rare ingredients, grown from its memories
         this.#updateCivic();   // #94: seat the first Town Manager + post day-one directive
+    }
+
+    // #97 P4 — the town's founding MYTHS: each grown from a founder's own remembered life, each pointing at a
+    // rare ingredient (star-crystal / emberbloom / relic) with frozen imagery from that founder's source doc.
+    // A tale is a rumour, not knowledge — the founder half-believes it and the rest have faintly heard of it.
+    // Snapshotted ONCE at founding + frozen in the save, so a mutable corpus can never shift a town's myths.
+    #seedTales() {
+        const founders = [...this.farmers].sort((a, b) => a.sheet.seed - b.sheet.seed);
+        for (let k = 0; k < Math.min(3, founders.length); k++) {
+            const f = founders[k], mem = f.sheet.memory || {};
+            const ingredient = RARE_KINDS[hashString('tale:' + f.sheet.seed) % RARE_KINDS.length];
+            if (this.tales.some(t => t.ingredient === ingredient)) continue;   // one tale per rare ingredient
+            const lex = (docLexicon(mem, f.sheet.seed) || []).slice(0, 4);     // frozen imagery from their doc
+            this.tales.push({ ingredient, lexemes: lex, originSeed: f.sheet.seed, originTitle: mem.title || null });
+            f.hearTale(ingredient, 0.4);                                       // its carrier believes a little more
+        }
+        // everyone else has faintly HEARD the town's tales (ambient lore); the curious a touch more
+        for (const t of this.tales) for (const f of this.farmers)
+            if (!(f.sheet.rareBelief && f.sheet.rareBelief[t.ingredient])) f.hearTale(t.ingredient, 0.2 + (mod(f.sheet.stats.int) >= 1 ? 0.05 : 0));
     }
 
     // Roll a dream for any farmer without one (founders after ensureFounderVariety; any future
@@ -2153,6 +2203,7 @@ export class World {
             sabotage: this.sabotage.map(s => ({ ...s })),   // #97 Slice 4: pending harm + the Watch's trail
             suspicion: { ...this.suspicion },
             recipes: Object.fromEntries(Object.entries(this.recipes).map(([k, v]) => [k, { ...v }])),   // #97 P3 registry
+            tales: this.tales.map(t => ({ ...t, lexemes: [...(t.lexemes || [])] })),   // #97 P4 frozen myths
 
             tiles: this.tiles.slice(),
             chunks: new Map([...this.chunks].map(([k, a]) => [k, a.slice()])),
@@ -2260,6 +2311,7 @@ export class World {
         this.sabotage = Array.isArray(d.sabotage) ? d.sabotage.map(s => ({ ...s })) : [];   // #97 Slice 4
         this.suspicion = d.suspicion ? { ...d.suspicion } : {};
         this.recipes = d.recipes ? Object.fromEntries(Object.entries(d.recipes).map(([k, v]) => [k, { ...v }])) : {};
+        this.tales = Array.isArray(d.tales) ? d.tales.map(t => ({ ...t, lexemes: [...(t.lexemes || [])] })) : [];
 
         this.tiles.set(d.tiles);
         this.chunks = new Map(); for (const [k, a] of d.chunks) this.chunks.set(k, Uint8Array.from(a));
@@ -4590,6 +4642,7 @@ export class World {
             this.#encroach();
             this.#maybeSpawnTreasure();
             this.#maybeSpawnRareNode();   // #97 P2: a rare crafting ingredient in the deep wilds
+            this.#spreadTales();          // #97 P4: tales of the rare ingredients travel farmer-to-farmer
             this.#tickCoops();
             this.#maybeHatchRooster();
             this.addLog(`Day ${this.day} begins on ${this.name}`, '#f0d060');
@@ -6030,6 +6083,24 @@ export class Farmer {
         if (!s.triedCombos.includes(sig)) { s.triedCombos.push(sig); if (s.triedCombos.length > 40) s.triedCombos.shift(); }
     }
 
+    // #97 P4 — RARE-INGREDIENT belief. A tale is a rumour with a STRENGTH (0.15..1); a find makes it
+    // 'validated'. Belief is per-ingredient (a crystal find never validates a relic) — reads only local state.
+    hearTale(ingredient, strength) {
+        const s = this.sheet; s.rareBelief = s.rareBelief || {};
+        const b = s.rareBelief[ingredient] || { state: 'unheard', strength: 0 };
+        if (b.state !== 'validated') { b.state = 'tale'; b.strength = Math.min(1, Math.max(b.strength, strength)); }
+        s.rareBelief[ingredient] = b;
+    }
+    topRareBelief() {   // strongest tale/validation — drives whether they're drawn out past the fog
+        const rb = this.sheet.rareBelief; if (!rb) return 0;
+        let m = 0; for (const k in rb) m = Math.max(m, rb[k].strength || 0); return m;
+    }
+    #decayLore() {   // each dawn a tale fades a little (grounded farmers faster), never below a thread of hope
+        const s = this.sheet; if (!s.rareBelief) return;
+        const decay = this.p.diligence > 0.6 ? 0.009 : (mod(s.stats.int) >= 1 ? 0.004 : 0.006);
+        for (const ing in s.rareBelief) { const b = s.rareBelief[ing]; if (b.state === 'tale') b.strength = Math.max(0.15, b.strength - decay); }
+    }
+
     // The soonest useful invented recipe to craft right now: a remedy when it would help THIS farmer,
     // else a tool/utility buff when idle and not already boosted. Returns an id they know + can afford.
     #usefulInvention() {
@@ -6779,6 +6850,7 @@ export class Farmer {
 
         this.#reviseBeliefs();        // W2: reinforce / erode / shed beliefs against recent life first
         this.#consolidateBeliefs();   // #91 Tier-3: a recurring lived theme may crystallise into a belief today
+        this.#decayLore();            // #97 P4: a rare-ingredient tale fades a little each dawn (floored)
     }
 
     #maybeAskForHelp() {
@@ -7406,10 +7478,11 @@ export class Farmer {
             }
         }
 
-        // #97 P2 — a curious soul is DRAWN to a rare glint out past the fog (the myth-BELIEF-driven pull
-        // arrives in P4; for now curiosity ~ wits). Discretionary: only when housed, rested and it's day, and
-        // gated by INT so it isn't a town-wide stampede — most stay home, a wondering few venture out.
-        if (w.rareNodes.length && !w.isNight() && this.energy > 0.35 && this.plot.built.level >= 1 && mod(s.stats.int) >= 1) {
+        // #97 P4 — a soul who BELIEVES the tales is drawn out past the fog to a rare glint. Discretionary:
+        // only when housed, rested and it's day, and gated by belief × curiosity (not everyone — a believing,
+        // wondering few venture out on the hope the stories are true). Most trips find nothing; that's the point.
+        if (w.rareNodes.length && !w.isNight() && this.energy > 0.35 && this.plot.built.level >= 1 &&
+            this.topRareBelief() > 0.2 && this.topRareBelief() + this.p.curiosity * 0.4 > 0.42) {
             const node = w.nearestRareNode(this, 55);
             if (node && !node.claimant) {
                 node.claimant = this; this.think('SOMETHING GLIMMERS OUT PAST THE FOG...');
