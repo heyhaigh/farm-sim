@@ -70,7 +70,7 @@ export const BASE_RECIPES = ['soup', 'salve', 'tonic'];
 // `harm` entries exist but are `locked` — UNREACHABLE until Slice 4 ships covert-crime detection.
 export const INVENTION_TABLE = {
     remedy: [
-        { id: 'inv:remedy:0', name: 'Fever Tonic',      inputs: { grass: 4, flower: 1 }, effect: 'cure',     tier: 2 },
+        { id: 'inv:remedy:0', name: 'Fever Draught',     inputs: { grass: 4, flower: 1 }, effect: 'mendhp',   tier: 2 },
         { id: 'inv:remedy:1', name: 'Poultice',         inputs: { grass: 3, crops: 1 },  effect: 'mendhp',   tier: 2 },
         { id: 'inv:remedy:2', name: 'Sleeping Draught', inputs: { flower: 2, grass: 2 }, effect: 'deeprest', tier: 2 },
     ],
@@ -2835,17 +2835,20 @@ export class World {
     applyRemedy(healer, patient, recipeId) {
         if (!this.#consumeRecipe(healer, recipeId)) return false;
         patient.tendedDay = this.day;   // one remedy per patient per day (see the Healer triage)
-        const nm = RECIPES[recipeId].name, cured = recipeId === 'tonic';
-        if (cured) { patient.health = 'healthy'; patient.sickDays = 0; patient.energy = Math.min(1, patient.energy + 0.25); patient.strain = 0; patient.sparkle = 2; }
+        // The Healer's commons remedies EASE and SPEED recovery — a strong tonic greatly hastens it — but a
+        // true INSTANT cure now comes only from a rare-gated elixir (the generative 'cure' item), so the whole
+        // rarity edifice has an economic pull (grass no longer cures fever). Ladder: soup < salve < tonic.
+        const nm = RECIPES[recipeId].name, strong = recipeId === 'tonic';
+        if (strong) { patient.sickDays = Math.max(1, patient.sickDays - 3); patient.strain = 0; patient.energy = Math.min(1, patient.energy + 0.25); patient.sparkle = 1; }
         else if (recipeId === 'salve') { patient.sickDays = Math.max(1, Math.ceil(patient.sickDays / 2)); patient.strain = Math.max(0, patient.strain - 0.5); patient.energy = Math.min(1, patient.energy + 0.1); }
         else { patient.sickDays = Math.max(1, patient.sickDays - 1); patient.energy = Math.min(1, patient.energy + 0.15); }
-        patient.adjustOpinion(healer, 0.4, 'healed me when I was ill');
+        patient.adjustOpinion(healer, 0.4, 'tended me when I was ill');
         this.addBond(healer, patient); healer.adjustReputation(0.05); healer.gainXP(2);
-        this.roles.healerApproval = Math.min(1, this.roles.healerApproval + (cured ? 0.06 : 0.03));
-        patient.say(cured ? 'ALL BETTER!' : 'THANK YOU...', '#7dd069'); healer.say(cured ? 'GOOD AS NEW' : 'REST NOW, FRIEND', '#7dd069');
+        this.roles.healerApproval = Math.min(1, this.roles.healerApproval + (strong ? 0.06 : 0.03));
+        patient.say(strong ? 'MUCH BETTER!' : 'THANK YOU...', '#7dd069'); healer.say(strong ? 'REST — YOU\'LL MEND FAST NOW' : 'REST NOW, FRIEND', '#7dd069');
         this.addLog(`${healer.sheet.name} tended ${patient.sheet.name} with a ${nm.toLowerCase()}`, '#7dd069');
-        this.addChronicle('bond', cured
-            ? `${shortName(healer)} nursed ${shortName(patient)} back to health with a tonic.`
+        this.addChronicle('bond', strong
+            ? `${shortName(healer)} had ${shortName(patient)} well on the mend with a tonic.`
             : `${shortName(healer)} eased ${shortName(patient)}'s illness with a ${nm.toLowerCase()}.`, healer, patient, '#7dd069');
         return true;
     }
