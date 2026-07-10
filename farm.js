@@ -332,6 +332,20 @@ export function obstacleTier(i, j) {
     const r = tileHash(i, j, 0x517e) % 100;
     return r < 62 ? 0 : r < 88 ? 1 : 2;   // ~62% small / 26% medium / 12% big
 }
+// #97 P2 — a wild tile occasionally holds a distinctive CRAFTING INGREDIENT (a berry patch, a mushroom ring,
+// an herb, a root), stable per position, so foraging the wilds yields a varied larder for invention rather
+// than only grass/flowers. ~40% of wild tiles carry one. Pure function of position — deterministic.
+export const FORAGE_INGREDIENTS = ['berry', 'mushroom', 'herb', 'root'];
+export function forageIngredient(i, j) {
+    if (tileHash(i, j, 0xf04a) % 100 < 60) return null;
+    return FORAGE_INGREDIENTS[tileHash(i, j, 0xf04b) % FORAGE_INGREDIENTS.length];
+}
+// #97 P2 — the RARE ingredients (the mythical ones). Kinds, their ingredient good, display + glint.
+export const RARE_KINDS = ['crystal', 'emberbloom', 'relic'];
+export const RARE_NAME = { crystal: 'star-crystal', emberbloom: 'emberbloom', relic: 'traveller\'s relic' };
+export const RARE_COLOR = { crystal: '#8fd0e8', emberbloom: '#f0885a', relic: '#e8c860' };
+const RARE_GLINT = { crystal: 'glitters cold', emberbloom: 'glows warm', relic: 'gleams gold' };
+
 // A tree's TYPE index (which species sprite), stable per tile — for the render to pick consistently.
 export function treeVariant(i, j, n) { return tileHash(i, j, 0x73ee) % n; }
 // ~1 in 6 trees is an APPLE tree (stable per tile): it renders as a fruit tree and, when felled, drops
@@ -611,6 +625,8 @@ export class World {
         this.birds = [];
         this.#spawnBirds(4 + Math.floor(this.rand() * 3));
         this.treasure = null;   // a rare treasure chest; the finder is richly rewarded
+        this.rareNodes = [];    // #97 P2: rare crafting-ingredient spawns in the deep wilds (star-crystal, etc.)
+        this.rareCooldown = 0;  // ...a long seeded reseed cadence so they stay genuinely scarce
     }
 
     // A settled flock of 2+ hens may hatch (or attract) a rooster — one per coop. He
@@ -818,6 +834,11 @@ export class World {
                 const n = Math.round(rnd(3, 6) * mult); s.goods[g] = (s.goods[g] || 0) + n;
                 picks.push(`${n} ${g}`);
             }
+            // #97 P2 — a DEEP chest may also hold one of the mythical rare ingredients (the other way to find them)
+            if ((tr.depth || 0) > 0.6 && this.rand() < 0.5) {
+                const rk = RARE_KINDS[Math.floor(this.rand() * RARE_KINDS.length)];
+                s.goods[rk] = (s.goods[rk] || 0) + 1; picks.push(`a ${RARE_NAME[rk]}`);
+            }
             farmer.gainXP(5); farmer.say('A TRADE BUNDLE!', '#e0b050');
             farmer.remember('event', `Found a bundle of trade goods — ${picks.join(', ')}`, null, 1.1);
             this.addLog(`${s.name} found a BUNDLE of trade goods — ${picks.join(', ')}!`, '#e0b050');
@@ -848,6 +869,52 @@ export class World {
         if (tr.opened) { tr.openT -= dt; if (tr.openT <= 0) this.treasure = null; return; }
         // release a stale claim if the claimant wandered off / isn't coming
         if (tr.claimant && tr.claimant.state !== 'walk' && tr.claimant.state !== 'treasure') tr.claimant = null;
+    }
+
+    // #97 P2 — a RARE crafting ingredient surfaces in the DEEP WILDS (far from town), genuinely scarce:
+    // at most a couple out at once, a long seeded reseed cadence, single-use. Mirrors the treasure spawn.
+    #maybeSpawnRareNode() {
+        if (this.rareNodes.length >= 2 || this.day < this.rareCooldown) return;
+        if (this.rand() > 0.05) return;                       // ~1 in 20 eligible days
+        const R = this.revealRect;
+        for (let tries = 0; tries < 60; tries++) {
+            const i = R.i0 + Math.floor(this.rand() * (R.i1 - R.i0 + 1));
+            const j = R.j0 + Math.floor(this.rand() * (R.j1 - R.j0 + 1));
+            if (Math.hypot(i - CENTER, j - CENTER) < 22) continue;        // must be DEEP (past the settled ring)
+            if (!this.isRevealed(i, j) || this.get(i, j) !== T.GRASS || this.pathBlocked(i, j)) continue;
+            if (this.rareNodes.some(n => Math.abs(n.i - i) + Math.abs(n.j - j) < 8)) continue;
+            const r = tileHash(i, j, 0x9a1e) % 100;
+            const kind = r < 55 ? 'crystal' : r < 85 ? 'emberbloom' : 'relic';   // relic the rarest
+            this.rareNodes.push({ kind, i, j, claimant: null, spawnedDay: this.day });
+            this.rareCooldown = this.day + 6;                            // a long, scarce cadence
+            this.addLog(`Something ${RARE_GLINT[kind]} far out in the deep wilds...`, RARE_COLOR[kind]);
+            return;
+        }
+    }
+    nearestRareNode(farmer, maxDist = 999) {                              // for the seek/harvest behaviour
+        let best = null, bd = maxDist; const p = farmer.pos || farmer;
+        for (const n of this.rareNodes) {
+            if (n.claimant && n.claimant !== farmer) continue;
+            const d = Math.hypot(n.i - p.i, n.j - p.j);
+            if (d < bd) { bd = d; best = n; }
+        }
+        return best;
+    }
+    rareNodeClaimedBy(farmer) { return this.rareNodes.find(n => n.claimant === farmer) || null; }
+    // Harvest a rare node — single-use. Adds the rare ingredient to the farmer's larder + a strong memory.
+    // (The myth VALIDATION beat + belief flip land here in P4; for P2 it's already a real find.)
+    harvestRareNode(farmer, node) {
+        const idx = this.rareNodes.indexOf(node); if (idx < 0) return null;
+        this.rareNodes.splice(idx, 1);
+        const s = farmer.sheet; s.goods = s.goods || {};
+        s.goods[node.kind] = (s.goods[node.kind] || 0) + 1;
+        farmer.sparkle = 3; farmer.gainXP(8);
+        farmer.remember('event', `Held a ${RARE_NAME[node.kind]} at last, out past the fog — the old tales were true`, null, 1.5);
+        this.addChronicle('find', `${shortName(farmer)} found a ${RARE_NAME[node.kind]} in the deep wilds.`, farmer, null, RARE_COLOR[node.kind]);
+        return node.kind;
+    }
+    #tickRareNodes() {   // release a stale claim if the seeker gave up
+        for (const n of this.rareNodes) if (n.claimant && n.claimant.state !== 'walk' && n.claimant.state !== 'seekrare') n.claimant = null;
     }
     #tickBirds(dt) {
         if (this.isNight()) return;   // crows roost at night — no flying, hopping, or crop raids
@@ -2265,6 +2332,7 @@ export class World {
         for (const plot of this.plots) this.#rebuildFields(plot);
         this.helpBoard = []; this.encounters = []; this.prey = [];
         this.treasure = null; this.merchant = null; this.dayRecap = null;
+        this.rareNodes = []; this.rareCooldown = 0;   // #97 P2: transient, like treasure — respawn after load
         this.lightningTimer = 0; this.lightningFlash = 0; this.struckTile = null; this.townLevelFlash = 0;
         this.birds = []; this.#spawnBirds(4 + Math.floor(this.rand() * 3));   // re-perch on the REAL current trees
         this.updateLeader();
@@ -4493,6 +4561,7 @@ export class World {
             this.#regrowWild();
             this.#encroach();
             this.#maybeSpawnTreasure();
+            this.#maybeSpawnRareNode();   // #97 P2: a rare crafting ingredient in the deep wilds
             this.#tickCoops();
             this.#maybeHatchRooster();
             this.addLog(`Day ${this.day} begins on ${this.name}`, '#f0d060');
@@ -4514,6 +4583,7 @@ export class World {
         this.#tickLightning(dt);
         this.#tickBirds(dt);
         this.#tickTreasure(dt);
+        this.#tickRareNodes();
         this.#maybeStartProject();
         this.#tickMerchant(dt);
         this.#tickDM(dt);
@@ -7281,6 +7351,18 @@ export class Farmer {
             }
         }
 
+        // #97 P2 — a curious soul is DRAWN to a rare glint out past the fog (the myth-BELIEF-driven pull
+        // arrives in P4; for now curiosity ~ wits). Discretionary: only when housed, rested and it's day, and
+        // gated by INT so it isn't a town-wide stampede — most stay home, a wondering few venture out.
+        if (w.rareNodes.length && !w.isNight() && this.energy > 0.35 && this.plot.built.level >= 1 && mod(s.stats.int) >= 1) {
+            const node = w.nearestRareNode(this, 55);
+            if (node && !node.claimant) {
+                node.claimant = this; this.think('SOMETHING GLIMMERS OUT PAST THE FOG...');
+                if (this.#goTo(node.i + 0.5, node.j + 0.5, 'seekrare')) return;
+                node.claimant = null;   // couldn't reach it — leave it for another
+            }
+        }
+
         // a new settler must clear their land, fence it, then build a house before farming
         if (this.plot.built.level < 1 && this.#pursueHomestead()) return;
         if (this.#maybeUpgradeHome()) return;
@@ -8430,6 +8512,11 @@ export class Farmer {
                 s.harvested += 1; w.harvestTotal += 1;
                 this.say('+1 wild grass', '#8fd06a');
             }
+            // #97 P2 — this patch of wilds may also hold a distinctive crafting ingredient (berry/mushroom/
+            // herb/root), stable per tile, so a forage trip stocks the larder for invention, not just staples.
+            const ing = forageIngredient(tgt.i, tgt.j);
+            if (ing) { const n = 1 + (obstacleTier(tgt.i, tgt.j) >= 1 ? 1 : 0);
+                s.goods[ing] = (s.goods[ing] || 0) + n; this.say(`+${n} ${ing}`, '#a0d060'); }
             this.gainXP(1);
         }
         this.forageTarget = null;
@@ -8712,6 +8799,11 @@ export class Farmer {
                     else if (then === 'barter') this.#completeBarter();
                     else if (then === 'annex') this.#completeAnnex();
                     else if (then === 'treasure') { this.world.openTreasure(this); this.state = 'decide'; }
+                    else if (then === 'seekrare') {   // #97 P2: reached the glint — harvest the rare ingredient
+                        const node = this.world.rareNodeClaimedBy(this);
+                        if (node) this.world.harvestRareNode(this, node);
+                        this.state = 'decide';
+                    }
                     else { this.state = 'idle'; this.wanderTimer = 1 + this.rand() * 2.5; }
                 } else {
                     const step = Math.min((this.speed * dt) / dist, 1);
