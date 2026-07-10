@@ -56,6 +56,8 @@ addEventListener('resize', resize); resize();
 
 const view = { x: 0, y: 0, z: 1 };            // pan/zoom
 let nodes = [], links = [], farmerNodes = [], selected = null, hover = null;
+let alpha = 1;                                 // layout "heat": decays 1→0 so the graph settles and stops drifting
+function reheat(a=0.5){ alpha = Math.max(alpha, a); }   // nudge it back to life on interaction
 
 const KIND_COL = { creed:'#c8a0e0', belief:'#8fc7e8', mem:'#7dd069' };
 function nameColor(s){ let h=0; for(const c of s) h=(h*31+c.charCodeAt(0))>>>0; return `hsl(${h%360} 42% 62%)`; }
@@ -102,23 +104,28 @@ async function load() {
 
 function tick() {
   const cx=W/2, cy=H/2;
-  // repulsion (mass-weighted: farmers push hard, satellites barely)
-  for (let i=0;i<nodes.length;i++){ const n=nodes[i]; let fx=0, fy=0;
-    for (let k=0;k<nodes.length;k++){ if(k===i) continue; const m=nodes[k];
-      let dx=n.x-m.x, dy=n.y-m.y, d2=dx*dx+dy*dy+0.01, d=Math.sqrt(d2);
-      const rep = 4200*n.mass*m.mass/d2; fx+=dx/d*rep; fy+=dy/d*rep; }
-    // gravity: farmers to centre; satellites only feather so strays don't drift off
-    const g = n.type==='farmer' ? 0.006 : 0.001; fx+=(cx-n.x)*g; fy+=(cy-n.y)*g;
-    n.vx=(n.vx+fx)*0.85; n.vy=(n.vy+fy)*0.85;
+  // once the graph is cool it holds still (dragging re-heats it); keep drawing so hover still works
+  const moving = alpha > 0.02 || dragNode;
+  if (moving) {
+    // repulsion (mass-weighted: farmers push hard, satellites barely)
+    for (let i=0;i<nodes.length;i++){ const n=nodes[i]; let fx=0, fy=0;
+      for (let k=0;k<nodes.length;k++){ if(k===i) continue; const m=nodes[k];
+        let dx=n.x-m.x, dy=n.y-m.y, d2=dx*dx+dy*dy+0.01, d=Math.sqrt(d2);
+        const rep = 4200*n.mass*m.mass/d2; fx+=dx/d*rep; fy+=dy/d*rep; }
+      // gravity: farmers to centre; satellites only feather so strays don't drift off
+      const g = n.type==='farmer' ? 0.006 : 0.001; fx+=(cx-n.x)*g; fy+=(cy-n.y)*g;
+      n.vx=(n.vx+fx*alpha)*0.82; n.vy=(n.vy+fy*alpha)*0.82;   // forces scaled by heat, then damped
+    }
+    for (const l of links) {
+      const dx=l.b.x-l.a.x, dy=l.b.y-l.a.y, d=Math.hypot(dx,dy)||1, ux=dx/d, uy=dy/d;
+      if (l.sat) { const k=(d-52)*0.09*alpha;                 // satellite: tight orbit, mostly moves the memory
+        if(l.b!==dragNode){ l.b.vx-=ux*k; l.b.vy-=uy*k; } if(l.a!==dragNode){ l.a.vx+=ux*k*0.12; l.a.vy+=uy*k*0.12; } }
+      else { const k=(d-200)*0.014*alpha;                     // relationship: long spring between farmers
+        if(l.a!==dragNode){ l.a.vx+=ux*k; l.a.vy+=uy*k; } if(l.b!==dragNode){ l.b.vx-=ux*k; l.b.vy-=uy*k; } }
+    }
+    for (const n of nodes) { if (n===dragNode) continue; n.x+=n.vx; n.y+=n.vy; }
+    if (!dragNode) alpha *= 0.985;                            // cool down toward rest
   }
-  for (const l of links) {
-    const dx=l.b.x-l.a.x, dy=l.b.y-l.a.y, d=Math.hypot(dx,dy)||1, ux=dx/d, uy=dy/d;
-    if (l.sat) { const k=(d-52)*0.09;                     // satellite: tight orbit, mostly moves the memory
-      if(l.b!==dragNode){ l.b.vx-=ux*k; l.b.vy-=uy*k; } if(l.a!==dragNode){ l.a.vx+=ux*k*0.12; l.a.vy+=uy*k*0.12; } }
-    else { const k=(d-200)*0.014;                          // relationship: long spring between farmers
-      if(l.a!==dragNode){ l.a.vx+=ux*k; l.a.vy+=uy*k; } if(l.b!==dragNode){ l.b.vx-=ux*k; l.b.vy-=uy*k; } }
-  }
-  for (const n of nodes) { if (n===dragNode) continue; n.x+=n.vx; n.y+=n.vy; }
   draw();
   requestAnimationFrame(tick);
 }
@@ -182,7 +189,7 @@ function far(e){ return downAt && Math.hypot(e.clientX-downAt.x, e.clientY-downA
 cv.addEventListener('mousedown', e=>{ downAt={x:e.clientX,y:e.clientY}; const n=hit(e);
   if(n && n.type==='farmer'){ dragNode=n; } else if(!n){ panning={x:e.clientX-view.x,y:e.clientY-view.y}; } });
 cv.addEventListener('mousemove', e=>{ hover=hit(e); cv.style.cursor=hover?'pointer':(panning?'grabbing':'grab');
-  if(dragNode && far(e)){ const p=toWorld(e); dragNode.x=p.x; dragNode.y=p.y; dragNode.vx=dragNode.vy=0; }
+  if(dragNode && far(e)){ const p=toWorld(e); dragNode.x=p.x; dragNode.y=p.y; dragNode.vx=dragNode.vy=0; reheat(0.3); }
   else if(panning){ view.x=e.clientX-panning.x; view.y=e.clientY-panning.y; } });
 addEventListener('mouseup', e=>{ if(!far(e)){ const n=hit(e); if(n) selectNode(n.type==='mem'?n.parent:n); }
   dragNode=null; panning=null; downAt=null; });
