@@ -101,6 +101,63 @@ export const RECIPE_BY_ID = (() => {
 // nothing left to find, so they stop burning stock on it (W3 throttle).
 const HELPFUL_INVENTIONS = ['remedy', 'tool', 'utility'].reduce((n, k) => n + INVENTION_TABLE[k].filter(e => !e.locked).length, 0);
 
+// ---------------------------------------------------------------------------
+// GENERATIVE CRAFTING (#97 next) — recipes as a COMBINATORIAL GRAMMAR, not a fixed list.
+// Every ingredient carries an ESSENCE vector; a combination's item is DERIVED from the summed essences
+// (deterministic + clamped), so the discoverable space is combinatorial (hundreds of items, per-town
+// unique) while the sim stays perfectly reproducible. The LLM later dresses each discovery in a name +
+// lore (display-only, procedural fallback) — the flavour is invented wholesale, the MECHANICS are seeded.
+// ---------------------------------------------------------------------------
+export const INGREDIENT_ESSENCE = {
+    // staples (already in the economy)
+    crops:  { vitality: 2, growth: 1 },
+    grass:  { vitality: 1, growth: 1, warmth: 1 },
+    flower: { growth: 1, luck: 1, mystic: 1, sweet: 1 },
+    wheat:  { hearty: 1, growth: 1 },
+    // foraged (new — from the wild)
+    berry:    { vitality: 2, sweet: 2 },
+    mushroom: { potency: 2, earthy: 2 },
+    herb:     { vitality: 1, potency: 1, warmth: 1 },
+    root:     { hearty: 2, earthy: 1 },
+    // rare finds (treasure / deep wilds / ancient relics) — enable rare, powerful items
+    crystal:    { mystic: 3, potency: 2, rare: 2 },
+    relic:      { mystic: 2, luck: 3, rare: 3 },
+    emberbloom: { warmth: 3, potency: 1, rare: 1 },
+};
+const INGREDIENT_FALLBACK = { vitality: 1 };   // any edible good we don't know still carries a little life
+// which existing gameplay EFFECT a dominant essence yields (so a discovery plugs into the craft/consume path)
+const ESSENCE_EFFECT = {
+    vitality: 'mendhp', hearty: 'refresh', growth: 'growboost', potency: 'workboost',
+    warmth: 'refresh', mystic: 'charm', luck: 'charm', sweet: 'refresh', earthy: 'growboost',
+};
+const ESSENCE_ADJ = { vitality: 'Vital', hearty: 'Hearty', growth: 'Verdant', potency: 'Potent', warmth: 'Warming', mystic: 'Mystic', luck: 'Lucky', sweet: 'Sweet', earthy: 'Earthen', rare: 'Rare' };
+const EFFECT_FORM = { mendhp: 'Poultice', cure: 'Elixir', refresh: 'Cordial', growboost: 'Tonic', workboost: 'Brew', charm: 'Charm' };
+
+// Derive the ITEM a set of ingredients makes: a pure, order-independent function of the counts. Returns
+// null for a combination too weak/incoherent to yield anything (a failed experiment). `counts` is
+// { good: qty }. The result is fully deterministic — the same ingredients always make the same item.
+export function deriveInvention(counts) {
+    const e = {}; let total = 0, rare = 0, kinds = 0;
+    for (const g in counts) {
+        const q = counts[g]; if (q <= 0) continue; total += q; kinds++;
+        const es = INGREDIENT_ESSENCE[g] || INGREDIENT_FALLBACK;
+        for (const k in es) { e[k] = (e[k] || 0) + es[k] * q; if (k === 'rare') rare += es[k] * q; }
+    }
+    if (kinds < 2 || total < 2) return null;                       // a "recipe" needs at least two things combined
+    const rank = Object.entries(e).filter(([k]) => k !== 'rare').sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1));
+    if (!rank.length) return null;
+    const [dominant, mag] = rank[0]; const second = rank[1] ? rank[1][0] : null;
+    if (mag < 3) return null;                                       // too faint an essence — nothing coheres
+    let effect = ESSENCE_EFFECT[dominant] || 'refresh';
+    const tier = Math.max(1, Math.min(4, 1 + Math.floor((total + rare * 2) / 4)));
+    if (effect === 'mendhp' && tier >= 3) effect = 'cure';         // a potent vitality brew becomes a true cure
+    // a stable id from the sorted ingredient multiset -> the same combination is always the same discovery
+    const sig = Object.keys(counts).filter(g => counts[g] > 0).sort().map(g => `${g}${counts[g]}`).join('.');
+    const name = `${ESSENCE_ADJ[dominant] || 'Odd'} ${EFFECT_FORM[effect] || 'Concoction'}`;
+    return { id: `gen:${sig}`, name, effect, tier, magnitude: mag, rare, dominant, second,
+             inputs: { ...counts }, essence: e };
+}
+
 // wood economy
 const TREE_WOOD = [1, 3, 5];   // wood from felling a tree, by growth stage: sapling 1 / young 3 / mature 5
 const TREE_CHOPS = [1, 3, 5];  // chops (hence exhaustion) to fell each stage — proportionate to the yield
