@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Ry Farms · the town's memory</title>
 <style>
-  :root { --bg:#0c0d12; --panel:#14161f; --line:#232634; --dim:#7a8090; --creed:#c8a0e0; --belief:#8fc7e8; --gold:#e8c860; --green:#7dd069; }
+  :root { --bg:#0c0d12; --panel:#14161f; --line:#232634; --dim:#7a8090; --creed:#c8a0e0; --belief:#8fc7e8; --mem:#7dd069; --gold:#e8c860; }
   * { box-sizing:border-box; }
   html,body { margin:0; height:100%; background:var(--bg); color:#e6e8ef; font-family:'JetBrains Mono',ui-monospace,Menlo,monospace; overflow:hidden; }
   #head { position:fixed; top:0; left:0; right:0; padding:14px 18px; z-index:5; pointer-events:none;
@@ -39,9 +39,11 @@
 </div>
 <canvas id="c"></canvas>
 <div id="legend">
-  <span class="k" style="background:var(--creed)"></span>farmer &nbsp;
-  <span class="k" style="background:var(--green)"></span>a bond &nbsp;
-  <span class="k" style="background:#e05840"></span>a rift &nbsp;· click a farmer to read their memories · drag to move · scroll to zoom
+  <span class="k" style="background:#b9a0d0"></span>farmer &nbsp;
+  <span class="k" style="background:var(--creed)"></span>creed &nbsp;
+  <span class="k" style="background:var(--belief)"></span>belief &nbsp;
+  <span class="k" style="background:var(--mem)"></span>memory &nbsp;·&nbsp;
+  <span class="k" style="background:#e05840"></span>a rift &nbsp;· hover a dot to read it · click a farmer for the full sheet
 </div>
 <div id="empty"></div>
 <div id="panel"><span class="x" onclick="closePanel()">✕</span><div id="pbody"></div></div>
@@ -53,10 +55,12 @@ function resize() { W = innerWidth; H = innerHeight; cv.width = W*DPR; cv.height
 addEventListener('resize', resize); resize();
 
 const view = { x: 0, y: 0, z: 1 };            // pan/zoom
-let nodes = [], links = [], selected = null, hover = null;
+let nodes = [], links = [], farmerNodes = [], selected = null, hover = null;
 
-// deterministic colour per farmer name
-function nameColor(s){ let h=0; for(const c of s) h=(h*31+c.charCodeAt(0))>>>0; return `hsl(${h%360} 55% 66%)`; }
+const KIND_COL = { creed:'#c8a0e0', belief:'#8fc7e8', mem:'#7dd069' };
+function nameColor(s){ let h=0; for(const c of s) h=(h*31+c.charCodeAt(0))>>>0; return `hsl(${h%360} 42% 62%)`; }
+function kindOf(m){ if(/\bcreed|lives by|taught them|drilled|raised (them|to)/i.test(m)) return 'creed';
+                    if(/belief|come to believe|earned belief|no longer/i.test(m)) return 'belief'; return 'mem'; }
 const RIFT = /chiselled|wronged|fell out|feud/;
 
 async function load() {
@@ -65,8 +69,7 @@ async function load() {
   catch { data = { farmers: [], links: [], source: 'offline' }; }
   const farmers = data.farmers || [];
   document.getElementById('sub').textContent =
-    farmers.length ? `${farmers.length} farmers · ${data.links.length} ties · live from SuperMemory (${data.source})`
-                   : '';
+    farmers.length ? `${farmers.length} farmers · ${data.links.length} ties · live from SuperMemory (${data.source})` : '';
   if (!farmers.length) {
     const e = document.getElementById('empty'); e.style.display='flex';
     e.innerHTML = data.source==='offline'
@@ -74,30 +77,47 @@ async function load() {
       : "No farmer memories stored yet.<br>open a town, let it run a moment, and they'll persist here.";
     return;
   }
-  const cx = W/2, cy = H/2;
-  nodes = farmers.map((f,i) => {
+  const cx = W/2, cy = H/2; nodes = []; farmerNodes = []; links = [];
+  const byName = new Map();
+  farmers.forEach((f,i) => {
     const a = (i/farmers.length)*Math.PI*2;
-    return { ...f, first: f.name.split(' ')[0], x: cx+Math.cos(a)*160, y: cy+Math.sin(a)*160, vx:0, vy:0,
-             r: 12 + Math.min(14, (f.memories.length||1)*2), col: nameColor(f.name) };
+    const fn = { type:'farmer', name:f.name, first:f.name.split(' ')[0], memories:f.memories, mass:1,
+                 x: cx+Math.cos(a)*200, y: cy+Math.sin(a)*200, vx:0, vy:0,
+                 r: 12, col: nameColor(f.name) };
+    nodes.push(fn); farmerNodes.push(fn); byName.set(f.name, fn);
+    // one satellite node per stored memory, orbiting the farmer, coloured by kind
+    f.memories.forEach((text,j) => {
+      const b = a + (j - f.memories.length/2)*0.5;
+      const kind = kindOf(text);
+      const mn = { type:'mem', kind, text, parent:fn, mass:0.28,
+                   x: fn.x+Math.cos(b)*55, y: fn.y+Math.sin(b)*55, vx:0, vy:0,
+                   r: 5, col: KIND_COL[kind] };
+      nodes.push(mn); links.push({ a:fn, b:mn, sat:true });
+    });
   });
-  const byName = new Map(nodes.map(n=>[n.name,n]));
-  links = (data.links||[]).map(l => ({ a: byName.get(l.a), b: byName.get(l.b), label: l.label }))
-                          .filter(l => l.a && l.b);
+  // farmer↔farmer relationship edges (labelled)
+  (data.links||[]).forEach(l => { const a=byName.get(l.a), b=byName.get(l.b); if(a&&b) links.push({ a, b, label:l.label }); });
   requestAnimationFrame(tick);
 }
 
 function tick() {
-  // force sim: repulsion + spring on links + gentle gravity to centre
   const cx=W/2, cy=H/2;
-  for (const n of nodes) {
-    let fx=0, fy=0;
-    for (const m of nodes) { if (m===n) continue; let dx=n.x-m.x, dy=n.y-m.y, d2=dx*dx+dy*dy+0.01, d=Math.sqrt(d2);
-      const rep = 9000/d2; fx += dx/d*rep; fy += dy/d*rep; }
-    fx += (cx-n.x)*0.008; fy += (cy-n.y)*0.008;
-    n.vx=(n.vx+fx)*0.86; n.vy=(n.vy+fy)*0.86;
+  // repulsion (mass-weighted: farmers push hard, satellites barely)
+  for (let i=0;i<nodes.length;i++){ const n=nodes[i]; let fx=0, fy=0;
+    for (let k=0;k<nodes.length;k++){ if(k===i) continue; const m=nodes[k];
+      let dx=n.x-m.x, dy=n.y-m.y, d2=dx*dx+dy*dy+0.01, d=Math.sqrt(d2);
+      const rep = 4200*n.mass*m.mass/d2; fx+=dx/d*rep; fy+=dy/d*rep; }
+    // gravity: farmers to centre; satellites only feather so strays don't drift off
+    const g = n.type==='farmer' ? 0.006 : 0.001; fx+=(cx-n.x)*g; fy+=(cy-n.y)*g;
+    n.vx=(n.vx+fx)*0.85; n.vy=(n.vy+fy)*0.85;
   }
-  for (const l of links) { const dx=l.b.x-l.a.x, dy=l.b.y-l.a.y, d=Math.hypot(dx,dy)||1, k=(d-150)*0.02;
-    const ux=dx/d, uy=dy/d; if(l.a!==dragNode){l.a.vx+=ux*k;l.a.vy+=uy*k;} if(l.b!==dragNode){l.b.vx-=ux*k;l.b.vy-=uy*k;} }
+  for (const l of links) {
+    const dx=l.b.x-l.a.x, dy=l.b.y-l.a.y, d=Math.hypot(dx,dy)||1, ux=dx/d, uy=dy/d;
+    if (l.sat) { const k=(d-52)*0.09;                     // satellite: tight orbit, mostly moves the memory
+      if(l.b!==dragNode){ l.b.vx-=ux*k; l.b.vy-=uy*k; } if(l.a!==dragNode){ l.a.vx+=ux*k*0.12; l.a.vy+=uy*k*0.12; } }
+    else { const k=(d-200)*0.014;                          // relationship: long spring between farmers
+      if(l.a!==dragNode){ l.a.vx+=ux*k; l.a.vy+=uy*k; } if(l.b!==dragNode){ l.b.vx-=ux*k; l.b.vy-=uy*k; } }
+  }
   for (const n of nodes) { if (n===dragNode) continue; n.x+=n.vx; n.y+=n.vy; }
   draw();
   requestAnimationFrame(tick);
@@ -106,47 +126,74 @@ function tick() {
 function draw() {
   ctx.clearRect(0,0,W,H);
   ctx.save(); ctx.translate(view.x,view.y); ctx.scale(view.z,view.z);
-  // edges
+  const selFarmer = selected;   // highlight the selected farmer's own orbit
+  // links first
   for (const l of links) {
-    ctx.strokeStyle = RIFT.test(l.label) ? 'rgba(224,88,64,.5)' : 'rgba(125,208,105,.45)';
-    ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(l.a.x,l.a.y); ctx.lineTo(l.b.x,l.b.y); ctx.stroke();
-    const mx=(l.a.x+l.b.x)/2, my=(l.a.y+l.b.y)/2;
-    ctx.fillStyle='#8a90a0'; ctx.font='10px JetBrains Mono, monospace'; ctx.textAlign='center'; ctx.fillText(l.label, mx, my-4);
+    if (l.sat) { const lit = selFarmer && l.a===selFarmer;
+      ctx.strokeStyle = lit ? 'rgba(200,200,220,.28)' : 'rgba(120,128,150,.13)'; ctx.lineWidth=1; }
+    else { ctx.strokeStyle = RIFT.test(l.label) ? 'rgba(224,88,64,.55)' : 'rgba(125,208,105,.5)'; ctx.lineWidth=1.5; }
+    ctx.beginPath(); ctx.moveTo(l.a.x,l.a.y); ctx.lineTo(l.b.x,l.b.y); ctx.stroke();
+    if (!l.sat) { const mx=(l.a.x+l.b.x)/2, my=(l.a.y+l.b.y)/2;
+      ctx.fillStyle='#8a90a0'; ctx.font='10px JetBrains Mono, monospace'; ctx.textAlign='center'; ctx.fillText(l.label, mx, my-4); }
   }
-  // nodes
-  for (const n of nodes) {
-    const sel = n===selected, hov = n===hover;
-    ctx.beginPath(); ctx.arc(n.x,n.y,n.r,0,7);
-    ctx.fillStyle = n.col; ctx.globalAlpha = sel||hov?1:0.9; ctx.fill(); ctx.globalAlpha=1;
-    if (sel||hov) { ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.stroke(); }
+  // memory (satellite) nodes
+  for (const n of nodes) { if (n.type!=='mem') continue; const hov=n===hover, dim=selFarmer && n.parent!==selFarmer;
+    ctx.globalAlpha = dim?0.32:1; ctx.beginPath(); ctx.arc(n.x,n.y,hov?n.r+2:n.r,0,7); ctx.fillStyle=n.col; ctx.fill();
+    if(hov){ ctx.strokeStyle='#fff'; ctx.lineWidth=1.5; ctx.stroke(); } ctx.globalAlpha=1;
+  }
+  // farmer nodes on top
+  for (const n of farmerNodes) { const sel=n===selected, hov=n===hover;
+    ctx.beginPath(); ctx.arc(n.x,n.y,n.r,0,7); ctx.fillStyle=n.col; ctx.fill();
+    if(sel||hov){ ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.stroke(); }
     ctx.fillStyle='#0c0d12'; ctx.font='bold 11px JetBrains Mono, monospace'; ctx.textAlign='center'; ctx.textBaseline='middle';
     ctx.fillText(n.first.slice(0,4).toUpperCase(), n.x, n.y);
     ctx.fillStyle='#cfd3df'; ctx.font='11px JetBrains Mono, monospace'; ctx.textBaseline='top';
     ctx.fillText(n.first, n.x, n.y+n.r+3);
   }
   ctx.restore();
+  if (hover && hover.type==='mem') drawTip(hover);
 }
 
-// ---- interaction (pan / zoom / drag node / click) ----
+// floating card showing a memory node's full text on hover
+function drawTip(n) {
+  const sx = n.x*view.z+view.x, sy = n.y*view.z+view.y;
+  const words = n.text.split(' '), lines=[]; let cur='';
+  ctx.font='12px JetBrains Mono, monospace';
+  for (const w of words){ const t=cur?cur+' '+w:w; if(ctx.measureText(t).width>250){ lines.push(cur); cur=w; } else cur=t; }
+  if(cur) lines.push(cur);
+  const pad=9, lh=16, bw=Math.min(268, Math.max(...lines.map(l=>ctx.measureText(l).width))+pad*2), bh=lines.length*lh+pad*2+10;
+  let bx=sx+14, by=sy+14; if(bx+bw>W) bx=sx-bw-14; if(by+bh>H) by=sy-bh-14;
+  ctx.fillStyle='rgba(14,15,22,.97)'; ctx.strokeStyle=n.col; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.roundRect(bx,by,bw,bh,6); ctx.fill(); ctx.stroke();
+  ctx.fillStyle=n.col; ctx.font='9px JetBrains Mono, monospace'; ctx.textAlign='left'; ctx.textBaseline='top';
+  ctx.fillText(n.kind.toUpperCase()+' · '+n.parent.first, bx+pad, by+pad-1);
+  ctx.fillStyle='#e6e8ef'; ctx.font='12px JetBrains Mono, monospace';
+  lines.forEach((l,i)=> ctx.fillText(l, bx+pad, by+pad+11+i*lh));
+}
+
+// ---- interaction ----
 let dragNode=null, panning=null, downAt=null;
 function toWorld(e){ return { x:(e.clientX-view.x)/view.z, y:(e.clientY-view.y)/view.z }; }
-function hit(e){ const p=toWorld(e); return nodes.find(n=>Math.hypot(n.x-p.x,n.y-p.y)<=n.r+3); }
-function far(e){ return downAt && Math.hypot(e.clientX-downAt.x, e.clientY-downAt.y) > 4; } // real drag, not a jittery click
-cv.addEventListener('mousedown', e=>{ downAt={x:e.clientX,y:e.clientY}; const n=hit(e); if(n){ dragNode=n; } else panning={x:e.clientX-view.x,y:e.clientY-view.y}; });
+function hit(e){ const p=toWorld(e);
+  for (const n of farmerNodes) if(Math.hypot(n.x-p.x,n.y-p.y)<=n.r+3) return n;   // farmers win ties
+  for (const n of nodes) if(n.type==='mem' && Math.hypot(n.x-p.x,n.y-p.y)<=n.r+3) return n;
+  return null; }
+function far(e){ return downAt && Math.hypot(e.clientX-downAt.x, e.clientY-downAt.y) > 4; }
+cv.addEventListener('mousedown', e=>{ downAt={x:e.clientX,y:e.clientY}; const n=hit(e);
+  if(n && n.type==='farmer'){ dragNode=n; } else if(!n){ panning={x:e.clientX-view.x,y:e.clientY-view.y}; } });
 cv.addEventListener('mousemove', e=>{ hover=hit(e); cv.style.cursor=hover?'pointer':(panning?'grabbing':'grab');
   if(dragNode && far(e)){ const p=toWorld(e); dragNode.x=p.x; dragNode.y=p.y; dragNode.vx=dragNode.vy=0; }
   else if(panning){ view.x=e.clientX-panning.x; view.y=e.clientY-panning.y; } });
-addEventListener('mouseup', e=>{ if(dragNode && !far(e)) selectNode(dragNode); dragNode=null; panning=null; downAt=null; });
-cv.addEventListener('wheel', e=>{ e.preventDefault(); const s=Math.exp(-e.deltaY*0.001); const mx=e.clientX,my=e.clientY;
-  view.x=mx-(mx-view.x)*s; view.y=my-(my-view.y)*s; view.z*=s; view.z=Math.max(0.4,Math.min(2.4,view.z)); }, {passive:false});
+addEventListener('mouseup', e=>{ if(!far(e)){ const n=hit(e); if(n) selectNode(n.type==='mem'?n.parent:n); }
+  dragNode=null; panning=null; downAt=null; });
+cv.addEventListener('wheel', e=>{ e.preventDefault(); const s=Math.exp(-e.deltaY*0.001), mx=e.clientX, my=e.clientY;
+  view.x=mx-(mx-view.x)*s; view.y=my-(my-view.y)*s; view.z=Math.max(0.4,Math.min(2.4,view.z*s)); }, {passive:false});
 
 function selectNode(n){ selected=n; const p=document.getElementById('pbody');
-  const creeds=n.memories.filter(m=>/creed|lives by|taught them|drilled|raised (them|to)/i.test(m));
-  const beliefs=n.memories.filter(m=>/belief|come to believe|earned belief|no longer/i.test(m));
-  const rest=n.memories.filter(m=>!creeds.includes(m)&&!beliefs.includes(m));
+  const g=k=>n.memories.filter(m=>kindOf(m)===k);
   const sect=(t,arr,col)=>arr.length?`<div class="sect">${t}</div>`+arr.map(m=>`<div class="mem" style="border-color:${col}">${esc(m)}</div>`).join(''):'';
   p.innerHTML = `<h2>${esc(n.name)}</h2><div class="arch">${n.memories.length} memories held in SuperMemory</div>`
-    + sect('CREEDS',creeds,'#c8a0e0') + sect('HARD-WON BELIEFS',beliefs,'#8fc7e8') + sect('WHAT THEY REMEMBER',rest,'#7dd069');
+    + sect('CREEDS',g('creed'),'#c8a0e0') + sect('HARD-WON BELIEFS',g('belief'),'#8fc7e8') + sect('WHAT THEY REMEMBER',g('mem'),'#7dd069');
   document.getElementById('panel').classList.add('open');
 }
 function esc(s){ return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
