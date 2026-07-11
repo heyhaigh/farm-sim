@@ -50,18 +50,41 @@ module.exports = async function handler(req, res) {
     };
     let data, civicData, inventData;
     try {
-        data = await search('farmer creed belief memory dream town', 100);
-        civicData = await search('the town civic record - manager watch voted in out elected recalled served', 24);
-        inventData = await search('the town book of inventions recipes crafted brewed charm poultice tonic', 24);
+        [data, civicData, inventData] = await Promise.all([
+            search('farmer creed belief memory dream town', 100),
+            search('the town civic record - manager watch voted in out elected recalled served', 24),
+            search('the town book of inventions recipes crafted brewed charm poultice tonic', 24),
+        ]);
     } catch (e) {
         return send(res, 200, { farmers: [], links: [], source: 'offline', error: e?.message || 'supermemory unreachable' });
     }
+
+    // PER-FARMER FAN-OUT. /v4/search is semantically RANKED and hard-capped at 100, so one broad query
+    // starves the roster: a popular farmer can eat 40+ of the 100 slots while a thin-ranking one gets a
+    // single chunk — which is why the portal showed a couple of dense farmers and the rest bare. Every
+    // farmer actually stores a full life; we just have to ASK for each one. Discover the roster from the
+    // broad pass, then pull an even slice per farmer so all settlers are represented, not just whoever
+    // ranked highest globally. Bounded (≤32 names, parallel) so it stays a single quick portal load.
+    const rosterNames = [];
+    for (const row of (data.results || [])) {
+        const m = row.metadata || {};
+        if (m.kind === 'farmer-life' && m.name && !rosterNames.includes(m.name)) rosterNames.push(m.name);
+    }
+    let perName = [];
+    try {
+        perName = await Promise.all(rosterNames.slice(0, 32).map(async (name) => {
+            try { return await search(`${name} — memory belief creed dream journal`, 24); }
+            catch { return null; }
+        }));
+    } catch { perName = []; }
+    // merge the broad pass + every per-farmer slice into one row list; dedup is per-text below
+    const allRows = (data.results || []).concat(...perName.map(r => (r && r.results) || []));
 
     // group the distilled memories by farmer (newest town per name wins, so the graph is one town).
     // the TOWN-HISTORY doc (#94 P3 — the civic record: who the town voted in/out, and why) has no farmer
     // name, so it's pulled aside into its own node rather than dropped.
     const byName = new Map();
-    for (const row of (data.results || [])) {
+    for (const row of allRows) {
         const m = row.metadata || {};
         if (m.kind === 'town-history') continue;   // the civic record comes from the dedicated search
         const name = m.name; if (!name) continue;
