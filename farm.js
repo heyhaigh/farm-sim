@@ -1517,6 +1517,42 @@ export class World {
         this._chronTotal = (this._chronTotal || 0) + 1;   // monotonic (never shifts) — drives the UNREAD badge on the Chronicle button
         if (this.chronicle.length > 240) this.chronicle.shift();
     }
+
+    // #reconciliation — consume the world layer's INBOX for this town: the ONLY channel by which a world-layer
+    // (non-reproducible) event touches the seeded town. Deterministic — events are sorted (day, pairKey, kind,
+    // ordinal) and each applied by a pure rule — so the town stays reproducible GIVEN its inbox ("same seed +
+    // same inbox => same town", the honest determinism claim for this layer). Returns how many were applied.
+    applyInbox(events) {
+        if (!Array.isArray(events) || !events.length) return 0;
+        const sorted = events.slice().sort((a, b) =>
+            (a.day - b.day) ||
+            (a.pairKey < b.pairKey ? -1 : a.pairKey > b.pairKey ? 1 : 0) ||
+            (a.kind < b.kind ? -1 : a.kind > b.kind ? 1 : 0) ||
+            ((a.ordinal || 0) - (b.ordinal || 0)));
+        let n = 0;
+        for (const e of sorted) {
+            const envoy = e.envoy != null ? this.farmers.find(f => f.sheet.seed === e.envoy) : null;
+            if (e.kind === 'raided') {
+                // STAKES: the season's labor taken in a night — dock the stores (drives reach + roster yield).
+                const lost = Math.round((this.harvestTotal || 0) * 0.2);
+                this.harvestTotal = Math.max(0, (this.harvestTotal || 0) - lost);
+                this.addChronicle('raid', `A warband raided ${this.name} - ${lost} of the stores taken.`, null, null, '#e05840',
+                    { tier: 'callout', tone: 'somber', why: `raided by ${e.by || 'a warband'}` });
+                n++;
+            } else if (e.kind === 'reconciled') {
+                if (envoy) envoy.remember('event', `${(e.withName || 'they').split(' ')[0]} kept faith at the frontier - not all of them betray`, null, 1.0);
+                this.addChronicle('lineage', `${this.name} kept faith with ${(e.withName || 'the frontier').split(' ')[0]} - the wall cracked a little.`, envoy, null, '#c8b0e0',
+                    { tier: 'callout', tone: 'triumph', why: 'a parley honored across the old line' });
+                n++;
+            } else if (e.kind === 'betrayed') {
+                if (envoy) envoy.remember('event', `The open hand was a snare - ${(e.by || 'they').split(' ')[0]} proved the old fear`, null, 1.0);
+                this.addChronicle('raid', `A parley was broken against ${this.name}. The old fear is proven again.`, envoy, null, '#e05840',
+                    { tier: 'callout', tone: 'somber', why: 'a broken parley' });
+                n++;
+            }
+        }
+        return n;
+    }
     // #98 Moments — the compiled MEMORY behind a profound beat, cited for the spotlight modal (the "why").
     // Deterministic + read-only: pulls from state already compiled at founding (tales, dreams, creeds).
     whyRareFind(farmer, kind) {

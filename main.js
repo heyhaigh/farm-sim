@@ -2724,8 +2724,14 @@ function drawWorldMap() {
         ctx.beginPath(); ctx.moveTo(toX(n), toY(n)); ctx.lineTo(toX(anc), toY(anc)); ctx.stroke();
         ctx.fillStyle = 'rgba(200,176,224,0.8)'; ctx.fillRect(toX(anc) - 1, toY(anc) - 1, 2, 2);
     }
-    // encounter links — gold for a peaceful meeting, blood-red for a raid (#3.2)
-    for (const e of enc) { const A = bySeed.get(String(e.a)), B = bySeed.get(String(e.b)); if (!A || !B) continue; ctx.strokeStyle = e.kind === 'raid' ? 'rgba(230,80,60,0.6)' : 'rgba(240,200,120,0.4)'; ctx.beginPath(); ctx.moveTo(toX(A), toY(A)); ctx.lineTo(toX(B), toY(B)); ctx.stroke(); }
+    // encounter links — blood-red for a raid/broken parley, WARM GREEN for an honored reconciliation, gold for
+    // a same-culture meeting (#3.2/#reconciliation: the frontier's state, readable at a glance).
+    for (const e of enc) {
+        const A = bySeed.get(String(e.a)), B = bySeed.get(String(e.b)); if (!A || !B) continue;
+        ctx.strokeStyle = (e.kind === 'raid' || e.kind === 'betrayed') ? 'rgba(230,80,60,0.6)'
+            : e.kind === 'reconciled' ? 'rgba(125,208,105,0.55)' : 'rgba(240,200,120,0.4)';
+        ctx.beginPath(); ctx.moveTo(toX(A), toY(A)); ctx.lineTo(toX(B), toY(B)); ctx.stroke();
+    }
     // town dots + labels
     for (const n of nodes) {
         const x = toX(n), y = toY(n), r = Math.max(2, Math.min(6, 2 + n.pop * 0.3));
@@ -4325,10 +4331,21 @@ function townSummary(w) {
     for (const [q, n] of [...tally].sort((a, b) => (a[0] < b[0] ? -1 : 1))) if (n > best) { best = n; motto = q; }
     // memory FINGERPRINT -> tint: a stable hash of the cast's source memories (what the town was grown from)
     const fp = hashString('fp:' + w.farmers.map(f => (f.sheet.memory && f.sheet.memory.id) || f.sheet.seed).sort().join('|'));
+    // #reconciliation ENVOY: who represents this town at a frontier meeting — its MOST CURIOUS member (the one
+    // who'd approach), seed-tiebroken. Their honesty decides whether an overture they extend is genuine. Baked
+    // into the summary because at resolve time the counterpart town isn't loaded (only its summary is).
+    let envoy = null, es = -Infinity;
+    for (const f of w.farmers) {
+        const p = f.sheet.personality || {}, score = p.curiosity || 0;
+        if (score > es || (score === es && envoy && f.sheet.seed < envoy.seed)) {
+            es = score;
+            envoy = { seed: f.sheet.seed, curiosity: +(p.curiosity || 0).toFixed(2), honesty: +(p.honesty || 0).toFixed(2), collaboration: +(p.collaboration || 0).toFixed(2) };
+        }
+    }
     return {
         seed: w.seed, name: w.name, day: w.day, year: w.year, pop: w.farmers.length,
         harvestTotal: w.harvestTotal || 0, lineage: [...anc], motto, fingerprint: fp >>> 0,
-        culture: w.culture || 'human', lastSeen: Date.now(),   // #3.2 human town or orc warband
+        culture: w.culture || 'human', envoy, lastSeen: Date.now(),   // #3.2 human town or orc warband
     };
 }
 let _worldBusy = false;
@@ -4338,7 +4355,10 @@ async function registerWorld(w) {
         const idx = await registerTownInWorld(townSummary(w));
         if (!idx) return;
         const fresh = detectEncounters(idx);        // did growth just bring two towns into reach?
-        if (fresh.length) {
+        // consume THIS town's inbox (its own resolved raids/parleys, + any queued while dormant) deterministically
+        const mine = (idx.inbox && idx.inbox[String(w.seed)]) || [];
+        if (mine.length && w === world) { w.applyInbox(mine); idx.inbox[String(w.seed)] = []; }
+        if (fresh.length || mine.length) {
             await saveWorldIndex(idx);
             for (const ev of fresh) if (w === world) world.addLog(encounterLine(ev), '#c8b0e0');   // surface on the town log
         }
@@ -4936,6 +4956,15 @@ function drawBootScreen(t) {
     const origSet = world.set.bind(world);
     world.set = (i, j, t) => { origSet(i, j, t); world._tilesChanged = true; };
     world._tilesChanged = true;
+
+    // #reconciliation: apply any world-layer events queued for this town WHILE IT WAS AWAY (a raid on the
+    // frontier that docked its stores, a parley honored/broken) before the resume card is built, so they land
+    // in the chronicle + the "PREVIOUSLY ON" recap. Deterministic consume; cleared once applied.
+    try {
+        const widx = await loadWorldIndex();
+        const pending = (widx.inbox && widx.inbox[String(world.seed)]) || [];
+        if (pending.length) { world.applyInbox(pending); widx.inbox[String(world.seed)] = []; await saveWorldIndex(widx); }
+    } catch (err) { console.warn('ry-farms: inbox consume failed', err); }
 
     if (resumed) {
         lastSavedDay = world.day;   // don't immediately re-save what we just loaded

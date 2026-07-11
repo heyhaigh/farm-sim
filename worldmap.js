@@ -8,6 +8,7 @@
 // town's seeded sim; it's display/persistence only, the same boundary as the LLM/shader side-channels.
 
 import { hashString } from './dna.js';
+import { lineagePairKey, isCrossFaction, foldDisposition, dispositionTier, resolveEncounter, applyOutcome } from './reconciliation.js';
 
 const WORLD_W = 1000, WORLD_H = 640;   // abstract world-plane units (the map view scales these to the screen)
 
@@ -50,7 +51,7 @@ export function computeLayout(index) {
         .map(t => ({
             seed: t.seed, name: t.name || `Town ${t.seed}`, pop: t.pop || 0, day: t.day || 0, year: t.year || 1,
             harvestTotal: t.harvestTotal || 0, motto: t.motto || null, lastSeen: t.lastSeen || 0,
-            culture: t.culture === 'orc' ? 'orc' : 'human',
+            culture: t.culture === 'orc' ? 'orc' : 'human', envoy: t.envoy || null,
             ...townPos(t.seed), reach: townReach(t), tint: townTint(t),
             // edges to ancestor towns that we actually have on the map (skip lineage from unknown/foreign towns)
             ancestors: (t.lineage || []).map(String).filter(s => s !== String(t.seed) && known.has(s)),
@@ -63,42 +64,88 @@ const pairKey = (a, b) => (a < b ? `${a}:${b}` : `${b}:${a}`);
 // Detect NEW encounters: any two towns whose reaches now overlap and that haven't met before. Appends an
 // encounter event (with a creed CARRIED from each town to the other — #2.4) to the index. Returns the list of
 // newly-created encounters so the caller can surface them. Idempotent: a met pair is never re-created.
+export const WORLD_INDEX_VERSION = 2;   // v2 adds ledgers + inbox; a v1 index (string encounters only) still loads
+
+// Queue a structured event into a town's inbox (the world->sim crossing; the town consumes it deterministically
+// at load/dawn). Keyed by town seed so a dormant town gets its due when it's next played.
+function queueInbox(index, townSeed, ev) {
+    index.inbox = index.inbox || {};
+    (index.inbox[String(townSeed)] = index.inbox[String(townSeed)] || []).push(ev);
+}
+
 export function detectEncounters(index) {
     const nodes = computeLayout(index);
     const met = new Set((index.encounters || []).map(e => pairKey(String(e.a), String(e.b))));
+    index.ledgers = index.ledgers || {};       // #reconciliation: per faction-lineage-pair grievance/reconciliation record
     const fresh = [];
     for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) {
         const A = nodes[i], B = nodes[j];
         const key = pairKey(String(A.seed), String(B.seed));
         if (met.has(key)) continue;
-        const dx = A.x - B.x, dy = A.y - B.y, dist = Math.hypot(dx, dy);
-        if (dist > A.reach + B.reach) continue;                 // not yet within reach of each other
+        // F2: exact squared-distance geometry now that overlap is outcome-bearing (no Math.hypot rounding).
+        const dx = A.x - B.x, dy = A.y - B.y, rr = A.reach + B.reach;
+        if (dx * dx + dy * dy > rr * rr) continue;              // not yet within reach of each other
         met.add(key);
-        // #3.2 legible conflict: an orc warband meeting a human town is a RAID, not a trade. Same-culture
-        // neighbours meet peacefully (and swap a creed, #2.4); across the human/orc line it's hostile, and the
-        // raided town REMEMBERS (the memory that travels is the grievance — traceable drama, not a stat).
-        const cross = A.culture !== B.culture;
-        const raider = A.culture === 'orc' ? A : B, victim = A.culture === 'orc' ? B : A;
-        const ev = cross ? {
-            a: raider.seed, b: victim.seed, day: Math.max(A.day, B.day), at: Date.now(),
-            aName: raider.name, bName: victim.name, kind: 'raid',
-            aCarried: null, bCarried: `${String(victim.name).split(' ')[0]} remembers the ${String(raider.name).split(' ')[0]} raid`,
-        } : {
-            a: A.seed, b: B.seed, day: Math.max(A.day, B.day), at: Date.now(),
-            aName: A.name, bName: B.name, kind: 'meeting',
-            aCarried: A.motto || null, bCarried: B.motto || null,   // #2.4 each town's motto reaches the other
-        };
+        const day = Math.max(A.day, B.day);
+
+        if (!isCrossFaction(A, B)) {
+            // same-culture neighbours meet in peace and swap a motto (#2.4 cross-town memory)
+            fresh.push({ a: A.seed, b: B.seed, day, at: Date.now(), aName: A.name, bName: B.name, kind: 'meeting', aCarried: A.motto || null, bCarried: B.motto || null });
+            continue;
+        }
+
+        // #reconciliation cross-faction: RESOLVE through the seeded model over the LINEAGE-pair ledger, so a
+        // gen-1 raid and a gen-3 parley compound. raid | parley-honored | parley-betrayed.
+        const human = A.culture === 'orc' ? B : A, orc = A.culture === 'orc' ? A : B;
+        const lpk = lineagePairKey(A, B);
+        const led = index.ledgers[lpk] || { grievances: [], reconciliations: [], tier: 'hostile', firstTrustDone: false };
+        const disposition = foldDisposition(led);
+        const tier = dispositionTier(disposition, led.tier || 'hostile');
+        const ordinal = led.grievances.length + led.reconciliations.length;
+        const res = resolveEncounter({
+            pairKey: lpk, ordinal, disposition, tier,
+            humanEnvoy: human.envoy || { seed: human.seed }, orcEnvoy: orc.envoy || { seed: orc.seed },
+        });
+        const shortH = String(human.name).split(' ')[0], shortO = String(orc.name).split(' ')[0];
+        const nextLed = applyOutcome(led, res.outcome, { ordinal, day });   // idempotent record
+        nextLed.tier = dispositionTier(foldDisposition(nextLed), tier);     // hysteretic tier for next time
+        nextLed.firstTrustDone = led.firstTrustDone;
+        index.ledgers[lpk] = nextLed;
+
+        const ev = { a: orc.seed, b: human.seed, day, at: Date.now(), aName: orc.name, bName: human.name, pairKey: lpk, ordinal, outcome: res.outcome };
+        if (res.outcome === 'raid') {
+            ev.kind = 'raid';
+            ev.aCarried = `${shortO} took what ${shortH} had gathered`;    // both readings — the contested record
+            ev.bCarried = `${shortH} remembers the ${shortO} raid`;
+            queueInbox(index, human.seed, { kind: 'raided', pairKey: lpk, ordinal, day, by: orc.name });
+        } else if (res.outcome === 'honored') {
+            ev.kind = 'reconciled';
+            ev.aCarried = `${shortO} was written into ${shortH}'s record - and kept faith`;
+            ev.bCarried = `${shortH} and ${shortO} kept faith at the frontier`;
+            queueInbox(index, human.seed, { kind: 'reconciled', pairKey: lpk, ordinal, day, envoy: human.envoy && human.envoy.seed, withName: orc.name });
+            queueInbox(index, orc.seed, { kind: 'reconciled', pairKey: lpk, ordinal, day, envoy: orc.envoy && orc.envoy.seed, withName: human.name });
+        } else {   // betrayed
+            ev.kind = 'betrayed';
+            const victimTown = res.betrayer === 'orc' ? human : orc;       // the honest party's envoy is wronged
+            ev.aCarried = `${res.betrayer === 'orc' ? shortO : shortH} used the open hand as cover`;
+            ev.bCarried = `${String(victimTown.name).split(' ')[0]} will remember the broken parley`;
+            queueInbox(index, victimTown.seed, { kind: 'betrayed', pairKey: lpk, ordinal, day, envoy: victimTown.envoy && victimTown.envoy.seed, by: (res.betrayer === 'orc' ? orc.name : human.name) });
+        }
         fresh.push(ev);
     }
     if (fresh.length) index.encounters = (index.encounters || []).concat(fresh);
+    index.v = WORLD_INDEX_VERSION;
     return fresh;
 }
 
 // A short human line for an encounter, for the world log / narrator (#4.1).
 export function encounterLine(ev) {
-    const a = String(ev.aName || `Town ${ev.a}`).split(' ')[0];
-    const b = String(ev.bName || `Town ${ev.b}`).split(' ')[0];
+    const a = String(ev.aName || `Town ${ev.a}`).split(' ')[0];   // orc side for cross-faction events
+    const b = String(ev.bName || `Town ${ev.b}`).split(' ')[0];   // human side
     if (ev.kind === 'raid') return `The ${a} warband fell upon ${b}. ${b} will remember.`;
+    if (ev.kind === 'reconciled') return `${b} and the ${a} warband met at the frontier - and kept faith.`;
+    if (ev.kind === 'betrayed') return `A parley between ${b} and the ${a} warband was broken. Blood, and a longer memory.`;
+    // same-culture meeting
     let s = `${a} and ${b} have grown into each other's reach.`;
     if (ev.aCarried) s += ` ${a} carries word that "${ev.aCarried}".`;
     return s;
