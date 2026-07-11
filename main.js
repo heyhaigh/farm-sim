@@ -4107,7 +4107,9 @@ function drawResumeCard() {
     const alpha = Math.min(1, (performance.now() - rc.shownAt) / 350);
 
     const lines = [];
-    for (const b of rc.beats) for (const ln of wrapText(b.text, 44).slice(0, 2)) lines.push({ t: ln, c: b.color, day: b.day });
+    // only the FIRST wrapped line of a beat carries the bullet; continuation lines indent under the text so a
+    // multi-line beat reads as ONE item, not several (see #99 chronicle bullet-wrap fix)
+    for (const b of rc.beats) { const wr = wrapText(b.text, 42).slice(0, 2); wr.forEach((ln, k) => lines.push({ t: ln, c: b.color, head: k === 0 })); }
 
     const PW = 224, PX = Math.floor((GW - PW) / 2);
     const headH = 24, PH = headH + Math.max(1, lines.length) * 8 + 20;
@@ -4128,7 +4130,7 @@ function drawResumeCard() {
 
     let y = PY + headH + 3;
     if (!lines.length) drawText(ctx, 'THE TOWN WAITS, ITS STORY UNWRITTEN.', PX + 8, y, '#6a6f7c');
-    else for (const ln of lines) { ctx.fillStyle = ln.c; ctx.fillRect(PX + 6, y + 2, 2, 2); drawText(ctx, ln.t, PX + 11, y, ln.c); y += 8; }
+    else for (const ln of lines) { if (ln.head) { ctx.fillStyle = ln.c; ctx.fillRect(PX + 6, y + 2, 2, 2); } drawText(ctx, ln.t, PX + 11, y, ln.c); y += 8; }
     const cue = 'CLICK TO CONTINUE';
     drawText(ctx, cue, PX + Math.floor((PW - textWidth(cue)) / 2), PY + PH - 9, performance.now() % 1000 < 620 ? '#c8ccd8' : '#6a6f7c');
     ctx.restore();
