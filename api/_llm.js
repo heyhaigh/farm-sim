@@ -7,6 +7,8 @@
 //   OPENAI_API_KEY      (blank is fine for most local servers)
 //   OPENAI_BASE_URL     (default https://api.openai.com/v1)
 //   RY_FARMS_LLM_MODEL | OPENAI_MODEL   (default gpt-4.1-mini)
+//   RY_FARMS_LLM_OFF    (=1 => KILL SWITCH: no channel calls the model at all, even with a key set — the
+//                        sim is byte-identical, so use this for ALL dev/browser testing to keep cost at $0)
 // Everything here is display-text only; callers always have a procedural fallback.
 
 function extractContent(data) {
@@ -31,6 +33,10 @@ function parseJson(text) {
 // plain json_object — the prompts all say "return JSON only", so parseJson still recovers it.
 async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxTokens = 400, temperature }) {
     if (typeof fetch !== 'function') throw new Error('fetch unavailable');
+    // KILL SWITCH — RY_FARMS_LLM_OFF=1 disables EVERY channel (chat/dm/conscience/invent) regardless of the
+    // API key, so dev + browser testing costs $0. Callers already fall back to their procedural versions on a
+    // throw, and the sim is byte-identical with the LLM off (the whole point of the presentation-only boundary).
+    if (process.env.RY_FARMS_LLM_OFF) throw new Error('LLM disabled (RY_FARMS_LLM_OFF)');
     const base = (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, '');
     const model = process.env.RY_FARMS_LLM_MODEL || process.env.OPENAI_MODEL || 'gpt-4.1-mini';
     const headers = { 'Content-Type': 'application/json' };
@@ -40,7 +46,7 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
         model,
         messages: [
             { role: 'system', content: system },
-            { role: 'user', content: String(user).slice(0, 24000) },
+            { role: 'user', content: String(user).slice(0, 8000) },   // hard cap (~2k tokens) — cost guardrail
         ],
         max_tokens: maxTokens,
     };

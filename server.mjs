@@ -71,5 +71,7 @@ http.createServer(async (req, res) => {
         res.end(data);
     });
 }).listen(PORT, () => {
-    console.log(`ry-farms on http://localhost:${PORT}  (LLM ${process.env.OPENAI_API_KEY ? 'ON' : 'off - no OPENAI_API_KEY'})`);
+    const llmStatus = process.env.RY_FARMS_LLM_OFF ? 'OFF (RY_FARMS_LLM_OFF - $0)'
+        : process.env.OPENAI_API_KEY ? 'ON - billing OpenAI' : 'off - no OPENAI_API_KEY';
+    console.log(`ry-farms on http://localhost:${PORT}  (LLM ${llmStatus})`);
 });

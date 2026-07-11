@@ -456,7 +456,7 @@ const CHAT_LINE_MAX = 34;   // speech bubbles do not wrap; keep generated lines 
 const CHAT_MEMORY_MAX = 110;
 const LLM_CHAT_ENDPOINT = '/api/ry-farms-chat';
 const LLM_CHAT_TIMEOUT_MS = 6500;
-const LLM_CHAT_REQUEST_COOLDOWN = 16;
+const LLM_CHAT_REQUEST_COOLDOWN = 45;   // cost guardrail: at most one chat request per 45 sim-seconds
 const LLM_CHAT_FAIL_COOLDOWN = 180;
 
 export function d20(rand, modifier) {
@@ -2028,7 +2028,7 @@ export class World {
                 needed: pr.needed,
                 builders: [...(pr.builders || [])].map(f => f.sheet.name),
             } : null,
-            recentTownLog: this.log.slice(-8).map(l => String(l.text || '').slice(0, 150)),
+            recentTownLog: this.log.slice(-4).map(l => String(l.text || '').slice(0, 110)),   // trimmed (cost guardrail)
             relationship: {
                 speakerToListener: Math.round((ctx.op ?? speaker.opinionOf(listener)) * 100) / 100,
                 listenerToSpeaker: Math.round((ctx.rop ?? listener.opinionOf(speaker)) * 100) / 100,
