@@ -3697,59 +3697,68 @@ function recipeInputs(id) {
 // lore, its ingredients, who first worked it out, and who knows it; plus the TALES the town tells of the
 // rare ingredients (grown from its memories) and whether they've been proven real.
 function drawChronicleRecipes(PX, top, PW, bot) {
-    const IX = PX + 8; let y = top + 2;
+    const IX = PX + 8, INGR = '#8ad0a0';
+    const maxChars = Math.max(24, Math.floor((PW - 24) / 4.2));
     const known = new Map(), heard = new Map();
     for (const f of world.farmers) {
         for (const id of (f.sheet.recipes || [])) { if (!known.has(id)) known.set(id, []); known.get(id).push(f.sheet.name.split(' ')[0]); }
         for (const id of (f.sheet.heardOf || [])) heard.set(id, (heard.get(id) || 0) + 1);
     }
-    const INGR = '#8ad0a0';
-    const maxChars = Math.max(24, Math.floor((PW - 24) / 4.2));
+    // build the FULL content as scrollable rows { h, draw:(y) } so the whole list can be scrolled, not capped
+    const rows = [];
+    const push = (h, draw) => rows.push({ h, draw: draw || (() => {}) });
+    const wrapPush = (text, col, dx) => { for (const ln of wrapText(text, maxChars)) push(7, y => drawText(ctx, ln, IX + dx, y, col)); };
 
-    // base remedies everyone knows
-    drawText(ctx, 'EVERYONE KNOWS', IX, y, '#8a8f9c'); y += 8;
+    push(8, y => drawText(ctx, 'EVERYONE KNOWS', IX, y, '#8a8f9c'));
     for (const id of ['soup', 'salve', 'tonic']) {
-        drawText(ctx, RECIPE_BY_ID[id].name.toUpperCase(), IX + 4, y, '#7dd069');
-        drawText(ctx, recipeInputs(id), IX + 4 + 66, y, INGR); y += 7;
+        const nm = RECIPE_BY_ID[id].name, inp = recipeInputs(id);
+        push(7, y => { drawText(ctx, nm, IX + 4, y, '#7dd069'); drawText(ctx, inp, IX + 4 + 66, y, INGR); });
     }
-    y += 3;
+    push(3);
 
-    // discovered recipes — rarest/most-potent first, so the charms and elixirs lead
-    drawText(ctx, 'INVENTED', IX, y, CHRON_ACCENT);
-    drawText(ctx, `${known.size}`, PX + PW - 8 - textWidth(`${known.size}`), y, '#9aa0b4'); y += 10;
-    if (!known.size) { drawText(ctx, 'The town has invented nothing yet — give it time.', IX, y, '#6a6f7c'); }
-    else {
-        const entries = [...known.entries()].sort((a, b) => ((world.recipeById(b[0])?.tier || 0) - (world.recipeById(a[0])?.tier || 0)));
-        for (let ei = 0; ei < entries.length; ei++) {
-            const [id, names] = entries[ei];
-            if (y > bot - 22) { drawText(ctx, `...and ${entries.length - ei} more`, IX, y, '#6a6f7c'); break; }
-            const nm = world.recipeName ? world.recipeName(id) : ((RECIPE_BY_ID[id] || {}).name || id);
-            drawText(ctx, nm.toUpperCase(), IX, y, '#ffd24a');
-            drawText(ctx, recipeInputs(id), IX + 108, y, INGR); y += 7;
-            const lore = world.recipeLore ? world.recipeLore(id) : null;   // LLM flavour, if named
-            if (lore) for (const ln of wrapText(lore, maxChars)) { drawText(ctx, ln.toUpperCase(), IX + 4, y, '#9a86c0'); y += 7; }
-            const rec = world.recipes && world.recipes[id];
-            const inv = rec && rec.discovererSeed != null ? (world.farmers.find(f => f.sheet.seed === rec.discovererSeed)?.sheet.name.split(' ')[0]) : null;
-            const h = heard.get(id) || 0;
-            const meta = (inv ? `invented by ${inv} - ` : '') + 'known by ' + names.join(', ') + (h ? `  (${h} have heard)` : '');
-            for (const ln of wrapText(meta, maxChars)) { drawText(ctx, ln.toUpperCase(), IX + 4, y, '#8a8f9c'); y += 7; }
-            y += 3;
-        }
+    // discovered recipes — rarest/most-potent first, ALL of them (scrollable)
+    push(10, y => { drawText(ctx, 'INVENTED', IX, y, CHRON_ACCENT); const t = `${known.size}`; drawText(ctx, t, PX + PW - 8 - textWidth(t), y, '#9aa0b4'); });
+    if (!known.size) push(7, y => drawText(ctx, 'The town has invented nothing yet — give it time.', IX, y, '#6a6f7c'));
+    else for (const [id, names] of [...known.entries()].sort((a, b) => ((world.recipeById(b[0])?.tier || 0) - (world.recipeById(a[0])?.tier || 0)))) {
+        const nm = world.recipeName ? world.recipeName(id) : ((RECIPE_BY_ID[id] || {}).name || id);
+        const inp = recipeInputs(id);
+        push(7, y => { drawText(ctx, nm, IX, y, '#ffd24a'); drawText(ctx, inp, IX + 108, y, INGR); });
+        const lore = world.recipeLore ? world.recipeLore(id) : null;
+        if (lore) wrapPush(lore, '#9a86c0', 4);
+        const rec = world.recipes && world.recipes[id];
+        const inv = rec && rec.discovererSeed != null ? (world.farmers.find(f => f.sheet.seed === rec.discovererSeed)?.sheet.name.split(' ')[0]) : null;
+        const h = heard.get(id) || 0;
+        wrapPush((inv ? `invented by ${inv} - ` : '') + 'known by ' + names.join(', ') + (h ? `  (${h} have heard)` : ''), '#8a8f9c', 4);
+        push(3);
     }
 
     // TALES of the rare ingredients — the town's myths, grown from its memories, and whether proven real
-    if ((world.tales || []).length && y < bot - 16) {
-        y += 2; drawText(ctx, 'TALES OF THE WILDS', IX, y, '#c8a860'); y += 9;
+    if ((world.tales || []).length) {
+        push(4); push(9, y => drawText(ctx, 'TALES OF THE WILDS', IX, y, '#c8a860'));
         for (const t of world.tales) {
-            if (y > bot - 8) break;
             const proven = world.farmers.some(f => f.sheet.rareBelief && f.sheet.rareBelief[t.ingredient] && f.sheet.rareBelief[t.ingredient].state === 'validated');
-            const nm = (RARE_NAME && RARE_NAME[t.ingredient]) || t.ingredient;
-            drawText(ctx, `${nm}`.toUpperCase(), IX + 4, y, proven ? '#7dd069' : '#9a86c0');
-            drawText(ctx, proven ? 'PROVEN REAL' : 'STILL A TALE', PX + PW - 8 - textWidth('STILL A TALE'), y, proven ? '#7dd069' : '#6a6f7c'); y += 7;
-            const from = t.originTitle ? `a tale from "${String(t.originTitle).slice(0, 34)}"` : 'a traveller\'s tale';
-            for (const ln of wrapText(from, maxChars)) { drawText(ctx, ln.toUpperCase(), IX + 8, y, '#6a6f7c'); y += 7; }
-            y += 2;
+            const nm = (RARE_NAME && RARE_NAME[t.ingredient]) || t.ingredient, status = proven ? 'PROVEN REAL' : 'STILL A TALE';
+            push(7, y => { drawText(ctx, nm, IX + 4, y, proven ? '#7dd069' : '#9a86c0'); drawText(ctx, status, PX + PW - 8 - textWidth(status), y, proven ? '#7dd069' : '#6a6f7c'); });
+            wrapPush(t.originTitle ? `a tale from "${String(t.originTitle).slice(0, 34)}"` : "a traveller's tale", '#6a6f7c', 8);
+            push(2);
         }
+    }
+
+    // scroll + clip (the wheel handler clamps chronScroll to chronView.maxScroll)
+    let contentH = 0; for (const r of rows) contentH += r.h;
+    const viewH = bot - top;
+    const maxScroll = Math.max(0, contentH - viewH);
+    chronScroll = Math.max(0, Math.min(chronScroll, maxScroll));
+    chronView = { x: PX, y: top, w: PW, h: viewH, bodyTop: top, bodyBot: bot, maxScroll };
+    ctx.save(); ctx.beginPath(); ctx.rect(PX + 1, top - 1, PW - 2, viewH + 2); ctx.clip();
+    let y = top + 2 - Math.round(chronScroll);
+    for (const r of rows) { if (y + r.h > top && y < bot) r.draw(y); y += r.h; }
+    ctx.restore();
+    // a thin scrollbar so it's clear there's more
+    if (maxScroll > 0) {
+        const trackH = viewH, thumbH = Math.max(12, trackH * viewH / contentH), thumbY = top + (trackH - thumbH) * (chronScroll / maxScroll);
+        ctx.fillStyle = '#2a2f3a'; ctx.fillRect(PX + PW - 3, top, 2, trackH);
+        ctx.fillStyle = '#5a6070'; ctx.fillRect(PX + PW - 3, Math.round(thumbY), 2, Math.round(thumbH));
     }
 }
 
