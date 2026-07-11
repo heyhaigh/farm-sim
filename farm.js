@@ -635,6 +635,7 @@ export class World {
         this.superstition = null;  // #97 P3+: a seeded per-town crafting superstition (a 'lucky' ingredient, maybe a 'shunned' pairing)
         this.recipeFlavor = {};// #97 P5: DISPLAY shadow store — LLM name+lore per recipe key. EXCLUDED from the sim
                                //         digest (LLM-on ≡ LLM-off); the procedural name is the canonical one.
+        this.taleFlavor = {};  // #97 P4: DISPLAY shadow — optional LLM-dressed prose per rare-ingredient tale.
         this.board = null;    // no bulletin board until the town builds one together (first communal project)
         this.merchant = null;                             // the wandering trader, present only during a visit
         this.merchantNextDay = 4 + Math.floor(this.rand() * 3);   // first caravan rolls in around day 4-6
@@ -2239,6 +2240,7 @@ export class World {
             tales: this.tales.map(t => ({ ...t, lexemes: [...(t.lexemes || [])] })),   // #97 P4 frozen myths
             superstition: this.superstition ? { ...this.superstition } : null,   // #97 P3+ folk culture
             recipeFlavor: { ...this.recipeFlavor },   // #97 P5 display shadow (never in the sim digest)
+            taleFlavor: { ...this.taleFlavor },        // #97 P4 tale prose shadow (display only)
 
             tiles: this.tiles.slice(),
             chunks: new Map([...this.chunks].map(([k, a]) => [k, a.slice()])),
@@ -2349,6 +2351,7 @@ export class World {
         this.tales = Array.isArray(d.tales) ? d.tales.map(t => ({ ...t, lexemes: [...(t.lexemes || [])] })) : [];
         this.superstition = d.superstition ? { ...d.superstition } : null;
         this.recipeFlavor = d.recipeFlavor ? { ...d.recipeFlavor } : {};
+        this.taleFlavor = d.taleFlavor ? { ...d.taleFlavor } : {};
 
         this.tiles.set(d.tiles);
         this.chunks = new Map(); for (const [k, a] of d.chunks) this.chunks.set(k, Uint8Array.from(a));
@@ -2915,6 +2918,52 @@ export class World {
     // #97 P5 — the DISPLAY name/lore: the LLM's evocative overlay when present, else the canonical procedural name.
     recipeName(recipeId) { const fl = this.recipeFlavor[recipeId]; return (fl && fl.name) || (this.recipeById(recipeId) || {}).name || recipeId; }
     recipeLore(recipeId) { const fl = this.recipeFlavor[recipeId]; return (fl && fl.lore) || null; }
+    // #97 P4 — compose a rare-ingredient TALE into readable lore for the Chronicle. Display-only: a fresh
+    // seeded rng (never this.rand — the sim stream is untouched), the frozen imagery the founder carried
+    // (t.lexemes, from their source memory), who first spoke of it, and how the town believes it now.
+    // If the LLM has dressed it (this.taleFlavor), prefer that; otherwise the procedural weave below.
+    taleLore(t) {
+        const nm = RARE_NAME[t.ingredient] || t.ingredient;
+        const fl = this.taleFlavor && this.taleFlavor[t.ingredient];
+        const r = mulberry32((hashString('talelore:' + t.ingredient + ':' + ((t.originSeed || 0) >>> 0))) >>> 0);
+        const lex = (t.lexemes || []).filter(w => w && w.length > 3);
+        const A = lex[0], B = lex[1], C = lex[2];
+        const pick = (arr) => arr[Math.floor(r() * arr.length)];
+        // the SAYING — weave the founder's frozen words into a rumour (falls back gracefully as they thin out)
+        let saying;
+        if (fl && fl.lore) saying = fl.lore;
+        else if (A && B) saying = pick([
+            `They say the ${nm} glimmers where the ${A} meets the ${B}, far past the fog.`,
+            `Old talk holds it waits between the ${A} and the ${B}, for whoever dares look.`,
+            `The story goes that ${A} and ${B} both point the way to the ${nm}.`,
+        ]);
+        else if (A) saying = pick([
+            `They say the ${nm} lies out past the fog, near the ${A}.`,
+            `Whispers place the ${nm} somewhere beyond the ${A}, if it's real at all.`,
+        ]);
+        else saying = `They say the ${nm} is out there past the fog — though no two tellings agree.`;
+        // who first carried the rumour, and out of what memory
+        const carrier = this.farmers.find(f => f.sheet.seed === t.originSeed);
+        const who = carrier ? carrier.sheet.name.split(' ')[0] : 'a traveller long gone';
+        const title = t.originTitle ? String(t.originTitle).replace(/\s+/g, ' ').trim() : '';
+        const clip = title.length > 46 ? title.slice(0, 46).replace(/\s+\S*$/, '') + '…' : title;
+        const origin = clip ? `First spoken of by ${who}, out of "${clip}".` : `First spoken of by ${who}.`;
+        // how the valley holds it NOW — live belief, so the tale reads differently as the town comes around
+        let believers = 0, seekers = 0, validated = false, finder = null;
+        for (const f of this.farmers) {
+            const b = f.sheet.rareBelief && f.sheet.rareBelief[t.ingredient]; if (!b) continue;
+            if (b.state === 'validated') { validated = true; if (!finder) finder = f.sheet.name.split(' ')[0]; }
+            else if (b.strength >= 0.55) { believers++; seekers++; }
+            else if (b.strength >= 0.3) believers++;
+        }
+        const n = this.farmers.length;
+        const belief = validated
+            ? `Proven real — ${finder || 'a settler'} carried one back from the wilds. No longer just a tale.`
+            : believers <= 0 ? `Almost forgotten now; scarcely a soul still credits it.`
+            : believers >= n - 1 ? `The whole valley half-believes it${seekers ? `, and some are out looking` : ''}.`
+            : `${believers} of ${n} still half-believe it${seekers ? `, ${seekers} keen enough to go looking` : ''}.`;
+        return { name: nm, saying, origin, belief, validated };
+    }
     // Crystallise a novel discovery into the town's registry (canonical key -> record). Idempotent.
     registerInvention(inv, discoverer) {
         if (this.recipes[inv.id]) return this.recipes[inv.id];

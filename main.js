@@ -3735,12 +3735,22 @@ function drawChronicleRecipes(PX, top, PW, bot) {
     // TALES of the rare ingredients — the town's myths, grown from its memories, and whether proven real
     if ((world.tales || []).length) {
         push(4); push(9, y => drawText(ctx, 'TALES OF THE WILDS', IX, y, '#c8a860'));
+        push(7, y => drawText(ctx, 'Rumours of rare ingredients, grown from the town\'s own memories.', IX, y, '#6a6f7c'));
+        push(2);
         for (const t of world.tales) {
-            const proven = world.farmers.some(f => f.sheet.rareBelief && f.sheet.rareBelief[t.ingredient] && f.sheet.rareBelief[t.ingredient].state === 'validated');
-            const nm = (RARE_NAME && RARE_NAME[t.ingredient]) || t.ingredient, status = proven ? 'PROVEN REAL' : 'STILL A TALE';
-            push(7, y => { drawText(ctx, nm, IX + 4, y, proven ? '#7dd069' : '#9a86c0'); drawText(ctx, status, PX + PW - 8 - textWidth(status), y, proven ? '#7dd069' : '#6a6f7c'); });
-            wrapPush(t.originTitle ? `a tale from "${String(t.originTitle).slice(0, 34)}"` : "a traveller's tale", '#6a6f7c', 8);
-            push(2);
+            const lore = world.taleLore ? world.taleLore(t) : null;
+            const nm = (lore && lore.name) || (RARE_NAME && RARE_NAME[t.ingredient]) || t.ingredient;
+            const proven = lore ? lore.validated : world.farmers.some(f => f.sheet.rareBelief && f.sheet.rareBelief[t.ingredient] && f.sheet.rareBelief[t.ingredient].state === 'validated');
+            const status = proven ? 'PROVEN REAL' : 'STILL A TALE';
+            push(8, y => { drawText(ctx, nm.toUpperCase(), IX + 4, y, proven ? '#7dd069' : '#c8a860'); drawText(ctx, status, PX + PW - 8 - textWidth(status), y, proven ? '#7dd069' : '#6a6f7c'); });
+            if (lore) {
+                wrapPush(`"${lore.saying}"`, '#b6a6d8', 8);   // the rumour itself, in the town's words
+                wrapPush(lore.origin, '#8a8f9c', 8);          // who first carried it, out of which memory
+                wrapPush(lore.belief, proven ? '#7dd069' : '#7a8194', 8);  // how the valley holds it now
+            } else {
+                wrapPush(t.originTitle ? `a tale from "${String(t.originTitle).slice(0, 34)}"` : "a traveller's tale", '#6a6f7c', 8);
+            }
+            push(4);
         }
     }
 
