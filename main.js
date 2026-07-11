@@ -12,7 +12,8 @@ import {
     fillDiamond, strokeDiamond,
 } from './pixel.js';
 import { CRT } from './crt.js';
-import { saveTown, loadTown, wipeTown, undoWipe } from './save.js';
+import { saveTown, loadTown, wipeTown, undoWipe, loadWorldIndex, registerTownInWorld, saveWorldIndex } from './save.js';
+import { computeLayout, detectEncounters, encounterLine, townPos, townReach, townTint } from './worldmap.js';
 import { enrichStories } from './dm.js';
 import { persistLives, persistTownHistory } from './memory-writeback.js';
 import { enrichInventions, persistTownInventions } from './memory-invent.js';
@@ -219,6 +220,14 @@ const SND_BTN = { x: 0, y: 3, w: 30, h: 12 };      // sound on/off toggle, posit
 const SETTINGS_BTN = { x: 0, y: 3, w: 15, h: 12 }; // gear cog — opens the settings menu (New Town + volume)
 const NEW_BTN = { x: 0, y: 3, w: 30, h: 12 };      // NEW TOWN reset hatch (now lives inside the settings menu)
 let settingsOpen = false;                          // settings menu (New Town + music/SFX volume)
+// #2 world-of-towns map (the zoom-out camera tier)
+let worldMapOpen = false;
+let worldMapIdx = null;                            // loaded world index { towns, encounters }
+let worldMapNodes = [];                            // computed layout for the current render
+let worldMapSel = null;                            // seed of the town whose info card is open
+let worldMapHits = [];                             // { seed, x, y, r } node hit-discs, rebuilt each draw
+let worldMapVisit = null;                          // VISIT button rect (switch active town)
+const WORLD_BTN = { x: 0, y: 3, w: 0, h: 12 };     // top-bar toggle, positioned in drawUI
 let settingsHits = null;                           // { music, sfx, musicSlider, sfxSlider, newBtn, close } rects (game px)
 let settingsDrag = null;                           // 'music' | 'sfx' while dragging a volume slider
 let newConfirmUntil = 0;                           // while now < this, the NEW button reads "SURE?" and a click wipes
@@ -2610,6 +2619,7 @@ function drawUI() {
     if (spd !== 1) barBtn(SPEED1_BTN, '1X', false);
 
     barBtn(ROSTER_BTN, 'ROSTER', rosterOpen, '#7dd069', '#10240c');
+    barBtn(WORLD_BTN, 'WORLD', worldMapOpen, '#c8b0e0', '#160f22');
     barBtn(CHRON_BTN, 'CHRONICLE', chronOpen, '#c8a0e0', '#1a1024');
     if ((world._chronTotal || 0) > chronReadTotal && !chronOpen) drawCoin(CHRON_BTN.x + CHRON_BTN.w - 3, CHRON_BTN.y - 2, 6);   // UNREAD only
 
@@ -2629,8 +2639,91 @@ function drawUI() {
 
     if (rosterOpen) drawRoster();
     else if (chronOpen) drawChronicle();
+    else if (worldMapOpen) drawWorldMap();
     else { drawMinimap(); if (boardOpen) drawBoard(); else if (selected) drawSheet(selected); }
     if (settingsOpen) drawSettings();
+}
+
+// ---------------------------------------------------------------------------
+// #2 The WORLD MAP — the zoom-out camera tier: every town this browser has grown, where it sits, which towns
+// it descends from (lineage edges = the closed memory loop at world scale), and which have met (encounters).
+// ---------------------------------------------------------------------------
+async function openWorldMap() {
+    worldMapOpen = true;
+    rosterOpen = chronOpen = boardOpen = false;
+    worldMapSel = world ? world.seed : null;
+    if (world) await registerWorld(world);        // make sure the active town is on the map + current
+    worldMapIdx = await loadWorldIndex();
+}
+
+function drawWorldMap() {
+    ctx.fillStyle = 'rgba(6,7,11,0.80)'; ctx.fillRect(0, 18, GW, GH - 18);
+    const PW = Math.min(GW - 12, 380), PH = GH - 40, PX = Math.floor((GW - PW) / 2), PY = 22;
+    uiPanel(PX, PY, PW, PH);
+    drawText(ctx, 'THE WORLD', PX + 7, PY + 5, '#c8b0e0', 1);
+    drawText(ctx, 'X', PX + PW - 10, PY + 5, '#c8ccd8');
+
+    const idx = worldMapIdx || { towns: {}, encounters: [] };
+    const nodes = computeLayout(idx);
+    const enc = idx.encounters || [];
+    drawText(ctx, `${nodes.length} town${nodes.length !== 1 ? 's' : ''} - ${enc.length} encounter${enc.length !== 1 ? 's' : ''}`, PX + 7, PY + 14, '#9aa0b4');
+
+    const mapX = PX + 10, mapY = PY + 24, mapW = PW - 20, mapH = PH - 48;
+    worldMapHits = []; worldMapVisit = null;
+    if (!nodes.length) { drawText(ctx, 'The world holds no towns yet - grow one.', mapX + 6, mapY + 20, '#9aa0b4'); return; }
+
+    // fit the town bounding box into the map region (few towns still fill the view)
+    let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+    for (const n of nodes) { minX = Math.min(minX, n.x); minY = Math.min(minY, n.y); maxX = Math.max(maxX, n.x); maxY = Math.max(maxY, n.y); }
+    const bw = Math.max(1, maxX - minX), bh = Math.max(1, maxY - minY), pad = 26;
+    const S = nodes.length === 1 ? 0 : Math.min((mapW - 2 * pad) / bw, (mapH - 2 * pad) / bh);
+    const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+    const toX = n => mapX + mapW / 2 + (n.x - cx) * S;
+    const toY = n => mapY + mapH / 2 + (n.y - cy) * S;
+    const bySeed = new Map(nodes.map(n => [String(n.seed), n]));
+
+    // faint memory-tinted reach halos
+    for (const n of nodes) { ctx.beginPath(); ctx.arc(toX(n), toY(n), Math.max(4, n.reach * S), 0, Math.PI * 2); ctx.fillStyle = `hsla(${n.tint.h} ${n.tint.s}% 55% / 0.06)`; ctx.fill(); }
+    // lineage edges (town -> ancestor town it was founded from)
+    ctx.lineWidth = 1;
+    for (const n of nodes) for (const a of n.ancestors) {
+        const anc = bySeed.get(a); if (!anc) continue;
+        ctx.strokeStyle = 'rgba(200,176,224,0.5)';
+        ctx.beginPath(); ctx.moveTo(toX(n), toY(n)); ctx.lineTo(toX(anc), toY(anc)); ctx.stroke();
+        ctx.fillStyle = 'rgba(200,176,224,0.8)'; ctx.fillRect(toX(anc) - 1, toY(anc) - 1, 2, 2);
+    }
+    // encounter links (gold)
+    for (const e of enc) { const A = bySeed.get(String(e.a)), B = bySeed.get(String(e.b)); if (!A || !B) continue; ctx.strokeStyle = 'rgba(240,200,120,0.4)'; ctx.beginPath(); ctx.moveTo(toX(A), toY(A)); ctx.lineTo(toX(B), toY(B)); ctx.stroke(); }
+    // town dots + labels
+    for (const n of nodes) {
+        const x = toX(n), y = toY(n), r = Math.max(2, Math.min(6, 2 + n.pop * 0.3));
+        const active = world && String(n.seed) === String(world.seed);
+        const seld = worldMapSel != null && String(n.seed) === String(worldMapSel);
+        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fillStyle = n.tint.css; ctx.fill();
+        if (active || seld) { ctx.strokeStyle = active ? '#f0e0a0' : '#ffffff'; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(x, y, r + 2, 0, Math.PI * 2); ctx.stroke(); }
+        drawText(ctx, n.name.split(' ')[0], x + r + 2, y - 3, active ? '#f0e0a0' : '#c8ccd8');
+        worldMapHits.push({ seed: n.seed, x, y, r: r + 3 });
+    }
+    // selected-town info card + VISIT
+    if (worldMapSel != null) {
+        const n = bySeed.get(String(worldMapSel));
+        if (n) {
+            const cardW = PW - 16, cardH = 44, cardX = PX + 8, cardY = PY + PH - cardH - 4;
+            ctx.fillStyle = 'rgba(20,16,28,0.92)'; ctx.fillRect(cardX, cardY, cardW, cardH);
+            ctx.strokeStyle = 'rgba(200,176,224,0.4)'; ctx.strokeRect(cardX + 0.5, cardY + 0.5, cardW - 1, cardH - 1);
+            drawText(ctx, n.name.toUpperCase(), cardX + 4, cardY + 4, n.tint.css);
+            drawText(ctx, `Year ${n.year} - day ${n.day} - ${n.pop} settlers - ${n.harvestTotal} harvested`, cardX + 4, cardY + 13, '#b0b6c8');
+            if (n.ancestors.length) drawText(ctx, `descends from ${n.ancestors.length} remembered town${n.ancestors.length > 1 ? 's' : ''}`, cardX + 4, cardY + 22, '#c8b0e0');
+            if (n.motto) { const ln = wrapText(`"${n.motto}"`, 46)[0]; drawText(ctx, ln, cardX + 4, cardY + 31, '#eef0f4'); }
+            const active = world && String(n.seed) === String(world.seed);
+            if (!active) {
+                const vbw = 42, bx = cardX + cardW - vbw - 3, by = cardY + cardH - 11;
+                ctx.fillStyle = 'rgba(125,208,105,0.25)'; ctx.fillRect(bx, by, vbw, 9);
+                drawText(ctx, 'VISIT', bx + 9, by + 1, '#7dd069');
+                worldMapVisit = { x: bx, y: by, w: vbw, h: 9, seed: n.seed };
+            } else drawText(ctx, 'you are here', cardX + cardW - 52, cardY + cardH - 10, '#f0e0a0');
+        }
+    } else drawText(ctx, 'click a town - lines: lineage - gold: encounters', PX + 8, PY + PH - 11, '#7a8090');
 }
 
 // ---------------------------------------------------------------------------
@@ -4183,6 +4276,40 @@ function maybeAutosave() {
     if (!booted || !world || world.day === lastSavedDay) return;
     lastSavedDay = world.day;                       // claim synchronously so a slow write can't double-fire
     saveTown(world).then(d => { if (d != null) saveFlashAt = performance.now(); });
+    registerWorld(world);                           // #2.1 keep this town's summary current in the world index
+}
+
+// #2.1/#2.3/#2.4 — build this town's compact WORLD summary and merge it into the world index, then check
+// whether growth has brought it into another town's reach (an encounter carries a creed between them, #2.4).
+// Off the sim loop, best-effort. Runs once per day at rollover.
+function townSummary(w) {
+    // lineage EDGES: the towns this one descends from (heirs among the founders name their forebear's town)
+    const anc = new Set();
+    for (const f of w.farmers) { const ln = f.sheet.lineage; if (ln && ln.ofTownSeed != null) anc.add(String(ln.ofTownSeed)); }
+    // a representative MOTTO — the creed most shared across the cast (what this town, collectively, lives by)
+    const tally = new Map();
+    for (const f of w.farmers) for (const c of (f.creeds || [])) { const q = c.quote; if (q) tally.set(q, (tally.get(q) || 0) + 1); }
+    let motto = null, best = 0;
+    for (const [q, n] of [...tally].sort((a, b) => (a[0] < b[0] ? -1 : 1))) if (n > best) { best = n; motto = q; }
+    // memory FINGERPRINT -> tint: a stable hash of the cast's source memories (what the town was grown from)
+    const fp = hashString('fp:' + w.farmers.map(f => (f.sheet.memory && f.sheet.memory.id) || f.sheet.seed).sort().join('|'));
+    return {
+        seed: w.seed, name: w.name, day: w.day, year: w.year, pop: w.farmers.length,
+        harvestTotal: w.harvestTotal || 0, lineage: [...anc], motto, fingerprint: fp >>> 0, lastSeen: Date.now(),
+    };
+}
+let _worldBusy = false;
+async function registerWorld(w) {
+    if (_worldBusy) return; _worldBusy = true;
+    try {
+        const idx = await registerTownInWorld(townSummary(w));
+        if (!idx) return;
+        const fresh = detectEncounters(idx);        // did growth just bring two towns into reach?
+        if (fresh.length) {
+            await saveWorldIndex(idx);
+            for (const ev of fresh) if (w === world) world.addLog(encounterLine(ev), '#c8b0e0');   // surface on the town log
+        }
+    } finally { _worldBusy = false; }
 }
 
 // ---------------------------------------------------------------------------
@@ -4268,6 +4395,16 @@ out.addEventListener('pointerup', (e) => {
     }
     if (inRect(p, ROSTER_BTN)) { rosterOpen = !rosterOpen; if (rosterOpen) { boardOpen = false; chronOpen = false; } else { chatDropdownOpen = false; blurChatInput(); } return; }
     if (CHRON_BTN.w && inRect(p, CHRON_BTN)) { chronOpen = !chronOpen; if (chronOpen) { boardOpen = false; rosterOpen = false; chronScroll = 0; blurChatInput(); chronTownWide = !(followMode && followTarget && world.farmers.includes(followTarget)); } return; }
+    if (WORLD_BTN.w && inRect(p, WORLD_BTN)) { if (worldMapOpen) worldMapOpen = false; else openWorldMap(); return; }
+
+    // world-map overlay (modal): X / click-outside closes; a town node selects it; VISIT switches active town
+    if (worldMapOpen) {
+        const PW = Math.min(GW - 12, 380), PH = GH - 40, PX = Math.floor((GW - PW) / 2), PY = 22;
+        if ((p.x > PX + PW - 14 && p.y < PY + 12) || p.x < PX || p.x > PX + PW || p.y < PY || p.y > PY + PH) { worldMapOpen = false; return; }
+        if (worldMapVisit && inRect(p, worldMapVisit)) { location.search = '?seed=' + worldMapVisit.seed; return; }
+        for (const h of worldMapHits) { const dx = p.x - h.x, dy = p.y - h.y; if (dx * dx + dy * dy <= (h.r + 2) * (h.r + 2)) { worldMapSel = h.seed; return; } }
+        return;   // consume all clicks inside the map
+    }
 
     // chronicle overlay (modal) — X or click-outside closes; a beat selects that Ry (its saga)
     if (chronOpen) {
@@ -4497,11 +4634,15 @@ window.addEventListener('keydown', (e) => {
         const target = spotlightFarmer();
         if (target) { followMode = true; followTarget = target; selected = target; sheetScroll = 0; sheetTab = 0; rosterOpen = false; chronOpen = false; boardOpen = false; dramaSpotlight = null; }
     }
+    // M — toggle the zoom-out WORLD map (the world of towns)
+    if ((e.key === 'm' || e.key === 'M') && world && booted) {
+        if (worldMapOpen) worldMapOpen = false; else openWorldMap();
+    }
     // Esc — stop following AND close the card / any open panel (a clean sweep back to the map)
     if (e.key === 'Escape' && world && booted) {
         followMode = false; followTarget = null;
         selected = null; selectedSlotKey = null;
-        rosterOpen = false; chronOpen = false; boardOpen = false; settingsOpen = false;
+        rosterOpen = false; chronOpen = false; boardOpen = false; settingsOpen = false; worldMapOpen = false;
         chatDropdownOpen = false; blurChatInput();
     }
     // ← / → — cycle through the whole cast: moves the open card and/or the follow target together

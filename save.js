@@ -63,6 +63,46 @@ export async function loadTown(seed) {
     }
 }
 
+// --- #2.1 the WORLD INDEX ---------------------------------------------------------------------------------
+// A lightweight registry of every town this browser has grown — one small summary per town (name, day, pop,
+// harvest, the towns it descends from, a memory fingerprint for its tint) plus the encounters between them.
+// Updated incrementally on each save (not by loading heavy snapshots), it's the data the zoom-out world map
+// renders. This is the LIVING WORLD tier: client-authoritative, explicitly non-reproducible (unlike a town's
+// seeded sim). Best-effort throughout — a storage failure never touches the running town.
+const WORLD_KEY = 'world';
+
+export async function loadWorldIndex() {
+    try { return (await idbReq('readonly', s => s.get(WORLD_KEY))) || { towns: {}, encounters: [] }; }
+    catch { return { towns: {}, encounters: [] }; }
+}
+
+// Merge one town's current summary into the world index (upsert by seed), preserving firstSeen + accumulated
+// encounters. Returns the merged index (so the caller can run encounter detection on it) or null on failure.
+export async function registerTownInWorld(summary) {
+    if (!summary || summary.seed == null) return null;
+    try {
+        const idx = await loadWorldIndex();
+        idx.towns = idx.towns || {};
+        idx.encounters = idx.encounters || [];
+        const prev = idx.towns[summary.seed] || {};
+        idx.towns[summary.seed] = {
+            ...prev, ...summary,
+            firstSeen: prev.firstSeen || summary.lastSeen || Date.now(),
+        };
+        await idbReq('readwrite', s => s.put(idx, WORLD_KEY));
+        return idx;
+    } catch (err) {
+        console.warn('ry-farms: world-index update failed (map may be stale)', err);
+        return null;
+    }
+}
+
+// Persist the whole world index (used after encounter detection appends cross-town events).
+export async function saveWorldIndex(idx) {
+    try { await idbReq('readwrite', s => s.put(idx, WORLD_KEY)); return true; }
+    catch { return false; }
+}
+
 // The NEW TOWN hatch: retire a seed's snapshot (and the latest-pointer if it points there).
 // NOT a hard delete — the save (and the wiped pointer) move to backup keys, so one accidental
 // "NEW -> SURE?" is always undoable (learned the hard way, day one). Each wipe overwrites the
