@@ -2668,7 +2668,10 @@ function drawWorldMap() {
     const enc = idx.encounters || [];
     drawText(ctx, `${nodes.length} town${nodes.length !== 1 ? 's' : ''} - ${enc.length} encounter${enc.length !== 1 ? 's' : ''}`, PX + 7, PY + 14, '#9aa0b4');
 
-    const mapX = PX + 10, mapY = PY + 24, mapW = PW - 20, mapH = PH - 48;
+    // RESERVE the footer's height (+padding) out of the map region, so the town nodes are always laid out
+    // ABOVE the bottom info bar and none is drawn behind it (e.g. Dunton getting clipped).
+    const CARD_H = 44, CARD_RESERVE = CARD_H + 12;
+    const mapX = PX + 10, mapY = PY + 24, mapW = PW - 20, mapH = PH - 24 - CARD_RESERVE;
     worldMapHits = []; worldMapVisit = null;
     if (!nodes.length) { drawText(ctx, 'The world holds no towns yet - grow one.', mapX + 6, mapY + 20, '#9aa0b4'); return; }
 
@@ -2704,16 +2707,16 @@ function drawWorldMap() {
         drawText(ctx, n.name.split(' ')[0], x + r + 2, y - 3, active ? '#f0e0a0' : '#c8ccd8');
         worldMapHits.push({ seed: n.seed, x, y, r: r + 3 });
     }
-    // selected-town info card + VISIT
+    // selected-town info bar (fixed footer). The map region above reserves its height, so it never clips a town.
     if (worldMapSel != null) {
         const n = bySeed.get(String(worldMapSel));
         if (n) {
-            const cardW = PW - 16, cardH = 44, cardX = PX + 8, cardY = PY + PH - cardH - 4;
+            const cardW = PW - 16, cardH = CARD_H, cardX = PX + 8, cardY = PY + PH - cardH - 4;
             ctx.fillStyle = 'rgba(20,16,28,0.92)'; ctx.fillRect(cardX, cardY, cardW, cardH);
-            ctx.strokeStyle = 'rgba(200,176,224,0.4)'; ctx.strokeRect(cardX + 0.5, cardY + 0.5, cardW - 1, cardH - 1);
-            drawText(ctx, n.name.toUpperCase() + (n.culture === 'orc' ? '  [WARBAND]' : ''), cardX + 4, cardY + 4, n.tint.css);
+            ctx.strokeStyle = n.tint.css; ctx.strokeRect(cardX + 0.5, cardY + 0.5, cardW - 1, cardH - 1);
+            drawText(ctx, n.name.toUpperCase() + (n.culture === 'orc' ? ' - WARBAND' : ''), cardX + 4, cardY + 4, n.tint.css);
             drawText(ctx, `Year ${n.year} - day ${n.day} - ${n.pop} ${n.culture === 'orc' ? 'raiders' : 'settlers'} - ${n.harvestTotal} ${n.culture === 'orc' ? 'plundered' : 'harvested'}`, cardX + 4, cardY + 13, '#b0b6c8');
-            if (n.ancestors.length) drawText(ctx, `descends from ${n.ancestors.length} remembered town${n.ancestors.length > 1 ? 's' : ''}`, cardX + 4, cardY + 22, '#c8b0e0');
+            if (n.ancestors.length) drawText(ctx, `heir of ${n.ancestors.length} remembered town${n.ancestors.length > 1 ? 's' : ''}`, cardX + 4, cardY + 22, '#c8b0e0');
             if (n.motto) { const ln = wrapText(`"${n.motto}"`, 46)[0]; drawText(ctx, ln, cardX + 4, cardY + 31, '#eef0f4'); }
             const active = world && String(n.seed) === String(world.seed);
             if (!active) {
