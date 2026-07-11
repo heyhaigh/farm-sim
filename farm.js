@@ -9,7 +9,7 @@
 // livestock pen (milk) — each with its own "producers" the farmer tends and
 // collects from. Which facility comes first reflects the farmer's archetype.
 
-import { mulberry32, mod, growFarmer, personalityLabel, compileCreeds, docLexicon, hashString, ALL_CROPS } from './dna.js';
+import { mulberry32, mod, growFarmer, growHeir, personalityLabel, compileCreeds, docLexicon, hashString, ALL_CROPS } from './dna.js';
 export { ALL_CROPS };   // re-exported so tools/tests can pull the crop list from the sim entrypoint
 
 // The FOUNDING VALLEY: the hand-tuned region generated with the original global algorithm
@@ -3138,7 +3138,7 @@ export class World {
         return this.ringCount === 1;
     }
 
-    addFarmer(memory, mutation = 0) {
+    addFarmer(memory, mutation = 0, lineage = null) {
         if (this.farmers.length >= MAX_FARMERS) return null;
         const B = World.BASE_PLOT;
         // only accept a slot whose plot rect (+buffer) clears every existing farm / the
@@ -3154,7 +3154,9 @@ export class World {
         if (!slot) return null;
         slot.used = true;
 
-        const sheet = growFarmer(memory, mutation);
+        // #1.1 an heir is grown from this fresh memory BUT carries a creed inherited from a forebear a past
+        // town wrote back (lineage life); a plain founder when there's no forebear to descend from.
+        const sheet = lineage ? growHeir(memory, lineage, mutation) : growFarmer(memory, mutation);
         const plot = {
             x: slot.i, y: slot.j, w: B, h: B,
             // house upper-center: ~4 tiles of fenced yard behind it, garden room in front, facility room to the sides
@@ -3185,6 +3187,14 @@ export class World {
         this.farmers.push(farmer);
         const p = sheet.personality;
         this.addLog(`${sheet.name} the ${p.label} settled in. "${p.creed}"`, '#7dd069');
+        // #1.1/#1.2 the closed loop, made visible: an heir's arrival names the forebear they descend from and
+        // the creed they carry forward — a plain chronicle entry (no boot toast), white, for the TALES feed.
+        if (sheet.lineage) {
+            const of = String(sheet.lineage.ofName || 'a forebear').split(' ')[0];
+            const where = sheet.lineage.ofTown ? ` of ${sheet.lineage.ofTown}` : '';
+            this.addChronicle('lineage', `${shortName(farmer)} came to the valley - heir of ${of}${where}, carrying their creed forward.`,
+                farmer, null, '#eef0f4', { tone: 'arrival', why: sheet.lineage.creed });
+        }
         return farmer;
     }
 

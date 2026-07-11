@@ -1,6 +1,6 @@
 // main.js — Ry Farms: rendering, camera, input, UI, boot.
 
-import { fetchMemories, generateCrew, mod, fmtMod, STAT_NAMES, TRAIT_NAMES, TRAIT_LABELS, hashString } from './dna.js';
+import { fetchMemories, generateCrew, mod, fmtMod, STAT_NAMES, TRAIT_NAMES, TRAIT_LABELS, hashString, mulberry32 } from './dna.js';
 import { audio } from './audio.js';
 import { World, CHUNK, T, DAY_LENGTH, NIGHT_LENGTH, ITEMS, CRAFTABLES, RECIPE_BY_ID, INVENTION_TABLE, RARE_NAME, xpForLevel, obstacleTier, treeVariant, treeIsFruit, SEASONS } from './farm.js';
 import {
@@ -52,6 +52,7 @@ resize();
 
 let world = null;
 let memories = [];
+let lineagePool = [];       // #1.1 past farmers a reachable store remembers — heirs may be grown from them
 let memorySource = 'offline';
 // Honest memory-source copy: the town is grown from REAL SuperMemory docs only when a store was reachable;
 // otherwise it's the invented fallback crew, and the UI must SAY so rather than claim SuperMemory (Fable
@@ -3257,6 +3258,19 @@ function drawSheet(f) {
             drawText(ctx, f.sheet.dreamDone ? `WON ON DAY ${f.sheet.dreamDone}` : 'STILL CHASING IT', IX + 2, y, f.sheet.dreamDone ? '#7dd069' : SHEET_LABEL); y += 8;
             if (f.goal) { drawText(ctx, `COURSE THIS SEASON: ${f.goal.toUpperCase()}`, IX + 2, y, '#d08cc8'); y += 7; }
 
+            // #1.2 LINEAGE / provenance — when this farmer is an HEIR, trace the closed memory loop on the
+            // sheet: who they descend from, that forebear's OWN source memory, and (in CREEDS) the creed
+            // carried forward. The visible causal chain — passage -> creed -> heir -> new town — made clickable.
+            const lin = f.sheet.lineage;
+            if (lin) {
+                y += 2;
+                y = sectionBand(IX, y, IW, 'LINEAGE');
+                for (const ln of wrapText(`Heir of ${lin.ofName}${lin.ofTown ? ` of ${lin.ofTown}` : ''}.`, 33)) { drawText(ctx, ln, IX + 2, y, '#e0c8f0'); y += 7; }
+                if (lin.sourceTitle) for (const ln of wrapText(`Their forebear grew from: "${lin.sourceTitle}".`, 32)) { drawText(ctx, ln, IX + 2, y, '#b0b6c8'); y += 7; }
+                if (lin.dream) for (const ln of wrapText(`Forebear's dream: ${lin.dream}.`, 32)) { drawText(ctx, ln, IX + 2, y, '#b0b6c8'); y += 7; }
+                y += 2;
+            }
+
             // #91 CREEDS — the values distilled from this farmer's source memory. These are what the
             // sim quotes when they refuse or hold their ground, so behaviour traces back to the document.
             y += 2;
@@ -3264,8 +3278,11 @@ function drawSheet(f) {
             const ks = f.creeds || [];
             if (!ks.length) { drawText(ctx, 'nothing carried yet', IX + 2, y, SHEET_LABEL); y += 8; }
             else for (const k of ks) {
-                ctx.fillStyle = '#c8a0e0'; ctx.fillRect(IX + 2, y + 2, 2, 2);
-                for (const ln of wrapText(k.quote, 33)) { drawText(ctx, ln, IX + 7, y, '#c8a0e0'); y += 7; }
+                const inh = k.theme === 'inherited';               // #1.2 the creed carried from a forebear
+                const col = inh ? '#e0c8f0' : '#c8a0e0';
+                if (inh && k.inherited && k.inherited.name) { drawText(ctx, `carried from ${String(k.inherited.name).split(' ')[0]}:`, IX + 7, y, '#8a7ca0'); y += 7; }
+                ctx.fillStyle = col; ctx.fillRect(IX + 2, y + 2, 2, 2);
+                for (const ln of wrapText(k.quote, 33)) { drawText(ctx, ln, IX + 7, y, col); y += 7; }
                 y += 2;
             }
 
@@ -4529,13 +4546,34 @@ function pickMemory() {
     return { memory, mutation };
 }
 
-function spawnFarmer() {
+function spawnFarmer(lineage = null) {
     // addFarmer is the authority on room (it lazily opens ring 2 and collision-checks
     // slots) — don't pre-guard on free slots or ring 2 can never open.
     const pick = pickMemory();
-    const f = world.addFarmer(pick.memory, pick.mutation);
+    const f = world.addFarmer(pick.memory, pick.mutation, lineage);
     if (f) { terrainDirty = true; selected = f; }
     else world.addLog('No room left! The valley is full.', '#e0a03c');
+}
+
+// #1.1 Generational founding — deterministically decide which of the founding cast are HEIRS of a forebear
+// a past town wrote back, and which forebear each carries. Blend, not echo: only a fraction (~1/3) inherit,
+// capped by how many lives the store actually remembers, and a storeless/first world gets none. Given
+// (worldSeed, pool) the plan is identical every run, so a live founding bakes into the save reproducibly and
+// the headless harness (no pool) yields exactly the old cast — determinism intact.
+function planHeirs(seed, count, pool) {
+    const plan = new Map();
+    if (!pool || !pool.length) return plan;
+    const rand = mulberry32(hashString('heirs:' + (seed >>> 0)));
+    const maxHeirs = Math.min(pool.length, Math.max(1, Math.round(count * 0.34)));
+    // seeded stable order of forebears so the pairing doesn't depend on array order alone
+    const order = pool.map((_, i) => i).sort((a, b) =>
+        hashString('lin:' + seed + ':' + a) - hashString('lin:' + seed + ':' + b));
+    let used = 0;
+    for (let i = 0; i < count && used < maxHeirs; i++) {
+        if (rand() < 0.5) plan.set(i, pool[order[used++]]);
+    }
+    if (used === 0) plan.set(0, pool[order[0]]);   // when a pool exists, at least one heir so the loop is always visible
+    return plan;
 }
 
 // ---------------------------------------------------------------------------
@@ -4707,6 +4745,7 @@ function drawBootScreen(t) {
     const result = await fetchMemories();
     memories = (result.memories && result.memories.length) ? result.memories : generateCrew(worldSeed);
     memorySource = (result.memories && result.memories.length) ? result.source : 'invented';
+    lineagePool = (memorySource !== 'invented' && Array.isArray(result.lineage)) ? result.lineage : [];   // #1.1
 
     let resumed = false;
     if (!wantFresh) {
@@ -4733,7 +4772,9 @@ function drawBootScreen(t) {
     } else {
         lastSavedDay = world.day;
         world.addLog(`Ry Farms — seed ${worldSeed}`, '#5a6672');
-        for (let i = 0; i < 8; i++) spawnFarmer();   // start with the full founding eight
+        const heirPlan = planHeirs(worldSeed, 8, lineagePool);   // #1.1 which founders descend from a past town's lives
+        for (let i = 0; i < 8; i++) spawnFarmer(heirPlan.get(i) || null);   // start with the full founding eight
+        if (heirPlan.size) world.addLog(`${heirPlan.size} of the founders are heirs of a remembered town.`, '#c8b0e0');
         world.ensureFounderVariety();                // guarantee a chaos-agent + a moody farmer among them
     }
     selected = null;

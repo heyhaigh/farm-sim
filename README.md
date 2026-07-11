@@ -68,10 +68,19 @@ conversation LLM — are **display-text only**: they decorate the words on scree
 but never draw sim RNG or write sim state, so the seeded sim is byte-identical
 with or without them (the LLM decorates, it never decides).
 
-## Verifying determinism
+## A living world on a reproducible substrate
 
-Determinism is the project's #1 invariant: same seed ⇒ the same town, twice.
-It's checked by a committed headless harness (sim only, LLM + SuperMemory off):
+Ry Farms is **a living world** first — towns that grow, remember, and (soon) find
+each other. Underneath that world is a **reproducible substrate**: a single town's
+*founding and sim* are deterministic — same seed ⇒ the same town, twice — so the
+whole thing stays testable and honest. That reproducibility is a substrate property,
+not the pitch: the world layer above it (expressive chat, encounters, cross-town
+migration, memories written back and re-entering as new lineage) is explicitly
+**alive and non-identical** — it's *meant* to diverge. Determinism is what we test;
+a living world is what we build.
+
+The substrate is checked by a committed headless harness (sim only, LLM +
+SuperMemory off):
 
 ```
 node tests/determinism.mjs
@@ -80,7 +89,8 @@ node tests/determinism.mjs
 It boots the founder cast, ticks 30 days, and hashes farmer + world state across
 two runs of each seed. `same-twice=false` is a P0 bug. The harness also pins
 baseline digests; a legitimate sim change re-baselines them (update the constant),
-but the same-twice property must always hold.
+but the same-twice property must always hold. (Cross-machine byte-identity is **not**
+promised — the guarantee is per-town, LLM-off, headless reproducibility.)
 
 ## How a farmer is made
 

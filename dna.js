@@ -406,8 +406,11 @@ function buildCropPalette(rand, signature, personality) {
     return palette;
 }
 
-export function growFarmer(memory, mutation = 0) {
-    const seed = hashString((memory.id || memory.title || 'ry') + (mutation ? `:m${mutation}` : ''));
+export function growFarmer(memory, mutation = 0, seedSalt = '') {
+    // seedSalt folds an extra identity term into the seed so a farmer grown from the same doc can still be a
+    // DISTINCT person (used by growHeir to shape an heir by both the fresh doc AND their forebear). Empty salt
+    // reproduces the original farmer exactly, so non-heir founding is byte-identical.
+    const seed = hashString((memory.id || memory.title || 'ry') + (mutation ? `:m${mutation}` : '') + (seedSalt ? `:${seedSalt}` : ''));
     const rand = mulberry32(seed);
     const key = classifyMemory(memory);
     const arch = ARCHETYPES[key];
@@ -461,6 +464,32 @@ export function growFarmer(memory, mutation = 0) {
     };
 }
 
+// #1.1 Generational founding — the closed memory loop made flesh. An HEIR is grown from a FRESH document
+// like any farmer (its archetype, stats, personality, name), but folds a forebear into its seed (so it's a
+// distinct person) and carries ONE creed inherited from a farmer a PAST town wrote back to SuperMemory. The
+// forebear is provenance (`f.lineage`), surfaced on the sheet + chronicle so the loop is visible. Determinism
+// is untouched: the whole heir derives from one seed, and the fresh-doc<->forebear pairing is chosen
+// deterministically at founding and baked into the save (the sim never re-reads SuperMemory).
+export function growHeir(freshDoc, lineage, mutation = 0) {
+    const f = growFarmer(freshDoc, mutation, `heir:${lineage.id}`);
+    const inheritedCreed = {
+        theme: 'inherited', tags: ['lineage', 'inheritance'], weight: 1,
+        quote: lineage.creed,
+        short: lineage.name ? `I carry what ${String(lineage.name).split(' ')[0]} believed` : 'I carry what they believed',
+        shorts: ['I carry what they believed'],
+        inherited: {
+            name: lineage.name, town: lineage.town, townSeed: lineage.townSeed,
+            farmerSeed: lineage.farmerSeed, sourceTitle: lineage.sourceTitle, archetype: lineage.archetype,
+        },
+    };
+    f.creeds = [inheritedCreed, ...f.creeds].slice(0, 6);
+    f.lineage = {   // provenance (#1.2): who this farmer descends from, beyond their own source doc
+        ofName: lineage.name, ofTown: lineage.town, ofTownSeed: lineage.townSeed, ofFarmerSeed: lineage.farmerSeed,
+        creed: lineage.creed, dream: lineage.dream, sourceTitle: lineage.sourceTitle, archetype: lineage.archetype,
+    };
+    return f;
+}
+
 // ---------------------------------------------------------------------------
 // Memory fetching
 // ---------------------------------------------------------------------------
@@ -482,11 +511,13 @@ export async function fetchMemories() {
                 content: d.content || '',
             }));
         if (docs.length === 0) throw new Error(data.error || 'no usable documents');
-        return { memories: docs, source: data.source || 'supermemory' };
+        // #1.1 lineage: past farmers this store remembers, available to found heirs from (blend, not echo).
+        const lineage = Array.isArray(data.lineage) ? data.lineage : [];
+        return { memories: docs, lineage, source: data.source || 'supermemory' };
     } catch (err) {
         // no self-hosted corpus reachable -> the caller grows the town from INVENTED lives (generateCrew),
         // seeded by the world so the default town is unique + untethered from any real documents.
         console.warn('[ry-bots] no memory corpus; growing farmers from invented lives:', err.message);
-        return { memories: null, source: 'invented' };
+        return { memories: null, lineage: [], source: 'invented' };
     }
 }
