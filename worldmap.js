@@ -28,11 +28,16 @@ export function townReach(t) {
 
 // Memory-derived tint (#5.1 seed): the town's palette hue comes from the fingerprint of its founding memories,
 // so a town literally wears the color of what it was grown from. Warm/cool falls out of the hash; saturation
-// lifts with how much the town has lived.
+// lifts with how much the town has lived. #3.2/#5.3: an ORC warband is rendered as atmosphere — ashen and
+// blood-red, the tension made visible at a glance against the verdant human towns.
 export function townTint(t) {
+    if (t.culture === 'orc') {
+        const hue = 2 + ((t.fingerprint >>> 0) % 14);   // narrow red band, ashen
+        return { h: hue, s: 52, l: 40, css: `hsl(${hue} 52% 44%)`, cssDim: `hsl(${hue} 40% 24%)`, orc: true };
+    }
     const hue = ((t.fingerprint >>> 0) % 360);
     const sat = 45 + Math.min(30, (t.harvestTotal || 0) / 200);
-    return { h: hue, s: sat, l: 58, css: `hsl(${hue} ${sat}% 58%)`, cssDim: `hsl(${hue} ${sat}% 30%)` };
+    return { h: hue, s: sat, l: 58, css: `hsl(${hue} ${sat}% 58%)`, cssDim: `hsl(${hue} ${sat}% 30%)`, orc: false };
 }
 
 // The full render model for the map: every town with its position, reach, tint, and lineage edges (an edge
@@ -45,6 +50,7 @@ export function computeLayout(index) {
         .map(t => ({
             seed: t.seed, name: t.name || `Town ${t.seed}`, pop: t.pop || 0, day: t.day || 0, year: t.year || 1,
             harvestTotal: t.harvestTotal || 0, motto: t.motto || null, lastSeen: t.lastSeen || 0,
+            culture: t.culture === 'orc' ? 'orc' : 'human',
             ...townPos(t.seed), reach: townReach(t), tint: townTint(t),
             // edges to ancestor towns that we actually have on the map (skip lineage from unknown/foreign towns)
             ancestors: (t.lineage || []).map(String).filter(s => s !== String(t.seed) && known.has(s)),
@@ -68,11 +74,19 @@ export function detectEncounters(index) {
         const dx = A.x - B.x, dy = A.y - B.y, dist = Math.hypot(dx, dy);
         if (dist > A.reach + B.reach) continue;                 // not yet within reach of each other
         met.add(key);
-        const ev = {
+        // #3.2 legible conflict: an orc warband meeting a human town is a RAID, not a trade. Same-culture
+        // neighbours meet peacefully (and swap a creed, #2.4); across the human/orc line it's hostile, and the
+        // raided town REMEMBERS (the memory that travels is the grievance — traceable drama, not a stat).
+        const cross = A.culture !== B.culture;
+        const raider = A.culture === 'orc' ? A : B, victim = A.culture === 'orc' ? B : A;
+        const ev = cross ? {
+            a: raider.seed, b: victim.seed, day: Math.max(A.day, B.day), at: Date.now(),
+            aName: raider.name, bName: victim.name, kind: 'raid',
+            aCarried: null, bCarried: `${String(victim.name).split(' ')[0]} remembers the ${String(raider.name).split(' ')[0]} raid`,
+        } : {
             a: A.seed, b: B.seed, day: Math.max(A.day, B.day), at: Date.now(),
-            aName: A.name, bName: B.name,
-            // the memory that travels each way (#2.4): each town's motto reaches the other
-            aCarried: A.motto || null, bCarried: B.motto || null,
+            aName: A.name, bName: B.name, kind: 'meeting',
+            aCarried: A.motto || null, bCarried: B.motto || null,   // #2.4 each town's motto reaches the other
         };
         fresh.push(ev);
     }
@@ -84,6 +98,7 @@ export function detectEncounters(index) {
 export function encounterLine(ev) {
     const a = String(ev.aName || `Town ${ev.a}`).split(' ')[0];
     const b = String(ev.bName || `Town ${ev.b}`).split(' ')[0];
+    if (ev.kind === 'raid') return `The ${a} warband fell upon ${b}. ${b} will remember.`;
     let s = `${a} and ${b} have grown into each other's reach.`;
     if (ev.aCarried) s += ` ${a} carries word that "${ev.aCarried}".`;
     return s;

@@ -2692,8 +2692,8 @@ function drawWorldMap() {
         ctx.beginPath(); ctx.moveTo(toX(n), toY(n)); ctx.lineTo(toX(anc), toY(anc)); ctx.stroke();
         ctx.fillStyle = 'rgba(200,176,224,0.8)'; ctx.fillRect(toX(anc) - 1, toY(anc) - 1, 2, 2);
     }
-    // encounter links (gold)
-    for (const e of enc) { const A = bySeed.get(String(e.a)), B = bySeed.get(String(e.b)); if (!A || !B) continue; ctx.strokeStyle = 'rgba(240,200,120,0.4)'; ctx.beginPath(); ctx.moveTo(toX(A), toY(A)); ctx.lineTo(toX(B), toY(B)); ctx.stroke(); }
+    // encounter links — gold for a peaceful meeting, blood-red for a raid (#3.2)
+    for (const e of enc) { const A = bySeed.get(String(e.a)), B = bySeed.get(String(e.b)); if (!A || !B) continue; ctx.strokeStyle = e.kind === 'raid' ? 'rgba(230,80,60,0.6)' : 'rgba(240,200,120,0.4)'; ctx.beginPath(); ctx.moveTo(toX(A), toY(A)); ctx.lineTo(toX(B), toY(B)); ctx.stroke(); }
     // town dots + labels
     for (const n of nodes) {
         const x = toX(n), y = toY(n), r = Math.max(2, Math.min(6, 2 + n.pop * 0.3));
@@ -2711,8 +2711,8 @@ function drawWorldMap() {
             const cardW = PW - 16, cardH = 44, cardX = PX + 8, cardY = PY + PH - cardH - 4;
             ctx.fillStyle = 'rgba(20,16,28,0.92)'; ctx.fillRect(cardX, cardY, cardW, cardH);
             ctx.strokeStyle = 'rgba(200,176,224,0.4)'; ctx.strokeRect(cardX + 0.5, cardY + 0.5, cardW - 1, cardH - 1);
-            drawText(ctx, n.name.toUpperCase(), cardX + 4, cardY + 4, n.tint.css);
-            drawText(ctx, `Year ${n.year} - day ${n.day} - ${n.pop} settlers - ${n.harvestTotal} harvested`, cardX + 4, cardY + 13, '#b0b6c8');
+            drawText(ctx, n.name.toUpperCase() + (n.culture === 'orc' ? '  [WARBAND]' : ''), cardX + 4, cardY + 4, n.tint.css);
+            drawText(ctx, `Year ${n.year} - day ${n.day} - ${n.pop} ${n.culture === 'orc' ? 'raiders' : 'settlers'} - ${n.harvestTotal} ${n.culture === 'orc' ? 'plundered' : 'harvested'}`, cardX + 4, cardY + 13, '#b0b6c8');
             if (n.ancestors.length) drawText(ctx, `descends from ${n.ancestors.length} remembered town${n.ancestors.length > 1 ? 's' : ''}`, cardX + 4, cardY + 22, '#c8b0e0');
             if (n.motto) { const ln = wrapText(`"${n.motto}"`, 46)[0]; drawText(ctx, ln, cardX + 4, cardY + 31, '#eef0f4'); }
             const active = world && String(n.seed) === String(world.seed);
@@ -4295,7 +4295,8 @@ function townSummary(w) {
     const fp = hashString('fp:' + w.farmers.map(f => (f.sheet.memory && f.sheet.memory.id) || f.sheet.seed).sort().join('|'));
     return {
         seed: w.seed, name: w.name, day: w.day, year: w.year, pop: w.farmers.length,
-        harvestTotal: w.harvestTotal || 0, lineage: [...anc], motto, fingerprint: fp >>> 0, lastSeen: Date.now(),
+        harvestTotal: w.harvestTotal || 0, lineage: [...anc], motto, fingerprint: fp >>> 0,
+        culture: w.culture || 'human', lastSeen: Date.now(),   // #3.2 human town or orc warband
     };
 }
 let _worldBusy = false;
@@ -4880,6 +4881,7 @@ function drawBootScreen(t) {
     const urlSeed = bootParams.get('seed');
     const wantFresh = bootParams.get('fresh') != null;
     const worldSeed = urlSeed != null && urlSeed !== '' ? (parseInt(urlSeed, 10) >>> 0) : Math.floor(Math.random() * 0x7fffffff);
+    const bootCulture = (bootParams.get('orc') != null || bootParams.get('culture') === 'orc') ? 'orc' : 'human';   // #3.1 ?orc=1 raises a warband
 
     // Grow the cast from a REAL self-hosted SuperMemory corpus if one is reachable; otherwise from
     // INVENTED past lives, seeded by this world so the default town is unique + untethered (no real docs).
@@ -4896,7 +4898,7 @@ function drawBootScreen(t) {
             catch (err) { console.warn('ry-farms: save unreadable — founding fresh', err); world = null; }
         }
     }
-    if (!world) world = new World(worldSeed);
+    if (!world) world = new World(worldSeed, bootCulture);
 
     // hook tile changes to terrain redraw
     const origSet = world.set.bind(world);

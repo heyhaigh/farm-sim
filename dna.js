@@ -406,7 +406,52 @@ function buildCropPalette(rand, signature, personality) {
     return palette;
 }
 
-export function growFarmer(memory, mutation = 0, seedSalt = '') {
+// ---------------------------------------------------------------------------
+// #3.1 ORC CULTURE — the same SuperMemory substrate read through an INVERTED lens. Not a second dna.js: a
+// per-town `culture` that re-skins a farmer grown from the very same document into a raider. Same memory,
+// different interpretation — a strong demo point about how memory is READ, not just stored. Deterministic
+// (seeded from the farmer's own seed); 'human' is the untouched default so every existing town is byte-identical.
+// ---------------------------------------------------------------------------
+const ORC_ROLES = {   // the human archetype -> its war-camp counterpart (same underlying talent, turned to the raid)
+    herald: 'War Drummer', athlete: 'Berserker', designer: 'Runecarver',
+    builder: 'Siegewright', homebody: 'Denkeeper', greeter: 'Warband Caller',
+};
+const ORC_FIRST = ['Grok', 'Zug', 'Mog', 'Krull', 'Thok', 'Grash', 'Urzog', 'Skarr', 'Brak', 'Drozz', 'Gorluk', 'Vrag', 'Karg', 'Ugluk', 'Nazgra', 'Sludge'];
+const ORC_CLAN = ['Bloodmaw', 'Skullcrush', 'Ashfang', 'Ironhide', 'Gutspike', 'Rotgrip', 'Bonesnap', 'Grimtooth', 'Blackscar', 'Dredmaw'];
+const ORC_CREEDS = [
+    'What the soft ones grow, the strong take.',
+    'A hoard remembers who raided it.',
+    'Strength is the only harvest that keeps.',
+    'We do not ask - we come.',
+    'Weakness is a debt paid in fire.',
+    'A fence is a promise the axe will break.',
+];
+const ORC_SKIN = ['#6a7a4a', '#5a6a3c', '#788a52', '#4e5e38'];
+const ORC_HAIR = ['#1a140e', '#2a1a12', '#0e0e0e'];
+const ORC_SHIRT = ['#7a3428', '#5a2a20', '#6a3a2a', '#4a2418'];
+
+// Re-skin a finished human sheet into an orc: war-role, guttural name, ashen palette, raider personality, and
+// an orc CREED prepended (the memory's values, reinterpreted as spoils). The memory-derived creeds stay — an
+// orc grown from a mapmaker's memory still thinks like a mapmaker, just aimed at plunder.
+function orcify(sheet, rand) {
+    sheet.culture = 'orc';
+    sheet.archetype = ORC_ROLES[sheet.archetypeKey] || 'Raider';
+    sheet.name = `${ORC_FIRST[Math.floor(rand() * ORC_FIRST.length)]} ${ORC_CLAN[Math.floor(rand() * ORC_CLAN.length)]}`;
+    sheet.colors.skin = ORC_SKIN[Math.floor(rand() * ORC_SKIN.length)];
+    sheet.colors.hair = ORC_HAIR[Math.floor(rand() * ORC_HAIR.length)];
+    sheet.colors.shirt = ORC_SHIRT[Math.floor(rand() * ORC_SHIRT.length)];
+    const p = sheet.personality;
+    p.competitiveness = Math.min(1, p.competitiveness + 0.3);
+    p.volatility = Math.min(1, p.volatility + 0.25);
+    p.collaboration = Math.max(0, p.collaboration - 0.3);
+    p.honesty = Math.max(0, p.honesty - 0.2);
+    const id = personalityLabel(p); p.label = id.label; p.creed = id.creed;
+    const orcCreed = { theme: 'orc', tags: ['raid', 'strength'], weight: 1, short: 'take what stands', shorts: ['take what stands'], quote: ORC_CREEDS[Math.floor(rand() * ORC_CREEDS.length)] };
+    sheet.creeds = [orcCreed, ...sheet.creeds].slice(0, 6);
+    return sheet;
+}
+
+export function growFarmer(memory, mutation = 0, seedSalt = '', culture = 'human') {
     // seedSalt folds an extra identity term into the seed so a farmer grown from the same doc can still be a
     // DISTINCT person (used by growHeir to shape an heir by both the fresh doc AND their forebear). Empty salt
     // reproduces the original farmer exactly, so non-heir founding is byte-identical.
@@ -428,7 +473,7 @@ export function growFarmer(memory, mutation = 0, seedSalt = '') {
 
     const personality = growPersonality(rand, text);
 
-    return {
+    const sheet = {
         seed,
         name: `${arch.names[Math.floor(rand() * arch.names.length)]} Ry`,
         archetype: arch.label,
@@ -461,7 +506,11 @@ export function growFarmer(memory, mutation = 0, seedSalt = '') {
         // would read as "lived drift" past the cap.
         memory,
         mutation,
+        culture: 'human',
     };
+    // #3.1 an orc town reads the SAME memory through the raider's lens (deterministic; human sheets untouched).
+    if (culture === 'orc') orcify(sheet, mulberry32(hashString('orc:' + seed)));
+    return sheet;
 }
 
 // #1.1 Generational founding — the closed memory loop made flesh. An HEIR is grown from a FRESH document
@@ -470,8 +519,8 @@ export function growFarmer(memory, mutation = 0, seedSalt = '') {
 // forebear is provenance (`f.lineage`), surfaced on the sheet + chronicle so the loop is visible. Determinism
 // is untouched: the whole heir derives from one seed, and the fresh-doc<->forebear pairing is chosen
 // deterministically at founding and baked into the save (the sim never re-reads SuperMemory).
-export function growHeir(freshDoc, lineage, mutation = 0) {
-    const f = growFarmer(freshDoc, mutation, `heir:${lineage.id}`);
+export function growHeir(freshDoc, lineage, mutation = 0, culture = 'human') {
+    const f = growFarmer(freshDoc, mutation, `heir:${lineage.id}`, culture);
     const inheritedCreed = {
         theme: 'inherited', tags: ['lineage', 'inheritance'], weight: 1,
         quote: lineage.creed,

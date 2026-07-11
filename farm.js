@@ -554,9 +554,10 @@ export function generateTownName(seed) {
 }
 
 export class World {
-    constructor(seed = 1337) {
+    constructor(seed = 1337, culture = 'human') {
         this.seed = seed >>> 0;
         this.rand = mulberry32(seed);
+        this.culture = culture === 'orc' ? 'orc' : 'human';   // #3.1 a human farming town or an orc warband
         this.name = generateTownName(this.seed);   // each town's own name (seeded, dedicated stream)
         this.tiles = new Uint8Array(GRID * GRID).fill(T.GRASS);
         this.rockWork = new Map();   // tilekey -> mining shifts landed on a big rock (persists till it breaks)
@@ -1545,8 +1546,8 @@ export class World {
             p.volatility = Math.max(p.volatility ?? 0.5, 0.55);
             relabel(chaos);
         }
-        // named so they're easy to spot in the roster
-        chaos.sheet.name = 'Chaos Ry';
+        // named so they're easy to spot in the roster (#3.1 orc towns get orc-flavoured standouts)
+        chaos.sheet.name = this.culture === 'orc' ? 'Skarn Ragefang' : 'Chaos Ry';
         this.addLog(`${chaos.sheet.name} has a scheming glint in their eye...`, '#c07050');
 
         // 2) a mercurial — high temper, middling everything else (warm then cold, quick to bristle)
@@ -1561,7 +1562,7 @@ export class World {
             }
         }
         if (moody) {
-            moody.sheet.name = 'Mercurial Ry';
+            moody.sheet.name = this.culture === 'orc' ? 'Grull Blackmood' : 'Mercurial Ry';
             this.addLog(`${moody.sheet.name} runs hot and cold — hard to read.`, '#c8a060');
         }
 
@@ -1573,7 +1574,7 @@ export class World {
             if (wanderer) { P(wanderer).curiosity = 0.86; relabel(wanderer); }
         }
         if (wanderer) {
-            wanderer.sheet.name = 'Rover Ry';
+            wanderer.sheet.name = this.culture === 'orc' ? 'Drokk Farwander' : 'Rover Ry';
             this.addLog(`${wanderer.sheet.name} keeps one eye on the horizon.`, '#40c8c0');
         }
 
@@ -1586,7 +1587,7 @@ export class World {
             if (loner) { P(loner).collaboration = 0.14; relabel(loner); }
         }
         if (loner) {
-            loner.sheet.name = 'Nomad Ry';
+            loner.sheet.name = this.culture === 'orc' ? 'Zarr Lonefang' : 'Nomad Ry';
             this.addLog(`${loner.sheet.name} would sooner farm alone at the edge of the world.`, '#9a8fb0');
         }
 
@@ -2242,7 +2243,7 @@ export class World {
     serialize() {
         const plotIdx = new Map(this.plots.map((p, i) => [p, i]));
         const snap = {
-            v: World.SAVE_VERSION, seed: this.seed, name: this.name,
+            v: World.SAVE_VERSION, seed: this.seed, name: this.name, culture: this.culture,
             // continue the RNG from a save-derived seed WITHOUT consuming the live stream
             // (saving must never be observable to the sim)
             randSeed: (this.seed ^ Math.imul(this.day, 2654435761) ^ ((this.time * 997) | 0)) >>> 0,
@@ -2358,6 +2359,7 @@ export class World {
 
     #restoreFrom(d) {
         this.name = d.name || generateTownName(this.seed);   // (pre-name saves regenerate deterministically)
+        this.culture = d.culture === 'orc' ? 'orc' : 'human';   // #3.1 (pre-culture saves default to human)
         this.rand = mulberry32(d.randSeed >>> 0);
         this.time = d.time; this.day = d.day; this.clock = d.clock;
         this.season = d.season; this.seasonDay = d.seasonDay; this.year = d.year;
@@ -3155,8 +3157,9 @@ export class World {
         slot.used = true;
 
         // #1.1 an heir is grown from this fresh memory BUT carries a creed inherited from a forebear a past
-        // town wrote back (lineage life); a plain founder when there's no forebear to descend from.
-        const sheet = lineage ? growHeir(memory, lineage, mutation) : growFarmer(memory, mutation);
+        // town wrote back (lineage life); a plain founder when there's no forebear to descend from. #3.1 the
+        // town's culture (human/orc) decides which lens the same memory is read through.
+        const sheet = lineage ? growHeir(memory, lineage, mutation, this.culture) : growFarmer(memory, mutation, '', this.culture);
         const plot = {
             x: slot.i, y: slot.j, w: B, h: B,
             // house upper-center: ~4 tiles of fenced yard behind it, garden room in front, facility room to the sides

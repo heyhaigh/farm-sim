@@ -104,6 +104,21 @@ shows they grow into **observably different societies** (different archetype mix
 different creeds, different lived outcomes). Same seed, different memories ⇒ a
 different town: the SuperMemory integration changes the world, it doesn't decorate it.
 
+## A world of towns
+
+A town is the reproducible substrate; the **world** is the living layer on top. Every
+town this browser grows is remembered in a world index and shown on a zoom-out map
+(the **WORLD** button, or press **M**): towns as memory-tinted dots, lines tracing which
+town each was **founded from** (the closed memory loop at world scale), and gold links
+where two towns have grown into each other's reach. Click a town to inspect it; **VISIT**
+switches to it.
+
+**Orc warbands.** Add `?orc=1` to grow a town from the *same* SuperMemory substrate
+through an inverted lens: the same memory that makes a Designer makes a **Runecarver**;
+cultivate-creeds become raid-creeds; personalities weight to competitiveness and temper.
+On the world map an orc warband is ashen and blood-red, and when it grows into a human
+town's reach the encounter is a **raid**, not a trade — and the raided town *remembers*.
+
 ## How a farmer is made
 
 Every farmer is **deterministic**: the same memory always grows the same farmer
