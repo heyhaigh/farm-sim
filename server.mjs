@@ -71,10 +71,7 @@ http.createServer(async (req, res) => {
         res.end(data);
     });
 }).listen(PORT, () => {
-    const base = process.env.OPENAI_BASE_URL || '';
-    const isLocal = /localhost|127\.0\.0\.1|0\.0\.0\.0/.test(base);
-    const llmStatus = process.env.RY_FARMS_LLM_OFF ? 'OFF (RY_FARMS_LLM_OFF - $0)'
-        : isLocal ? `ON - LOCAL ${base} - $0`
-        : process.env.OPENAI_API_KEY ? 'ON - billing OpenAI (api.openai.com)' : 'off - no OPENAI_API_KEY';
-    console.log(`ry-farms on http://localhost:${PORT}  (LLM ${llmStatus})`);
+    // the resolved, fail-closed status comes straight from the chokepoint (single source of truth)
+    const { llmStatus } = require('./api/_llm.js');
+    console.log(`ry-farms on http://localhost:${PORT}  (LLM ${llmStatus()})`);
 });
