@@ -236,8 +236,39 @@ const troughSprite = makeTrough();
 const stumpSprite = makeStump();
 const wheatSprite = makeWildWheat();
 const flowerSprite = makeWildFlowers();
-// procedural inventory icons for wild-caught goods that have no Supplies.png entry (fish/lilies)
-const GOOD_ICON = { fish: makeFish(0), lily: makeLilyPad(true) };
+// procedural inventory icons for wild-caught + facility goods that have no Supplies.png entry
+// (fish/lilies from ponds; eggs/milk/wool/truffle from the coop & pen — the raised by-products)
+function makeGoodIcon(draw) {
+    const c = document.createElement('canvas'); c.width = 16; c.height = 16;
+    const g = c.getContext('2d'); g.imageSmoothingEnabled = false; draw(g); return c;
+}
+const makeEggIcon = () => makeGoodIcon(g => {                          // two speckled eggs in a nest
+    g.fillStyle = '#7a5a34'; g.fillRect(3, 11, 10, 2);                 // straw nest
+    for (const [ex, ey] of [[5, 6], [9, 5]]) {
+        g.fillStyle = '#f2ead6'; g.fillRect(ex, ey, 4, 6); g.fillRect(ex + 1, ey - 1, 2, 8);
+        g.fillStyle = '#fffdf6'; g.fillRect(ex + 1, ey + 1, 1, 2);     // highlight
+        g.fillStyle = '#d8cdb2'; g.fillRect(ex + 2, ey + 4, 1, 1); g.fillRect(ex + 1, ey + 2, 1, 1);  // speckle
+    }
+});
+const makeMilkIcon = () => makeGoodIcon(g => {                         // a pail of milk
+    g.fillStyle = '#c8ccd4'; g.fillRect(4, 6, 8, 7);                   // pail body
+    g.fillStyle = '#e6e9ef'; g.fillRect(4, 5, 8, 2);                   // milk surface / rim
+    g.fillStyle = '#aeb3bd'; g.fillRect(4, 12, 8, 1);                  // base shade
+    g.fillStyle = '#9aa0aa'; g.fillRect(5, 4, 6, 1);                   // handle
+    g.fillStyle = '#fbfcff'; g.fillRect(5, 6, 1, 4);                   // highlight
+});
+const makeWoolIcon = () => makeGoodIcon(g => {                         // a fluffy wool bundle
+    g.fillStyle = '#eef0f2';
+    for (const [wx, wy, ww, wh] of [[4, 6, 8, 6], [3, 8, 10, 3], [5, 5, 6, 2]]) g.fillRect(wx, wy, ww, wh);
+    g.fillStyle = '#d6d9de'; for (const [dx, dy] of [[5, 8], [8, 7], [10, 9], [6, 10]]) g.fillRect(dx, dy, 2, 2);
+    g.fillStyle = '#fbfcff'; g.fillRect(5, 6, 2, 1); g.fillRect(9, 6, 1, 1);
+});
+const makeTruffleIcon = () => makeGoodIcon(g => {                      // a knobbly dark truffle
+    g.fillStyle = '#3c2c22'; g.fillRect(5, 6, 7, 7); g.fillRect(4, 8, 9, 4); g.fillRect(6, 5, 4, 1);
+    g.fillStyle = '#584234'; g.fillRect(6, 7, 2, 2); g.fillRect(9, 9, 2, 2);   // knobs
+    g.fillStyle = '#6f5443'; g.fillRect(7, 8, 1, 1); g.fillRect(10, 7, 1, 1);  // highlights
+});
+const GOOD_ICON = { fish: makeFish(0), lily: makeLilyPad(true), egg: makeEggIcon(), milk: makeMilkIcon(), wool: makeWoolIcon(), truffle: makeTruffleIcon() };
 
 // A dedicated CARROT inventory icon: its procedural CROP sprite is a leafy green bundle that reads as
 // wheat, so for the inventory we hold up an unmistakable orange root with a green top instead.

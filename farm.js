@@ -6673,9 +6673,10 @@ export class Farmer {
         }
         // foraged wild goods — grass (from grass clumps + bushes) and flowers (from bushes)
         for (const key of ['grass', 'flower']) push(key, g[key] || 0);
-        // wild-caught goods drawn with a procedural sprite (resolved renderer-side): fish is its own
-        // item, lilies too — the yield of the wild-water fishing bounty.
-        for (const key of ['fish', 'lily']) { const n = g[key] || 0; if (n > 0) out.push({ id: key, good: key, name: key === 'fish' ? 'Fish' : 'Lily pad', count: n }); }
+        // facility & wild-caught by-products, each its own tradable stack (fish/lily from ponds; eggs/milk/
+        // wool/truffle from the coop/pen). Drawn with a procedural sprite resolved renderer-side.
+        const FACILITY_GOOD_NAME = { fish: 'Fish', lily: 'Lily pad', egg: 'Eggs', milk: 'Milk', wool: 'Wool', truffle: 'Truffle' };
+        for (const key of ['fish', 'lily', 'egg', 'milk', 'wool', 'truffle']) { const n = g[key] || 0; if (n > 0) out.push({ id: key, good: key, name: FACILITY_GOOD_NAME[key], count: n }); }
         // hunted MEAT — prized barter good + HP restorative, drawn from the fantasy-icon sheet
         for (const key of MEAT_GOODS) { const n = g[key] || 0; if (n > 0) out.push({ id: key, good: key, name: MEAT_NAME[key], count: n }); }
         return out;
@@ -8680,7 +8681,10 @@ export class Farmer {
         }
         const ownerSheet = (helping && owner) ? owner.sheet : s;
         ownerSheet.harvested += yieldN; w.harvestTotal += yieldN;
-        ownerSheet.produce = (ownerSheet.produce || 0) + yieldN;   // spendable stockpile (harvested is lifetime-only)
+        // Credit the SPECIFIC by-product (egg/milk/wool/truffle/fish/lily) as its own tradable good — NOT the
+        // generic crops `produce` scalar. These are distinct barter/donate goods (see producedGoods/DONATE_XP)
+        // and must show up in the inventory as themselves, not vanish into the crop stockpile.
+        if (yieldN > 0) { ownerSheet.goods = ownerSheet.goods || {}; ownerSheet.goods[name] = (ownerSheet.goods[name] || 0) + yieldN; }
         w.payHarvestShares(helping && owner ? owner : this, yieldN);
         if (yieldN > 0 && !check.crit) this.say(`+${yieldN} ${name}`);
         p.ready = false; p.prod = 0;
@@ -8741,6 +8745,7 @@ export class Farmer {
             if (c && c.stage === 3 && !c.withered) { name = c.type; victim = c.owner; this.carryCrop = { type: c.type, t: 2.2 }; w.crops.delete(`${loot.crop.i},${loot.crop.j}`); s.harvested += 1; w.harvestTotal += 1; addCropStock(s, c.type, 1, 'stolen'); pos = loot.crop; }
         } else if (loot.prod && loot.prod.ready) {
             name = FACILITY_YIELD_NAME[loot.prod.kind] || 'produce'; loot.prod.ready = false; loot.prod.prod = 0; s.harvested += 1; w.harvestTotal += 1;
+            s.goods = s.goods || {}; s.goods[name] = (s.goods[name] || 0) + 1;   // the thief pockets the actual by-product
             victim = w.farmers.find(f => f.plot === loot.plot);
             pos = { i: Math.round(loot.prod.fx), j: Math.round(loot.prod.fy) };
         }
