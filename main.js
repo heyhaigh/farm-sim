@@ -790,7 +790,36 @@ function characterSprites(f) {
     return sets[f.moveDir] || sets.down;   // pick the row matching current facing
 }
 
+// #3.1 orc farmers wear the real ORC sprite (the DM's foe pack, already loaded as threatImg.orc) instead of
+// the re-skinned human farmer. The pack is a 4x4 grid of 64px frames; we crop the character out of its padded
+// cell, scale it to a farmer-ish height (orcs a touch taller), and slice a few idle columns so it still has a
+// little life. All facings use the front-menacing pose (row 2), matching how the foe orcs render.
+const orcCharCache = new Map();
+function orcSpriteReady() { const im = threatImg.orc; return im && im.complete && im.naturalWidth > 0; }
+function orcCharSets(f) {
+    const img = threatImg.orc, FW = 64;
+    const cols = Math.max(1, Math.round(img.naturalWidth / FW));
+    const rows = Math.max(1, Math.round(img.naturalHeight / FW));
+    const row = Math.min(2, rows - 1);
+    const sx0 = 14, sy0 = 6, sw = 36, sh = 54;          // crop the orc out of the 64px cell's padding
+    const targetH = 28, scale = targetH / sh;
+    const dw = Math.max(1, Math.round(sw * scale)), dh = Math.max(1, Math.round(sh * scale));
+    const frameCol = (col) => {
+        const c = Math.min(col, cols - 1);
+        const [out, ox] = makeCanvas(dw, dh); ox.imageSmoothingEnabled = false;
+        ox.drawImage(img, c * FW + sx0, row * FW + sy0, sw, sh, 0, 0, dw, dh);
+        return out;
+    };
+    const set = { idle: frameCol(0), walk1: frameCol(1), walk2: frameCol(2), work: frameCol(1), sleep: frameCol(0) };
+    return { down: set, side: set, up: set };
+}
+
 function farmerSprites(f) {
+    if (f.sheet.culture === 'orc' && orcSpriteReady()) {
+        let sets = orcCharCache.get(f);
+        if (!sets) { sets = orcCharSets(f); orcCharCache.set(f, sets); }
+        return sets[f.moveDir] || sets.down;
+    }
     if (charReady()) return characterSprites(f);
     if (!spriteCache.has(f)) spriteCache.set(f, makeFarmerSprites(f.sheet));
     return spriteCache.get(f);

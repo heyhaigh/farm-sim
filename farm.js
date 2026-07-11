@@ -548,8 +548,14 @@ const TOWN_ROOTS = ['Oak', 'Elm', 'Mill', 'Fox', 'Bram', 'Thorn', 'Ash', 'Rye', 
     'Honey', 'Corn', 'Crook', 'Hart', 'Bell', 'Ember', 'Wold', 'Marl', 'Nettle', 'Sedge', 'Holly', 'Larch'];
 const TOWN_TAILS = ['brook', 'field', 'hollow', 'vale', 'stead', 'ford', 'wick', 'bury', 'ton', 'dale',
     'mere', 'grove', 'crest', 'reach', 'moor', 'haven', 'ridge', 'bend', 'cross', 'march', 'gate', 'row'];
-export function generateTownName(seed) {
+// #3.1 orc warbands get menacing, guttural hold-names instead of the pastoral human ones.
+const ORC_TOWN_ROOTS = ['Grim', 'Skull', 'Ash', 'Gore', 'Bone', 'Blood', 'Drok', 'Krag', 'Mor', 'Grish',
+    'Dread', 'Rot', 'Char', 'Gnash', 'Vile', 'Murk', 'Snar', 'Bru', 'Ghor', 'Ruk'];
+const ORC_TOWN_TAILS = ['hold', 'maw', 'reach', 'fang', 'crag', 'gore', 'spire', 'den', 'grind', 'skar',
+    'gash', 'pit', 'throne', 'gut', 'snarl', 'rend', 'char', 'gorge'];
+export function generateTownName(seed, culture = 'human') {
     const r = mulberry32((seed ^ 0x7047) >>> 0);
+    if (culture === 'orc') return ORC_TOWN_ROOTS[Math.floor(r() * ORC_TOWN_ROOTS.length)] + ORC_TOWN_TAILS[Math.floor(r() * ORC_TOWN_TAILS.length)];
     return TOWN_ROOTS[Math.floor(r() * TOWN_ROOTS.length)] + TOWN_TAILS[Math.floor(r() * TOWN_TAILS.length)];
 }
 
@@ -558,7 +564,7 @@ export class World {
         this.seed = seed >>> 0;
         this.rand = mulberry32(seed);
         this.culture = culture === 'orc' ? 'orc' : 'human';   // #3.1 a human farming town or an orc warband
-        this.name = generateTownName(this.seed);   // each town's own name (seeded, dedicated stream)
+        this.name = generateTownName(this.seed, this.culture);   // each town's own name (seeded, dedicated stream)
         this.tiles = new Uint8Array(GRID * GRID).fill(T.GRASS);
         this.rockWork = new Map();   // tilekey -> mining shifts landed on a big rock (persists till it breaks)
         this.treePlanted = new Map();// tilekey -> world.day a REGROWN tree sprouted (so it starts a sapling + grows)
@@ -2358,8 +2364,8 @@ export class World {
     }
 
     #restoreFrom(d) {
-        this.name = d.name || generateTownName(this.seed);   // (pre-name saves regenerate deterministically)
         this.culture = d.culture === 'orc' ? 'orc' : 'human';   // #3.1 (pre-culture saves default to human)
+        this.name = d.name || generateTownName(this.seed, this.culture);   // (pre-name saves regenerate deterministically)
         this.rand = mulberry32(d.randSeed >>> 0);
         this.time = d.time; this.day = d.day; this.clock = d.clock;
         this.season = d.season; this.seasonDay = d.seasonDay; this.year = d.year;
