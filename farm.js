@@ -338,6 +338,11 @@ export const PROD = {
     rooster: { rate: 0, feedDecay: 0.004, yieldLo: 0, yieldHi: 0, collectT: 1.8, feedT: 1.4, wander: true },
 };
 
+// #99 Livestock feeding from the INVENTORY: a hungry producer must be fed the RIGHT good, drawn from the
+// tending farmer's stash. Cow/sheep eat foraged GRASS; chicken/fish eat milled GRAIN (from a Mill; see #99b).
+// Kinds not listed feed themselves off the land (pig/goat forage, lily pads photosynthesise, the rooster struts).
+const FEED_GOOD = { cow: 'grass', sheep: 'grass' };   // chicken/fish -> 'grain' added with the Mill (#99b)
+
 // plot cell-set key (plots are tile-sets so they can grow into non-rectangular shapes)
 export function pkey(i, j) { return i + ',' + j; }
 
@@ -6729,6 +6734,11 @@ export class Farmer {
         }
         return best;
     }
+    // #99 — does this farmer have the feed a producer needs on hand? (grazers with no FEED_GOOD are always fed)
+    #hasFeedFor(p) {
+        const fg = FEED_GOOD[p.kind];
+        return !fg || ((this.sheet.goods && this.sheet.goods[fg]) || 0) > 0;
+    }
 
     // The unified "what needs doing on this plot" — crops AND facilities.
     // urgentOnly=true skips the low-priority sow/till "fill" work so a farmer
@@ -6750,7 +6760,9 @@ export class Farmer {
         // 3. sustain: water thirsty crops, feed/tend hungry producers
         const thirsty = this.#findCrop(c => !c.withered && c.water < thirstThreshold && c.stage < 3, plot);
         if (thirsty) return { act: 'water', crop: thirsty };
-        const hungry = skipFacilities ? null : this.#findProducer(p => p.fed < 0.35, plot);
+        // a hungry producer can only be fed if the tender is CARRYING its feed good (cow/sheep: grass) —
+        // otherwise it stays hungry until someone brings feed (the supply pressure the feeding rework adds)
+        const hungry = skipFacilities ? null : this.#findProducer(p => p.fed < 0.35 && this.#hasFeedFor(p), plot);
         if (hungry) return { act: 'tend', prod: hungry };
         if (urgentOnly) return null;
         // 4. sow + till (crop farms only) — lowest priority "fill" work. Frozen out in winter:
@@ -8657,7 +8669,17 @@ export class Farmer {
                 break;
             }
             case 'clear': w.crops.delete(`${task.crop.i},${task.crop.j}`); w.set(task.crop.i, task.crop.j, T.TILLED); break;
-            case 'tend': { const p = task.prod; if (p) p.fed = 1; this.gainXP(1); break; }
+            case 'tend': {   // #99 feeding CONSUMES the feed good from the tender's stash (cow/sheep: grass)
+                const p = task.prod;
+                if (p) {
+                    const fg = FEED_GOOD[p.kind];
+                    if (!fg) { p.fed = 1; }                                   // grazers feed themselves
+                    else { const s = this.sheet, have = (s.goods && s.goods[fg]) || 0;
+                        if (have > 0) { s.goods[fg] = have - 1; p.fed = 1; } }   // else: no feed on hand, stays hungry
+                }
+                this.gainXP(1);
+                break;
+            }
             case 'collect': this.#doCollect(task.prod, owner, helping); break;
             case 'harvest': this.#doHarvest(task.crop, owner, helping); break;
         }
