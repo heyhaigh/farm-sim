@@ -199,7 +199,7 @@ const MINIMAP = { x: 0, y: 0, w: 46, h: 46 };      // bottom-right legend, posit
 const SHEET_RECT = { x: 0, y: 0, w: 0, h: 0 };     // detail-card bounds, set in drawSheet (for hit-testing)
 const SHEET_CLOSE = { x: 0, y: 0, w: 0, h: 0 };    // card close (X) button, set in drawSheet
 const SHEET_FOLLOW = { x: 0, y: 0, w: 0, h: 0 };   // card follow/track toggle, set in drawSheet
-const RECAP_CARD = { x: 0, y: 0, w: 0, h: 0 };     // end-of-day recap card bounds, set in drawDayRecap
+const RECAP_CARD = { x: 0, y: 0, w: 0, h: 0 };     // zeroed stub (daily recap removed); callouts/cursor read .w
 const MEM_PREV = { x: 0, y: 0, w: 0, h: 0 };       // memories pager arrows, set in drawSheet
 const MEM_NEXT = { x: 0, y: 0, w: 0, h: 0 };
 let SHEET_TABS = [];                               // tab-bar hit-rects {x,y,w,h,tab}, rebuilt in drawSheet
@@ -3946,65 +3946,10 @@ function drawChronicle() {
     drawText(ctx, selected ? "ONE RY'S STORY - CLICK A RY IN THE WORLD TO SWITCH" : 'CLICK A BEAT TO FOLLOW THAT RY - SCROLL FOR MORE', PX + 6, PY + PH - 8, '#4a4f5c');
 }
 
-// ---------------------------------------------------------------------------
-// End-of-day RECAP — a self-playing town's action happens off-screen, so surface
-// what mattered: a card at each rollover summing the day's harvest + notable beats.
-// Auto-fades; click to dismiss. Skipped at 20x (you're fast-forwarding, not watching).
-// ---------------------------------------------------------------------------
-const RECAP_MS = 7000;
-const RECAP_PRI = { dream: 7, peril: 6, crime: 5, build: 5, town: 4, find: 4, season: 3, bond: 2, rift: 2, found: 1 };
-
-function drawDayRecap() {
-    RECAP_CARD.w = 0;
-    if (rosterOpen || chronOpen || boardOpen) return;      // don't fight a modal for the screen
-    const r = world.dayRecap;
-    if (!r) return;
-    if (r.seq !== recapSeq) {                               // a fresh day just closed
-        recapSeq = r.seq;
-        const worthShowing = (r.beats.length > 0 || r.harvest > 0) && (world._speedMult || 1) <= 5;
-        recapShownAt = worthShowing ? performance.now() : -1e9;
-    }
-    const age = performance.now() - recapShownAt;
-    if (age < 0 || age > RECAP_MS) return;
-    const alpha = Math.min(1, age / 220) * Math.min(1, (RECAP_MS - age) / 600);
-
-    // pick the most notable beats — GRAND spotlight beats float to the top, then priority, then chronological
-    const beats = [...r.beats].map((b, i) => ({ b, i }))
-        .sort((a, z) => ((z.b.tier === 'grand' ? 100 : 0) - (a.b.tier === 'grand' ? 100 : 0))
-            || (RECAP_PRI[z.b.kind] || 0) - (RECAP_PRI[a.b.kind] || 0) || a.i - z.i)
-        .slice(0, 4).map(o => o.b);
-    const lines = [];
-    for (const b of beats) { const wr = wrapText(b.text, 44).slice(0, 2); wr.forEach((ln, k) => lines.push({ t: ln, c: b.color, grand: b.tier === 'grand' && k === 0 })); }
-
-    const PW = 214, PX = Math.floor((GW - PW) / 2), PY = 20;
-    const headH = 22, PH = headH + lines.length * 8 + 12;
-    RECAP_CARD.x = PX; RECAP_CARD.y = PY; RECAP_CARD.w = PW; RECAP_CARD.h = PH;
-
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    ctx.fillStyle = 'rgba(14,16,26,0.95)'; ctx.fillRect(PX, PY, PW, PH);
-    ctx.fillStyle = '#e8c860'; ctx.fillRect(PX, PY, PW, 1); ctx.fillRect(PX, PY + PH - 1, PW, 1);
-    ctx.fillRect(PX, PY, 1, PH); ctx.fillRect(PX + PW - 1, PY, 1, PH);
-
-    const sd = SEASONS[r.season];
-    drawText(ctx, `DAY ${r.day} RECAP`, PX + 6, PY + 5, '#f0d060', 1);
-    if (sd) drawText(ctx, sd.name, PX + PW - textWidth(sd.name) - 16, PY + 5, sd.accent);
-    drawText(ctx, 'X', PX + PW - 9, PY + 5, '#9aa0b4');
-    // headline stat line
-    let stat = `${r.harvest} harvested`;
-    if (r.downed) stat += `  -  ${r.downed} down`;
-    drawText(ctx, stat.toUpperCase(), PX + 6, PY + 14, '#9ad0e0');
-    ctx.fillStyle = '#2a2e3a'; ctx.fillRect(PX + 4, PY + 21, PW - 8, 1);
-
-    let y = PY + headH + 2;
-    if (!lines.length) { drawText(ctx, 'A QUIET DAY IN THE VALLEY.', PX + 8, y, '#6a6f7c'); }
-    else for (const ln of lines) {
-        if (ln.grand) { drawText(ctx, '*', PX + 5, y - 1, '#f0d060'); }   // a star marks a spotlight-worthy beat
-        else { ctx.fillStyle = ln.c; ctx.fillRect(PX + 6, y + 2, 2, 2); }
-        drawText(ctx, ln.t, PX + 11, y, ln.grand ? '#f4ead0' : ln.c); y += 8;
-    }
-    ctx.restore();
-}
+// End-of-day RECAP card REMOVED — the day's beats now surface live through the Moments/callout banners and
+// persist in the Town Chronicle, so a per-rollover pop-up was redundant. (The "PREVIOUSLY ON" catch-up card
+// shown once on RESUME is a separate thing and stays — see drawResumeCard.) RECAP_CARD is kept as a zeroed
+// stub because the callout/cursor code reads its .w to know a card is up; it now simply never becomes non-zero.
 
 // ---------------------------------------------------------------------------
 // #98 MOMENTS — the celebration/legibility layer. Watches the chronicle for the profound beats (entries
@@ -4636,8 +4581,9 @@ function frame(now) {
     drawWeather(dt, t);
     drawUI();
     maybeAutosave();
-    drawDayRecap();
-    drawMoments();   // #98: spotlight the profound beats on top of the recap/HUD (still under the CRT shader)
+    // (end-of-day recap card removed — the Moments/callout banners + the chronicle carry the day's beats now;
+    // the "PREVIOUSLY ON" catch-up card on RESUME is separate and stays, see drawResumeCard)
+    drawMoments();   // #98: spotlight the profound beats on top of the HUD (still under the CRT shader)
     // a quiet indicator while the camera is trailing someone (F, or the sheet's crosshair, toggles it)
     if (followMode && followTarget && world.farmers.includes(followTarget) && !rosterOpen && !chronOpen && !boardOpen) {
         const lbl = `FOLLOWING ${followTarget.sheet.name.split(' ')[0].toUpperCase()} - F TO STOP`;
