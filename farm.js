@@ -954,7 +954,7 @@ export class World {
             ? `Held a ${RARE_NAME[node.kind]} at last, out past the fog — the old tales were true`
             : `Found a ${RARE_NAME[node.kind]} — I'd never heard its like. What else waits out there?`, null, 1.5);
         this.addChronicle('find', `${shortName(farmer)} found a ${RARE_NAME[node.kind]} in the deep wilds.`, farmer, null, RARE_COLOR[node.kind],
-            { tier: 'grand', tone: 'triumph', why: this.whyRareFind(farmer, node.kind), icon: 'rare:' + node.kind });
+            { tier: 'grand', tone: 'triumph', label: 'OUT PAST THE FOG', why: this.whyRareFind(farmer, node.kind), icon: 'rare:' + node.kind });
         return node.kind;
     }
     #tickRareNodes() {   // release a stale claim if the seeker gave up
@@ -1484,7 +1484,7 @@ export class World {
             whoSeed: who ? who.sheet.seed : null,
             otherSeed: other ? other.sheet.seed : null,
         };
-        if (meta) { e.tier = meta.tier || null; e.tone = meta.tone || 'neutral'; e.why = meta.why || null; e.icon = meta.icon || null; }
+        if (meta) { e.tier = meta.tier || null; e.tone = meta.tone || 'neutral'; e.why = meta.why || null; e.icon = meta.icon || null; e.label = meta.label || null; }
         this.chronicle.push(e);
         if (this.chronicle.length > 240) this.chronicle.shift();
     }
@@ -2774,14 +2774,16 @@ export class World {
         const mandate = nVoters > 0 ? winVotes / nVoters : 1;
         if (reelected) {
             if (office === 'manager') r.managerTerms++; else r.watchTerms++;
-            this.addChronicle('town', `${shortName(winner)} was returned as ${roleWord} for Year ${r.election.year}${acclaimed ? ' unopposed' : ''}.`, winner, null, '#e0c060');
+            this.addChronicle('town', `${shortName(winner)} was returned as ${roleWord} for Year ${r.election.year}${acclaimed ? ' unopposed' : ''}.`, winner, null, '#e0c060',
+                { tier: 'grand', tone: 'triumph', label: 'THE TOWN DECIDES', why: `the valley kept its faith in ${winner.sheet.name.split(' ')[0]} for another year`, icon: null });
         } else {
             if (incumbentSeed != null) this.#recordTerm(office, 'voted-out', `the town chose ${winner.sheet.name.split(' ')[0]} instead`);
             this.#vacateOtherRoles(winSeed, office);   // a winner who held ANY other office steps aside (one role each)
             const freshAppr = 0.45 + 0.2 * clamp((mandate - 0.34) / 0.5, 0, 1);   // strong mandate vs a reluctant win
             if (office === 'manager') { r.manager = winSeed; r.approval = freshAppr; r.lowDays = 0; r.managerTerms = 1; r.managerSince = { year: r.election.year, day: this.day }; }
             else { r.watch = winSeed; r.watchApproval = freshAppr; r.watchLowDays = 0; r.watchTerms = 1; r.watchSince = { year: r.election.year, day: this.day }; }
-            this.addChronicle('town', `${acclaimed ? `${shortName(winner)} stood unopposed and took` : `The town chose ${shortName(winner)} for`} the ${roleWord}'s chair — Year ${r.election.year}.`, winner, outF, '#e0c060');
+            this.addChronicle('town', `${acclaimed ? `${shortName(winner)} stood unopposed and took` : `The town chose ${shortName(winner)} for`} the ${roleWord}'s chair — Year ${r.election.year}.`, winner, outF, '#e0c060',
+                { tier: 'grand', tone: 'triumph', label: 'THE TOWN DECIDES', why: outF ? `the town turned from ${outF.sheet.name.split(' ')[0]} to ${winner.sheet.name.split(' ')[0]}` : `the town raised ${winner.sheet.name.split(' ')[0]} to the ${roleWord.toLowerCase()}'s chair`, icon: null });
         }
         // each farmer's vote becomes a remembered beat (flows to the SuperMemory life-writeback)
         for (const { v, choice } of ballots) {
@@ -3934,7 +3936,8 @@ export class World {
             else if (type === 'well2') this.wells.push({ i: site.i, j: site.j, ready: true });
         }
         this.addLog(`The ${label} is finished! ${perk}`, '#f0d060');
-        this.addChronicle('town', `The town raised the ${label.toLowerCase()} — ${perk.toLowerCase()}.`, null, null, '#e0c060');
+        this.addChronicle('town', `The town raised the ${label.toLowerCase()} — ${perk.toLowerCase()}.`, null, null, '#e0c060',
+            { tier: 'grand', tone: 'triumph', label: 'THE TOWN BUILDS', why: 'every hand in the valley lent to the work', icon: null });
         for (const f of pr.builders) {
             f.gainXP(6); f.say('HOORAY!', '#f0d060'); f.sparkle = 3;
             f.remember('event', `We raised the ${label.toLowerCase()} together`, null, 1.1);
@@ -5032,7 +5035,8 @@ export class World {
                 f.remember('person', `${h.sheet.name.split(' ')[0]} stood with me when ${e.def.name} had me — I owe them`, h, 1.4);
             }
             this.addLog(`${f.sheet.name} owes their life to ${rescuers.map(h => h.sheet.name.split(' ')[0]).join(' & ')}.`, '#7dd069');
-            this.addChronicle('peril', `${f.sheet.name.split(' ')[0]} was struck down by a ${e.def.name.toLowerCase()}, but ${rescuers.map(h => h.sheet.name.split(' ')[0]).join(' & ')} pulled them back.`, f, rescuers[0], '#e07040');
+            this.addChronicle('peril', `${f.sheet.name.split(' ')[0]} was struck down by a ${e.def.name.toLowerCase()}, but ${rescuers.map(h => h.sheet.name.split(' ')[0]).join(' & ')} pulled them back.`, f, rescuers[0], '#e07040',
+                { tier: 'grand', tone: 'triumph', label: 'PULLED BACK FROM THE BRINK', why: `${rescuers.map(h => h.sheet.name.split(' ')[0]).join(' & ')} reached them in time`, icon: null });
         } else {
             // no one came: resent the able-bodied who were near enough to have helped
             const bystanders = this.farmers.filter(x => x !== f && !x.downed && x.plot?.sited && x.state !== 'sleep'
@@ -5042,7 +5046,8 @@ export class World {
                 f.remember('person', `${b.sheet.name.split(' ')[0]} was near enough to help and left me to ${e.def.name}`, b, 1.3);
             }
             if (bystanders.length) this.addLog(`${f.sheet.name} won't forget that no one came.`, '#c05840');
-            this.addChronicle('peril', `${f.sheet.name.split(' ')[0]} was struck down by a ${e.def.name.toLowerCase()} in the wilds — no one came.`, f, null, '#e03828');
+            this.addChronicle('peril', `${f.sheet.name.split(' ')[0]} was struck down by a ${e.def.name.toLowerCase()} in the wilds — no one came.`, f, null, '#e03828',
+                { tier: 'grand', tone: 'somber', label: 'STRUCK DOWN', why: `struck down out in the wilds, and no one came in time`, icon: null });
         }
         // shun the ground where they fell — a scar on the map they'll avoid and speak of
         (f.dangerZones ||= []).push({ i: downI, j: downJ, kind: e.def.kind });
@@ -6379,7 +6384,8 @@ export class Farmer {
             const def = DREAM_DEFS.find(x => x.id === d.id);
             this.say('MY DREAM - REAL!', '#f0d060'); this.sparkle = 3; this.gainXP(10);
             this.remember('event', `My dream came true - ${d.yearn.toLowerCase()}`, null, 1.2);
-            w.addChronicle('dream', `${s.name.split(' ')[0]} ${def ? def.fulfil : 'saw their dream fulfilled'} - a lifelong want, answered.`, this, null, '#f0d060');
+            w.addChronicle('dream', `${s.name.split(' ')[0]} ${def ? def.fulfil : 'saw their dream fulfilled'} - a lifelong want, answered.`, this, null, '#f0d060',
+                { tier: 'grand', tone: 'triumph', label: 'A DREAM FULFILLED', why: w.whyOfDream(this), icon: null });
             w.addLog(`${s.name}'s dream came true!`, '#f0d060');
             return;
         }

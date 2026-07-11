@@ -4085,14 +4085,16 @@ function drawMoments() {
     ctx.fillStyle = 'rgba(12,14,22,0.97)'; ctx.fillRect(PX, PY, PW, PH);
     ctx.fillStyle = accent; ctx.fillRect(PX, PY, PW, 1); ctx.fillRect(PX, PY + PH - 1, PW, 1); ctx.fillRect(PX, PY, 1, PH); ctx.fillRect(PX + PW - 1, PY, 1, PH);
 
-    // header label, centered
-    const label = MOMENT_LABEL[e.kind] || 'A MOMENT';
+    // header label, centered (each grand beat names its own; falls back to a per-kind default)
+    const label = e.label || MOMENT_LABEL[e.kind] || 'A MOMENT';
     drawText(ctx, label, PX + Math.floor((PW - textWidth(label)) / 2), PY + 5, accent, 1);
     ctx.fillStyle = '#2a2e3a'; ctx.fillRect(PX + 4, PY + 14, PW - 8, 1);
 
     // the FARMER showcase — a WALKING loop, scaled — in a left column, with the object below it in an
-    // inventory-style beveled slot (kept clear of the text on the right).
+    // inventory-style beveled slot (kept clear of the text on the right). Town-wide beats have no farmer.
     const f = world.farmers.find(x => x.sheet.seed === e.whoSeed);
+    const hasObject = e.icon && e.icon.indexOf('rare:') === 0;
+    const hasLeft = !!f || hasObject;
     const colCX = PX + 38;
     if (f) {
         const fr = farmerSprites(f);
@@ -4102,7 +4104,7 @@ function drawMoments() {
         ctx.drawImage(spr, Math.round(colCX - spr.width * S / 2), Math.round(PY + 48 - spr.height * S / 2), spr.width * S, spr.height * S);
     }
     // the object in a beveled square slot (matches the inventory), glow clipped inside the frame
-    if (e.icon && e.icon.indexOf('rare:') === 0) {
+    if (hasObject) {
         const sz = 22, sx = colCX - sz / 2, sy = PY + 70;
         drawItemSlot(sx, sy, sz, null, null, { hi: true });
         ctx.save(); ctx.beginPath(); ctx.rect(sx + 1, sy + 1, sz - 2, sz - 2); ctx.clip();
@@ -4110,8 +4112,8 @@ function drawMoments() {
         ctx.restore();
     }
 
-    // title (what happened) + the memory WHY — right column, well clear of the sprite/slot
-    const tx = PX + 78, tw = Math.floor((PW - 78 - 10) / 4.2);
+    // title (what happened) + the memory WHY — a right column beside the showcase, or full width if none
+    const tx = hasLeft ? PX + 78 : PX + 10, tw = Math.floor((PX + PW - 10 - tx) / 4.2);
     let ty = PY + 22;
     for (const ln of wrapText(e.text.toUpperCase(), tw).slice(0, 3)) { drawText(ctx, ln, tx, ty, '#f4ead0'); ty += 8; }
     if (e.why) { ty += 2; for (const ln of wrapText(e.why, tw).slice(0, 4)) { drawText(ctx, ln, tx, ty, '#9a86c0'); ty += 7; } }
