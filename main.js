@@ -3600,7 +3600,7 @@ let chronTownWide = false;        // force the town-wide chronicle even when a f
 let chronScopeHits = null;        // { town, farmer } toggle-chip rects (game px)
 let chronTab = 0;                 // 0 NEWS (the event log/saga), 1 ROLES (civic band), 2 RECIPES (discoveries)
 let chronTabHits = null;          // [{ x, y, w, h, tab }] tab-chip rects (game px)
-const CHRON_TABS = ['NEWS', 'ROLES', 'RECIPES'];
+const CHRON_TABS = ['NEWS', 'ROLES', 'RECIPES', 'TALES'];
 const CHRON_ACCENT = '#c8a0e0';
 
 // The farmer whose SAGA the chronicle is showing (or null for town-wide). Follows the camera focus
@@ -3775,29 +3775,42 @@ function drawChronicleRecipes(PX, top, PW, bot) {
         push(3);
     }
 
-    // TALES of the rare ingredients — the town's myths, grown from its memories, and whether proven real
-    if ((world.tales || []).length) {
-        push(4); push(9, y => drawText(ctx, 'TALES OF THE WILDS', IX, y, '#c8a860'));
-        push(7, y => drawText(ctx, 'Rumours of rare ingredients, grown from the town\'s own memories.', IX, y, '#6a6f7c'));
-        push(2);
-        for (const t of world.tales) {
-            const lore = world.taleLore ? world.taleLore(t) : null;
-            const nm = (lore && lore.name) || (RARE_NAME && RARE_NAME[t.ingredient]) || t.ingredient;
-            const proven = lore ? lore.validated : world.farmers.some(f => f.sheet.rareBelief && f.sheet.rareBelief[t.ingredient] && f.sheet.rareBelief[t.ingredient].state === 'validated');
-            const status = proven ? 'PROVEN REAL' : 'STILL A TALE';
-            push(8, y => { drawText(ctx, nm.toUpperCase(), IX + 4, y, proven ? '#7dd069' : '#c8a860'); drawText(ctx, status, PX + PW - 8 - textWidth(status), y, proven ? '#7dd069' : '#6a6f7c'); });
-            if (lore) {
-                wrapPush(`"${lore.saying}"`, '#b6a6d8', 8);   // the rumour itself, in the town's words
-                wrapPush(lore.origin, '#8a8f9c', 8);          // who first carried it, out of which memory
-                wrapPush(lore.belief, proven ? '#7dd069' : '#7a8194', 8);  // how the valley holds it now
-            } else {
-                wrapPush(t.originTitle ? `a tale from "${String(t.originTitle).slice(0, 34)}"` : "a traveller's tale", '#6a6f7c', 8);
-            }
-            push(4);
-        }
-    }
+    chronScrollBody(rows, PX, top, PW, bot);
+}
 
-    // scroll + clip (the wheel handler clamps chronScroll to chronView.maxScroll)
+// #99 TALES — its own Chronicle tab (was folded into RECIPES). The town's myths of rare ingredients,
+// grown from its memories, and whether they've been proven real.
+function drawChronicleTales(PX, top, PW, bot) {
+    const IX = PX + 8;
+    const maxChars = Math.max(24, Math.floor((PW - 24) / 4.2));
+    const rows = [];
+    const push = (h, draw) => rows.push({ h, draw: draw || (() => {}) });
+    const wrapPush = (text, col, dx) => { for (const ln of wrapText(text, maxChars)) push(7, y => drawText(ctx, ln, IX + dx, y, col)); };
+
+    push(9, y => drawText(ctx, 'TALES OF THE WILDS', IX, y, '#c8a860'));
+    push(7, y => drawText(ctx, 'Rumours of rare ingredients, grown from the town\'s own memories.', IX, y, '#6a6f7c'));
+    push(3);
+    if (!(world.tales || []).length) push(7, y => drawText(ctx, 'No tales have taken root yet.', IX, y, '#6a6f7c'));
+    for (const t of (world.tales || [])) {
+        const lore = world.taleLore ? world.taleLore(t) : null;
+        const nm = (lore && lore.name) || (RARE_NAME && RARE_NAME[t.ingredient]) || t.ingredient;
+        const proven = lore ? lore.validated : world.farmers.some(f => f.sheet.rareBelief && f.sheet.rareBelief[t.ingredient] && f.sheet.rareBelief[t.ingredient].state === 'validated');
+        const status = proven ? 'PROVEN REAL' : 'STILL A TALE';
+        push(8, y => { drawText(ctx, nm.toUpperCase(), IX + 4, y, proven ? '#7dd069' : '#c8a860'); drawText(ctx, status, PX + PW - 8 - textWidth(status), y, proven ? '#7dd069' : '#6a6f7c'); });
+        if (lore) {
+            wrapPush(`"${lore.saying}"`, '#b6a6d8', 8);
+            wrapPush(lore.origin, '#8a8f9c', 8);
+            wrapPush(lore.belief, proven ? '#7dd069' : '#7a8194', 8);
+        } else {
+            wrapPush(t.originTitle ? `a tale from "${String(t.originTitle).slice(0, 34)}"` : "a traveller's tale", '#6a6f7c', 8);
+        }
+        push(4);
+    }
+    chronScrollBody(rows, PX, top, PW, bot);
+}
+
+// shared scroll+clip+scrollbar body for the RECIPES/TALES tabs (both build scrollable `rows`)
+function chronScrollBody(rows, PX, top, PW, bot) {
     let contentH = 0; for (const r of rows) contentH += r.h;
     const viewH = bot - top;
     const maxScroll = Math.max(0, contentH - viewH);
@@ -3807,7 +3820,6 @@ function drawChronicleRecipes(PX, top, PW, bot) {
     let y = top + 2 - Math.round(chronScroll);
     for (const r of rows) { if (y + r.h > top && y < bot) r.draw(y); y += r.h; }
     ctx.restore();
-    // a thin scrollbar so it's clear there's more
     if (maxScroll > 0) {
         const trackH = viewH, thumbH = Math.max(12, trackH * viewH / contentH), thumbY = top + (trackH - thumbH) * (chronScroll / maxScroll);
         ctx.fillStyle = '#2a2f3a'; ctx.fillRect(PX + PW - 3, top, 2, trackH);
@@ -3829,7 +3841,7 @@ function drawChronicle() {
 
     // header — the panel title reflects the active tab (NEWS can narrow to one Ry's saga)
     const cf = chronTab === 0 ? chronFocusFarmer() : null;
-    const title = chronTab === 1 ? 'TOWN ROLES' : chronTab === 2 ? 'TOWN RECIPES'
+    const title = chronTab === 1 ? 'TOWN ROLES' : chronTab === 2 ? 'TOWN RECIPES' : chronTab === 3 ? 'TALES OF THE WILDS'
         : cf ? `SAGA OF ${cf.sheet.name.split(' ')[0].toUpperCase()}` : 'TOWN CHRONICLE';
     drawText(ctx, title, PX + 7, PY + 5, CHRON_ACCENT, 1);
     const entries = chronEntries();
@@ -3879,6 +3891,7 @@ function drawChronicle() {
     // ROLES + RECIPES render their own (non-scrolling) bodies and return; NEWS falls through below.
     if (chronTab === 1) { drawChronicleRoles(PX, bodyTop, PW, bodyBot); return; }
     if (chronTab === 2) { drawChronicleRecipes(PX, bodyTop, PW, bodyBot); return; }
+    if (chronTab === 3) { drawChronicleTales(PX, bodyTop, PW, bodyBot); return; }
     const viewH = bodyBot - bodyTop;
     const IX = PX + 8;
     const maxChars = Math.max(30, Math.floor((PW - 30) / 4.2));
