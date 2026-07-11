@@ -2028,21 +2028,16 @@ export class World {
         };
     }
 
+    // DISPLAY-ONLY: kick off an async request that will rewrite the (already-shown) speech bubbles in nicer
+    // prose. Draws NO sim rng and writes NO sim state — the deterministic effects already landed in the caller —
+    // so enabling the LLM can never change the simulation. Purely a cosmetic overlay on the words on screen.
     tryLlmChat(speaker, listener, ctx = {}) {
         const cfg = this.llmChat;
         if (!cfg?.enabled || typeof fetch !== 'function') return false;
         if (cfg.inflight >= 1 || this.time < cfg.disabledUntil) return false;
         if (this.time - cfg.lastAt < LLM_CHAT_REQUEST_COOLDOWN) return false;
-        // conversations are already sparse; when the LLM is available, let it drive nearly all of
-        // them (the scripted lines are a fallback for offline / failed / in-flight requests only)
-        if (this.rand() > 0.95) return false;
-
         cfg.inflight++;
         cfg.lastAt = this.time;
-        speaker.say('LISTEN...', '#8a9ade');
-        listener.say('...', '#8a9ade');
-        speaker.facing = (listener.pos.i - listener.pos.j) >= (speaker.pos.i - speaker.pos.j) ? 1 : -1;
-        listener.facing = (speaker.pos.i - speaker.pos.j) >= (listener.pos.i - listener.pos.j) ? 1 : -1;
         this.#runLlmChat(speaker, listener, ctx);
         return true;
     }
@@ -2076,29 +2071,26 @@ export class World {
             if (err?.name !== 'AbortError' && ([401, 403, 404, 405, 501, 503].includes(err?.status) || cfg.failures >= 2)) {
                 cfg.disabledUntil = this.time + LLM_CHAT_FAIL_COOLDOWN;
             }
-            if (ctx?.fallback) this.applyChatLines(speaker, listener, ctx.fallback, { weight: ctx.fallback.weight ?? 0.45 });
+            // no fallback re-apply: the deterministic scripted bubbles + effects already showed at chat time,
+            // so a failed LLM request simply leaves the scripted lines standing (display-only, nothing to undo).
         } finally {
             clearTimeout(timeout);
             cfg.inflight = Math.max(0, cfg.inflight - 1);
         }
     }
 
+    // DISPLAY-ONLY. Swap the already-shown scripted bubbles for the LLM's prose + tone. Deliberately ignores
+    // any relationshipDelta / memory the model returns: opinions, bonds, and journal were set deterministically
+    // at chat time, so the model can dress the words but never move sim state (the compile-don't-query boundary).
     #applyGeneratedChat(speaker, listener, data) {
         const lines = data?.lines || data?.conversation?.lines || null;
         const first = Array.isArray(lines) ? lines[0] : null;
         const second = Array.isArray(lines) ? lines[1] : null;
-        const chat = {
-            speakerLine: data?.speakerLine || data?.speaker_line || first?.text || data?.speaker?.text,
-            listenerLine: data?.listenerLine || data?.listener_line || second?.text || data?.listener?.text,
-            speakerColor: this.#toneColor(data?.speakerTone || first?.tone || data?.tone),
-            listenerColor: this.#toneColor(data?.listenerTone || second?.tone || data?.tone),
-            memory: data?.memory || data?.summary,
-            relationshipDelta: Number(data?.relationshipDelta ?? data?.relationship_delta ?? 0) || 0,
-            reason: data?.relationshipReason || data?.relationship_reason || 'opened up in conversation',
-            weight: 0.9,
-        };
-        if (!chat.speakerLine || !chat.listenerLine) return false;
-        this.applyChatLines(speaker, listener, chat, { weight: 0.9 });
+        const speakerLine = cleanChatText(data?.speakerLine || data?.speaker_line || first?.text || data?.speaker?.text || '');
+        const listenerLine = cleanChatText(data?.listenerLine || data?.listener_line || second?.text || data?.listener?.text || '');
+        if (!speakerLine || !listenerLine) return false;
+        speaker.say(speakerLine, this.#toneColor(data?.speakerTone || first?.tone || data?.tone));
+        listener.say(listenerLine, this.#toneColor(data?.listenerTone || second?.tone || data?.tone));
         return true;
     }
 
@@ -7364,9 +7356,13 @@ export class Farmer {
             const id = mine[Math.floor(this.rand() * mine.length)];
             if (other.hearOf(id)) other.think(`SO ${shortName(this).toUpperCase()} WORKED OUT ${(RECIPE_BY_ID[id] ? RECIPE_BY_ID[id].name : id).toUpperCase()}...`);
         }
+        // The DETERMINISTIC scripted outcome IS the sim state: opinions, bonds, and journal memories are applied
+        // NOW, synchronously, from seeded logic. The LLM (if enabled) is a pure DISPLAY embellishment — it later
+        // swaps the speech bubbles for nicer prose and never touches sim state or draws sim rng. So LLM-on is
+        // byte-identical to LLM-off in the simulation; only the words on screen differ.
         const fallback = this.#scriptedChat(other, op, rop, grudge, vivid);
-        if (w.tryLlmChat(this, other, { op, rop, grudge, vivid, fallback })) return true;
         w.applyChatLines(this, other, fallback, { weight: fallback.weight });
+        w.tryLlmChat(this, other, { op, rop, grudge, vivid, fallback });
         return true;
     }
 
