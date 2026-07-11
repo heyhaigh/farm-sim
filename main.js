@@ -4090,20 +4090,28 @@ function drawMoments() {
     drawText(ctx, label, PX + Math.floor((PW - textWidth(label)) / 2), PY + 5, accent, 1);
     ctx.fillStyle = '#2a2e3a'; ctx.fillRect(PX + 4, PY + 14, PW - 8, 1);
 
-    // the FARMER showcase (idle sprite, scaled) on the left, holding up the thing they found
+    // the FARMER showcase — a WALKING loop, scaled — in a left column, with the object below it in an
+    // inventory-style beveled slot (kept clear of the text on the right).
     const f = world.farmers.find(x => x.sheet.seed === e.whoSeed);
-    const spriteCX = PX + 34, spriteCY = PY + 58;
+    const colCX = PX + 38;
     if (f) {
-        const spr = farmerSprites(f).idle;
+        const fr = farmerSprites(f);
+        const spr = (Math.floor(performance.now() / 1000 * 7) % 2) ? fr.walk1 : fr.walk2;   // 2-frame walk cycle
         const S = 2;
         ctx.imageSmoothingEnabled = false;
-        ctx.drawImage(spr, Math.round(spriteCX - spr.width * S / 2), Math.round(spriteCY - spr.height * S / 2), spr.width * S, spr.height * S);
+        ctx.drawImage(spr, Math.round(colCX - spr.width * S / 2), Math.round(PY + 48 - spr.height * S / 2), spr.width * S, spr.height * S);
     }
-    // the object: a rare gem for a find, held to the farmer's side
-    if (e.icon && e.icon.indexOf('rare:') === 0) drawGem(e.icon.slice(5), spriteCX + 22, spriteCY - 8, 6, e.tone);
+    // the object in a beveled square slot (matches the inventory), glow clipped inside the frame
+    if (e.icon && e.icon.indexOf('rare:') === 0) {
+        const sz = 22, sx = colCX - sz / 2, sy = PY + 70;
+        drawItemSlot(sx, sy, sz, null, null, { hi: true });
+        ctx.save(); ctx.beginPath(); ctx.rect(sx + 1, sy + 1, sz - 2, sz - 2); ctx.clip();
+        drawGem(e.icon.slice(5), sx + sz / 2, sy + sz / 2, 6, e.tone);
+        ctx.restore();
+    }
 
-    // title (what happened) + the memory WHY
-    const tx = PX + 66, tw = Math.floor((PW - 66 - 8) / 4.2);
+    // title (what happened) + the memory WHY — right column, well clear of the sprite/slot
+    const tx = PX + 78, tw = Math.floor((PW - 78 - 10) / 4.2);
     let ty = PY + 22;
     for (const ln of wrapText(e.text.toUpperCase(), tw).slice(0, 3)) { drawText(ctx, ln, tx, ty, '#f4ead0'); ty += 8; }
     if (e.why) { ty += 2; for (const ln of wrapText(e.why, tw).slice(0, 4)) { drawText(ctx, ln, tx, ty, '#9a86c0'); ty += 7; } }
