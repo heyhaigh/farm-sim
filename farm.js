@@ -416,7 +416,8 @@ const FACILITY_DEFS = {
 // #99b Milling: a Mill (3x3 workstation) grinds harvested WHEAT into GRAIN — the feed chickens + fish eat.
 // One milling run costs energy and takes ~a tipi build-step of time (see 'mill' action), and converts:
 const MILL_WHEAT_IN = 2;    // wheat consumed per run (from the miller's harvested crop stock)
-const MILL_GRAIN_OUT = 2;   // grain produced per run (the mill is raised for FACILITY_WOOD like any facility)
+const MILL_GRAIN_OUT = 10;  // grain produced per run — generous so one mill can feed a flock (grinding time is the throttle)
+const MILL_GRAIN_STOCK = 24; // grind until the larder holds this much grain (build a buffer, not hand-to-mouth)
 
 // energy / health tuning
 const AWAKE_DRAIN = 0;        // no passive drain — merely being awake and farming never tires you;
@@ -1497,6 +1498,7 @@ export class World {
         };
         if (meta) { e.tier = meta.tier || null; e.tone = meta.tone || 'neutral'; e.why = meta.why || null; e.icon = meta.icon || null; e.label = meta.label || null; }
         this.chronicle.push(e);
+        this._chronTotal = (this._chronTotal || 0) + 1;   // monotonic (never shifts) — drives the UNREAD badge on the Chronicle button
         if (this.chronicle.length > 240) this.chronicle.shift();
     }
     // #98 Moments — the compiled MEMORY behind a profound beat, cited for the spotlight modal (the "why").
@@ -4464,7 +4466,13 @@ export class World {
     // so a farm shows steady patches of several crops (not one mono-culture) and it never changes
     // under a tile between plantings. Deterministic — no world.rand.
     cropForField(owner, i, j) {
-        const cs = owner.sheet.crops && owner.sheet.crops.length ? owner.sheet.crops : [owner.sheet.crop];
+        let cs = owner.sheet.crops && owner.sheet.crops.length ? owner.sheet.crops : [owner.sheet.crop];
+        // #99b a farm with chickens/fish needs a steady WHEAT supply to grind into grain, so a grain-eater
+        // owner ALTERS THEIR STRATEGY and turns a share of their fields over to wheat (if they don't already
+        // grow it). A farm with no room to grow wheat should trade for it instead (barter path — follow-up).
+        if (owner.plot && !cs.includes('wheat') && owner.plot.facilities.some(f => f.producers && f.producers.some(p => FEED_GOOD[p.kind] === 'grain'))) {
+            cs = ['wheat', 'wheat', ...cs];   // ~half the fields turn to wheat while the grain-eaters stay
+        }
         return cs[tileHash(i, j, owner.sheet.seed) % cs.length];
     }
     plantCrop(i, j, type, owner) {
@@ -6773,7 +6781,7 @@ export class Farmer {
     // grain-eaters (chicken/fish) to feed. Grinds a batch of wheat into grain (deterministic, seeded elsewhere).
     #millToWork(plot) {
         const mill = this.#ownMill(plot); if (!mill) return null;
-        if ((this.sheet.goods && this.sheet.goods.grain || 0) >= 4) return null;   // enough grain in the larder
+        if ((this.sheet.goods && this.sheet.goods.grain || 0) >= MILL_GRAIN_STOCK) return null;   // larder buffer is full
         if (this.#wheatOnHand() < MILL_WHEAT_IN) return null;                       // no wheat to grind
         const grainEater = plot.facilities.some(f => f.producers && f.producers.some(p => FEED_GOOD[p.kind] === 'grain'));
         return grainEater ? mill : null;

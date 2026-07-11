@@ -21,10 +21,10 @@ const SEEDS = [20260706, 42, 7, 3];
 // Baseline digests at HEAD (LLM + SuperMemory off, 30-day run). Update deliberately when a sim change
 // legitimately re-baselines; a DRIFT here on an unrelated change is a determinism regression to investigate.
 const BASELINE = {
-    20260706: '9139a75d',
-    42: 'c4f15880',
-    7: '720c699d',
-    3: 'f60ffd9b',
+    20260706: '19d53747',
+    42: 'bc8b8504',
+    7: '2b9d51b5',
+    3: '2ce57075',
 };
 
 function boot(seed) {

@@ -84,6 +84,7 @@ let chatFocused = false;          // is the hidden input focused (blocks world k
 let chatInputEl = null;           // the hidden DOM <input> that actually captures keystrokes/IME/paste
 let chatViewport = null;          // { x, y, w, h, bodyTop, bodyBot, maxScroll } of the history area
 let chronOpen = false;            // town chronicle panel (the settlement's saga)
+let chronReadTotal = 0;           // world._chronTotal at last view — the badge shows only for UNREAD beats
 let chronScroll = 0;
 let followMode = false;           // camera tracks followTarget (F/crosshair toggles; drag/Esc cancels)
 let followTarget = null;          // the farmer being trailed — independent of the open card, so closing
@@ -2608,7 +2609,7 @@ function drawUI() {
 
     barBtn(ROSTER_BTN, 'ROSTER', rosterOpen, '#7dd069', '#10240c');
     barBtn(CHRON_BTN, 'CHRONICLE', chronOpen, '#c8a0e0', '#1a1024');
-    if (world.chronicle.length && !chronOpen) drawCoin(CHRON_BTN.x + CHRON_BTN.w - 3, CHRON_BTN.y - 2, 6);
+    if ((world._chronTotal || 0) > chronReadTotal && !chronOpen) drawCoin(CHRON_BTN.x + CHRON_BTN.w - 3, CHRON_BTN.y - 2, 6);   // UNREAD only
 
     // (NEW TOWN moved into the settings menu.) A quiet "SAVED" tick under the cog whenever the town
     // autosaves — trust that the memory is real.
@@ -3798,8 +3799,8 @@ function drawChronicleTales(PX, top, PW, bot) {
         const status = proven ? 'PROVEN REAL' : 'STILL A TALE';
         push(8, y => { drawText(ctx, nm.toUpperCase(), IX + 4, y, proven ? '#7dd069' : '#c8a860'); drawText(ctx, status, PX + PW - 8 - textWidth(status), y, proven ? '#7dd069' : '#6a6f7c'); });
         if (lore) {
-            wrapPush(`"${lore.saying}"`, '#b6a6d8', 8);
-            wrapPush(lore.origin, '#8a8f9c', 8);
+            wrapPush(`"${lore.saying}"`, '#b6a6d8', 8);            // the rumour, in the town's words (purple)
+            wrapPush(lore.origin, '#eef0f4', 8);                   // who first carried it + which memory (white)
             wrapPush(lore.belief, proven ? '#7dd069' : '#7a8194', 8);
         } else {
             wrapPush(t.originTitle ? `a tale from "${String(t.originTitle).slice(0, 34)}"` : "a traveller's tale", '#6a6f7c', 8);
@@ -3828,6 +3829,7 @@ function chronScrollBody(rows, PX, top, PW, bot) {
 }
 
 function drawChronicle() {
+    chronReadTotal = world._chronTotal || 0;   // reading the chronicle marks all current beats read (clears the badge)
     const PW = Math.min(GW - 12, 372);
     const PH = GH - 40;
     const PX = Math.floor((GW - PW) / 2);
