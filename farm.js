@@ -1717,12 +1717,13 @@ export class World {
             });
             let roll = r() * total, def = DREAM_DEFS[0];
             for (let k = 0; k < DREAM_DEFS.length; k++) { roll -= weights[k]; if (roll <= 0) { def = DREAM_DEFS[k]; break; } }
-            f.sheet.dream = { id: def.id, yearn: def.yearn };
+            const oy = d => (this.culture === 'orc' && d.oyearn) ? d.oyearn : d.yearn;   // #3.1 orc dream prose
+            f.sheet.dream = { id: def.id, yearn: oy(def) };
             if (def.id === 'outdo') {   // a rival dream needs a NAMED rival: the next settler over
                 const others = this.farmers.filter(o => o !== f);
                 const rv = others[Math.floor(r() * others.length)];
                 if (rv) { f.sheet.dream.rivalSeed = rv.sheet.seed; f.sheet.dream.rivalName = shortName(rv); }
-                else f.sheet.dream = { id: 'neverpoor', yearn: DREAM_DEFS.find(d => d.id === 'neverpoor').yearn };
+                else { const np = DREAM_DEFS.find(d => d.id === 'neverpoor'); f.sheet.dream = { id: 'neverpoor', yearn: oy(np) }; }
             }
             taken[f.sheet.dream.id] = (taken[f.sheet.dream.id] || 0) + 1;
             f.recomputeWanderlust();   // a far-shore dream pulls at the horizon from day one
@@ -5587,15 +5588,17 @@ const PROJECT_DEFS = [
 // life came from a real memory?) for free.
 // ---------------------------------------------------------------------------
 
+// #3.1 orc variants (oyearn/ofulfil) are the SAME dream turned over — ids + aff weights are unchanged, so
+// mechanics + saves are identical; only the display prose flips for a warband. `farshore` (wander) is shared.
 export const DREAM_DEFS = [
     { id: 'farshore',   yearn: 'TO SEE WHAT LIES BEYOND THE FOG',      fulfil: 'walked further than anyone',        aff: p => 0.2 + (p.curiosity ?? 0.5) * 1.2 },
-    { id: 'grandhouse', yearn: 'A HOME THAT WILL OUTLAST THEM',        fulfil: 'raised the home they dreamed of',   aff: p => 0.2 + p.diligence * 0.7 + p.competitiveness * 0.4 },
-    { id: 'beloved',    yearn: 'TO BE NEEDED IN THIS TOWN',            fulfil: 'became beloved by the town',        aff: p => 0.2 + p.collaboration * 1.1 },
-    { id: 'outdo',      yearn: 'TO OUTGROW A RIVAL, ONCE AND FOR ALL', fulfil: 'outgrew their rival at last',       aff: p => 0.1 + p.competitiveness * 1.2 },
-    { id: 'neverpoor',  yearn: 'TO NEVER GO WANTING AGAIN',            fulfil: 'filled the stores at last',         aff: p => 0.3 + p.diligence * 0.5 + (1 - p.honesty) * 0.3 },
-    { id: 'deed',       yearn: 'A DEED WORTH A STANDING STONE',        fulfil: 'earned their standing stone',       aff: p => 0.15 + p.competitiveness * 0.6 + (p.volatility ?? 0.5) * 0.5 },
-    { id: 'craft',      yearn: 'TO MASTER EVERY TOOL OF THE TRADE',    fulfil: 'mastered the tools of the trade',   aff: p => 0.2 + p.diligence * 1.0 },
-    { id: 'quietlife',  yearn: 'PEACE, A FENCE, AND RAIN ON THE ROOF', fulfil: 'kept the quiet life they wanted',   aff: p => 0.25 + (1 - p.competitiveness) * 0.7 + (1 - (p.volatility ?? 0.5)) * 0.5 },
+    { id: 'grandhouse', yearn: 'A HOME THAT WILL OUTLAST THEM',        fulfil: 'raised the home they dreamed of',   aff: p => 0.2 + p.diligence * 0.7 + p.competitiveness * 0.4, oyearn: 'A STRONGHOLD THAT OUTLASTS THEM',      ofulfil: 'raised the stronghold they dreamed of' },
+    { id: 'beloved',    yearn: 'TO BE NEEDED IN THIS TOWN',            fulfil: 'became beloved by the town',        aff: p => 0.2 + p.collaboration * 1.1,                  oyearn: 'TO BE FEARED IN THIS WARBAND',        ofulfil: 'became feared across the warband' },
+    { id: 'outdo',      yearn: 'TO OUTGROW A RIVAL, ONCE AND FOR ALL', fulfil: 'outgrew their rival at last',       aff: p => 0.1 + p.competitiveness * 1.2,                oyearn: 'TO BREAK A RIVAL, ONCE AND FOR ALL',  ofulfil: 'broke their rival at last' },
+    { id: 'neverpoor',  yearn: 'TO NEVER GO WANTING AGAIN',            fulfil: 'filled the stores at last',         aff: p => 0.3 + p.diligence * 0.5 + (1 - p.honesty) * 0.3, oyearn: 'TO NEVER GO HUNGRY AGAIN',          ofulfil: 'filled the hoard at last' },
+    { id: 'deed',       yearn: 'A DEED WORTH A STANDING STONE',        fulfil: 'earned their standing stone',       aff: p => 0.15 + p.competitiveness * 0.6 + (p.volatility ?? 0.5) * 0.5, oyearn: 'A KILL WORTH A SAGA',      ofulfil: 'earned the saga they wanted' },
+    { id: 'craft',      yearn: 'TO MASTER EVERY TOOL OF THE TRADE',    fulfil: 'mastered the tools of the trade',   aff: p => 0.2 + p.diligence * 1.0,                      oyearn: 'TO MASTER EVERY TOOL OF WAR',         ofulfil: 'mastered the tools of war' },
+    { id: 'quietlife',  yearn: 'PEACE, A FENCE, AND RAIN ON THE ROOF', fulfil: 'kept the quiet life they wanted',   aff: p => 0.25 + (1 - p.competitiveness) * 0.7 + (1 - (p.volatility ?? 0.5)) * 0.5, oyearn: 'A DEN, A FIRE, AND SPOILS ENOUGH', ofulfil: 'kept the den they wanted' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -6523,7 +6526,8 @@ export class Farmer {
             const def = DREAM_DEFS.find(x => x.id === d.id);
             this.say('MY DREAM - REAL!', '#f0d060'); this.sparkle = 3; this.gainXP(10);
             this.remember('event', `My dream came true - ${d.yearn.toLowerCase()}`, null, 1.2);
-            w.addChronicle('dream', `${s.name.split(' ')[0]} ${def ? def.fulfil : 'saw their dream fulfilled'} - a lifelong want, answered.`, this, null, '#f0d060',
+            const fulfilTxt = def ? ((w.culture === 'orc' && def.ofulfil) ? def.ofulfil : def.fulfil) : 'saw their dream fulfilled';
+            w.addChronicle('dream', `${s.name.split(' ')[0]} ${fulfilTxt} - a lifelong want, answered.`, this, null, '#f0d060',
                 { tier: 'grand', tone: 'triumph', label: 'A DREAM FULFILLED', why: w.whyOfDream(this), icon: null });
             w.addLog(`${s.name}'s dream came true!`, '#f0d060');
             return;

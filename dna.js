@@ -425,6 +425,11 @@ const ORC_CREEDS = [
     'We do not ask - we come.',
     'Weakness is a debt paid in fire.',
     'A fence is a promise the axe will break.',
+    // the avenge/remember axis — an orc's deepest fear is being forgotten, a debt going unpaid
+    'A debt unpaid is a debt unreal.',
+    'Carve it in bone, or it never happened.',
+    'We endure - let the soft ones build.',
+    'Forget nothing that was done to us.',
 ];
 const ORC_SKIN = ['#6a7a4a', '#5a6a3c', '#788a52', '#4e5e38'];
 const ORC_HAIR = ['#1a140e', '#2a1a12', '#0e0e0e'];
