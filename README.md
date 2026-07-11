@@ -92,6 +92,18 @@ baseline digests; a legitimate sim change re-baselines them (update the constant
 but the same-twice property must always hold. (Cross-machine byte-identity is **not**
 promised — the guarantee is per-town, LLM-off, headless reproducibility.)
 
+**Memory is load-bearing** — proven by the ablation harness:
+
+```
+node tests/ablation.mjs
+```
+
+It founds three towns from the *same seed* but different memory sources — a real
+corpus, that corpus shuffled, and the invented fallback — ticks each 30 days, and
+shows they grow into **observably different societies** (different archetype mix,
+different creeds, different lived outcomes). Same seed, different memories ⇒ a
+different town: the SuperMemory integration changes the world, it doesn't decorate it.
+
 ## How a farmer is made
 
 Every farmer is **deterministic**: the same memory always grows the same farmer
