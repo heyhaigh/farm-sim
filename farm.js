@@ -3512,7 +3512,7 @@ export class World {
                 : `${farmer.sheet.name} finished raising a ${HOUSE_TIERS[b.level].name}!`, '#f0d060');
             const fn = farmer.sheet.name.split(' ')[0];
             this.addChronicle('build', b.level === 1 ? `${fn} pitched a tipi — a first roof.`
-                : b.level === 2 ? `${fn} raised a yurt.` : `${fn} raised a cottage — the estate is complete.`, farmer, null, '#f0d060');
+                : b.level === 2 ? `${fn} raised a yurt.` : `${fn} raised a cottage — the estate is complete.`, farmer, null, '#eef0f4');
         }
     }
 
@@ -6041,7 +6041,7 @@ export class Farmer {
         const delta = this.#applyDrift(best.trait, best.nudge);   // bounded; recorded for exact reversal
         (this.sheet.beliefs = this.sheet.beliefs || []).push({ text, tag: best.tag, day: this.world.day, strength: 1, trait: best.trait, delta });
         const id = personalityLabel(this.p); this.p.label = id.label; this.p.creed = id.creed;
-        this.world.addChronicle('reflection', `${shortName(this)} has come to believe: ${text}`, this, null, '#8fc7e8');
+        this.world.addChronicle('reflection', `${shortName(this)} has come to believe: ${text}`, this, null, '#eef0f4');
     }
 
     // W2 — a belief is not forever. Each dawn its STRENGTH rises when recent life keeps rhyming with it,
@@ -6062,7 +6062,7 @@ export class Farmer {
             b.strength = Math.max(0, Math.min(1.5, (b.strength ?? 1) + Math.min(0.3, reinforced * 0.05) - Math.min(0.6, contradicted * 0.12) - BELIEF_DECAY));
             if (b.strength < BELIEF_FLOOR) {
                 if (b.delta) this.#applyDrift(b.trait, -b.delta);   // undo the drift this belief caused
-                this.world.addChronicle('reflection', `${shortName(this)} let go of an old belief: ${b.text.replace(/[.!]$/, '')}.`, this, null, '#8a8f9c');
+                this.world.addChronicle('reflection', `${shortName(this)} let go of an old belief: ${b.text.replace(/[.!]$/, '')}.`, this, null, '#eef0f4');
             } else kept.push(b);
         }
         if (kept.length !== bel.length) { this.sheet.beliefs = kept; const id = personalityLabel(this.p); this.p.label = id.label; this.p.creed = id.creed; }
