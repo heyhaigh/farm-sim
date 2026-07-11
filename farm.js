@@ -22,7 +22,7 @@ const FOREST_BORDER = 5;   // keep trees this many tiles off the map edge
 const ISO_HALF_W = 10;     // mirrors TILE_W / 2 without importing renderer code
 const ISO_HALF_H = 5;      // mirrors TILE_H / 2 without importing renderer code
 
-export const T = { GRASS: 0, PATH: 1, TILLED: 2, HOUSE: 3, WELL: 4, SIGN: 5, STRUCT: 6, WATER: 7, COOP: 8, BARN: 9, TREE: 10, STUMP: 11, WHEAT: 12, FLOWER: 13, ROCK: 14, MILL: 15 };
+export const T = { GRASS: 0, PATH: 1, TILLED: 2, HOUSE: 3, WELL: 4, SIGN: 5, STRUCT: 6, WATER: 7, COOP: 8, BARN: 9, TREE: 10, STUMP: 11, WHEAT: 12, FLOWER: 13, ROCK: 14, MILL: 15, HATCH: 16 };
 export const FORAGE_TILES = [T.WHEAT, T.FLOWER];
 export const FORAGE_NAME = { [T.WHEAT]: 'wild grass', [T.FLOWER]: 'wild bush' };
 
@@ -411,7 +411,16 @@ const FACILITY_DEFS = {
     pen:  { label: 'livestock pen', w: 3, h: 3, produce: 'milk' },
     sheeppen: { label: 'sheep pen', w: 3, h: 3, produce: 'wool' },
     mill: { label: 'mill', w: 3, h: 3, produce: null, workstation: true },   // #99b: grinds wheat -> grain (chicken/fish feed)
+    hatchery: { label: 'hatch house', w: 3, h: 3, produce: null, workstation: true },   // #100: hatches eggs -> chickens
 };
+
+// #100 Hatch House — a coop owner sets a clutch of EGGS incubating; ~HATCH_DAYS later they hatch into new
+// chickens (up to the coop's cap). Lets a farm GROW its flock deliberately — but only when it can feed them
+// (see #wantsToHatch): surplus grain + a well-fed flock. So flock size self-regulates against grain capacity.
+const HATCH_EGGS_PER_CHICK = 2;   // eggs consumed per chick (a clutch of a few chicks costs several eggs)
+const HATCH_CLUTCH = 3;           // chicks set per clutch
+const HATCH_DAYS = 4;             // days a clutch incubates before hatching
+const FLOCK_CAP = 12;             // most chickens one coop will hold (past this, a farm needs a second coop)
 
 // #99b Milling: a Mill (3x3 workstation) grinds harvested WHEAT into GRAIN — the feed chickens + fish eat.
 // One milling run costs energy and takes ~a tipi build-step of time (see 'mill' action), and converts:
@@ -441,7 +450,7 @@ const MEAT_GOODS = ['meat-s', 'meat-m', 'meat-l', 'fowl'];   // eaten smallest-f
 // Tending crops and animals is free — tilling a patch, sowing, watering, harvesting, collecting
 // eggs/milk, feeding. Only heavy construction (build) drains here; the rest is 0. Chopping,
 // mining, breaking stumps, fencing and raising scarecrows drain via the LABOR table below.
-const ACTION_ENERGY = { till: 0, plant: 0, water: 0.006, harvest: 0, clear: 0, build: 0.04, collect: 0, tend: 0, mill: 0.05 };   // #99b grinding costs energy
+const ACTION_ENERGY = { till: 0, plant: 0, water: 0.006, harvest: 0, clear: 0, build: 0.04, collect: 0, tend: 0, mill: 0.05, hatch: 0.01 };
 // Clearing/building labor by effort: a shrub is quick and light, a tree is a long hard fell,
 // a stump is grubbing work (roots and all — just as heavy as the fell), a rock is the heaviest,
 // a fence post is medium. { time, energy }.
@@ -1439,7 +1448,7 @@ export class World {
     }
     blocked(i, j) {
         const t = this.get(i, j);
-        return t === T.HOUSE || t === T.WELL || t === T.SIGN || t === T.STRUCT || t === T.COOP || t === T.BARN || t === T.ROCK || t === T.MILL;
+        return t === T.HOUSE || t === T.WELL || t === T.SIGN || t === T.STRUCT || t === T.COOP || t === T.BARN || t === T.ROCK || t === T.MILL || t === T.HATCH;
     }
 
     isNight() { return this.clock > DAY_LENGTH; }
@@ -2066,6 +2075,7 @@ export class World {
     tryLlmChat(speaker, listener, ctx = {}) {
         const cfg = this.llmChat;
         if (!cfg?.enabled || typeof fetch !== 'function') return false;
+        if (this._tabHidden) return false;   // #101 a backgrounded tab makes no network chat calls (belt-and-braces to the visibility guard on the writeback loops)
         if (cfg.inflight >= 1 || this.time < cfg.disabledUntil) return false;
         if (this.time - cfg.lastAt < LLM_CHAT_REQUEST_COOLDOWN) return false;
         cfg.inflight++;
@@ -2312,6 +2322,7 @@ export class World {
                 facilities: p.facilities.map(f => ({
                     type: f.type, x: f.x, y: f.y, w: f.w, h: f.h,
                     struct: f.struct ? { ...f.struct } : null, trough: f.trough ? { ...f.trough } : null,
+                    clutch: f.clutch ? { ...f.clutch } : null,   // #100 incubating clutch persists
                     producers: f.producers.map(pr => { const { region, ...rest } = pr; return { ...rest, busy: false }; }),
                 })),
             })),
@@ -2421,6 +2432,7 @@ export class World {
                 return {
                     type: fd.type, ...region,
                     struct: fd.struct ? { ...fd.struct } : null, trough: fd.trough ? { ...fd.trough } : null,
+                    clutch: fd.clutch ? { ...fd.clutch } : null,   // #100 restore an incubating clutch
                     producers: fd.producers.map(pr => ({ ...pr, region })),
                 };
             });
@@ -3541,6 +3553,17 @@ export class World {
                 return true;
             }
         }
+        // #100 a coop owner with a healthy grain buffer + a mill raises a HATCH HOUSE to grow their flock
+        if (!built.has('hatchery') && built.has('coop') && built.has('mill')
+            && (farmer.sheet.goods && farmer.sheet.goods.grain || 0) >= MILL_GRAIN_STOCK * 0.5) {
+            const region = this.#findFacilityRegion(plot, 'hatchery');
+            if (region) {
+                this.#buildFacility(plot, farmer.sheet, 'hatchery', region);
+                this.addLog(`${farmer.sheet.name} built a HATCH HOUSE to grow their flock!`, '#7dd069');
+                farmer.say('A HATCH HOUSE!', '#7dd069'); farmer.sparkle = 2;
+                return true;
+            }
+        }
         // candidate facilities: the farmer's unbuilt preferences their house tier + level already unlock
         const prefs = farmer.sheet.facilityPrefs || ['pond', 'coop', 'pen'];
         const candidates = prefs.filter(t => !built.has(t) && facilityUnlocked(t, plot.built.level, farmer.sheet.level));
@@ -3626,7 +3649,7 @@ export class World {
     // Solid obstacles farmers must walk AROUND (buildings, wells, rocks, the board).
     pathBlocked(i, j) {
         const t = this.get(i, j);
-        if (t === T.HOUSE || t === T.WELL || t === T.STRUCT || t === T.COOP || t === T.BARN || t === T.ROCK || t === T.WATER || t === T.MILL) return true;
+        if (t === T.HOUSE || t === T.WELL || t === T.STRUCT || t === T.COOP || t === T.BARN || t === T.ROCK || t === T.WATER || t === T.MILL || t === T.HATCH) return true;
         if (this.board && this.board.i === i && this.board.j === j) return true;
         return false;
     }
@@ -3737,7 +3760,7 @@ export class World {
                     for (let i = x - 1; i <= x + def.w; i++) {
                         if (i >= x && i < x + def.w && j >= y && j < y + def.h) continue; // skip interior
                         const t = this.get(i, j);
-                        if (t === T.WATER || t === T.COOP || t === T.BARN || t === T.MILL || t === T.STRUCT || this.#inHouse(plot, i, j)) { ok = false; break; }
+                        if (t === T.WATER || t === T.COOP || t === T.BARN || t === T.MILL || t === T.HATCH || t === T.STRUCT || this.#inHouse(plot, i, j)) { ok = false; break; }
                     }
                 }
                 if (ok) return { x, y, w: def.w, h: def.h };
@@ -3777,6 +3800,10 @@ export class World {
         } else if (type === 'mill') {   // #99b a workstation, no producers — the miller stands at it to grind wheat
             fac.struct = { i: region.x, j: region.y, kind: 'mill' };
             this.set(region.x, region.y, T.MILL);
+        } else if (type === 'hatchery') {   // #100 a workstation that incubates a clutch of eggs into chickens
+            fac.struct = { i: region.x, j: region.y, kind: 'hatchery' };
+            this.set(region.x, region.y, T.HATCH);
+            fac.clutch = null;   // { chicks, dueDay } while a clutch incubates
         }
         plot.facilities.push(fac);
         // A new build turns tiles solid — a barn under a fresh animal, or a pond carved under a
@@ -4272,6 +4299,23 @@ export class World {
     // a rally that never drew a second pair of hands first tries a sweetened recruit,
     // then fizzles; a dig that can't finish (materials nowhere to be found) is abandoned
     // after a while so it doesn't block the next neighborhood plan forever
+    // #100 hatch any clutch whose incubation is up into new chickens (up to the coop's cap), then clear it.
+    #hatchClutches() {
+        for (const f of this.farmers) {
+            if (!f.plot) continue;
+            const coop = f.plot.facilities.find(x => x.type === 'coop');
+            for (const hatch of f.plot.facilities) {
+                if (hatch.type !== 'hatchery' || !hatch.clutch || this.day < hatch.clutch.dueDay) continue;
+                const chicks = hatch.clutch.chicks; hatch.clutch = null;
+                if (!coop) continue;   // no coop to receive them (shouldn't happen — hatchery is built off a coop)
+                const cur = coop.producers.filter(p => p.kind === 'chicken').length;
+                const hatched = Math.min(chicks, Math.max(0, FLOCK_CAP - cur));
+                const cx = coop.x + coop.w / 2, cy = coop.y + coop.h / 2;
+                for (let k = 0; k < hatched; k++) coop.producers.push(this.#makeProducer('chicken', cx + (f.rand() - 0.5) * coop.w * 0.6, cy + (f.rand() - 0.5) * coop.h * 0.6, coop));
+                if (hatched > 0) this.addChronicle('build', `${hatched} chick${hatched > 1 ? 's' : ''} hatched at ${shortName(f)}'s farm.`, f, null, '#eef0f4', { tier: 'callout', tone: 'triumph' });
+            }
+        }
+    }
     #tickCoops() {
         this.coops = this.coops.filter(c => {
             if (c.stage === 'rally' && this.day - c.bornDay >= 1 && c.members.size < 2 && this.#coopRecruit(c)) return true;
@@ -4470,8 +4514,13 @@ export class World {
         // #99b a farm with chickens/fish needs a steady WHEAT supply to grind into grain, so a grain-eater
         // owner ALTERS THEIR STRATEGY and turns a share of their fields over to wheat (if they don't already
         // grow it). A farm with no room to grow wheat should trade for it instead (barter path — follow-up).
-        if (owner.plot && !cs.includes('wheat') && owner.plot.facilities.some(f => f.producers && f.producers.some(p => FEED_GOOD[p.kind] === 'grain'))) {
-            cs = ['wheat', 'wheat', ...cs];   // ~half the fields turn to wheat while the grain-eaters stay
+        if (owner.plot && !cs.includes('wheat')) {
+            let eaters = 0;
+            for (const f of owner.plot.facilities) if (f.producers) for (const p of f.producers) if (FEED_GOOD[p.kind] === 'grain') eaters++;
+            if (eaters > 0) {   // #100 FLOCK-SCALED: the bigger the flock, the more fields turn to wheat to feed it
+                const wheatFields = Math.max(2, Math.min(6, Math.ceil(eaters / 3)));
+                cs = [...Array(wheatFields).fill('wheat'), ...cs];
+            }
         }
         return cs[tileHash(i, j, owner.sheet.seed) % cs.length];
     }
@@ -4789,6 +4838,7 @@ export class World {
             this.#spreadTales();          // #97 P4: tales of the rare ingredients travel farmer-to-farmer
             this.#tickCoops();
             this.#maybeHatchRooster();
+            this.#hatchClutches();   // #100 any due clutches hatch into new chickens this dawn
             this.addLog(`Day ${this.day} begins on ${this.name}`, '#f0d060');
             // END-OF-DAY RECAP: gather the day's notable beats (from the chronicle) + the harvest tally,
             // so the UI can surface what happened in a self-playing town where the action is off-screen.
@@ -5635,7 +5685,7 @@ function deriveStance(f) {
     return 'unbothered';                                        // "thoughts don't till fields"
 }
 
-const ACTION_TIME = { till: 3.2, plant: 2.2, water: 1.6, harvest: 2.6, clear: 2.0, mill: 5.5 };   // #99b milling is slow work (~a tipi build-step+)
+const ACTION_TIME = { till: 3.2, plant: 2.2, water: 1.6, harvest: 2.6, clear: 2.0, mill: 5.5, hatch: 2.4 };   // #99b/#100
 
 const IDLE_THOUGHTS = [
     'NICE DAY OUT HERE',
@@ -6764,14 +6814,22 @@ export class Farmer {
         return best;
     }
     // #99 — does this farmer have the feed a producer needs on hand? (grazers with no FEED_GOOD are always fed)
-    #hasFeedFor(p) {
+    #hasFeedFor(p, plot = this.plot) {
         const fg = FEED_GOOD[p.kind];
-        return !fg || ((this.sheet.goods && this.sheet.goods[fg]) || 0) > 0;
+        const owner = this.#plotOwner(plot);   // #101 feed comes from the animal's OWNER, not a helper passing through
+        return !fg || ((owner.sheet.goods && owner.sheet.goods[fg]) || 0) > 0;
     }
     // #99b — harvested WHEAT the farmer holds (grown/found/stolen), and a way to spend it into the mill.
-    #wheatOnHand() { const w = this.sheet.cropStock && this.sheet.cropStock.wheat; return w ? (w.grown || 0) + (w.stolen || 0) + (w.found || 0) : 0; }
-    #spendWheat(n) {
-        const s = this.sheet; s.produce = Math.max(0, (s.produce || 0) - n);   // wheat leaves the spendable crop pool
+    // #101 a facility (mill/hatch/tend feeding) belongs to the PLOT'S OWNER — when a helper works someone
+    // else's plot, its wheat/eggs/grain/feed must come from and credit the OWNER, never the helper. On the
+    // farmer's own plot this is just `this`.
+    #plotOwner(plot = this.plot) {
+        if (!plot || plot === this.plot) return this;
+        return this.world.farmers.find(f => f.plot === plot) || this;
+    }
+    #wheatOnHand(who = this) { const w = who.sheet.cropStock && who.sheet.cropStock.wheat; return w ? (w.grown || 0) + (w.stolen || 0) + (w.found || 0) : 0; }
+    #spendWheat(n, who = this) {
+        const s = who.sheet; s.produce = Math.max(0, (s.produce || 0) - n);   // wheat leaves the spendable crop pool
         const w = s.cropStock && s.cropStock.wheat; if (!w) return;
         let left = n;
         for (const src of ['grown', 'found', 'stolen']) { const take = Math.min(left, w[src] || 0); w[src] = (w[src] || 0) - take; left -= take; if (left <= 0) break; }
@@ -6781,10 +6839,29 @@ export class Farmer {
     // grain-eaters (chicken/fish) to feed. Grinds a batch of wheat into grain (deterministic, seeded elsewhere).
     #millToWork(plot) {
         const mill = this.#ownMill(plot); if (!mill) return null;
-        if ((this.sheet.goods && this.sheet.goods.grain || 0) >= MILL_GRAIN_STOCK) return null;   // larder buffer is full
-        if (this.#wheatOnHand() < MILL_WHEAT_IN) return null;                       // no wheat to grind
+        const owner = this.#plotOwner(plot);                                        // #101 the mill grinds the OWNER's wheat into the OWNER's grain
+        if ((owner.sheet.goods && owner.sheet.goods.grain || 0) >= MILL_GRAIN_STOCK) return null;   // larder buffer is full
+        if (this.#wheatOnHand(owner) < MILL_WHEAT_IN) return null;                  // owner has no wheat to grind
         const grainEater = plot.facilities.some(f => f.producers && f.producers.some(p => FEED_GOOD[p.kind] === 'grain'));
         return grainEater ? mill : null;
+    }
+    // #100 flock helpers + the hatch decision
+    #coopFac(plot = this.plot) { return plot && plot.facilities.find(f => f.type === 'coop'); }
+    #chickenCount(plot = this.plot) { const c = this.#coopFac(plot); return c ? c.producers.filter(p => p.kind === 'chicken').length : 0; }
+    // Should this farm set a clutch to GROW its flock? Only when it can afford the extra mouths: a healthy
+    // grain buffer + a well-fed flock, room under the cap, spare eggs, and no clutch already incubating.
+    #wantsToHatch(plot) {
+        const hatch = plot && plot.facilities.find(f => f.type === 'hatchery');
+        if (!hatch || hatch.clutch) return null;
+        const coop = this.#coopFac(plot); if (!coop) return null;
+        const owner = this.#plotOwner(plot);                                                         // #101 the OWNER's eggs + grain fund the clutch
+        const chickens = coop.producers.filter(p => p.kind === 'chicken');
+        if (chickens.length >= FLOCK_CAP) return null;                                              // coop full
+        if ((owner.sheet.goods && owner.sheet.goods.egg || 0) < HATCH_EGGS_PER_CHICK * HATCH_CLUTCH) return null;   // not enough eggs
+        if ((owner.sheet.goods && owner.sheet.goods.grain || 0) < MILL_GRAIN_STOCK * 0.5) return null;   // grain buffer must be healthy
+        const avgFed = chickens.length ? chickens.reduce((sum, p) => sum + p.fed, 0) / chickens.length : 1;
+        if (avgFed < 0.5) return null;                                                              // don't add mouths to a hungry flock
+        return hatch;
     }
 
     // The unified "what needs doing on this plot" — crops AND facilities.
@@ -6809,11 +6886,14 @@ export class Farmer {
         if (thirsty) return { act: 'water', crop: thirsty };
         // a hungry producer can only be fed if the tender is CARRYING its feed good (cow/sheep: grass) —
         // otherwise it stays hungry until someone brings feed (the supply pressure the feeding rework adds)
-        const hungry = skipFacilities ? null : this.#findProducer(p => p.fed < 0.35 && this.#hasFeedFor(p), plot);
+        const hungry = skipFacilities ? null : this.#findProducer(p => p.fed < 0.35 && this.#hasFeedFor(p, plot), plot);
         if (hungry) return { act: 'tend', prod: hungry };
         // #99b keep GRAIN stocked: grind wheat at the mill when it's running low (with chickens/fish to feed)
         const mill = skipFacilities ? null : this.#millToWork(plot);
         if (mill) return { act: 'mill', fac: mill };
+        // #100 grow the flock: set a clutch of eggs incubating when the farm can afford more chickens
+        const hatch = skipFacilities ? null : this.#wantsToHatch(plot);
+        if (hatch) return { act: 'hatch', fac: hatch };
         if (urgentOnly) return null;
         // 4. sow + till (crop farms only) — lowest priority "fill" work. Frozen out in winter:
         //    the ground won't take seed, so farmers spend the season on livestock and other work.
@@ -8085,6 +8165,7 @@ export class Farmer {
         if (task.act === 'collect' && task.prod) this.think(`GATHERING ${(FACILITY_YIELD_NAME[task.prod.kind] || 'produce').toUpperCase()}!`);
         else if (task.act === 'tend' && task.prod) this.think(task.prod.kind === 'pad' ? 'TENDING THE LILIES' : `FEEDING THE ${task.prod.kind.toUpperCase()}S`);
         else if (task.act === 'mill') this.think('GRINDING WHEAT INTO GRAIN');
+        else if (task.act === 'hatch') this.think('SETTING A CLUTCH TO HATCH');
         else if (task.act === 'harvest') this.think(`MY ${task.crop.type.toUpperCase()} IS READY!`);
         else if (task.act === 'clear') this.think('CLEARING OUT THE DEAD ONES');
         else if (task.act === 'water') this.think('WATER FOR THE THIRSTY ONES');
@@ -8701,7 +8782,7 @@ export class Farmer {
     }
 
     #completeWork() {
-        const w = this.world, s = this.sheet;
+        const w = this.world;
         const { task, plot, helping } = this.action;
         this.action = null;
         this.#spendEnergy(ACTION_ENERGY[task.act] || 0.05);
@@ -8721,24 +8802,34 @@ export class Farmer {
                 break;
             }
             case 'clear': w.crops.delete(`${task.crop.i},${task.crop.j}`); w.set(task.crop.i, task.crop.j, T.TILLED); break;
-            case 'tend': {   // #99 feeding CONSUMES the feed good from the tender's stash (cow/sheep: grass)
+            case 'tend': {   // #99 feeding CONSUMES the feed good from the OWNER's stash (cow/sheep: grass) — #101 not the helper's
                 const p = task.prod;
                 if (p) {
                     const fg = FEED_GOOD[p.kind];
                     if (!fg) { p.fed = 1; }                                   // grazers feed themselves
-                    else { const s = this.sheet, have = (s.goods && s.goods[fg]) || 0;
-                        if (have > 0) { s.goods[fg] = have - 1; p.fed = 1; } }   // else: no feed on hand, stays hungry
+                    else { const os = owner.sheet, have = (os.goods && os.goods[fg]) || 0;
+                        if (have > 0) { os.goods[fg] = have - 1; p.fed = 1; } }   // else: no feed on hand, stays hungry
                 }
                 this.gainXP(1);
                 break;
             }
             case 'collect': this.#doCollect(task.prod, owner, helping); break;
             case 'harvest': this.#doHarvest(task.crop, owner, helping); break;
-            case 'mill': {   // #99b grind a batch of wheat into grain (chicken/fish feed)
-                if (this.#wheatOnHand() >= MILL_WHEAT_IN) {
-                    this.#spendWheat(MILL_WHEAT_IN);
-                    s.goods = s.goods || {}; s.goods.grain = (s.goods.grain || 0) + MILL_GRAIN_OUT;
+            case 'mill': {   // #99b grind a batch of the OWNER's wheat into the OWNER's grain (chicken/fish feed) — #101
+                if (this.#wheatOnHand(owner) >= MILL_WHEAT_IN) {
+                    this.#spendWheat(MILL_WHEAT_IN, owner);
+                    const os = owner.sheet; os.goods = os.goods || {}; os.goods.grain = (os.goods.grain || 0) + MILL_GRAIN_OUT;
                     this.say(`+${MILL_GRAIN_OUT} grain`, '#e8c860'); this.gainXP(2);
+                }
+                break;
+            }
+            case 'hatch': {   // #100 set a clutch of the OWNER's eggs incubating in the hatch house — #101
+                const fac = task.fac, need = HATCH_EGGS_PER_CHICK * HATCH_CLUTCH, os = owner.sheet;
+                if (fac && !fac.clutch && (os.goods && os.goods.egg || 0) >= need) {
+                    os.goods.egg -= need;
+                    fac.clutch = { chicks: HATCH_CLUTCH, dueDay: w.day + HATCH_DAYS };
+                    this.say('CLUTCH SET', '#e8c860'); this.gainXP(2);
+                    w.addChronicle('build', `${shortName(this)} set a clutch of eggs in the hatch house.`, this, null, '#eef0f4', { tier: 'callout', tone: 'triumph' });
                 }
                 break;
             }

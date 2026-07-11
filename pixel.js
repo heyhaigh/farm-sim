@@ -934,6 +934,23 @@ export function makeMill() {
     return c;
 }
 
+// #100 the Hatch House — a warm little brooder hut with a straw nest + eggs showing in the doorway
+export function makeHatchery() {
+    const [c, ctx] = makeCanvas(24, 22);
+    ctx.fillStyle = '#c8a24a'; ctx.fillRect(4, 10, 16, 12);        // warm plank body
+    ctx.fillStyle = '#b0883a'; ctx.fillRect(4, 19, 16, 3);        // base course
+    ctx.fillStyle = '#7a5a34'; for (let i = 6; i < 20; i += 4) ctx.fillRect(i, 10, 1, 12);   // planks
+    ctx.fillStyle = '#3a2e24'; ctx.fillRect(9, 13, 6, 9);         // doorway (nest opening)
+    ctx.fillStyle = '#8a6a3c'; ctx.fillRect(9, 20, 6, 2);         // straw sill
+    // eggs in the nest
+    ctx.fillStyle = '#f2ead6'; ctx.fillRect(10, 18, 2, 2); ctx.fillRect(12, 17, 2, 3);
+    ctx.fillStyle = '#fffdf6'; ctx.fillRect(10, 18, 1, 1); ctx.fillRect(12, 17, 1, 1);   // egg highlights
+    ctx.fillStyle = '#8a4a3a';                                    // warm roof
+    for (let i = 0; i < 6; i++) ctx.fillRect(2 + i * 2, 10 - i, 20 - i * 4, 2);
+    ctx.fillStyle = '#e0a848'; ctx.fillRect(17, 6, 2, 4);        // little warming chimney
+    return c;
+}
+
 export function makeTrough() {
     const [c, ctx] = makeCanvas(12, 6);
     ctx.fillStyle = '#8a6844';

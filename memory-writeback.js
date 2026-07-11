@@ -12,8 +12,20 @@ const ENDPOINT = '/api/memory-writeback';
 const TIMEOUT_MS = 20000;
 const RETRY_COOLDOWN_MS = 5 * 60 * 1000;
 
+// #101 writeback THROTTLE (cost + fan-out control): a farmer's life is only worth persisting once it has
+// actually accumulated something (a formed belief or a few real memories) — this stops a fresh-town boot
+// from ingesting 16 near-empty day-one snapshots at once. And even when many lives mature together, at most
+// MAX_PER_PASS are written per pass so writeback trickles out over successive ticks instead of a 16-way burst.
+const MIN_EPISODIC_TO_PERSIST = 3;
+const MAX_PER_PASS = 4;
+function worthPersisting(life) {
+    return (life.beliefs?.length || 0) >= 1 || (life.episodic?.length || 0) >= MIN_EPISODIC_TO_PERSIST;
+}
+
 let inflight = false;
 let lastFailAt = -Infinity;
+const writeAttemptGen = new Map();   // #101 seed -> pass# this life was last SUBMITTED (fair round-robin scheduler, off-sim)
+let writeGen = 0;
 
 // #94 P3: the town's evolving civic record is persisted separately from the one-shot farmer lives, because
 // it KEEPS CHANGING (each election adds a term) long after every farmer has been written once. Re-posts
@@ -92,8 +104,23 @@ export async function persistLives(world, isCurrent = () => true) {
     if (typeof fetch !== 'function' || inflight) return 0;
     if (Date.now() - lastFailAt < RETRY_COOLDOWN_MS) return 0;
     const pending = [];
-    for (const f of world.farmers) { const sig = lifeSig(f); if (sig !== f.sheet.lifeSig) pending.push({ f, sig }); }
+    for (const f of world.farmers) {
+        const sig = lifeSig(f);
+        if (sig === f.sheet.lifeSig) continue;          // unchanged since last write — skip
+        if (!worthPersisting(lifeOf(f))) continue;      // #101 still a thin day-one life — don't spend on it yet
+        pending.push({ f, sig });
+    }
     if (!pending.length) return 0;
+    // #101 FAIRNESS: submit the LEAST-RECENTLY-SUBMITTED lives first, then trickle at most MAX_PER_PASS. A fixed
+    // prefix would let a few always-changing farmers (0-3) hold the cap every pass and starve farmer 4+ out of the
+    // portal forever; round-robin by attempt-generation guarantees every pending life gets its turn. Off-sim, so
+    // ordering needn't be deterministic — the seed tiebreak just keeps it stable.
+    pending.sort((a, b) =>
+        (writeAttemptGen.get(a.f.sheet.seed) ?? -1) - (writeAttemptGen.get(b.f.sheet.seed) ?? -1)
+        || a.f.sheet.seed - b.f.sheet.seed);
+    if (pending.length > MAX_PER_PASS) pending.length = MAX_PER_PASS;
+    writeGen++;
+    for (const p of pending) writeAttemptGen.set(p.f.sheet.seed, writeGen);   // mark this turn taken (even if the store is down)
 
     inflight = true;
     const controller = new AbortController();

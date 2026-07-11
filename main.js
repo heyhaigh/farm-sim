@@ -7,7 +7,7 @@ import {
     TILE_W, TILE_H, makeCanvas, drawText, textWidth,
     makeFarmerSprites, makeCropSprites, makeHouse, makeWell, makeBoard, makeFencePost,
     makeScaffold, makeToolshed, makeWindmill, makeTower, makeLantern,
-    makeLilyPad, makeFish, makeChicken, makeCow, makePig, makeGoat, makeSheep, makeCoop, makeBarn, makeMill, makeTrough,
+    makeLilyPad, makeFish, makeChicken, makeCow, makePig, makeGoat, makeSheep, makeCoop, makeBarn, makeMill, makeHatchery, makeTrough,
     makeTree, makeStump, makeWildWheat, makeWildFlowers,
     fillDiamond, strokeDiamond,
 } from './pixel.js';
@@ -248,6 +248,7 @@ const structSprites = {
 const coopSprite = makeCoop();
 const barnSprite = makeBarn();
 const millSprite = makeMill();
+const hatchSprite = makeHatchery();
 const troughSprite = makeTrough();
 const stumpSprite = makeStump();
 const wheatSprite = makeWildWheat();
@@ -1154,7 +1155,7 @@ function bakeChunk(cx, cy) {
             // (T.HOUSE keeps its grass colour here.)
             // winter freezes the pond to pale, two-tone ice (vs deep liquid blue the rest of the year)
             if (t === T.WATER) col = winter ? ((i + j) % 2 ? '#aecad8' : '#a0bccc') : ((i + j) % 2 ? '#2a5a72' : '#26506a');
-            if (t === T.COOP || t === T.BARN || t === T.MILL) col = "#6a5a44";
+            if (t === T.COOP || t === T.BARN || t === T.MILL || t === T.HATCH) col = "#6a5a44";
             fillDiamond(bctx, sx, sy, col);
 
             if (t === T.WATER) {
@@ -1708,7 +1709,7 @@ function collectDrawables() {
             if (fac.struct) {
                 const b = fac.struct;
                 const bx = cam.x + isoX(b.i + 0.5, b.j + 0.5), by = cam.y + isoY(b.i + 0.5, b.j + 0.5);
-                const spr = b.kind === 'barn' ? barnSprite : b.kind === 'mill' ? millSprite : coopSprite;
+                const spr = b.kind === 'barn' ? barnSprite : b.kind === 'mill' ? millSprite : b.kind === 'hatchery' ? hatchSprite : coopSprite;
                 list.push({ y: by + TILE_H, draw: () => ctx.drawImage(spr, Math.floor(bx - spr.width / 2), Math.floor(by + TILE_H - spr.height)) });
             }
             if (fac.trough) {
@@ -2247,7 +2248,7 @@ function rebuildMiniBase(ci, cj) {
                     : t === T.TREE ? (seasonIdx === 3 ? '#4a5a52' : '#2f5a30')
                     : t === T.ROCK ? '#6a6f78'
                     : t === T.TILLED ? '#5e4830'
-                    : (t === T.HOUSE || t === T.COOP || t === T.BARN || t === T.MILL || t === T.STRUCT || t === T.WELL) ? "#8a8070"
+                    : (t === T.HOUSE || t === T.COOP || t === T.BARN || t === T.MILL || t === T.HATCH || t === T.STRUCT || t === T.WELL) ? "#8a8070"
                     : seasonIdx === 3 ? '#8fa0ac' : '#3d5a33';   // open ground (snowy in winter)
             }
             miniCtx.fillStyle = col;
@@ -3943,7 +3944,7 @@ function drawChronicle() {
         } else if (it.type === 'entry') {
             if (vis) {
                 if (it.first) { ctx.fillStyle = it.e.color; ctx.fillRect(IX + 1, y + 2, 2, 2); }
-                drawText(ctx, it.line, IX + 7, y, it.first ? it.e.color : '#aab0be');
+                drawText(ctx, it.line, IX + 7, y, it.e.color);   // wrapped lines keep the beat's own colour (not dimmed)
                 if (it.first) chronRows.push({ e: it.e, y0: y, y1: y + H_LINE, farmerSeed: it.e.whoSeed });
                 else if (chronRows.length) chronRows[chronRows.length - 1].y1 = y + H_LINE;
             }
@@ -4739,8 +4740,13 @@ function drawBootScreen(t) {
 
     // the town also saves itself whenever the tab hides or closes (the rollover autosave's backstop)
     const saveOnHide = () => { if (booted && world) saveTown(world); };
-    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') saveOnHide(); });
+    const syncTabHidden = () => { if (world) world._tabHidden = document.hidden; };   // #101 sim reads this to pause the LLM chat
+    document.addEventListener('visibilitychange', () => {
+        syncTabHidden();
+        if (document.visibilityState === 'hidden') saveOnHide();
+    });
     window.addEventListener('pagehide', saveOnHide);
+    syncTabHidden();
 
     // center camera on the well
     cam.x = GW / 2 - isoX(world.well.i, world.well.j);
@@ -4757,6 +4763,7 @@ function drawBootScreen(t) {
     // whose stories only reach composer-generation at the next dawn (older saves migrating)
     // and any later arrivals. Display-only, save-carried, fails silent to procedural text.
     const tryEnrich = async () => {
+        if (document.hidden) return;   // #101 a backgrounded/forgotten tab must NOT feed SuperMemory or the LLM
         const w = world;
         if (await enrichStories(w, () => world === w)) saveTown(w);
     };
@@ -4767,12 +4774,18 @@ function drawBootScreen(t) {
     // self-hosted SuperMemory. Off the sim loop, best-effort, save-carried stamp. Slower cadence than
     // enrichment so a life is captured with a little history (beliefs form over days); no-ops offline.
     const tryPersist = async () => {
-        const w = world;
+        if (document.hidden) return;   // #101 STALE-TAB GUARD: no memory writeback while the tab is hidden — this
+        const w = world;               // is the loop that fed SuperMemory's paid gpt-5.1 extraction from a backgrounded tab
+        // #101 the tab can be hidden (or the town replaced) DURING any await below, so every later paid op rechecks —
+        // guarding only at the top let three writeback/enrich calls still fire after the tab went to the background.
+        const stillActive = () => !document.hidden && world === w;
         if (await persistLives(w, () => world === w)) saveTown(w);
+        if (!stillActive()) return;
         // #94 P3: also persist the town's evolving civic record (re-posts only when it changes)
         persistTownHistory(w, () => world === w);
         // #97 P5: name each new invention (LLM flavour -> display shadow) + persist the town's book of inventions
         if (await enrichInventions(w, () => world === w)) saveTown(w);
+        if (!stillActive()) return;
         persistTownInventions(w, () => world === w);
     };
     setTimeout(tryPersist, 20000);
