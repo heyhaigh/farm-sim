@@ -21,10 +21,11 @@ const SEEDS = [20260706, 42, 7, 3];
 // Baseline digests at HEAD (LLM + SuperMemory off, 30-day run). Update deliberately when a sim change
 // legitimately re-baselines; a DRIFT here on an unrelated change is a determinism regression to investigate.
 const BASELINE = {
-    20260706: '19d53747',
-    42: 'bc8b8504',
-    7: '2b9d51b5',
-    3: '2ce57075',
+    // re-baselined 2026-07-11 when the snapshot gained creeds+beliefs (reconciliation Slice 0); same-twice held.
+    20260706: 'ba358e06',
+    42: '5e868c14',
+    7: '55efd73b',
+    3: 'da9f09e4',
 };
 
 function boot(seed) {
@@ -62,6 +63,11 @@ function digest(seed) {
             seed: f.sheet.seed, xp: f.sheet.xp, lvl: f.sheet.level,
             inv: (f.sheet.recipes || []).slice().sort(), belief: f.sheet.rareBelief || {},
             goods: f.sheet.goods || {}, produce: f.sheet.produce || 0, i: f.pos.i, j: f.pos.j,
+            // #reconciliation Slice 0: creed authority (weight) + earned-belief strength are the state the
+            // creed-overwrite mechanic mutates — they MUST be in the fingerprint or a regression self-compares
+            // clean. Kept in natural (deterministic) order so an ordering bug is caught too, not hidden.
+            creeds: (f.creeds || []).map(c => [c.theme, c.weight]),
+            beliefs: (f.sheet.beliefs || []).map(b => [b.tag, b.strength || 0]),
         })),
     };
     return fnv(JSON.stringify(snap));
