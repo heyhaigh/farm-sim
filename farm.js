@@ -1905,7 +1905,7 @@ export class World {
         const reason = this.#claimReason(f);
         f.say(reason, '#7dd069'); f.think(reason); f.sparkle = 1.5;
         this.addLog(`${f.sheet.name} staked a homestead — "${reason.toLowerCase()}"`, '#7dd069');
-        this.addChronicle('found', `${f.sheet.name.split(' ')[0]} staked a homestead — ${reason.toLowerCase()}.`, f, null, '#7dd069');
+        this.addChronicle('found', `${f.sheet.name.split(' ')[0]} staked a homestead — ${reason.toLowerCase()}.`, f, null, '#eef0f4');
     }
     // Why did this settler pick THIS ground? Read the nearby resources + nearest neighbour + their
     // nature, and voice the most salient reason. This is the settlement decision made LEGIBLE.
@@ -6589,7 +6589,7 @@ export class Farmer {
             s.xp -= need; s.level++;
             const up = ['str', 'dex', 'con', 'int', 'wis', 'cha'][Math.floor(this.rand() * 6)];
             s.stats[up] = Math.min(20, s.stats[up] + 1);
-            this.world.addLog(`${s.name} reached LV ${s.level}! +1 ${up.toUpperCase()}`, '#7dd069');
+            this.world.addChronicle('level', `${s.name.split(' ')[0]} reached level ${s.level} - +1 ${up.toUpperCase()}.`, this, null, '#8ad0a0');
             this.sparkle = 2.5; this.say('LEVEL UP!', '#7dd069');
             need = xpForLevel(s.level);
         }

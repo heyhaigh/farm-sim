@@ -2248,7 +2248,7 @@ function rebuildMiniBase(ci, cj) {
 }
 function drawMinimap() {
     MINIMAP.x = GW - MINIMAP.w - 5;
-    MINIMAP.y = GH - 22 - MINIMAP.h - 5;
+    MINIMAP.y = GH - MINIMAP.h - 5;   // sits near the bottom edge now the log bar is gone
     const { x: mx, y: my, w: mw, h: mh } = MINIMAP;
     const { ci, cj } = minimapWindow();
     const t2m = (i, j) => [mx + ((i - ci) / MINI_SPAN + 0.5) * mw, my + ((j - cj) / MINI_SPAN + 0.5) * mh];
@@ -2291,7 +2291,7 @@ function drawMinimap() {
     for (const p of world.plots) { if (p.built.level < 1) continue; const [px, py] = t2m(p.house.i, p.house.j); ctx.fillRect(Math.floor(px), Math.floor(py), 2, 2); }
 
     // current viewport (the on-screen diamond)
-    const corners = [screenToTile(0, 18), screenToTile(GW, 18), screenToTile(GW, GH - 22), screenToTile(0, GH - 22)];
+    const corners = [screenToTile(0, 18), screenToTile(GW, 18), screenToTile(GW, GH), screenToTile(0, GH)];
     ctx.strokeStyle = 'rgba(255,255,255,0.18)';
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -2614,17 +2614,7 @@ function drawUI() {
     }
 
 
-    // bottom log
-    ctx.fillStyle = 'rgba(12,14,22,0.92)';
-    ctx.fillRect(0, GH - 22, GW, 22);
-    ctx.fillStyle = '#20242f';
-    ctx.fillRect(0, GH - 23, GW, 1);
-    const logs = world.log.slice(-2);
-    logs.forEach((l, i) => {
-        let text = l.text.toUpperCase();
-        if (text.length > 96) text = text.slice(0, 96);
-        drawText(ctx, text, 4, GH - 19 + i * 8, l.color);
-    });
+    // (bottom log bar removed — the Moments/callout banners + the chronicle now carry the beats it duplicated)
 
     if (rosterOpen) drawRoster();
     else if (chronOpen) drawChronicle();
@@ -2638,7 +2628,7 @@ function drawUI() {
 function drawSettings() {
     const PW = Math.min(GW - 24, 240), PH = 148;
     const PX = Math.floor((GW - PW) / 2), PY = Math.floor((GH - PH) / 2) - 6;
-    ctx.fillStyle = 'rgba(6,7,11,0.72)'; ctx.fillRect(0, 18, GW, GH - 40);
+    ctx.fillStyle = 'rgba(6,7,11,0.72)'; ctx.fillRect(0, 18, GW, GH - 18);
     uiPanel(PX, PY, PW, PH);
     drawText(ctx, 'SETTINGS', PX + 7, PY + 5, '#c8ccd8', 1);
     drawText(ctx, 'X', PX + PW - 10, PY + 5, '#c8ccd8');
@@ -3326,7 +3316,7 @@ function drawRoster() {
 
     // dim the world behind
     ctx.fillStyle = 'rgba(6,7,11,0.72)';
-    ctx.fillRect(0, 18, GW, GH - 40);
+    ctx.fillRect(0, 18, GW, GH - 18);
 
     // panel — shared wood frame (matches the Board + character sheet)
     uiPanel(PX, PY, PW, PH);
@@ -3826,7 +3816,7 @@ function drawChronicle() {
 
     // dim behind, then the shared wood frame (matches the Board + character sheet)
     ctx.fillStyle = 'rgba(6,7,11,0.72)';
-    ctx.fillRect(0, 18, GW, GH - 40);
+    ctx.fillRect(0, 18, GW, GH - 18);
     uiPanel(PX, PY, PW, PH);
 
     // header — the panel title reflects the active tab (NEWS can narrow to one Ry's saga)
@@ -4116,7 +4106,7 @@ function drawMoments() {
     const accent = e.tone === 'somber' ? '#7a9ade' : e.tone === 'neutral' ? '#9ad0e0' : '#f0d060';
 
     ctx.save();
-    ctx.globalAlpha = fade * 0.62; ctx.fillStyle = '#04050a'; ctx.fillRect(0, 18, GW, GH - 40);   // dim the world
+    ctx.globalAlpha = fade * 0.62; ctx.fillStyle = '#04050a'; ctx.fillRect(0, 18, GW, GH - 18);   // dim the world
     ctx.globalAlpha = fade;
 
     const PW = Math.round(224 * pop), PH = Math.round(104 * pop);
@@ -4651,9 +4641,8 @@ function frame(now) {
     // a quiet indicator while the camera is trailing someone (F, or the sheet's crosshair, toggles it)
     if (followMode && followTarget && world.farmers.includes(followTarget) && !rosterOpen && !chronOpen && !boardOpen) {
         const lbl = `FOLLOWING ${followTarget.sheet.name.split(' ')[0].toUpperCase()} - F TO STOP`;
-        // sit the plate ABOVE the bottom log bar (top of bar = GH-22) with the same 3px gap the
-        // detail card leaves, so the banner reads as a floating element, not part of the bar
-        const tw = textWidth(lbl), bx = Math.floor((GW - tw) / 2), boxTop = GH - 36, cy = GH - 31;
+        // sit the plate near the bottom edge (the log bar is gone) as a floating element
+        const tw = textWidth(lbl), bx = Math.floor((GW - tw) / 2), boxTop = GH - 16, cy = GH - 11;
         const pad = 12, bxL = bx - pad, bxW = tw + pad * 2;
         ctx.fillStyle = 'rgba(12,14,22,0.82)';   // legibility: dark plate behind the label (like the bars)
         ctx.fillRect(bxL, boxTop, bxW, 11);
