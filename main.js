@@ -53,6 +53,19 @@ resize();
 let world = null;
 let memories = [];
 let memorySource = 'offline';
+// Honest memory-source copy: the town is grown from REAL SuperMemory docs only when a store was reachable;
+// otherwise it's the invented fallback crew, and the UI must SAY so rather than claim SuperMemory (Fable
+// finding). 'offline' is the transient pre-load state during the boot static.
+function memoryTagline() {
+    return memorySource === 'invented' ? 'GROWN FROM IMAGINED LIVES'
+        : memorySource === 'offline' ? 'TUNING IN'
+        : 'GROWN FROM SUPERMEMORY';
+}
+function memoryCaption() {
+    return memorySource === 'invented'
+        ? 'INVENTED LIVES - NO SUPERMEMORY CONNECTED YET.'
+        : 'EVERY FARMER\'S MEMORIES, LIVE FROM SUPERMEMORY.';
+}
 const usedMemoryIds = new Set();
 let selected = null;
 let bootTime = 0;
@@ -2662,7 +2675,7 @@ function drawSettings() {
     const mlabel = 'VIEW THE TOWN\'S MEMORY';
     drawText(ctx, mlabel, mb.x + Math.floor((mb.w - textWidth(mlabel)) / 2), mb.y + 4, '#d8b8ee');
     settingsHits.portalBtn = mb;
-    drawText(ctx, 'EVERY FARMER\'S MEMORIES, LIVE FROM SUPERMEMORY.', IX, PY + 82, '#5a5f6c');
+    drawText(ctx, memoryCaption(), IX, PY + 82, '#5a5f6c');
 
     ctx.fillStyle = '#20242f'; ctx.fillRect(PX + 4, PY + 92, PW - 8, 1);
 
@@ -4549,7 +4562,8 @@ function drawBootScreen(t) {
         ctx.fillStyle = 'rgba(10,12,18,0.88)';
         ctx.fillRect(0, 0, GW, GH);
         drawText(ctx, 'RY FARMS', GW / 2 - textWidth('RY FARMS', 3) / 2, 110, '#7dd069', 3);
-        drawText(ctx, 'GROWN FROM SUPERMEMORY', GW / 2 - textWidth('GROWN FROM SUPERMEMORY') / 2, 140, '#9aa0b4');
+        const tagline = memoryTagline();
+        drawText(ctx, tagline, GW / 2 - textWidth(tagline) / 2, 140, '#9aa0b4');
         const dots = '.'.repeat(1 + (Math.floor(t * 3) % 3));
         drawText(ctx, `TUNING CHANNEL${dots}`, GW / 2 - textWidth('TUNING CHANNEL...') / 2, 158, '#6a9ade');
     }
