@@ -63,9 +63,24 @@ With either a key or a base URL configured, three out-of-band channels wake
   farmer's in-character REACTION to the verdict the sim decided (`conscience.js`
   is the client side). Offline it falls back to a keyword classifier + templates.
 
-`RY_FARMS_LLM_MODEL` can override the model. Both channels are display-text
-only and fall back to the procedural versions on any failure, so the seeded
-sim stays deterministic with or without them.
+`RY_FARMS_LLM_MODEL` can override the model. Both channels — and the in-town
+conversation LLM — are **display-text only**: they decorate the words on screen
+but never draw sim RNG or write sim state, so the seeded sim is byte-identical
+with or without them (the LLM decorates, it never decides).
+
+## Verifying determinism
+
+Determinism is the project's #1 invariant: same seed ⇒ the same town, twice.
+It's checked by a committed headless harness (sim only, LLM + SuperMemory off):
+
+```
+node tests/determinism.mjs
+```
+
+It boots the founder cast, ticks 30 days, and hashes farmer + world state across
+two runs of each seed. `same-twice=false` is a P0 bug. The harness also pins
+baseline digests; a legitimate sim change re-baselines them (update the constant),
+but the same-twice property must always hold.
 
 ## How a farmer is made
 
