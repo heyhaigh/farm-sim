@@ -22,7 +22,7 @@ const FOREST_BORDER = 5;   // keep trees this many tiles off the map edge
 const ISO_HALF_W = 10;     // mirrors TILE_W / 2 without importing renderer code
 const ISO_HALF_H = 5;      // mirrors TILE_H / 2 without importing renderer code
 
-export const T = { GRASS: 0, PATH: 1, TILLED: 2, HOUSE: 3, WELL: 4, SIGN: 5, STRUCT: 6, WATER: 7, COOP: 8, BARN: 9, TREE: 10, STUMP: 11, WHEAT: 12, FLOWER: 13, ROCK: 14 };
+export const T = { GRASS: 0, PATH: 1, TILLED: 2, HOUSE: 3, WELL: 4, SIGN: 5, STRUCT: 6, WATER: 7, COOP: 8, BARN: 9, TREE: 10, STUMP: 11, WHEAT: 12, FLOWER: 13, ROCK: 14, MILL: 15 };
 export const FORAGE_TILES = [T.WHEAT, T.FLOWER];
 export const FORAGE_NAME = { [T.WHEAT]: 'wild grass', [T.FLOWER]: 'wild bush' };
 
@@ -260,7 +260,7 @@ const TOWN_MAX_LEVEL = 10;                       // the town is "built out" here
 // and facility produce (eggs/milk/wool/truffles/fish/lilies) are worth more than raw wood/forage
 // since they take a built facility to yield. Unknown goods fall back to DONATE_XP_DEFAULT.
 const DONATE_XP = { wood: 2, ore: 3, crops: 1, egg: 3, milk: 3, fish: 3, lily: 2, truffle: 4, wool: 4,
-                    grass: 1, flower: 1,
+                    grass: 1, flower: 1, grain: 2,
                     'meat-s': 3, 'meat-m': 5, 'meat-l': 7, fowl: 4 };   // meat is prized
 const DONATE_XP_DEFAULT = 2;
 const DONATE_BATCH = 15;                          // how much surplus a farmer carries to the silo per trip
@@ -341,7 +341,7 @@ export const PROD = {
 // #99 Livestock feeding from the INVENTORY: a hungry producer must be fed the RIGHT good, drawn from the
 // tending farmer's stash. Cow/sheep eat foraged GRASS; chicken/fish eat milled GRAIN (from a Mill; see #99b).
 // Kinds not listed feed themselves off the land (pig/goat forage, lily pads photosynthesise, the rooster struts).
-const FEED_GOOD = { cow: 'grass', sheep: 'grass' };   // chicken/fish -> 'grain' added with the Mill (#99b)
+const FEED_GOOD = { cow: 'grass', sheep: 'grass', chicken: 'grain', fish: 'grain' };   // grain is milled from wheat at a Mill (#99b)
 
 // plot cell-set key (plots are tile-sets so they can grow into non-rectangular shapes)
 export function pkey(i, j) { return i + ',' + j; }
@@ -410,7 +410,13 @@ const FACILITY_DEFS = {
     coop: { label: 'chicken coop', w: 3, h: 3, produce: 'eggs' },
     pen:  { label: 'livestock pen', w: 3, h: 3, produce: 'milk' },
     sheeppen: { label: 'sheep pen', w: 3, h: 3, produce: 'wool' },
+    mill: { label: 'mill', w: 3, h: 3, produce: null, workstation: true },   // #99b: grinds wheat -> grain (chicken/fish feed)
 };
+
+// #99b Milling: a Mill (3x3 workstation) grinds harvested WHEAT into GRAIN — the feed chickens + fish eat.
+// One milling run costs energy and takes ~a tipi build-step of time (see 'mill' action), and converts:
+const MILL_WHEAT_IN = 2;    // wheat consumed per run (from the miller's harvested crop stock)
+const MILL_GRAIN_OUT = 2;   // grain produced per run (the mill is raised for FACILITY_WOOD like any facility)
 
 // energy / health tuning
 const AWAKE_DRAIN = 0;        // no passive drain — merely being awake and farming never tires you;
@@ -434,7 +440,7 @@ const MEAT_GOODS = ['meat-s', 'meat-m', 'meat-l', 'fowl'];   // eaten smallest-f
 // Tending crops and animals is free — tilling a patch, sowing, watering, harvesting, collecting
 // eggs/milk, feeding. Only heavy construction (build) drains here; the rest is 0. Chopping,
 // mining, breaking stumps, fencing and raising scarecrows drain via the LABOR table below.
-const ACTION_ENERGY = { till: 0, plant: 0, water: 0.006, harvest: 0, clear: 0, build: 0.04, collect: 0, tend: 0 };
+const ACTION_ENERGY = { till: 0, plant: 0, water: 0.006, harvest: 0, clear: 0, build: 0.04, collect: 0, tend: 0, mill: 0.05 };   // #99b grinding costs energy
 // Clearing/building labor by effort: a shrub is quick and light, a tree is a long hard fell,
 // a stump is grubbing work (roots and all — just as heavy as the fell), a rock is the heaviest,
 // a fence post is medium. { time, energy }.
@@ -1432,7 +1438,7 @@ export class World {
     }
     blocked(i, j) {
         const t = this.get(i, j);
-        return t === T.HOUSE || t === T.WELL || t === T.SIGN || t === T.STRUCT || t === T.COOP || t === T.BARN || t === T.ROCK;
+        return t === T.HOUSE || t === T.WELL || t === T.SIGN || t === T.STRUCT || t === T.COOP || t === T.BARN || t === T.ROCK || t === T.MILL;
     }
 
     isNight() { return this.clock > DAY_LENGTH; }
@@ -3521,6 +3527,18 @@ export class World {
     buildNextFacility(farmer) {
         const plot = farmer.plot;
         const built = new Set(plot.facilities.map(f => f.type));
+        // #99b a farm with chickens/fish NEEDS a Mill to grind their grain feed — that need jumps the queue
+        // ahead of diversifying into another animal (no mill => the flock/pond slowly starves). Built when
+        // there's room; if not, the normal growth loop expands the plot and it lands on a later pass.
+        if (!built.has('mill') && plot.facilities.some(f => f.producers && f.producers.some(p => FEED_GOOD[p.kind] === 'grain'))) {
+            const region = this.#findFacilityRegion(plot, 'mill');
+            if (region) {
+                this.#buildFacility(plot, farmer.sheet, 'mill', region);
+                this.addLog(`${farmer.sheet.name} raised a MILL to grind feed!`, '#7dd069');
+                farmer.say('A MILL!', '#7dd069'); farmer.sparkle = 2;
+                return true;
+            }
+        }
         // candidate facilities: the farmer's unbuilt preferences their house tier + level already unlock
         const prefs = farmer.sheet.facilityPrefs || ['pond', 'coop', 'pen'];
         const candidates = prefs.filter(t => !built.has(t) && facilityUnlocked(t, plot.built.level, farmer.sheet.level));
@@ -3606,7 +3624,7 @@ export class World {
     // Solid obstacles farmers must walk AROUND (buildings, wells, rocks, the board).
     pathBlocked(i, j) {
         const t = this.get(i, j);
-        if (t === T.HOUSE || t === T.WELL || t === T.STRUCT || t === T.COOP || t === T.BARN || t === T.ROCK || t === T.WATER) return true;
+        if (t === T.HOUSE || t === T.WELL || t === T.STRUCT || t === T.COOP || t === T.BARN || t === T.ROCK || t === T.WATER || t === T.MILL) return true;
         if (this.board && this.board.i === i && this.board.j === j) return true;
         return false;
     }
@@ -3717,7 +3735,7 @@ export class World {
                     for (let i = x - 1; i <= x + def.w; i++) {
                         if (i >= x && i < x + def.w && j >= y && j < y + def.h) continue; // skip interior
                         const t = this.get(i, j);
-                        if (t === T.WATER || t === T.COOP || t === T.BARN || t === T.STRUCT || this.#inHouse(plot, i, j)) { ok = false; break; }
+                        if (t === T.WATER || t === T.COOP || t === T.BARN || t === T.MILL || t === T.STRUCT || this.#inHouse(plot, i, j)) { ok = false; break; }
                     }
                 }
                 if (ok) return { x, y, w: def.w, h: def.h };
@@ -3754,6 +3772,9 @@ export class World {
             const kind = type === 'sheeppen' ? 'sheep' : (sheet.penAnimal || 'cow');
             const n = 3 + Math.floor(rand() * 2);
             for (let k = 0; k < n; k++) fac.producers.push(this.#makeProducer(kind, cx + (rand() - 0.5) * region.w * 0.6, cy + (rand() - 0.5) * region.h * 0.6, region));
+        } else if (type === 'mill') {   // #99b a workstation, no producers — the miller stands at it to grind wheat
+            fac.struct = { i: region.x, j: region.y, kind: 'mill' };
+            this.set(region.x, region.y, T.MILL);
         }
         plot.facilities.push(fac);
         // A new build turns tiles solid — a barn under a fresh animal, or a pond carved under a
@@ -5606,7 +5627,7 @@ function deriveStance(f) {
     return 'unbothered';                                        // "thoughts don't till fields"
 }
 
-const ACTION_TIME = { till: 3.2, plant: 2.2, water: 1.6, harvest: 2.6, clear: 2.0 };
+const ACTION_TIME = { till: 3.2, plant: 2.2, water: 1.6, harvest: 2.6, clear: 2.0, mill: 5.5 };   // #99b milling is slow work (~a tipi build-step+)
 
 const IDLE_THOUGHTS = [
     'NICE DAY OUT HERE',
@@ -6697,8 +6718,8 @@ export class Farmer {
         for (const key of ['grass', 'flower']) push(key, g[key] || 0);
         // facility & wild-caught by-products, each its own tradable stack (fish/lily from ponds; eggs/milk/
         // wool/truffle from the coop/pen). Drawn with a procedural sprite resolved renderer-side.
-        const FACILITY_GOOD_NAME = { fish: 'Fish', lily: 'Lily pad', egg: 'Eggs', milk: 'Milk', wool: 'Wool', truffle: 'Truffle' };
-        for (const key of ['fish', 'lily', 'egg', 'milk', 'wool', 'truffle']) { const n = g[key] || 0; if (n > 0) out.push({ id: key, good: key, name: FACILITY_GOOD_NAME[key], count: n }); }
+        const FACILITY_GOOD_NAME = { fish: 'Fish', lily: 'Lily pad', egg: 'Eggs', milk: 'Milk', wool: 'Wool', truffle: 'Truffle', grain: 'Grain' };
+        for (const key of ['fish', 'lily', 'egg', 'milk', 'wool', 'truffle', 'grain']) { const n = g[key] || 0; if (n > 0) out.push({ id: key, good: key, name: FACILITY_GOOD_NAME[key], count: n }); }
         // hunted MEAT — prized barter good + HP restorative, drawn from the fantasy-icon sheet
         for (const key of MEAT_GOODS) { const n = g[key] || 0; if (n > 0) out.push({ id: key, good: key, name: MEAT_NAME[key], count: n }); }
         return out;
@@ -6739,6 +6760,24 @@ export class Farmer {
         const fg = FEED_GOOD[p.kind];
         return !fg || ((this.sheet.goods && this.sheet.goods[fg]) || 0) > 0;
     }
+    // #99b — harvested WHEAT the farmer holds (grown/found/stolen), and a way to spend it into the mill.
+    #wheatOnHand() { const w = this.sheet.cropStock && this.sheet.cropStock.wheat; return w ? (w.grown || 0) + (w.stolen || 0) + (w.found || 0) : 0; }
+    #spendWheat(n) {
+        const s = this.sheet; s.produce = Math.max(0, (s.produce || 0) - n);   // wheat leaves the spendable crop pool
+        const w = s.cropStock && s.cropStock.wheat; if (!w) return;
+        let left = n;
+        for (const src of ['grown', 'found', 'stolen']) { const take = Math.min(left, w[src] || 0); w[src] = (w[src] || 0) - take; left -= take; if (left <= 0) break; }
+    }
+    #ownMill(plot = this.plot) { return plot && plot.facilities.find(f => f.type === 'mill'); }
+    // A milling task: this plot has a mill, the tender holds wheat, grain is running low, and there are
+    // grain-eaters (chicken/fish) to feed. Grinds a batch of wheat into grain (deterministic, seeded elsewhere).
+    #millToWork(plot) {
+        const mill = this.#ownMill(plot); if (!mill) return null;
+        if ((this.sheet.goods && this.sheet.goods.grain || 0) >= 4) return null;   // enough grain in the larder
+        if (this.#wheatOnHand() < MILL_WHEAT_IN) return null;                       // no wheat to grind
+        const grainEater = plot.facilities.some(f => f.producers && f.producers.some(p => FEED_GOOD[p.kind] === 'grain'));
+        return grainEater ? mill : null;
+    }
 
     // The unified "what needs doing on this plot" — crops AND facilities.
     // urgentOnly=true skips the low-priority sow/till "fill" work so a farmer
@@ -6764,6 +6803,9 @@ export class Farmer {
         // otherwise it stays hungry until someone brings feed (the supply pressure the feeding rework adds)
         const hungry = skipFacilities ? null : this.#findProducer(p => p.fed < 0.35 && this.#hasFeedFor(p), plot);
         if (hungry) return { act: 'tend', prod: hungry };
+        // #99b keep GRAIN stocked: grind wheat at the mill when it's running low (with chickens/fish to feed)
+        const mill = skipFacilities ? null : this.#millToWork(plot);
+        if (mill) return { act: 'mill', fac: mill };
         if (urgentOnly) return null;
         // 4. sow + till (crop farms only) — lowest priority "fill" work. Frozen out in winter:
         //    the ground won't take seed, so farmers spend the season on livestock and other work.
@@ -8034,6 +8076,7 @@ export class Farmer {
     #thinkTask(task) {
         if (task.act === 'collect' && task.prod) this.think(`GATHERING ${(FACILITY_YIELD_NAME[task.prod.kind] || 'produce').toUpperCase()}!`);
         else if (task.act === 'tend' && task.prod) this.think(task.prod.kind === 'pad' ? 'TENDING THE LILIES' : `FEEDING THE ${task.prod.kind.toUpperCase()}S`);
+        else if (task.act === 'mill') this.think('GRINDING WHEAT INTO GRAIN');
         else if (task.act === 'harvest') this.think(`MY ${task.crop.type.toUpperCase()} IS READY!`);
         else if (task.act === 'clear') this.think('CLEARING OUT THE DEAD ONES');
         else if (task.act === 'water') this.think('WATER FOR THE THIRSTY ONES');
@@ -8617,7 +8660,8 @@ export class Farmer {
             return;
         }
         let ti, tj;
-        if (task.prod) { ti = task.prod.fx; tj = task.prod.fy; }
+        if (task.fac) { ti = task.fac.struct.i + 0.5; tj = task.fac.struct.j + 1.6; }   // #99b stand just below the mill
+        else if (task.prod) { ti = task.prod.fx; tj = task.prod.fy; }
         else if (task.crop) { ti = task.crop.i + 0.5; tj = task.crop.j + 0.5; }
         else { ti = task.field.i + 0.5; tj = task.field.j + 0.5; }
         // aquatic producers (fish, lily pads) sit ON pond water — a solid tile. Collect from the
@@ -8682,6 +8726,14 @@ export class Farmer {
             }
             case 'collect': this.#doCollect(task.prod, owner, helping); break;
             case 'harvest': this.#doHarvest(task.crop, owner, helping); break;
+            case 'mill': {   // #99b grind a batch of wheat into grain (chicken/fish feed)
+                if (this.#wheatOnHand() >= MILL_WHEAT_IN) {
+                    this.#spendWheat(MILL_WHEAT_IN);
+                    s.goods = s.goods || {}; s.goods.grain = (s.goods.grain || 0) + MILL_GRAIN_OUT;
+                    this.say(`+${MILL_GRAIN_OUT} grain`, '#e8c860'); this.gainXP(2);
+                }
+                break;
+            }
         }
         this.targetProd = null;
         if (helping && this.helpTask) { this.helpTask.didWork = true; this.helpTask.actionsLeft--; this.state = 'decide-help'; }

@@ -913,6 +913,27 @@ export function makeBarn() {
     return c;
 }
 
+// #99b the Mill — a stone grinding house with a big millstone wheel on its face (grinds wheat -> grain)
+export function makeMill() {
+    const [c, ctx] = makeCanvas(26, 26);
+    ctx.fillStyle = '#8a8378'; ctx.fillRect(4, 8, 18, 18);          // stone body
+    ctx.fillStyle = '#736c62'; ctx.fillRect(4, 22, 18, 4);         // shaded base course
+    ctx.fillStyle = '#5a544c';                                     // stone block seams
+    for (let j = 10; j < 24; j += 4) ctx.fillRect(4, j, 18, 1);
+    for (let i = 8; i < 22; i += 6) ctx.fillRect(i, 8, 1, 18);
+    ctx.fillStyle = '#3a342c'; ctx.fillRect(6, 16, 5, 10);         // doorway
+    ctx.fillStyle = '#4a4038'; ctx.fillStyle = '#6b4a2c'; ctx.fillRect(20, 6, 3, 3);   // roof vent
+    ctx.fillStyle = '#5a3a22';                                     // dark plank roof
+    for (let i = 0; i < 6; i++) ctx.fillRect(2 + i * 2, 8 - i, 22 - i * 4, 2);
+    // the millstone wheel on the face
+    ctx.fillStyle = '#c8c2b6'; ctx.beginPath(); ctx.arc(16, 17, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#9a948a'; ctx.beginPath(); ctx.arc(16, 17, 5, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = '#6a645a'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(11, 17); ctx.lineTo(21, 17); ctx.moveTo(16, 12); ctx.lineTo(16, 22); ctx.stroke();   // spokes
+    ctx.fillStyle = '#5a544c'; ctx.fillRect(15, 16, 2, 2);        // hub
+    return c;
+}
+
 export function makeTrough() {
     const [c, ctx] = makeCanvas(12, 6);
     ctx.fillStyle = '#8a6844';

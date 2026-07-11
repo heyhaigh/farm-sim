@@ -7,7 +7,7 @@ import {
     TILE_W, TILE_H, makeCanvas, drawText, textWidth,
     makeFarmerSprites, makeCropSprites, makeHouse, makeWell, makeBoard, makeFencePost,
     makeScaffold, makeToolshed, makeWindmill, makeTower, makeLantern,
-    makeLilyPad, makeFish, makeChicken, makeCow, makePig, makeGoat, makeSheep, makeCoop, makeBarn, makeTrough,
+    makeLilyPad, makeFish, makeChicken, makeCow, makePig, makeGoat, makeSheep, makeCoop, makeBarn, makeMill, makeTrough,
     makeTree, makeStump, makeWildWheat, makeWildFlowers,
     fillDiamond, strokeDiamond,
 } from './pixel.js';
@@ -246,6 +246,7 @@ const structSprites = {
 // facility sprites
 const coopSprite = makeCoop();
 const barnSprite = makeBarn();
+const millSprite = makeMill();
 const troughSprite = makeTrough();
 const stumpSprite = makeStump();
 const wheatSprite = makeWildWheat();
@@ -282,7 +283,14 @@ const makeTruffleIcon = () => makeGoodIcon(g => {                      // a knob
     g.fillStyle = '#584234'; g.fillRect(6, 7, 2, 2); g.fillRect(9, 9, 2, 2);   // knobs
     g.fillStyle = '#6f5443'; g.fillRect(7, 8, 1, 1); g.fillRect(10, 7, 1, 1);  // highlights
 });
-const GOOD_ICON = { fish: makeFish(0), lily: makeLilyPad(true), egg: makeEggIcon(), milk: makeMilkIcon(), wool: makeWoolIcon(), truffle: makeTruffleIcon() };
+const makeGrainIcon = () => makeGoodIcon(g => {                       // a tied sack spilling golden grain
+    g.fillStyle = '#c9a24a'; g.fillRect(4, 6, 8, 8); g.fillRect(5, 5, 6, 1);   // burlap sack body
+    g.fillStyle = '#b08a38'; g.fillRect(4, 12, 8, 2);                          // shaded base
+    g.fillStyle = '#8a6a28'; g.fillRect(6, 4, 4, 1); g.fillRect(7, 3, 2, 1);   // tied neck
+    g.fillStyle = '#f0d878'; g.fillRect(5, 7, 1, 1); g.fillRect(9, 8, 1, 1); g.fillRect(7, 6, 1, 1);  // grain highlights
+    g.fillStyle = '#e8c860'; g.fillRect(11, 12, 1, 1); g.fillRect(12, 13, 1, 1); g.fillRect(10, 13, 1, 1);  // spilled grain
+});
+const GOOD_ICON = { fish: makeFish(0), lily: makeLilyPad(true), egg: makeEggIcon(), milk: makeMilkIcon(), wool: makeWoolIcon(), truffle: makeTruffleIcon(), grain: makeGrainIcon() };
 
 // A dedicated CARROT inventory icon: its procedural CROP sprite is a leafy green bundle that reads as
 // wheat, so for the inventory we hold up an unmistakable orange root with a green top instead.
@@ -1145,7 +1153,7 @@ function bakeChunk(cx, cy) {
             // (T.HOUSE keeps its grass colour here.)
             // winter freezes the pond to pale, two-tone ice (vs deep liquid blue the rest of the year)
             if (t === T.WATER) col = winter ? ((i + j) % 2 ? '#aecad8' : '#a0bccc') : ((i + j) % 2 ? '#2a5a72' : '#26506a');
-            if (t === T.COOP || t === T.BARN) col = '#6a5a44';
+            if (t === T.COOP || t === T.BARN || t === T.MILL) col = "#6a5a44";
             fillDiamond(bctx, sx, sy, col);
 
             if (t === T.WATER) {
@@ -1699,7 +1707,7 @@ function collectDrawables() {
             if (fac.struct) {
                 const b = fac.struct;
                 const bx = cam.x + isoX(b.i + 0.5, b.j + 0.5), by = cam.y + isoY(b.i + 0.5, b.j + 0.5);
-                const spr = b.kind === 'barn' ? barnSprite : coopSprite;
+                const spr = b.kind === 'barn' ? barnSprite : b.kind === 'mill' ? millSprite : coopSprite;
                 list.push({ y: by + TILE_H, draw: () => ctx.drawImage(spr, Math.floor(bx - spr.width / 2), Math.floor(by + TILE_H - spr.height)) });
             }
             if (fac.trough) {
@@ -2238,7 +2246,7 @@ function rebuildMiniBase(ci, cj) {
                     : t === T.TREE ? (seasonIdx === 3 ? '#4a5a52' : '#2f5a30')
                     : t === T.ROCK ? '#6a6f78'
                     : t === T.TILLED ? '#5e4830'
-                    : (t === T.HOUSE || t === T.COOP || t === T.BARN || t === T.STRUCT || t === T.WELL) ? '#8a8070'
+                    : (t === T.HOUSE || t === T.COOP || t === T.BARN || t === T.MILL || t === T.STRUCT || t === T.WELL) ? "#8a8070"
                     : seasonIdx === 3 ? '#8fa0ac' : '#3d5a33';   // open ground (snowy in winter)
             }
             miniCtx.fillStyle = col;
