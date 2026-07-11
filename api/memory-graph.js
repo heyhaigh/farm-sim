@@ -38,23 +38,23 @@ module.exports = async function handler(req, res) {
     // /v4/search is SEMANTIC + query-ranked (no list-all endpoint), so a single query can't reliably pull
     // BOTH the farmer lives AND the one town-history doc — the civic record ranks below the farmer corpus.
     // Run two targeted searches: one for the lives, a small dedicated one for the town's political record.
-    const search = async (q, limit) => {
+    const search = async (q, limit, filters) => {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), DEADLINE_MS);
         try {
-            const r = await fetch(`${base}/v4/search`, { method: 'POST', headers, signal: controller.signal,
-                body: JSON.stringify({ q, limit, containerTag: 'ry-farms' }) });
+            const body = { q, limit, containerTag: 'ry-farms' };
+            if (filters) body.filters = filters;   // /v4/search honours metadata AND-filters (kind, townSeed)
+            const r = await fetch(`${base}/v4/search`, { method: 'POST', headers, signal: controller.signal, body: JSON.stringify(body) });
             if (!r.ok) throw new Error(`search ${r.status}`);
             return await r.json();
         } finally { clearTimeout(timer); }
     };
-    let data, civicData, inventData;
+    // First pull the farmer corpus; the civic + invention records are fetched AFTER we know the active town
+    // (below), scoped to it by townSeed — otherwise an older town's docs can crowd the active town's single
+    // civic/invention doc out of a hard-capped, semantically-ranked result set and blank the hub.
+    let data;
     try {
-        [data, civicData, inventData] = await Promise.all([
-            search('farmer creed belief memory dream town', 100),
-            search('the town civic record - manager watch voted in out elected recalled served', 24),
-            search('the town book of inventions recipes crafted brewed charm poultice tonic', 24),
-        ]);
+        data = await search('farmer creed belief memory dream town', 100);
     } catch (e) {
         return send(res, 200, { farmers: [], links: [], source: 'offline', error: e?.message || 'supermemory unreachable' });
     }
@@ -96,6 +96,20 @@ module.exports = async function handler(req, res) {
         if (when > bestWhen || (when === bestWhen && (activeTown == null || ts > activeTown))) { bestWhen = when; activeTown = ts; }
     }
     const inActiveTown = (m) => activeTown == null || String(m.townSeed ?? '') === activeTown;
+
+    // Now fetch the active town's civic record + inventions SPECIFICALLY, filtered by townSeed so ranking
+    // truncation can't blank them. (Falls back to an unfiltered search when there's no active town, e.g. a
+    // store with civic docs but no farmer-life rows.) A failed sub-search degrades to empty, never 500s.
+    const townFilter = (kind) => activeTown != null
+        ? { AND: [{ key: 'kind', value: kind }, { key: 'townSeed', value: activeTown }] }
+        : { AND: [{ key: 'kind', value: kind }] };
+    let civicData = { results: [] }, inventData = { results: [] };
+    try {
+        [civicData, inventData] = await Promise.all([
+            search('the town civic record - manager watch voted in out elected recalled served', 24, townFilter('town-history')).catch(() => ({ results: [] })),
+            search('the town book of inventions recipes crafted brewed charm poultice tonic', 24, townFilter('town-inventions')).catch(() => ({ results: [] })),
+        ]);
+    } catch { civicData = { results: [] }; inventData = { results: [] }; }
 
     // group the distilled memories by farmer, WITHIN the chosen town. The TOWN-HISTORY doc (#94 P3 — the
     // civic record) has no farmer name, so it's pulled aside into its own node rather than dropped.

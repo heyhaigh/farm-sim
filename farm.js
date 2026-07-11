@@ -8685,7 +8685,9 @@ export class Farmer {
         // generic crops `produce` scalar. These are distinct barter/donate goods (see producedGoods/DONATE_XP)
         // and must show up in the inventory as themselves, not vanish into the crop stockpile.
         if (yieldN > 0) { ownerSheet.goods = ownerSheet.goods || {}; ownerSheet.goods[name] = (ownerSheet.goods[name] || 0) + yieldN; }
-        w.payHarvestShares(helping && owner ? owner : this, yieldN);
+        // NOTE: no payHarvestShares here. A share deal is "1 CROP per N harvests" (help dig my well for a cut
+        // of my crops, #coopRecruit) — it's paid in crops from #doHarvest. Advancing it on a facility yield
+        // would consume a share tick the farmer can only settle in crops, falsely defaulting the deal.
         if (yieldN > 0 && !check.crit) this.say(`+${yieldN} ${name}`);
         p.ready = false; p.prod = 0;
         this.gainXP(2 + yieldN);
