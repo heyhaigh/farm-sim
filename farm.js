@@ -125,6 +125,24 @@ export const INGREDIENT_ESSENCE = {
     emberbloom: { warmth: 3, potency: 1, rare: 1 },
 };
 const INGREDIENT_FALLBACK = { vitality: 1 };   // any edible good we don't know still carries a little life
+// #97 P3+ FOLK ASSOCIATIONS — what farmers BELIEVE an ingredient is good for (from its look/taste/where it
+// grows), NOT the hidden essence table. Deliberately loose: it only roughly rhymes with the real effects, so
+// a "healing" folk-mix sometimes yields a refresh or nothing — which is what makes it real trial-and-error.
+const FOLK_ASSOC = {
+    heal:    ['grass', 'herb', 'berry', 'crops'],        // "these soothe and mend"
+    warm:    ['emberbloom', 'root', 'meat', 'mushroom'], // "these warm the bones"
+    grow:    ['flower', 'root', 'crops', 'grass'],       // "these coax the fields"
+    refresh: ['berry', 'flower', 'herb'],                // "these pick you up"
+};
+// #97 P3+ — how a farmer narrates the FOLK STRATEGY behind an experiment (see #folkCombo dispatcher), so
+// their approach reads as character in the discovery beat rather than a uniform "trying something new".
+const STRATEGY_MUSE = {
+    refine:  'IF I SWAP ONE THING IN A RECIPE I KNOW...',
+    need:    'WE COULD USE A REMEDY — LET ME TRY...',
+    staple:  'JUST WORKING WITH WHAT I HAVE PLENTY OF...',
+    novelty: 'WHAT IF I TRIED SOMETHING NOBODY HAS...',
+    reach:   'IF THIS WORKS IT\'LL BE THE TALK OF THE TOWN...',
+};
 // which existing gameplay EFFECT a dominant essence yields (so a discovery plugs into the craft/consume path)
 const ESSENCE_EFFECT = {
     vitality: 'mendhp', hearty: 'refresh', growth: 'growboost', potency: 'workboost',
@@ -614,6 +632,7 @@ export class World {
         this.suspicion = {};   // #97 Slice 4: the Watch's slow-building trail on unsolved crimes (seed -> score)
         this.recipes = {};     // #97 P3: the town's generatively-discovered recipes (canonical key -> record)
         this.tales = [];       // #97 P4: the town's founding myths of rare ingredients, grown from its founders' memories
+        this.superstition = null;  // #97 P3+: a seeded per-town crafting superstition (a 'lucky' ingredient, maybe a 'shunned' pairing)
         this.recipeFlavor = {};// #97 P5: DISPLAY shadow store — LLM name+lore per recipe key. EXCLUDED from the sim
                                //         digest (LLM-on ≡ LLM-off); the procedural name is the canonical one.
         this.board = null;    // no bulletin board until the town builds one together (first communal project)
@@ -1555,7 +1574,19 @@ export class World {
         // town rerolls the cast's inner lives.
         this.#ensureDreams();
         this.#seedTales();     // #97 P4: the town's founding myths of rare ingredients, grown from its memories
+        this.#seedSuperstition();  // #97 P3+: a seeded crafting superstition gives each town its own folk culture
         this.#updateCivic();   // #94: seat the first Town Manager + post day-one directive
+    }
+
+    // #97 P3+ — a seeded crafting SUPERSTITION per town: a 'lucky' ingredient folk favour, and sometimes a
+    // 'shunned' one they avoid ("mushrooms are lucky in Crookreach"). Pure flavour bias on discovery, seeded
+    // from the world (never touches the essence table), giving each town its own folk crafting culture.
+    #seedSuperstition() {
+        const goods = Object.keys(INGREDIENT_ESSENCE).filter(g => !['crystal', 'relic', 'emberbloom'].includes(g));
+        const r = mulberry32((this.seed ^ 0x5c0f2a) >>> 0);
+        const lucky = goods[Math.floor(r() * goods.length)];
+        const shun = r() < 0.5 ? goods.filter(g => g !== lucky)[Math.floor(r() * (goods.length - 1))] : null;
+        this.superstition = { lucky, shun };
     }
 
     // #97 P4 — the town's founding MYTHS: each grown from a founder's own remembered life, each pointing at a
@@ -2206,6 +2237,7 @@ export class World {
             suspicion: { ...this.suspicion },
             recipes: Object.fromEntries(Object.entries(this.recipes).map(([k, v]) => [k, { ...v }])),   // #97 P3 registry
             tales: this.tales.map(t => ({ ...t, lexemes: [...(t.lexemes || [])] })),   // #97 P4 frozen myths
+            superstition: this.superstition ? { ...this.superstition } : null,   // #97 P3+ folk culture
             recipeFlavor: { ...this.recipeFlavor },   // #97 P5 display shadow (never in the sim digest)
 
             tiles: this.tiles.slice(),
@@ -2315,6 +2347,7 @@ export class World {
         this.suspicion = d.suspicion ? { ...d.suspicion } : {};
         this.recipes = d.recipes ? Object.fromEntries(Object.entries(d.recipes).map(([k, v]) => [k, { ...v }])) : {};
         this.tales = Array.isArray(d.tales) ? d.tales.map(t => ({ ...t, lexemes: [...(t.lexemes || [])] })) : [];
+        this.superstition = d.superstition ? { ...d.superstition } : null;
         this.recipeFlavor = d.recipeFlavor ? { ...d.recipeFlavor } : {};
 
         this.tiles.set(d.tiles);
@@ -6035,14 +6068,15 @@ export class Farmer {
 
         const larder = this.#larder();
         if (larder.length < 2) { this.think('NOTHING TO TINKER WITH YET.'); return; }
-        const combo = this.#folkCombo(larder, roll);        // folk pick: most-held + any rare, small amounts
+        const combo = this.#folkCombo(larder, roll);        // folk pick: strategy-driven (see #folkCombo)
+        const approach = STRATEGY_MUSE[this._craftStrategy] || 'WHAT IF I TRIED SOMETHING NEW...';
         const sig = comboSig(combo);
         if ((s.triedCombos || []).includes(sig)) { this.gainXP(1); this.think("I'VE TRIED THAT MIX BEFORE..."); return; }
         const inv = deriveInvention(combo);
         this.#consumeCombo(combo);                           // production cost — every experiment spends real stock
         if (!inv || w.recipeKnownByTown(inv.id) || this.knowsRecipe(inv.id)) {   // incoherent OR already known -> failed
             this.#rememberTried(sig); s.dryStreak = (s.dryStreak || 0) + 1; this.gainXP(1);
-            this.think(inv ? 'THE SAME AS SOMETHING WE ALREADY KNOW.' : 'THAT DIDN\'T COHERE. HMM.');
+            this.think(inv ? 'THE SAME AS SOMETHING WE ALREADY KNOW.' : approach);
             return;
         }
         // DISCOVERY — a novel, useful item crystallises. Register it, credit + spread, reopen the search.
@@ -6065,19 +6099,91 @@ export class Farmer {
         out.sort((a, b) => b.have - a.have || (a.good < b.good ? -1 : 1));
         return out;
     }
-    // pick 2-3 ingredients, favouring what they hold most and any rare find they're itching to try — small
-    // amounts (rares used sparingly). A seeded weighted draw; no reference to what the mix will MAKE.
+    // #97 P3+ FOLK HEURISTICS — how a farmer REASONS about what to combine, from observable things only
+    // (what they hold, what they've seen work, what's needed, the town's superstition) — never the hidden
+    // essence table. A dispatcher: a methodical hand refines a known recipe; otherwise a personality/situation
+    // -driven STRATEGY weights their larder its own way, so invention reads as character, not a uniform roll.
     #folkCombo(larder, roll) {
-        const RARE = new Set(['crystal', 'relic', 'emberbloom']);
-        const pool = larder.map(x => ({ good: x.good, have: x.have, w: Math.min(4, x.have) + (RARE.has(x.good) ? 3 : 0) + 0.5 }));
-        const draw = () => { let total = 0; for (const x of pool) total += x.w; let acc = roll() * total;
-            for (let k = 0; k < pool.length; k++) { acc -= pool[k].w; if (acc <= 0) return pool.splice(k, 1)[0]; }
-            return pool.length ? pool.pop() : null; };
-        const n = pool.length >= 3 && roll() < 0.5 ? 3 : 2;
+        const RARE = new Set(['crystal', 'relic', 'emberbloom']), p = this.p, w = this.world;
+        // MEMORY: a diligent hand takes a recipe they already know and swaps ONE ingredient for a variant
+        if ((p.diligence > 0.55 || this.goal === 'master farmer') && roll() < 0.4) {
+            const variant = this.#refineKnown(larder, roll);
+            if (variant) { this._craftStrategy = 'refine'; return variant; }
+        }
+        const need = this.#currentNeed();                    // observable: sick nearby / winter / tired / drought
+        const success = this.#pastSuccessGoods();            // "that worked before" — goods from past discoveries
+        const sup = w.superstition || {};
+        const strat = this.#pickStrategy(roll, need);
+        this._craftStrategy = strat;
+        const weighted = larder.map(x => {
+            let ww = 0.5;
+            if (strat === 'staple') ww += Math.min(4, x.have);                                        // thrifty: hold most
+            else if (strat === 'novelty') ww += (RARE.has(x.good) ? 2 : 0) + (x.have <= 2 ? 1.5 : 0) + (['berry', 'mushroom', 'herb', 'root'].includes(x.good) ? 1 : 0);  // curious: foraged/rare/scarce
+            else if (strat === 'reach') ww += (RARE.has(x.good) ? 4 : 0) + Math.min(2, x.have);        // competitive: the impressive/rare
+            else if (strat === 'need' && need) ww += (FOLK_ASSOC[need].includes(x.good) ? 2.5 : 0) + Math.min(1, x.have);  // a remedy/warmer in mind
+            else ww += Math.min(3, x.have);
+            if (RARE.has(x.good) && strat !== 'reach' && strat !== 'novelty') ww += 1;                 // the itch to try a find
+            if (success.has(x.good)) ww += 1.2;                                                        // folk theory: it worked once
+            if (sup.lucky === x.good) ww += 1.5;                                                       // town superstition
+            if (sup.shun === x.good) ww *= 0.3;
+            return { good: x.good, have: x.have, w: Math.max(0.1, ww) };
+        });
+        const draw = () => { let total = 0; for (const x of weighted) total += x.w; let acc = roll() * total;
+            for (let k = 0; k < weighted.length; k++) { acc -= weighted[k].w; if (acc <= 0) return weighted.splice(k, 1)[0]; }
+            return weighted.length ? weighted.pop() : null; };
+        const n = weighted.length >= 3 && roll() < 0.5 ? 3 : 2;
         const combo = {};
-        for (let k = 0; k < n && pool.length; k++) { const x = draw(); if (!x) break;
+        for (let k = 0; k < n && weighted.length; k++) { const x = draw(); if (!x) break;
             combo[x.good] = RARE.has(x.good) ? 1 : 1 + Math.floor(roll() * Math.min(2, x.have)); }
         return combo;
+    }
+    // PERSONALITY: which folk strategy this farmer leans on today (a situational need sometimes takes over)
+    #pickStrategy(roll, need) {
+        const p = this.p;
+        if (need && roll() < 0.4 + p.collaboration * 0.2) return 'need';
+        const opts = [
+            ['staple', 0.5 + (1 - p.curiosity) * 0.6 + p.diligence * 0.3],
+            ['novelty', 0.4 + p.curiosity * 1.0 + (this.goal === 'seeker' ? 0.4 : 0)],
+            ['reach', 0.3 + p.competitiveness * 0.8],
+        ];
+        let total = 0; for (const o of opts) total += o[1]; let acc = roll() * total;
+        for (const o of opts) { acc -= o[1]; if (acc <= 0) return o[0]; }
+        return 'staple';
+    }
+    // SITUATION: the folk-need in the air right now — read off observable state, mapped to a FOLK_ASSOC key
+    #currentNeed() {
+        const w = this.world;
+        if (this.health === 'sick' || w.farmers.some(o => o !== this && o.health === 'sick' && Math.abs(o.pos.i - this.pos.i) + Math.abs(o.pos.j - this.pos.j) < 16)) return 'heal';
+        if (w.season === 3 || w.weather === 'blizzard') return 'warm';
+        if (this.energy < 0.4) return 'refresh';
+        if (w.weather === 'drought') return 'grow';
+        return null;
+    }
+    // MEMORY: goods that appeared in a recipe this farmer already knows — "these have worked before"
+    #pastSuccessGoods() {
+        const set = new Set();
+        for (const id of (this.sheet.recipes || [])) { const r = this.world.recipeById(id); if (r && r.inputs) for (const g in r.inputs) set.add(g); }
+        return set;
+    }
+    // MEMORY (refinement): take the most recent generative recipe they know and swap ONE ingredient for
+    // something else they hold — a directed, believable variation, only if they can afford it and it's valid.
+    #refineKnown(larder, roll) {
+        const s = this.sheet;
+        const gen = (s.recipes || []).filter(id => this.world.recipes && this.world.recipes[id]);
+        if (!gen.length) return null;
+        const base = this.world.recipes[gen[gen.length - 1]];
+        if (!base || !base.inputs) return null;
+        const inputs = { ...base.inputs }, goods = Object.keys(inputs).filter(g => inputs[g] > 0);
+        if (!goods.length) return null;
+        const drop = goods[Math.floor(roll() * goods.length)];
+        const held = larder.filter(x => x.good !== drop && !inputs[x.good]);   // a new ingredient they hold
+        if (!held.length) return null;
+        const add = held[Math.floor(roll() * held.length)].good;
+        delete inputs[drop]; inputs[add] = 1;
+        const kinds = Object.keys(inputs).filter(g => inputs[g] > 0);
+        if (kinds.length < 2) return null;
+        for (const g of kinds) { const have = g === 'crops' ? (s.produce || 0) : ((s.goods && s.goods[g]) || 0); if (have < inputs[g]) return null; }
+        return inputs;
     }
     #consumeCombo(combo) {
         const s = this.sheet;
