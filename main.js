@@ -3978,12 +3978,13 @@ function drawDayRecap() {
     if (age < 0 || age > RECAP_MS) return;
     const alpha = Math.min(1, age / 220) * Math.min(1, (RECAP_MS - age) / 600);
 
-    // pick the most notable beats (priority desc, then chronological), wrap to card width
+    // pick the most notable beats — GRAND spotlight beats float to the top, then priority, then chronological
     const beats = [...r.beats].map((b, i) => ({ b, i }))
-        .sort((a, z) => (RECAP_PRI[z.b.kind] || 0) - (RECAP_PRI[a.b.kind] || 0) || a.i - z.i)
+        .sort((a, z) => ((z.b.tier === 'grand' ? 100 : 0) - (a.b.tier === 'grand' ? 100 : 0))
+            || (RECAP_PRI[z.b.kind] || 0) - (RECAP_PRI[a.b.kind] || 0) || a.i - z.i)
         .slice(0, 4).map(o => o.b);
     const lines = [];
-    for (const b of beats) for (const ln of wrapText(b.text, 44).slice(0, 2)) lines.push({ t: ln, c: b.color });
+    for (const b of beats) { const wr = wrapText(b.text, 44).slice(0, 2); wr.forEach((ln, k) => lines.push({ t: ln, c: b.color, grand: b.tier === 'grand' && k === 0 })); }
 
     const PW = 214, PX = Math.floor((GW - PW) / 2), PY = 20;
     const headH = 22, PH = headH + lines.length * 8 + 12;
@@ -4007,7 +4008,11 @@ function drawDayRecap() {
 
     let y = PY + headH + 2;
     if (!lines.length) { drawText(ctx, 'A QUIET DAY IN THE VALLEY.', PX + 8, y, '#6a6f7c'); }
-    else for (const ln of lines) { ctx.fillStyle = ln.c; ctx.fillRect(PX + 6, y + 2, 2, 2); drawText(ctx, ln.t, PX + 11, y, ln.c); y += 8; }
+    else for (const ln of lines) {
+        if (ln.grand) { drawText(ctx, '*', PX + 5, y - 1, '#f0d060'); }   // a star marks a spotlight-worthy beat
+        else { ctx.fillStyle = ln.c; ctx.fillRect(PX + 6, y + 2, 2, 2); }
+        drawText(ctx, ln.t, PX + 11, y, ln.grand ? '#f4ead0' : ln.c); y += 8;
+    }
     ctx.restore();
 }
 
@@ -4036,7 +4041,41 @@ function scanMoments() {
     // new entries are appended, so the unseen ones form a contiguous tail — scan back until a seen one
     const fresh = [];
     for (let i = ch.length - 1; i >= 0; i--) { const e = ch[i]; if (seenMoments.has(e)) break; seenMoments.add(e); fresh.push(e); }
-    for (let i = fresh.length - 1; i >= 0; i--) { const e = fresh[i]; if (e.tier === 'grand') momentQueue.push(e); }
+    for (let i = fresh.length - 1; i >= 0; i--) {
+        const e = fresh[i];
+        if (e.tier === 'grand') momentQueue.push(e);
+        else if (e.tier === 'callout') calloutQueue.push(e);   // shown one-at-a-time by drawCallouts
+    }
+    if (calloutQueue.length > 6) calloutQueue.splice(0, calloutQueue.length - 6);   // drop the stale backlog
+}
+
+// callout tier — a SINGLE lighter toast at a time (never a stack): show the front of the queue briefly,
+// then move to the next. Short-lived by design so beats flash past rather than piling up.
+const calloutQueue = [];      // chronicle entries waiting to flash
+let activeCallout = null;     // { e, shownAt }
+let CALLOUT_MS = 1900;        // short: appears and vanishes quickly (let, so RYFARMS.calloutMs() can hold for QA)
+function drawCallouts() {
+    const nowMs = performance.now();
+    if (activeCallout && nowMs - activeCallout.shownAt > CALLOUT_MS) activeCallout = null;
+    if (!activeCallout && calloutQueue.length) {
+        activeCallout = { e: calloutQueue.shift(), shownAt: nowMs };
+        try { audio.moment('neutral'); } catch { /* not ready */ }
+    }
+    if (!activeCallout) return;
+    const y = (RECAP_CARD.w ? RECAP_CARD.y + RECAP_CARD.h + 4 : 22);
+    {
+        const c = activeCallout;
+        const age = nowMs - c.shownAt;
+        const fade = Math.min(1, age / 140) * Math.min(1, (CALLOUT_MS - age) / 420);
+        const accent = c.e.tone === 'somber' ? '#7a9ade' : c.e.tone === 'triumph' ? '#f0d060' : '#9ad0e0';
+        const txt = c.e.text.toUpperCase();
+        const w = Math.min(GW - 16, textWidth(txt) + 14), x = Math.floor((GW - w) / 2);
+        ctx.save(); ctx.globalAlpha = fade;
+        ctx.fillStyle = 'rgba(12,14,22,0.92)'; ctx.fillRect(x, y, w, 12);
+        ctx.fillStyle = accent; ctx.fillRect(x, y, 2, 12);
+        drawText(ctx, txt.slice(0, Math.floor((w - 10) / 4)), x + 6, y + 3, '#dfe4ee');
+        ctx.restore();
+    }
 }
 
 function drawGem(kind, cx, cy, r, tone) {
@@ -4067,6 +4106,7 @@ function drawMoments() {
         try { audio.moment(e.tone || 'triumph'); } catch { /* audio not ready */ }
     }
     MOMENTS_HIT.w = 0;
+    drawCallouts();               // non-blocking toasts (a grand modal, if active, draws over them below)
     if (!activeMoment) return;
     const age = nowMs - activeMoment.shownAt;
     if (age > MOMENT_MS) { activeMoment = null; return; }
@@ -4784,6 +4824,8 @@ function drawBootScreen(t) {
         speed: (mult) => { world._speedMult = mult; },
         // #98 fire a test Moment: RYFARMS.moment() spotlights farmer 0 finding a star-crystal (with its memory why)
         momentMs: (ms) => { MOMENT_MS = ms; },   // hold a Moment open for QA/screenshots
+        calloutMs: (ms) => { CALLOUT_MS = ms; },  // hold callout toasts open for QA
+        callout: (txt = 'Rover invented the Emberwarm Poultice.', tone = 'triumph') => world.addChronicle('discovery', txt, world.farmers[0], null, '#ffd24a', { tier: 'callout', tone }),
         moment: (i = 0, kind = 'crystal') => { const f = world.farmers[i]; if (!f) return; world.addChronicle('find',
             `${f.sheet.name.split(' ')[0]} found a ${RARE_NAME[kind] || kind} in the deep wilds.`, f, null, '#8fd8ff',
             { tier: 'grand', tone: 'triumph', why: world.whyRareFind(f, kind), icon: 'rare:' + kind }); },

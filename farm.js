@@ -2174,7 +2174,7 @@ export class World {
         // the moment a working acquaintance becomes a real friendship, note it (once per pair)
         if (v >= 4 && !this._chronBonds.has(key)) {
             this._chronBonds.add(key);
-            this.addChronicle('bond', `${a.sheet.name.split(' ')[0]} and ${b.sheet.name.split(' ')[0]} have grown close.`, a, b, '#7dd069');
+            this.addChronicle('bond', `${a.sheet.name.split(' ')[0]} and ${b.sheet.name.split(' ')[0]} have grown close.`, a, b, '#7dd069', { tier: 'callout', tone: 'triumph' });
         }
     }
     bondCount(f) {
@@ -6158,7 +6158,7 @@ export class Farmer {
         this.gainXP(6); this.sparkle = 2; this.say('AHA!', '#ffd24a');
         this.remember('event', `Worked out the ${inv.name} — ${comboDesc(combo)}`, null, 1.1);
         this.think(`I MADE SOMETHING NEW — THE ${inv.name.toUpperCase()}!`);
-        w.addChronicle('discovery', `${shortName(this)} invented the ${inv.name} (${comboDesc(combo)}).`, this, null, '#ffd24a');
+        w.addChronicle('discovery', `${shortName(this)} invented the ${inv.name} (${comboDesc(combo)}).`, this, null, '#ffd24a', { tier: 'callout', tone: 'triumph' });
         w.addLog(`${s.name} invented the ${inv.name} after much trial and error`, '#ffd24a');
     }
     // the OBSERVABLE larder — crafting ingredients the farmer holds, sorted stably (most-held first, then name)
@@ -8779,7 +8779,7 @@ export class Farmer {
             const witness = w.farmers.find(o => o !== this && o.health !== 'sick' && o.p.honesty > 0.55 &&
                 Math.abs(o.pos.i - pos.i) + Math.abs(o.pos.j - pos.j) < 6);
             if (witness) {
-                witness.say('HEY! THIEF!', '#c05840'); this.say('uh oh', '#e0a03c'); this.adjustReputation(-0.12); w.addBond(this, witness, -1); witness.adjustOpinion(this, -0.25, 'caught them thieving'); w.addLog(`${witness.sheet.name} caught ${s.name} stealing ${name}!`, '#c05840'); w.addChronicle('crime', `${witness.sheet.name.split(' ')[0]} caught ${s.name.split(' ')[0]} stealing ${name}.`, this, witness, '#c05840');
+                witness.say('HEY! THIEF!', '#c05840'); this.say('uh oh', '#e0a03c'); this.adjustReputation(-0.12); w.addBond(this, witness, -1); witness.adjustOpinion(this, -0.25, 'caught them thieving'); w.addLog(`${witness.sheet.name} caught ${s.name} stealing ${name}!`, '#c05840'); w.addChronicle('crime', `${witness.sheet.name.split(' ')[0]} caught ${s.name.split(' ')[0]} stealing ${name}.`, this, witness, '#c05840', { tier: 'callout', tone: 'somber' });
                 // #87 — WORD TRAVELS: everyone else within earshot of the shout also sours on the thief
                 // and files the rumor away, so a public theft costs standing town-wide, not just with the pair.
                 for (const o of w.farmers) {
