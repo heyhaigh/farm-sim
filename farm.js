@@ -953,7 +953,8 @@ export class World {
         farmer.remember('event', hadTale
             ? `Held a ${RARE_NAME[node.kind]} at last, out past the fog — the old tales were true`
             : `Found a ${RARE_NAME[node.kind]} — I'd never heard its like. What else waits out there?`, null, 1.5);
-        this.addChronicle('find', `${shortName(farmer)} found a ${RARE_NAME[node.kind]} in the deep wilds.`, farmer, null, RARE_COLOR[node.kind]);
+        this.addChronicle('find', `${shortName(farmer)} found a ${RARE_NAME[node.kind]} in the deep wilds.`, farmer, null, RARE_COLOR[node.kind],
+            { tier: 'grand', tone: 'triumph', why: this.whyRareFind(farmer, node.kind), icon: 'rare:' + node.kind });
         return node.kind;
     }
     #tickRareNodes() {   // release a stale claim if the seeker gave up
@@ -1473,14 +1474,32 @@ export class World {
     // Record a lasting story beat in the chronicle. kind groups the beat (found/build/town/peril/
     // bond/rift/find); who/other are the farmer(s) it belongs to, so the panel can thread each
     // farmer's personal saga. Stamped with in-sim day/season/year only — fully deterministic.
-    addChronicle(kind, text, who = null, other = null, color = '#c8ccd8') {
+    // meta (optional, DISPLAY-ONLY — never in the determinism digest): { tier:'grand'|'callout',
+    // tone:'triumph'|'somber'|'neutral', why:string|null (the compiled memory behind the beat), icon:string|null }.
+    // The Moments layer (main.js) reads it to spotlight the profound events; regular entries omit it.
+    addChronicle(kind, text, who = null, other = null, color = '#c8ccd8', meta = null) {
         text = text.replace(/[—–]/g, '-');   // the bitmap font has no long dash — normalize to a hyphen
-        this.chronicle.push({
+        const e = {
             day: this.day, season: this.season, year: this.year, kind, text, color,
             whoSeed: who ? who.sheet.seed : null,
             otherSeed: other ? other.sheet.seed : null,
-        });
+        };
+        if (meta) { e.tier = meta.tier || null; e.tone = meta.tone || 'neutral'; e.why = meta.why || null; e.icon = meta.icon || null; }
+        this.chronicle.push(e);
         if (this.chronicle.length > 240) this.chronicle.shift();
+    }
+    // #98 Moments — the compiled MEMORY behind a profound beat, cited for the spotlight modal (the "why").
+    // Deterministic + read-only: pulls from state already compiled at founding (tales, dreams, creeds).
+    whyRareFind(farmer, kind) {
+        const tale = (this.tales || []).find(t => t.ingredient === kind);
+        if (tale && tale.originTitle) return `chasing the old tale of the ${RARE_NAME[kind] || kind}, grown from the memory "${String(tale.originTitle).replace(/\s+/g, ' ').trim().slice(0, 48)}"`;
+        return `drawn out past the fog by a half-believed tale of the ${RARE_NAME[kind] || kind}`;
+    }
+    whyOfDream(farmer) {
+        const d = farmer.sheet.dream;
+        const src = farmer.sheet.memory && farmer.sheet.memory.title;
+        if (d && src) return `living out their dream — ${d} — grown from the memory "${String(src).replace(/\s+/g, ' ').trim().slice(0, 44)}"`;
+        return d ? `living out their dream — ${d}` : null;
     }
 
     // The founding roster should have real texture. If the memory-grown personalities didn't

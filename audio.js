@@ -324,6 +324,30 @@ class FarmAudio {
         else this.#hammer(pan, Math.min(1, vol));
     }
 
+    // #98 Moments — a short musical STING for a profound beat. triumph = bright ascending arpeggio;
+    // somber = a low minor fall; neutral = a soft two-note chime. Called by the Moments layer (display-only).
+    moment(tone = 'triumph') {
+        if (!this.ctx || !this.enabled) return;
+        this.ensure();
+        const t0 = this.ctx.currentTime + 0.02;
+        // note sets (Hz). triumph rises through a major chord; somber falls a minor third; neutral a gentle 5th.
+        const notes = tone === 'somber' ? [[392.0, 0], [311.1, 0.16]]
+            : tone === 'neutral' ? [[587.3, 0], [880.0, 0.12]]
+            : [[523.3, 0], [659.3, 0.09], [784.0, 0.18], [1046.5, 0.27]];   // triumph: C5 E5 G5 C6
+        const wave = tone === 'somber' ? 'sine' : 'triangle';
+        const peak = tone === 'somber' ? 0.16 : 0.14;
+        for (const [f, off] of notes) {
+            const t = t0 + off;
+            const o = this.ctx.createOscillator(); o.type = wave; o.frequency.value = f;
+            const g = this.ctx.createGain();
+            g.gain.setValueAtTime(0.0001, t);
+            g.gain.linearRampToValueAtTime(peak, t + 0.02);
+            g.gain.exponentialRampToValueAtTime(0.0001, t + (tone === 'somber' ? 0.7 : 0.42));
+            o.connect(g); g.connect(this.sfxBus);
+            o.start(t); o.stop(t + 0.9);
+        }
+    }
+
     #thunder() {
         const t = this.ctx.currentTime + 0.1 + Math.random() * 0.5;   // travel delay after the flash
         const src = this.ctx.createBufferSource();

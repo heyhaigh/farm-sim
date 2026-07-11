@@ -179,6 +179,7 @@ function cursorIsHot(worldTooltip) {
     for (const b of [ROSTER_BTN, CHRON_BTN, SND_BTN, SETTINGS_BTN, FWD_BTN, FF_BTN, SPEED1_BTN]) if (b.w && inRect(m, b)) return true;
     if (!BOARD_BTN.hidden && inRect(m, BOARD_BTN)) return true;
     if (RECAP_CARD.w && inRect(m, RECAP_CARD)) return true;
+    if (activeMoment && MOMENTS_HIT.w) return true;   // #98 a grand Moment is up — the whole screen is "click to continue"
     if (selected) {
         if (inRect(m, SHEET_CLOSE)) return true;
         if (inRect(m, SHEET_FOLLOW)) return true;
@@ -4010,6 +4011,107 @@ function drawDayRecap() {
     ctx.restore();
 }
 
+// ---------------------------------------------------------------------------
+// #98 MOMENTS — the celebration/legibility layer. Watches the chronicle for the profound beats (entries
+// tagged tier:'grand') and spotlights them: a dim backdrop, a card that SHOWCASES the farmer + the thing
+// that happened + WHY (the compiled memory behind it), and a musical sting. Display-only: reads the sim's
+// event stream, never writes it. Same events model as the recap (which slices the chronicle by day).
+// ---------------------------------------------------------------------------
+const seenMoments = new WeakSet();
+let momentsPrimed = false;
+const momentQueue = [];               // pending grand moments (FIFO)
+let activeMoment = null;              // { e, shownAt }
+let MOMENT_MS = 4600;   // grand spotlight duration (let, so RYFARMS.momentMs() can hold it open for QA)
+const RARE_GEM = { crystal: '#8fd8ff', relic: '#f0d060', emberbloom: '#ff7a4a' };
+const MOMENT_LABEL = { find: 'OUT PAST THE FOG', discovery: 'A DISCOVERY', town: 'THE TOWN DECIDES',
+    project: 'THE TOWN BUILDS', dream: 'A DREAM FULFILLED', rift: 'A HARD DAY', season: 'THE SEASON TURNS' };
+const MOMENTS_HIT = { x: 0, y: 0, w: 0, h: 0 };
+
+function scanMoments() {
+    const ch = world.chronicle;
+    if (!momentsPrimed) {   // on load, mark existing history seen so only NEW beats spotlight (no backlog flood)
+        for (const e of ch) seenMoments.add(e);
+        momentsPrimed = true; return;
+    }
+    // new entries are appended, so the unseen ones form a contiguous tail — scan back until a seen one
+    const fresh = [];
+    for (let i = ch.length - 1; i >= 0; i--) { const e = ch[i]; if (seenMoments.has(e)) break; seenMoments.add(e); fresh.push(e); }
+    for (let i = fresh.length - 1; i >= 0; i--) { const e = fresh[i]; if (e.tier === 'grand') momentQueue.push(e); }
+}
+
+function drawGem(kind, cx, cy, r, tone) {
+    const col = RARE_GEM[kind] || '#e0c060';
+    ctx.save();
+    // soft glow
+    ctx.globalAlpha = 0.5; ctx.fillStyle = col;
+    ctx.beginPath(); ctx.arc(cx, cy, r * 1.7, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+    // faceted diamond
+    ctx.beginPath(); ctx.moveTo(cx, cy - r); ctx.lineTo(cx + r * 0.75, cy); ctx.lineTo(cx, cy + r); ctx.lineTo(cx - r * 0.75, cy); ctx.closePath();
+    ctx.fillStyle = col; ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';   // top-left highlight facet
+    ctx.beginPath(); ctx.moveTo(cx, cy - r); ctx.lineTo(cx - r * 0.75, cy); ctx.lineTo(cx, cy); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';          // bottom shade facet
+    ctx.beginPath(); ctx.moveTo(cx, cy + r); ctx.lineTo(cx + r * 0.75, cy); ctx.lineTo(cx, cy); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#ffffff'; ctx.fillRect(Math.round(cx - r * 0.3), Math.round(cy - r * 0.35), 1, 1);   // sparkle
+    ctx.restore();
+}
+
+function drawMoments() {
+    if (rosterOpen || chronOpen || boardOpen || settingsOpen) { scanMoments(); return; }   // don't fight a full modal
+    scanMoments();
+    const nowMs = performance.now();
+    if (!activeMoment && momentQueue.length) {
+        const e = momentQueue.shift();
+        activeMoment = { e, shownAt: nowMs };
+        try { audio.moment(e.tone || 'triumph'); } catch { /* audio not ready */ }
+    }
+    MOMENTS_HIT.w = 0;
+    if (!activeMoment) return;
+    const age = nowMs - activeMoment.shownAt;
+    if (age > MOMENT_MS) { activeMoment = null; return; }
+    const e = activeMoment.e;
+    const fade = Math.min(1, age / 260) * Math.min(1, (MOMENT_MS - age) / 520);
+    const pop = 0.86 + 0.14 * Math.min(1, age / 220);   // a small scale-in
+    const accent = e.tone === 'somber' ? '#7a9ade' : e.tone === 'neutral' ? '#9ad0e0' : '#f0d060';
+
+    ctx.save();
+    ctx.globalAlpha = fade * 0.62; ctx.fillStyle = '#04050a'; ctx.fillRect(0, 18, GW, GH - 40);   // dim the world
+    ctx.globalAlpha = fade;
+
+    const PW = Math.round(224 * pop), PH = Math.round(104 * pop);
+    const PX = Math.floor((GW - PW) / 2), PY = Math.floor((GH - PH) / 2) - 4;
+    MOMENTS_HIT.x = 0; MOMENTS_HIT.y = 0; MOMENTS_HIT.w = GW; MOMENTS_HIT.h = GH;   // click anywhere dismisses
+    ctx.fillStyle = 'rgba(12,14,22,0.97)'; ctx.fillRect(PX, PY, PW, PH);
+    ctx.fillStyle = accent; ctx.fillRect(PX, PY, PW, 1); ctx.fillRect(PX, PY + PH - 1, PW, 1); ctx.fillRect(PX, PY, 1, PH); ctx.fillRect(PX + PW - 1, PY, 1, PH);
+
+    // header label, centered
+    const label = MOMENT_LABEL[e.kind] || 'A MOMENT';
+    drawText(ctx, label, PX + Math.floor((PW - textWidth(label)) / 2), PY + 5, accent, 1);
+    ctx.fillStyle = '#2a2e3a'; ctx.fillRect(PX + 4, PY + 14, PW - 8, 1);
+
+    // the FARMER showcase (idle sprite, scaled) on the left, holding up the thing they found
+    const f = world.farmers.find(x => x.sheet.seed === e.whoSeed);
+    const spriteCX = PX + 34, spriteCY = PY + 58;
+    if (f) {
+        const spr = farmerSprites(f).idle;
+        const S = 2;
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(spr, Math.round(spriteCX - spr.width * S / 2), Math.round(spriteCY - spr.height * S / 2), spr.width * S, spr.height * S);
+    }
+    // the object: a rare gem for a find, held to the farmer's side
+    if (e.icon && e.icon.indexOf('rare:') === 0) drawGem(e.icon.slice(5), spriteCX + 22, spriteCY - 8, 6, e.tone);
+
+    // title (what happened) + the memory WHY
+    const tx = PX + 66, tw = Math.floor((PW - 66 - 8) / 4.2);
+    let ty = PY + 22;
+    for (const ln of wrapText(e.text.toUpperCase(), tw).slice(0, 3)) { drawText(ctx, ln, tx, ty, '#f4ead0'); ty += 8; }
+    if (e.why) { ty += 2; for (const ln of wrapText(e.why, tw).slice(0, 4)) { drawText(ctx, ln, tx, ty, '#9a86c0'); ty += 7; } }
+
+    drawText(ctx, 'CLICK TO CONTINUE', PX + PW - textWidth('CLICK TO CONTINUE') - 5, PY + PH - 8, '#5a5f6c');
+    ctx.restore();
+}
+
 // "PREVIOUSLY ON RY FARMS" — the returning player's catch-up card (#88): the last few
 // chronicle beats of the resumed town, held on screen until any click/key. This is also the
 // story-emergence instrument: if this card is ever boring, the sim has told us something.
@@ -4068,6 +4170,8 @@ out.addEventListener('pointerdown', (e) => {
     audio.ensure();   // browsers only allow audio to start on a user gesture
     const p = gamePoint(e);
     mouse.downX = p.x; mouse.downY = p.y;
+    // #98 a grand Moment spotlight eats the next click (dismiss it, don't fall through to world/pan)
+    if (activeMoment && MOMENTS_HIT.w) { activeMoment = null; mouse.panStart = null; return; }
     // settings volume sliders: press to grab, drag to set
     if (settingsOpen && settingsHits) {
         if (inRect(p, settingsHits.musicSlider)) { settingsDrag = 'music'; audio.setMusicVolume((p.x - settingsHits.musicSlider.x) / settingsHits.musicSlider.w); mouse.panStart = null; return; }
@@ -4493,6 +4597,7 @@ function frame(now) {
     drawUI();
     maybeAutosave();
     drawDayRecap();
+    drawMoments();   // #98: spotlight the profound beats on top of the recap/HUD (still under the CRT shader)
     // a quiet indicator while the camera is trailing someone (F, or the sheet's crosshair, toggles it)
     if (followMode && followTarget && world.farmers.includes(followTarget) && !rosterOpen && !chronOpen && !boardOpen) {
         const lbl = `FOLLOWING ${followTarget.sheet.name.split(' ')[0].toUpperCase()} - F TO STOP`;
@@ -4667,6 +4772,11 @@ function drawBootScreen(t) {
         world, cam, audio,
         select: (i) => { selected = world.farmers[i] || null; },
         speed: (mult) => { world._speedMult = mult; },
+        // #98 fire a test Moment: RYFARMS.moment() spotlights farmer 0 finding a star-crystal (with its memory why)
+        momentMs: (ms) => { MOMENT_MS = ms; },   // hold a Moment open for QA/screenshots
+        moment: (i = 0, kind = 'crystal') => { const f = world.farmers[i]; if (!f) return; world.addChronicle('find',
+            `${f.sheet.name.split(' ')[0]} found a ${RARE_NAME[kind] || kind} in the deep wilds.`, f, null, '#8fd8ff',
+            { tier: 'grand', tone: 'triumph', why: world.whyRareFind(f, kind), icon: 'rare:' + kind }); },
         animalRow: (n) => { ANIMAL_SIDE_ROW = n; },
         // deterministic stepping for reproducibility tests: N uniform FIXED_DT sim ticks
         runSteps: (n) => { for (let k = 0; k < n; k++) world.tick(FIXED_DT); },
