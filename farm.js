@@ -1596,10 +1596,17 @@ export class World {
     // Snapshotted ONCE at founding + frozen in the save, so a mutable corpus can never shift a town's myths.
     #seedTales() {
         const founders = [...this.farmers].sort((a, b) => a.sheet.seed - b.sheet.seed);
-        for (let k = 0; k < Math.min(3, founders.length); k++) {
+        const used = new Set();
+        for (let k = 0; k < Math.min(RARE_KINDS.length, founders.length); k++) {
             const f = founders[k], mem = f.sheet.memory || {};
-            const ingredient = RARE_KINDS[hashString('tale:' + f.sheet.seed) % RARE_KINDS.length];
-            if (this.tales.some(t => t.ingredient === ingredient)) continue;   // one tale per rare ingredient
+            // each founder PREFERS the rare kind their seed hashes to; if it's taken, deterministically probe
+            // to the next free kind (linear scan over the fixed RARE_KINDS order). With >=3 founders every
+            // rare ingredient gets exactly one founding tale — a collision no longer drops a whole kind.
+            let idx = hashString('tale:' + f.sheet.seed) % RARE_KINDS.length;
+            for (let step = 0; step < RARE_KINDS.length && used.has(RARE_KINDS[idx]); step++) idx = (idx + 1) % RARE_KINDS.length;
+            const ingredient = RARE_KINDS[idx];
+            if (used.has(ingredient)) continue;   // safety: more rare kinds than founders (can't happen with 3/8)
+            used.add(ingredient);
             const lex = (docLexicon(mem, f.sheet.seed) || []).slice(0, 4);     // frozen imagery from their doc
             this.tales.push({ ingredient, lexemes: lex, originSeed: f.sheet.seed, originTitle: mem.title || null });
             f.hearTale(ingredient, 0.4);                                       // its carrier believes a little more
@@ -6120,9 +6127,10 @@ export class Farmer {
         const combo = this.#folkCombo(larder, roll);        // folk pick: strategy-driven (see #folkCombo)
         const approach = STRATEGY_MUSE[this._craftStrategy] || 'WHAT IF I TRIED SOMETHING NEW...';
         const sig = comboSig(combo);
+        this.#consumeCombo(combo);                           // production cost — EVERY experiment spends real stock,
+                                                             // even a repeat of a mix they've tried before (conservation)
         if ((s.triedCombos || []).includes(sig)) { this.gainXP(1); this.think("I'VE TRIED THAT MIX BEFORE..."); return; }
         const inv = deriveInvention(combo);
-        this.#consumeCombo(combo);                           // production cost — every experiment spends real stock
         if (!inv || w.recipeKnownByTown(inv.id) || this.knowsRecipe(inv.id)) {   // incoherent OR already known -> failed
             this.#rememberTried(sig); s.dryStreak = (s.dryStreak || 0) + 1; this.gainXP(1);
             this.think(inv ? 'THE SAME AS SOMETHING WE ALREADY KNOW.' : approach);

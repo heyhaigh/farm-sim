@@ -80,13 +80,30 @@ module.exports = async function handler(req, res) {
     // merge the broad pass + every per-farmer slice into one row list; dedup is per-text below
     const allRows = (data.results || []).concat(...perName.map(r => (r && r.results) || []));
 
-    // group the distilled memories by farmer (newest town per name wins, so the graph is one town).
-    // the TOWN-HISTORY doc (#94 P3 — the civic record: who the town voted in/out, and why) has no farmer
-    // name, so it's pulled aside into its own node rather than dropped.
+    // Choose ONE town to render — the NEWEST (the active/current town). Farmer NAMES recur across `?fresh`
+    // boots, so grouping by name alone silently merges different towns' lives into one inflated node. Each
+    // stored doc carries its townSeed + an updatedAt; partition farmer-life rows by townSeed, and keep only
+    // the town whose most-recent doc is newest. (Deterministic tie-break by townSeed so it never flickers.)
+    const townLatest = new Map();
+    for (const row of allRows) {
+        const m = row.metadata || {};
+        if (m.kind !== 'farmer-life') continue;
+        const ts = String(m.townSeed ?? ''), when = Date.parse(row.updatedAt || '') || 0;
+        if (!townLatest.has(ts) || when > townLatest.get(ts)) townLatest.set(ts, when);
+    }
+    let activeTown = null, bestWhen = -1;
+    for (const [ts, when] of townLatest) {
+        if (when > bestWhen || (when === bestWhen && (activeTown == null || ts > activeTown))) { bestWhen = when; activeTown = ts; }
+    }
+    const inActiveTown = (m) => activeTown == null || String(m.townSeed ?? '') === activeTown;
+
+    // group the distilled memories by farmer, WITHIN the chosen town. The TOWN-HISTORY doc (#94 P3 — the
+    // civic record) has no farmer name, so it's pulled aside into its own node rather than dropped.
     const byName = new Map();
     for (const row of allRows) {
         const m = row.metadata || {};
         if (m.kind === 'town-history') continue;   // the civic record comes from the dedicated search
+        if (!inActiveTown(m)) continue;            // one town only — the newest — so recurring names don't merge
         const name = m.name; if (!name) continue;
         const text = String(row.memory || '').trim(); if (!text) continue;
         let f = byName.get(name);
@@ -99,7 +116,7 @@ module.exports = async function handler(req, res) {
     const civicLines = [];
     for (const row of (civicData?.results || [])) {
         const m = row.metadata || {};
-        if (m.kind !== 'town-history') continue;
+        if (m.kind !== 'town-history' || !inActiveTown(m)) continue;   // the ACTIVE town's politics, not a prior boot's
         const text = String(row.memory || '').trim(); if (!text) continue;
         if (!civicLines.includes(text)) civicLines.push(text);
         if (!civicTown) civicTown = m.town || null;
@@ -109,7 +126,7 @@ module.exports = async function handler(req, res) {
     const inventions = [];
     for (const row of (inventData?.results || [])) {
         const m = row.metadata || {};
-        if (m.kind !== 'town-inventions') continue;
+        if (m.kind !== 'town-inventions' || !inActiveTown(m)) continue;   // the ACTIVE town's book, not a prior boot's
         const text = String(row.memory || '').trim(); if (!text || inventions.includes(text)) continue;
         inventions.push(text);
     }
