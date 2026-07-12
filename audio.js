@@ -393,19 +393,24 @@ class FarmAudio {
         if (!this.ctx || !this.enabled) return;
         this.ensure();
         const t0 = this.ctx.currentTime + 0.02;
-        // note sets (Hz). triumph rises through a major chord; somber falls a minor third; neutral a gentle 5th.
+        // note sets (Hz). triumph rises through a major chord; somber falls a minor third; neutral a gentle,
+        // warm two-note lift (the frequent callout banners — chicks hatched etc. — so it's soft + unobtrusive).
         const notes = tone === 'somber' ? [[392.0, 0], [311.1, 0.16]]
-            : tone === 'neutral' ? [[587.3, 0], [880.0, 0.12]]
+            : tone === 'neutral' ? [[523.25, 0], [698.46, 0.13]]   // C5 -> F5, low + round (was a piercing D5->A5)
             : [[523.3, 0], [659.3, 0.09], [784.0, 0.18], [1046.5, 0.27]];   // triumph: C5 E5 G5 C6
-        const wave = tone === 'somber' ? 'sine' : 'triangle';
-        const peak = tone === 'somber' ? 0.16 : 0.14;
+        // neutral is a SOFT sine at a fraction of the volume with a gentle onset (no harsh click); triumph/somber
+        // keep their weight (they're rare, ceremonial).
+        const wave = (tone === 'somber' || tone === 'neutral') ? 'sine' : 'triangle';
+        const peak = tone === 'somber' ? 0.16 : tone === 'neutral' ? 0.05 : 0.14;
+        const atk = tone === 'neutral' ? 0.045 : 0.02;
+        const rel = tone === 'somber' ? 0.7 : tone === 'neutral' ? 0.34 : 0.42;
         for (const [f, off] of notes) {
             const t = t0 + off;
             const o = this.ctx.createOscillator(); o.type = wave; o.frequency.value = f;
             const g = this.ctx.createGain();
             g.gain.setValueAtTime(0.0001, t);
-            g.gain.linearRampToValueAtTime(peak, t + 0.02);
-            g.gain.exponentialRampToValueAtTime(0.0001, t + (tone === 'somber' ? 0.7 : 0.42));
+            g.gain.linearRampToValueAtTime(peak, t + atk);
+            g.gain.exponentialRampToValueAtTime(0.0001, t + rel);
             o.connect(g); g.connect(this.sfxBus);
             o.start(t); o.stop(t + 0.9);
         }
