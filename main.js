@@ -3431,22 +3431,35 @@ function drawSheet(f) {
             if (!ks.length) { drawText(ctx, 'nothing carried yet', IX + 2, y, SHEET_LABEL); y += 8; }
             else for (const k of ks) {
                 const inh = k.theme === 'inherited';               // #1.2 the creed carried from a forebear
-                const col = inh ? '#e0c8f0' : '#c8a0e0';
+                const ow = k.overwritten;                          // #reconciliation: a hard-won belief has outgrown it
+                const col = ow ? '#6b6b74' : (inh ? '#e0c8f0' : '#c8a0e0');
                 if (inh && k.inherited && k.inherited.name) { drawText(ctx, `carried from ${String(k.inherited.name).split(' ')[0]}:`, IX + 7, y, '#8a7ca0'); y += 7; }
                 ctx.fillStyle = col; ctx.fillRect(IX + 2, y + 2, 2, 2);
-                for (const ln of wrapText(k.quote, 33)) { drawText(ctx, ln, IX + 7, y, col); y += 7; }
+                for (const ln of wrapText(k.quote, 33)) {
+                    drawText(ctx, ln, IX + 7, y, col);
+                    if (ow) { ctx.fillStyle = '#6b6b74'; ctx.fillRect(IX + 7, y + 2, textWidth(ln), 1); }   // struck through — no longer quoted
+                    y += 7;
+                }
+                if (ow) { drawText(ctx, 'outgrown - a belief won out', IX + 7, y, '#c9a45a'); y += 7; }
                 y += 2;
             }
 
             // #91 Tier-3 — BELIEFS: convictions FORMED from lived experience (not inherited like creeds).
             // Only shown once a farmer has actually learned something the hard way (e.g. being denied care).
+            // #reconciliation: a crossfaction belief is the one at WAR with a raid-creed — flag it warm + say so.
             const bels = f.beliefs || [];
             if (bels.length) {
                 y += 1;
                 y = sectionBand(IX, y, IW, 'HARD-WON BELIEFS');
                 for (const b of bels) {
-                    ctx.fillStyle = '#8fc7e8'; ctx.fillRect(IX + 2, y + 2, 2, 2);
-                    for (const ln of wrapText(`"${b.text}" (day ${b.day})`, 33)) { drawText(ctx, ln, IX + 7, y, '#8fc7e8'); y += 7; }
+                    const xf = b.tag === 'crossfaction';
+                    const bcol = xf ? '#7dd069' : '#8fc7e8';
+                    ctx.fillStyle = bcol; ctx.fillRect(IX + 2, y + 2, 2, 2);
+                    for (const ln of wrapText(`"${b.text}" (day ${b.day})`, 33)) { drawText(ctx, ln, IX + 7, y, bcol); y += 7; }
+                    if (xf) {
+                        const won = (f.creeds || []).some(c => c.overwritten && c.theme === b.contradicts);
+                        drawText(ctx, won ? 'outgrew the raid-creed' : 'at war with an old creed', IX + 7, y, '#c9a45a'); y += 7;
+                    }
                     y += 2;
                 }
             }
