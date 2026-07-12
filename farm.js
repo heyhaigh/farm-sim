@@ -564,6 +564,10 @@ export class World {
         this.seed = seed >>> 0;
         this.rand = mulberry32(seed);
         this.culture = culture === 'orc' ? 'orc' : 'human';   // #3.1 a human farming town or an orc warband
+        // #reconciliation (Codex r20 P1): the faction-lineage ROOT — stable across generations descended from
+        // the same origin, so grievances/reconciliations compound. A fresh town is its own root; an heir town
+        // inherits its forebear's root (resolved from the world index at founding, in main.js).
+        this.lineageRoot = String(this.seed);
         this.name = generateTownName(this.seed, this.culture);   // each town's own name (seeded, dedicated stream)
         this.tiles = new Uint8Array(GRID * GRID).fill(T.GRASS);
         this.rockWork = new Map();   // tilekey -> mining shifts landed on a big rock (persists till it breaks)
@@ -1524,6 +1528,11 @@ export class World {
     // same inbox => same town", the honest determinism claim for this layer). Returns how many were applied.
     applyInbox(events) {
         if (!Array.isArray(events) || !events.length) return 0;
+        // Codex r20 P1: idempotency. Inbox delivery is at-least-once (a crash between applying and clearing the
+        // inbox re-delivers on reload); tracking APPLIED event ids makes the effect exactly-once — a re-delivered
+        // raid can't dock the stores twice. The applied set rides the save (capped so it can't grow unbounded).
+        this._inboxApplied = this._inboxApplied || [];
+        const applied = new Set(this._inboxApplied);
         const sorted = events.slice().sort((a, b) =>
             (a.day - b.day) ||
             (a.pairKey < b.pairKey ? -1 : a.pairKey > b.pairKey ? 1 : 0) ||
@@ -1531,6 +1540,10 @@ export class World {
             ((a.ordinal || 0) - (b.ordinal || 0)));
         let n = 0;
         for (const e of sorted) {
+            const eid = e.id || `${e.pairKey}:${e.ordinal}:${e.kind}`;
+            if (applied.has(eid)) continue;                       // already applied — skip (exactly-once)
+            applied.add(eid); this._inboxApplied.push(eid);
+            if (this._inboxApplied.length > 200) this._inboxApplied.splice(0, this._inboxApplied.length - 200);
             const envoy = e.envoy != null ? this.farmers.find(f => f.sheet.seed === e.envoy) : null;
             if (e.kind === 'raided') {
                 // STAKES: the season's labor taken in a night — dock the stores (drives reach + roster yield).
@@ -2286,7 +2299,8 @@ export class World {
     serialize() {
         const plotIdx = new Map(this.plots.map((p, i) => [p, i]));
         const snap = {
-            v: World.SAVE_VERSION, seed: this.seed, name: this.name, culture: this.culture,
+            v: World.SAVE_VERSION, seed: this.seed, name: this.name, culture: this.culture, lineageRoot: this.lineageRoot,
+            inboxApplied: (this._inboxApplied || []).slice(-200),   // #reconciliation exactly-once inbox ledger
             // continue the RNG from a save-derived seed WITHOUT consuming the live stream
             // (saving must never be observable to the sim)
             randSeed: (this.seed ^ Math.imul(this.day, 2654435761) ^ ((this.time * 997) | 0)) >>> 0,
@@ -2402,6 +2416,8 @@ export class World {
 
     #restoreFrom(d) {
         this.culture = d.culture === 'orc' ? 'orc' : 'human';   // #3.1 (pre-culture saves default to human)
+        this._inboxApplied = Array.isArray(d.inboxApplied) ? d.inboxApplied : [];   // #reconciliation exactly-once
+        this.lineageRoot = d.lineageRoot != null ? String(d.lineageRoot) : String(this.seed);   // #reconciliation lineage root
         this.name = d.name || generateTownName(this.seed, this.culture);   // (pre-name saves regenerate deterministically)
         this.rand = mulberry32(d.randSeed >>> 0);
         this.time = d.time; this.day = d.day; this.clock = d.clock;

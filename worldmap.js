@@ -51,7 +51,7 @@ export function computeLayout(index) {
         .map(t => ({
             seed: t.seed, name: t.name || `Town ${t.seed}`, pop: t.pop || 0, day: t.day || 0, year: t.year || 1,
             harvestTotal: t.harvestTotal || 0, motto: t.motto || null, lastSeen: t.lastSeen || 0,
-            culture: t.culture === 'orc' ? 'orc' : 'human', envoy: t.envoy || null,
+            culture: t.culture === 'orc' ? 'orc' : 'human', envoy: t.envoy || null, lineageRoot: t.lineageRoot != null ? String(t.lineageRoot) : String(t.seed),
             ...townPos(t.seed), reach: townReach(t), tint: townTint(t),
             // edges to ancestor towns that we actually have on the map (skip lineage from unknown/foreign towns)
             ancestors: (t.lineage || []).map(String).filter(s => s !== String(t.seed) && known.has(s)),
@@ -70,6 +70,8 @@ export const WORLD_INDEX_VERSION = 2;   // v2 adds ledgers + inbox; a v1 index (
 // at load/dawn). Keyed by town seed so a dormant town gets its due when it's next played.
 function queueInbox(index, townSeed, ev) {
     index.inbox = index.inbox || {};
+    // stable id so the town can apply each event EXACTLY ONCE even if a crash leaves it uncleared (Codex r20 P1)
+    ev.id = ev.id || `${ev.pairKey}:${ev.ordinal}:${ev.kind}`;
     (index.inbox[String(townSeed)] = index.inbox[String(townSeed)] || []).push(ev);
 }
 

@@ -17,8 +17,11 @@ import { hashString, mulberry32 } from './dna.js';
 // key, so a gen-1 raid and a gen-3 parley accumulate in one ledger. This is the only structure where the
 // reconciliation arc has a second act (a town-pair meets exactly once).
 export function factionLineage(town) {
-    const anc = Array.isArray(town.lineage) ? town.lineage.map(String).filter(Boolean) : [];
-    const root = anc.length ? anc.slice().sort()[0] : String(town.seed);
+    // Codex r20 P1: use the PROPAGATED lineage root (stable across all generations from one origin) when present,
+    // so a gen-3 town keyed to the same ledger as gen-1. Fall back to the immediate ancestor / own seed for
+    // legacy summaries that predate lineageRoot.
+    const root = town.lineageRoot != null ? String(town.lineageRoot)
+        : (Array.isArray(town.lineage) && town.lineage.length ? town.lineage.map(String).filter(Boolean).sort()[0] : String(town.seed));
     return `${town.culture === 'orc' ? 'orc' : 'human'}:${root}`;
 }
 export function lineagePairKey(a, b) {

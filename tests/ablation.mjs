@@ -51,11 +51,20 @@ function fnv(s) {
     for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
     return ('00000000' + h.toString(16)).slice(-8);
 }
+// Identity-INDEPENDENT behavioral fingerprint (Codex r20 P2): the old digest included `seed`/`pos`, which
+// change with the source document REGARDLESS of whether memory affects behavior — so it "proved" divergence
+// from identity alone. This captures only the SOCIETY the memories grew: the sorted archetype distribution,
+// the cast's aggregate memory-derived stats, and lived outcomes. If memory were inert these would be identical
+// across real/shuffled/fallback; that they differ is the actual proof that memory is load-bearing.
+const STAT_KEYS = ['str', 'dex', 'con', 'int', 'wis', 'cha'];
 function digest(w) {
-    return fnv(JSON.stringify(w.farmers.map(f => ({
-        seed: f.sheet.seed, arch: f.sheet.archetypeKey, xp: f.sheet.xp, lvl: f.sheet.level,
-        harv: f.sheet.harvested || 0, goods: f.sheet.goods || {}, i: f.pos.i, j: f.pos.j,
-    }))));
+    const mix = {};
+    for (const f of w.farmers) mix[f.sheet.archetypeKey] = (mix[f.sheet.archetypeKey] || 0) + 1;
+    const archMix = Object.entries(mix).sort((a, b) => (a[0] < b[0] ? -1 : 1));
+    const statTotals = STAT_KEYS.map(k => w.farmers.reduce((s, f) => s + (f.sheet.stats[k] || 0), 0));
+    const totalXP = w.farmers.reduce((s, f) => s + (f.sheet.xp || 0), 0);
+    const totalHarv = w.farmers.reduce((s, f) => s + (f.sheet.harvested || 0), 0);
+    return fnv(JSON.stringify({ archMix, statTotals, totalXP, totalHarv }));
 }
 // Human-legible fingerprint of the society that GREW — this is the demo beat, not just a hash.
 function society(w) {

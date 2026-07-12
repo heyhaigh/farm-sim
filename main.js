@@ -12,7 +12,7 @@ import {
     fillDiamond, strokeDiamond,
 } from './pixel.js';
 import { CRT } from './crt.js';
-import { saveTown, loadTown, wipeTown, undoWipe, loadWorldIndex, registerTownInWorld, saveWorldIndex } from './save.js';
+import { saveTown, loadTown, wipeTown, undoWipe, loadWorldIndex, registerTownInWorld, saveWorldIndex, updateWorldIndex } from './save.js';
 import { computeLayout, detectEncounters, encounterLine, townPos, townReach, townTint } from './worldmap.js';
 import { enrichStories } from './dm.js';
 import { persistLives, persistTownHistory } from './memory-writeback.js';
@@ -4353,22 +4353,32 @@ function townSummary(w) {
     return {
         seed: w.seed, name: w.name, day: w.day, year: w.year, pop: w.farmers.length,
         harvestTotal: w.harvestTotal || 0, lineage: [...anc], motto, fingerprint: fp >>> 0,
-        culture: w.culture || 'human', envoy, lastSeen: Date.now(),   // #3.2 human town or orc warband
+        culture: w.culture || 'human', lineageRoot: w.lineageRoot || String(w.seed), envoy, lastSeen: Date.now(),   // #3.2
     };
 }
 let _worldBusy = false;
 async function registerWorld(w) {
     if (_worldBusy) return; _worldBusy = true;
     try {
-        const idx = await registerTownInWorld(townSummary(w));
+        // Codex r20 P1: register THIS town + detect encounters + read its inbox in ONE atomic transaction, so a
+        // second tab can't clobber the ledger/inbox. The mutator is synchronous (no awaits inside a live txn).
+        let fresh = [], mine = [];
+        const idx = await updateWorldIndex(index => {
+            index.towns = index.towns || {}; index.encounters = index.encounters || []; index.ledgers = index.ledgers || {};
+            const s = townSummary(w);
+            const prev = index.towns[s.seed] || {};
+            index.towns[s.seed] = { ...prev, ...s, firstSeen: prev.firstSeen || s.lastSeen || Date.now() };
+            fresh = detectEncounters(index);                 // resolves raids/parleys, queues inbox
+            mine = (index.inbox && index.inbox[String(w.seed)]) || [];
+            return index;
+        });
         if (!idx) return;
-        const fresh = detectEncounters(idx);        // did growth just bring two towns into reach?
-        // consume THIS town's inbox (its own resolved raids/parleys, + any queued while dormant) deterministically
-        const mine = (idx.inbox && idx.inbox[String(w.seed)]) || [];
-        if (mine.length && w === world) { w.applyInbox(mine); idx.inbox[String(w.seed)] = []; }
-        if (fresh.length || mine.length) {
-            await saveWorldIndex(idx);
-            for (const ev of fresh) if (w === world) world.addLog(encounterLine(ev), '#c8b0e0');   // surface on the town log
+        for (const ev of fresh) if (w === world) world.addLog(encounterLine(ev), '#c8b0e0');   // surface on the town log
+        // consume THIS town's inbox: apply (idempotent) -> PERSIST the town -> only THEN clear the inbox
+        // atomically, so a crash between can never lose an effect or double-apply it (exactly-once).
+        if (mine.length && w === world && w.applyInbox(mine)) {
+            await saveTown(w);
+            await updateWorldIndex(index => { if (index.inbox) index.inbox[String(w.seed)] = []; return index; });
         }
     } finally { _worldBusy = false; }
 }
@@ -4948,7 +4958,10 @@ function drawBootScreen(t) {
     const result = await fetchMemories();
     memories = (result.memories && result.memories.length) ? result.memories : generateCrew(worldSeed);
     memorySource = (result.memories && result.memories.length) ? result.source : 'invented';
-    lineagePool = (memorySource !== 'invented' && Array.isArray(result.lineage)) ? result.lineage : [];   // #1.1
+    // #1.1 (Codex r20 P1) lineage is INDEPENDENT of the source corpus: even a town whose fresh cast is invented
+    // (no /v3 corpus, e.g. v0.0.3) still founds heirs of PRIOR towns read back via /v4/search. Key off the
+    // lineage array itself, not memorySource. Empty when no store answered at all.
+    lineagePool = Array.isArray(result.lineage) ? result.lineage : [];
 
     let resumed = false;
     if (!wantFresh) {
@@ -4971,7 +4984,11 @@ function drawBootScreen(t) {
     try {
         const widx = await loadWorldIndex();
         const pending = (widx.inbox && widx.inbox[String(world.seed)]) || [];
-        if (pending.length) { world.applyInbox(pending); widx.inbox[String(world.seed)] = []; await saveWorldIndex(widx); }
+        // apply (idempotent) -> persist the town -> clear the inbox atomically (exactly-once; Codex r20 P1)
+        if (pending.length && world.applyInbox(pending)) {
+            await saveTown(world);
+            await updateWorldIndex(idx => { if (idx.inbox) idx.inbox[String(world.seed)] = []; return idx; });
+        }
     } catch (err) { console.warn('ry-farms: inbox consume failed', err); }
 
     if (resumed) {
@@ -4988,6 +5005,20 @@ function drawBootScreen(t) {
         for (let i = 0; i < 8; i++) spawnFarmer(heirPlan.get(i) || null);   // start with the full founding eight
         if (heirPlan.size) world.addLog(`${heirPlan.size} of the founders are heirs of a remembered town.`, '#c8b0e0');
         world.ensureFounderVariety();                // guarantee a chaos-agent + a moody farmer among them
+        // #reconciliation (Codex r20 P1): this town's lineage ROOT = the earliest origin its heirs descend from
+        // (their forebears' roots, looked up in the world index), so the faction-lineage ledger compounds across
+        // generations instead of starting fresh at each town. No heirs -> the town is its own root (constructor).
+        if (heirPlan.size) {
+            try {
+                const widx = await loadWorldIndex();
+                const roots = [];
+                for (const f of world.farmers) {
+                    const ln = f.sheet.lineage;
+                    if (ln && ln.ofTownSeed != null) { const anc = widx.towns && widx.towns[String(ln.ofTownSeed)]; roots.push(String(anc && anc.lineageRoot ? anc.lineageRoot : ln.ofTownSeed)); }
+                }
+                if (roots.length) world.lineageRoot = roots.slice().sort()[0];
+            } catch (err) { console.warn('ry-farms: lineage-root resolve failed', err); }
+        }
     }
     selected = null;
 

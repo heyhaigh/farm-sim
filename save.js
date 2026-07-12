@@ -103,6 +103,31 @@ export async function saveWorldIndex(idx) {
     catch { return false; }
 }
 
+// Codex r20 P1: ATOMIC read-modify-write of the world index in a SINGLE IndexedDB transaction. The old flow
+// (loadWorldIndex -> mutate in memory -> saveWorldIndex) was a racy read-modify-write across separate txns —
+// two open tabs registering different towns could each read the same index and clobber the other's summary /
+// encounter / ledger / inbox. IndexedDB serializes readwrite transactions on a store, so doing the get + mutate
+// + put inside ONE txn makes concurrent updates safe (each sees the prior's committed value). `mutator(cur)`
+// mutates + returns the index; it must be SYNCHRONOUS (no awaits — the txn would auto-close). Returns the
+// stored index, or null on failure (best-effort, never throws into the sim).
+export function updateWorldIndex(mutator) {
+    return openDb().then(db => new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE, 'readwrite');
+        const store = tx.objectStore(STORE);
+        const getReq = store.get(WORLD_KEY);
+        let out = null;
+        getReq.onsuccess = () => {
+            const cur = getReq.result || { towns: {}, encounters: [] };
+            try { out = mutator(cur) || cur; } catch (e) { try { tx.abort(); } catch {} reject(e); return; }
+            store.put(out, WORLD_KEY);
+        };
+        getReq.onerror = () => reject(getReq.error);
+        tx.oncomplete = () => resolve(out);
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error || new Error('world-index txn aborted'));
+    })).catch(err => { console.warn('ry-farms: atomic world-index update failed', err); return null; });
+}
+
 // The NEW TOWN hatch: retire a seed's snapshot (and the latest-pointer if it points there).
 // NOT a hard delete — the save (and the wiped pointer) move to backup keys, so one accidental
 // "NEW -> SURE?" is always undoable (learned the hard way, day one). Each wipe overwrites the

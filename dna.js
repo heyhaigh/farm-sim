@@ -564,10 +564,14 @@ export async function fetchMemories() {
                 summary: d.summary || d.content || '',
                 content: d.content || '',
             }));
-        if (docs.length === 0) throw new Error(data.error || 'no usable documents');
         // #1.1 lineage: past farmers this store remembers, available to found heirs from (blend, not echo).
         const lineage = Array.isArray(data.lineage) ? data.lineage : [];
-        return { memories: docs, lineage, source: data.source || 'supermemory' };
+        // Codex r20 P1: extract lineage BEFORE bailing on an empty source corpus. On self-hosted v0.0.3,
+        // GET /v3/documents is gone (docs empty) yet /v4/search returns past lives — throwing here discarded
+        // the lineage and the loop could never close. Only give up when BOTH are empty; otherwise keep the
+        // lineage and grow the fresh cast from invented lives (memories:null -> generateCrew in the caller).
+        if (docs.length === 0 && lineage.length === 0) throw new Error(data.error || 'no usable documents');
+        return { memories: docs.length ? docs : null, lineage, source: data.source || 'supermemory' };
     } catch (err) {
         // no self-hosted corpus reachable -> the caller grows the town from INVENTED lives (generateCrew),
         // seeded by the world so the default town is unique + untethered from any real documents.

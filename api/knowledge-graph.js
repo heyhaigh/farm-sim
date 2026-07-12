@@ -231,9 +231,12 @@ module.exports = async function handler(req, res) {
         }
         // #1.1 the RELIABLE lineage read: /v4/search (GET /v3/documents above is gone on newer builds, so the
         // legacy loop's lineage is a bonus for old builds; search is the path that actually closes the loop).
-        // Merge + dedup by forebear id so both sources contribute without doubles.
-        const seenLife = new Set(lineage.map(l => l.id));
-        for (const l of await searchLineage(base, headers)) if (!seenLife.has(l.id)) { seenLife.add(l.id); lineage.push(l); }
+        // Merge + dedup by a STABLE forebear key (Codex r20 P2): the legacy path ids by doc UUID and the search
+        // path by `ry-farms:<town>:<farmer>` — deduping by `id` would let the SAME forebear enter twice on a
+        // server exposing both. Key by (townSeed, farmerSeed) — the actual identity — which both paths carry.
+        const lifeKey = l => `${l.townSeed ?? 'x'}:${l.farmerSeed ?? l.name ?? l.id}`;
+        const seenLife = new Set(lineage.map(lifeKey));
+        for (const l of await searchLineage(base, headers)) { const k = lifeKey(l); if (!seenLife.has(k)) { seenLife.add(k); lineage.push(l); } }
         // stable order -> deterministic cast + deterministic heir pairing for a given corpus
         out.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
         lineage.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
