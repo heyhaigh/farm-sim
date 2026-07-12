@@ -49,7 +49,7 @@ Each `#pickLine([...])` is a pool; swap by culture. Full parallels (human → or
 - listener default: LIKEWISE.(keep) / CAN'T COMPLAIN.→NO BLOOD LOST. / AYE.→GRUH. / WELL ENOUGH.→STRONG ENOUGH. /
   ONE ROW AT A TIME.→ONE SKULL AT A TIME.
 
-## POOL C — CREED_THEMES[].shorts (dna.js) — identity speech, the "same memory inverted"  [TODO]
+## POOL C — CREED_THEMES[].shorts (dna.js) — identity speech, the "same memory inverted"  [DONE]
 Add `shortsOrc` per theme, keep `{t}` doc-term. (craft: a thing taken clean or not at all / mercy never is enough
 / the {t} taught me to leave nothing · grit: nothing is given — it is TAKEN / you take what you can hold / {t}
 taught me the weak pay the price · service: you do not walk past a soul too weak to keep it / the strong never

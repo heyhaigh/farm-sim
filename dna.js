@@ -334,6 +334,22 @@ const CREED_THEMES = [
       quotes: ['{t} shaped them into one plain rule: a promise kept is a promise kept.', 'they were raised on one plain rule: your word is your word.'] },
 ];
 
+// #94 orc-speech POOL C — the SAME creed, inverted. Same doc-memory, opposite lesson: the craftsman who
+// "finishes clean" becomes one who "leaves nothing"; the neighbor who "does not walk past a soul in need"
+// becomes one who "does not walk past a soul too weak to keep it". Keyed by theme id, same slot order + {t}
+// placement as the human shorts so orcify can re-skin without touching mechanics (theme/weight/tags unchanged).
+const SHORTS_ORC = {
+    craft:   ['a thing taken clean or not at all', 'mercy never is enough', 'the {t} taught me to leave nothing'],
+    grit:    ['nothing is given - it is taken', 'you take what you can hold', '{t} taught me the weak pay the price'],
+    service: ['you do not walk past a soul too weak to keep it', 'the strong never have to ask', '{t} taught me to stop and take'],
+    team:    ['a band is only as strong as who it fears', 'no one raids alone', '{t} taught me we take together'],
+    guard:   ['nothing i hold gets taken back', 'you avenge your own', 'hold what you took, like in {t}'],
+    wander:  ['a horizon is another camp to sack', 'always the next raid', '{t} put the warpath in me'],
+    quiet:   ['spoils, a wall, and no debts left open', 'a hard life taken well', '{t} was mine to take'],
+    word:    ['the threat said plain', 'say it once', '{t} taught me a plain threat'],
+    steady:  ['a blood-debt paid is a blood-debt paid', 'the patient blade wins it', '{t} forged me'],
+};
+
 // A per-document LEXICON: the handful of most DISTINCTIVE words in a farmer's source doc (proper nouns,
 // domain terms, vivid rare words — stopwords + the ubiquitous "ryan" dropped). Deterministic; used to make
 // even a mundane/technical document yield a creed that names ITS own subject, so no two farmers read alike.
@@ -380,7 +396,7 @@ export function compileCreeds(memory, seed) {
             return chosen.replace(/\{t\}/g, term || '');
         };
         const shorts = (term ? s.t.shorts : s.t.shorts.filter(x => !x.includes('{t}'))).map(x => x.replace(/\{t\}/g, term || ''));
-        return { theme: s.t.id, tags: s.t.tags, weight: +s.w.toFixed(3), short: shorts[0], shorts, quote: fill(s.t.quotes) };
+        return { theme: s.t.id, tags: s.t.tags, weight: +s.w.toFixed(3), short: shorts[0], shorts, term, quote: fill(s.t.quotes) };
     });
 }
 
@@ -452,6 +468,14 @@ function orcify(sheet, rand) {
     p.honesty = Math.max(0, p.honesty - 0.2);
     const id = personalityLabel(p); p.label = id.label; p.creed = id.creed;
     const orcCreed = { theme: 'orc', tags: ['raid', 'strength'], weight: 1, short: 'take what stands', shorts: ['take what stands'], quote: ORC_CREEDS[Math.floor(rand() * ORC_CREEDS.length)] };
+    // re-skin the theme-creed mutterings to their orc inversion (display only — theme/weight/tags untouched)
+    sheet.creeds = sheet.creeds.map(c => {
+        const ov = SHORTS_ORC[c.theme];
+        if (!ov) return c;
+        const t = c.term;
+        const shorts = (t ? ov : ov.filter(x => !x.includes('{t}'))).map(x => x.replace(/\{t\}/g, t || ''));
+        return { ...c, short: shorts[0], shorts };
+    });
     sheet.creeds = [orcCreed, ...sheet.creeds].slice(0, 6);
     return sheet;
 }
