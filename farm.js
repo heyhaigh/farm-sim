@@ -1564,10 +1564,9 @@ export class World {
         for (const e of sorted) {
             const eid = e.id || `${e.pairKey}:${e.ordinal}:${e.kind}`;
             if (applied.has(eid)) continue;                       // already applied — skip (exactly-once)
-            // Slice B: the traveler event is recognized but not yet consumed — leave it UNAPPLIED so it survives
-            // to Slice C (which plants the arrival awareness once the sim reaches its arrivalDay). Skipping
-            // before marking applied keeps it in the inbox for next time.
-            if (e.kind === 'traveler') continue;
+            // Slice C: a traveler still en route (arrivalDay in the future) is left UNAPPLIED so it lands only
+            // when the sim actually reaches that day (deterministic; wall-clock/reloads can't move it).
+            if (e.kind === 'traveler' && this.day < (e.day || 0)) continue;
             applied.add(eid); this._inboxApplied.push(eid);
             if (this._inboxApplied.length > 200) this._inboxApplied.splice(0, this._inboxApplied.length - 200);
             const envoy = e.envoy != null ? this.farmers.find(f => f.sheet.seed === e.envoy) : null;
@@ -1590,9 +1589,31 @@ export class World {
                 this.addChronicle('raid', `A parley was broken against ${this.name}. The old fear is proven again.`, envoy, null, '#e05840',
                     { tier: 'callout', tone: 'somber', why: 'a broken parley' });
                 n++;
+            } else if (e.kind === 'traveler') {
+                // Slice C — a surviving traveler's warning reaches town (day >= arrivalDay). It PRIMES the
+                // town's most-curious soul for contact: their curiosity lifts, so as envoy they're likelier to
+                // come to the table — the traveler's peaceful word is literally what earns the first parley
+                // (Fable rec 3, wired through the existing envoy/willParley gate; no new balance surface).
+                const warn = (e.payload && e.payload.warning) || 'strangers are near';
+                const f = this.#mostCuriousFarmer();
+                this.addChronicle('lineage', `A weary traveler reached ${this.name}: ${warn}.`, f, null, '#c8b0e0',
+                    { tier: 'callout', tone: 'somber', why: 'word carried from beyond the frontier', day: this.day });
+                if (f) f.hearTraveler(e.payload || {});
+                n++;
             }
         }
         return n;
+    }
+
+    // #names/#traveler — the most-curious farmer, chosen exactly like the world-layer envoy (highest curiosity,
+    // lowest seed on a tie) so the traveler primes the SAME soul the frontier will send to parley. Pure/seeded.
+    #mostCuriousFarmer() {
+        let best = null, bs = -Infinity;
+        for (const f of this.farmers) {
+            const c = f.sheet.personality?.curiosity || 0;
+            if (c > bs || (c === bs && best && f.sheet.seed < best.sheet.seed)) { bs = c; best = f; }
+        }
+        return best;
     }
     // #98 Moments — the compiled MEMORY behind a profound beat, cited for the spotlight modal (the "why").
     // Deterministic + read-only: pulls from state already compiled at founding (tales, dreams, creeds).
@@ -6393,6 +6414,18 @@ export class Farmer {
     // #reconciliation Slice C — "the mechanism of hope". An honest cross-faction moment (an honored parley the
     // envoy kept faith through) EARNS a belief that CONTRADICTS the raid/fear creed the farmer was grown from.
     // Called when a 'reconciled' inbox event lands on the envoy. `dir` = +1 confirm (honored) / -1 betray.
+    // #traveler (Slice C) — a warning from beyond primes this soul for contact: curiosity lifts (feeds the
+    // envoy/willParley gate, so the traveler's peaceful word earns the first parley) and one belief is
+    // recorded. Bounded to a single priming per farmer. Deterministic — a fixed nudge on inbox consumption.
+    hearTraveler(payload) {
+        const s = this.sheet; s.beliefs = s.beliefs || [];
+        if (s.beliefs.some(b => b.tag === 'travelerWarned')) return;   // one priming per soul
+        this.p.curiosity = Math.min(1, (this.p.curiosity || 0) + 0.12);
+        const from = payload && payload.fromCulture === 'orc' ? 'orcs' : 'strangers';
+        s.beliefs.push({ text: `there are ${from} out there, and I would know them`, tag: 'travelerWarned', day: this.world.day, strength: 0.6 });
+        this.remember('event', `a traveler brought word: ${(payload && payload.warning) || 'strangers near'}`, null, 1.0);
+    }
+
     earnCrossFaction(withName, pairKey, dir = 1) {
         const s = this.sheet; s.beliefs = s.beliefs || [];
         // the creed this belief argues against: an orc's raid-creed (theme 'orc') or any inherited raid/grievance creed

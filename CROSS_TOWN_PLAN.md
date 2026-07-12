@@ -129,9 +129,9 @@ exactly like raids) reads as intentional, not broken.
 ## Rollout (unchanged order; council + Fable both endorse)
 - **Slice A — Names.** DONE (2026-07-12). Per-town dedup, derived surnames, heir surname inheritance,
   invariant test, re-pin baselines.
-- **Slice B — Plumbing.** Pair-state machine in `detectEncounters`; `seedTraveler` (fate + arrivalDay upfront);
+- **Slice B — Plumbing.** DONE (2026-07-12) — seeding + inbox + map marker. Pair-state machine in `detectEncounters`; `seedTraveler` (fate + arrivalDay upfront);
   `traveler` inbox event shape (carrier primitive); world-map state rendering + interpolating marker; NO sim
   effect yet. Prove determinism (identical seeds + different wall-clock/tab interleavings → identical sim).
-- **Slice C — Arrival.** Consume `traveler` at `day >= arrivalDay`: chronicle beat + seeded belief into the
+- **Slice C — Arrival.** DONE (2026-07-12) — belief primes envoy; lost traveler -> surprise; no hard gate. Consume `traveler` at `day >= arrivalDay`: chronicle beat + seeded belief into the
   curious farmer; wire surprise-contact fallback; migration deriving awareness from the ledger.
 - **Slice D — later/maybe.** Behavior nudges (if ever), richer viz, `news` payloads (rumor propagation).

@@ -101,7 +101,9 @@ export function detectEncounters(index) {
             });
             index.pairs[key] = { state: 'enRoute', origin: t.origin, destination: t.destination, fate: t.fate,
                 discoveryDay, arrivalDay: t.arrivalDay, warning: t.warning, bearing: t.bearing, fromCulture: t.fromCulture };
-            queueInbox(index, t.destination, { kind: 'traveler', pairKey: key, ordinal: 0, day: t.arrivalDay,
+            // Slice C: a LOST traveler delivers nothing — no inbox event, so the destination never learns and
+            // the pair meets by surprise (base curiosity, no parley boost). Only a survivor's warning arrives.
+            if (t.fate === 'arrives') queueInbox(index, t.destination, { kind: 'traveler', pairKey: key, ordinal: 0, day: t.arrivalDay,
                 payload: { type: 'warning', origin: String(t.origin), fromCulture: t.fromCulture, warning: t.warning, bearing: t.bearing } });
         }
 
