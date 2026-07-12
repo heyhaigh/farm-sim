@@ -5772,6 +5772,14 @@ const IDLE_THOUGHTS = [
     'WONDER HOW THE NEIGHBORS ARE DOING',
     'A GOOD FENCE MAKES A GOOD FARM',
 ];
+// Orc mirror (same slots, same order — determinism-safe): the settled musing turned to appetite. #94 orc-speech
+const IDLE_THOUGHTS_ORC = [
+    'GOOD DAY TO TAKE SOMETHING',
+    'THIS GROUND STINKS OF WEAKNESS',
+    'THE CISTERN IS MINE TO GUARD',
+    'WHICH OF THEM IS RIPE FOR TAKING',
+    'A STRONG WALL IS A FULL BELLY',
+];
 
 const FACILITY_YIELD_NAME = { pad: 'lily', fish: 'fish', chicken: 'egg', cow: 'milk', pig: 'truffle', goat: 'wool', sheep: 'wool' };
 
@@ -7490,94 +7498,104 @@ export class Farmer {
 
     #scriptedChat(other, op, rop, grudge, vivid) {
         const w = this.world;
+        const orc = w.culture === 'orc';                       // #94 orc-speech: every greeting turned to taking
+        const pick = (h, o) => this.#pickLine(orc ? o : h);     // same length arrays -> one rand draw either way
         let speakerLine = null;
         let speakerColor = '#c8ccd8';
         let weight = 0.45;
 
         if (op >= 0.4) {
-            speakerLine = this.#pickLine([
-                'GOOD TO SEE YOU, FRIEND!',
-                'WE MAKE A FINE TEAM.',
-                'YOUR HELP STUCK WITH ME.',
-                'THIS PLACE FEELS LESS LONELY.',
-            ]);
+            speakerLine = pick(
+                ['GOOD TO SEE YOU, FRIEND!', 'WE MAKE A FINE TEAM.', 'YOUR HELP STUCK WITH ME.', 'THIS PLACE FEELS LESS LONELY.'],
+                ['STILL BREATHING, BLOOD-KIN.', 'WE RAID WELL TOGETHER.', 'I OWE YOU A DEBT. IT HOLDS.', 'THE CAMP IS STRONGER WITH YOU.']);
             speakerColor = '#7dd069';
             weight = 0.62;
         } else if (op <= -0.35) {
-            speakerLine = this.#pickLine([
-                "I HAVEN'T FORGOTTEN.",
-                'WATCH YOURSELF.',
-                'WE ARE NOT SQUARE.',
-                'KEEP TO YOUR OWN ROWS.',
-            ]);
+            speakerLine = pick(
+                ["I HAVEN'T FORGOTTEN.", 'WATCH YOURSELF.', 'WE ARE NOT SQUARE.', 'KEEP TO YOUR OWN ROWS.'],
+                ['I FORGET NOTHING.', 'SLEEP LIGHTLY.', 'THE DEBT IS UNPAID.', 'STAY OUT OF MY REACH.']);
             speakerColor = '#c05840';
             weight = 0.72;
         } else if (other === w.leader && this.p.competitiveness > 0.6) {
-            speakerLine = this.#pickLine(["I'LL PASS YOU YET.", 'ENJOY THE LEAD... FOR NOW.', 'YOUR LEAD HAS A SHADOW.']);
+            speakerLine = pick(
+                ["I'LL PASS YOU YET.", 'ENJOY THE LEAD... FOR NOW.', 'YOUR LEAD HAS A SHADOW.'],
+                ["I'LL PULL YOU DOWN YET.", 'WEAR THE CHIEF-MARK... FOR NOW.', 'YOUR THRONE HAS A KNIFE BEHIND IT.']);
             speakerColor = '#e0a03c';
         } else if (this === w.leader) {
-            speakerLine = this.#pickLine(['KEEP AT IT!', 'FINE DAY FOR FARMING.', 'THE TOWN RISES WITH US.']);
+            speakerLine = pick(
+                ['KEEP AT IT!', 'FINE DAY FOR FARMING.', 'THE TOWN RISES WITH US.'],
+                ['TAKE MORE!', 'FINE DAY FOR TAKING.', 'THE WARBAND RISES ON OUR BACKS.']);
         } else if (vivid && this.rand() < 0.62) {
             const sour = /welch|trick|thiev|stole|toll|turned|behind|owe/i.test(vivid.text);
             if (vivid.kind === 'job') {
-                speakerLine = sour ? "WE'RE NOT SQUARE YET." : 'GOOD WORK STICKS AROUND.';
+                speakerLine = sour ? (orc ? 'THE BLOOD-DEBT STANDS.' : "WE'RE NOT SQUARE YET.") : (orc ? 'A GOOD HAUL IS REMEMBERED.' : 'GOOD WORK STICKS AROUND.');
                 speakerColor = sour ? '#c05840' : '#e8c860';
             } else if (vivid.kind === 'event') {
-                speakerLine = this.#pickLine(['WE BUILT MORE THAN WOOD.', 'THAT DAY STILL HOLDS ME UP.', 'THE TOWN REMEMBERS WORK.']);
+                speakerLine = pick(
+                    ['WE BUILT MORE THAN WOOD.', 'THAT DAY STILL HOLDS ME UP.', 'THE TOWN REMEMBERS WORK.'],
+                    ['WE SPILLED MORE THAN SWEAT.', 'THAT DAY IS CARVED IN ME.', 'THE SAGA REMEMBERS BLOOD.']);
                 speakerColor = '#8fc7e8';
             } else {
-                speakerLine = sour ? `DAY ${vivid.day} STILL STINGS.` : `DAY ${vivid.day} STILL WARMS ME.`;
+                speakerLine = sour ? `DAY ${vivid.day} ${orc ? 'IS AN OPEN WOUND.' : 'STILL STINGS.'}` : `DAY ${vivid.day} ${orc ? 'STILL FEEDS MY FIRE.' : 'STILL WARMS ME.'}`;
                 speakerColor = sour ? '#c05840' : '#7dd069';
             }
             weight = sour ? 0.72 : 0.62;
         } else if (w.project && this.rand() < 0.45) {
             const left = Math.max(0, Math.ceil(w.project.needed - w.project.points));
-            speakerLine = left > 0 ? `${w.project.label} NEEDS ${left} MORE.` : `${w.project.label} IS NEAR DONE.`;
+            speakerLine = left > 0 ? `${w.project.label} ${orc ? `WANTS ${left} MORE FISTS.` : `NEEDS ${left} MORE.`}` : `${w.project.label} ${orc ? 'IS ALMOST OURS.' : 'IS NEAR DONE.'}`;
             speakerColor = '#e8c860';
         } else if (!w.board && this.rand() < 0.35) {
-            speakerLine = 'WE NEED A BOARD FOR JOBS.';
+            speakerLine = orc ? 'WE NEED A WAR-POST FOR THE TAKING.' : 'WE NEED A BOARD FOR JOBS.';
             speakerColor = '#e8c860';
         } else if (this.goal && this.rand() < 0.42) {
-            const goalLines = {
+            const goalLines = orc ? {
+                'good neighbor': ['A DEBT REPAID IS A DEBT REPAID.', 'A FIST LENT COMES BACK ARMED.'],
+                'lone wolf': ['I HUNT ALONE.', 'I TRUST MY AXE MORE THAN YOUR MOUTH.'],
+                'harvest king': ['EVERY HAUL IS A TALLY.', 'THE SPOILS WILL KNOW MY NAME.'],
+                'sharp trader': ['HARD TERMS KEEP THE WEAK IN LINE.', 'A DEAL IS A LEASH.'],
+                'master farmer': ['I AM BREAKING THIS LAND.', 'THE LAND YIELDS TO STRENGTH.'],
+            } : {
                 'good neighbor': ['A FARM IS A PROMISE.', 'HELP GIVEN RETURNS HOME.'],
                 'lone wolf': ['QUIET ROWS SUIT ME.', 'I TRUST WORK MORE THAN TALK.'],
                 'harvest king': ['EVERY ROW IS A SCORECARD.', 'THE HARVEST WILL KNOW ME.'],
                 'sharp trader': ['FAIR TERMS KEEP FRIENDS.', 'A DEAL TELLS THE TRUTH.'],
                 'master farmer': ['I AM LEARNING THE LAND.', 'THE SOIL ANSWERS PATIENCE.'],
             };
-            speakerLine = this.#pickLine(goalLines[this.goal] || ['WE KEEP LEARNING HERE.']);
+            speakerLine = this.#pickLine(goalLines[this.goal] || [orc ? 'WE GROW STRONGER HERE.' : 'WE KEEP LEARNING HERE.']);
             speakerColor = '#8a9ade';
         } else if (grudge && grudge.v < -0.3 && grudge.who !== other && this.rand() < 0.4) {
-            speakerLine = `DON'T TRUST ${shortName(grudge.who).toUpperCase()}...`;
+            speakerLine = orc ? `${shortName(grudge.who).toUpperCase()} IS WEAK. USE THEM.` : `DON'T TRUST ${shortName(grudge.who).toUpperCase()}...`;
             speakerColor = '#c9a45a';
         } else if (w.weather === 'storm') {
-            speakerLine = this.#pickLine(['SKY SOUNDS ANGRY TODAY.', 'COUNT YOUR ROOF BEAMS.']);
+            speakerLine = pick(['SKY SOUNDS ANGRY TODAY.', 'COUNT YOUR ROOF BEAMS.'], ['THE SKY WANTS A FIGHT.', 'BRACE THE WALLS.']);
             speakerColor = '#8a9ade';
         } else if (w.weather === 'rain') {
-            speakerLine = this.#pickLine(['RAIN DOES HALF OUR WORK.', 'THE FIELDS ARE DRINKING.']);
+            speakerLine = pick(['RAIN DOES HALF OUR WORK.', 'THE FIELDS ARE DRINKING.'], ['RAIN SPARES OUR BACKS.', 'THE MUD FEEDS THE SPOILS.']);
             speakerColor = '#8fc7e8';
         } else if (w.weather === 'drought') {
-            speakerLine = this.#pickLine(['THE DIRT IS ASKING LOUDLY.', 'EVERY DROP COUNTS TODAY.']);
+            speakerLine = pick(['THE DIRT IS ASKING LOUDLY.', 'EVERY DROP COUNTS TODAY.'], ['THE GROUND IS DYING OF THIRST.', 'HOARD EVERY DROP.']);
             speakerColor = '#e0a03c';
         } else {
-            speakerLine = this.#pickLine(['MORNING!', 'HOW GOES THE HARVEST?', 'WHAT DID THE SOIL TELL YOU?', 'STILL HERE. STILL TRYING.']);
+            speakerLine = pick(
+                ['MORNING!', 'HOW GOES THE HARVEST?', 'WHAT DID THE SOIL TELL YOU?', 'STILL HERE. STILL TRYING.'],
+                ['GRRAH.', 'WHAT HAVE YOU TAKEN?', 'WHAT DID THE WILDS COST YOU?', 'STILL HERE. STILL TAKING.']);
         }
 
         let listenerLine;
         let listenerColor = rop <= -0.35 ? '#c05840' : '#c8ccd8';
         if (rop >= 0.4) {
-            listenerLine = this.#pickLine(['ALWAYS, FRIEND.', 'I REMEMBER TOO.', 'WE KEEP EACH OTHER STANDING.']);
+            listenerLine = pick(['ALWAYS, FRIEND.', 'I REMEMBER TOO.', 'WE KEEP EACH OTHER STANDING.'], ['ALWAYS, BLOOD-KIN.', 'I REMEMBER THE DEBT TOO.', 'WE KEEP EACH OTHER ARMED.']);
             listenerColor = '#7dd069';
         } else if (rop <= -0.35) {
-            listenerLine = this.#pickLine(['...', 'MIND YOUR OWN ROWS.', 'NOT TODAY.']);
-        } else if (w.project && /NEEDS|DONE|BOARD|JOBS/.test(speakerLine)) {
-            listenerLine = this.#pickLine(['I CAN SPARE A HAND.', 'POST IT WHERE ALL CAN SEE.', 'THAT WOULD HELP US ALL.']);
+            listenerLine = pick(['...', 'MIND YOUR OWN ROWS.', 'NOT TODAY.'], ['...', 'MIND YOUR OWN THROAT.', 'NOT TODAY.']);
+        } else if (w.project && /NEEDS|DONE|BOARD|JOBS|FISTS|OURS|WAR-POST/.test(speakerLine)) {
+            listenerLine = pick(['I CAN SPARE A HAND.', 'POST IT WHERE ALL CAN SEE.', 'THAT WOULD HELP US ALL.'], ['I CAN SPARE A FIST.', 'NAIL IT TO THE WAR-POST.', 'THAT FEEDS THE WHOLE BAND.']);
             listenerColor = '#e8c860';
         } else if (w.weather === 'rain' || w.weather === 'storm') {
-            listenerLine = this.#pickLine(['WEATHER HAS A TEMPER.', 'THE ROOF WILL TELL.']);
+            listenerLine = pick(['WEATHER HAS A TEMPER.', 'THE ROOF WILL TELL.'], ['THE SKY HAS A TEMPER.', 'THE WALLS WILL TELL.']);
             listenerColor = '#8a9ade';
         } else {
-            listenerLine = this.#pickLine(['LIKEWISE.', "CAN'T COMPLAIN.", 'AYE.', 'WELL ENOUGH.', 'ONE ROW AT A TIME.']);
+            listenerLine = pick(['LIKEWISE.', "CAN'T COMPLAIN.", 'AYE.', 'WELL ENOUGH.', 'ONE ROW AT A TIME.'], ['LIKEWISE.', 'NO BLOOD LOST.', 'GRUH.', 'STRONG ENOUGH.', 'ONE SKULL AT A TIME.']);
         }
 
         return { speakerLine, listenerLine, speakerColor, listenerColor, weight };
@@ -8284,22 +8302,24 @@ export class Farmer {
             this.#goTo(best.i + 0.5, best.j + 0.5, 'wander');
             return;
         }
-        this.think(this.rand() < 0.4 ? `REMEMBERING: ${String(s.memory.title).slice(0, 26)}..` : IDLE_THOUGHTS[Math.floor(this.rand() * IDLE_THOUGHTS.length)]);
+        const musePool = this.world.culture === 'orc' ? IDLE_THOUGHTS_ORC : IDLE_THOUGHTS;
+        this.think(this.rand() < 0.4 ? `REMEMBERING: ${String(s.memory.title).slice(0, 26)}..` : musePool[Math.floor(this.rand() * musePool.length)]);
         // wander to an owned interior field tile (works for L-shaped plots; never a hole/outside)
         if (spots.length) { const t = spots[Math.floor(this.rand() * spots.length)]; this.#goTo(t.i + 0.5, t.j + 0.5, 'wander'); }
         else { const d = this.world.houseDoor(this.plot); this.#goTo(d.i, d.j, 'wander'); }
     }
 
     #thinkTask(task) {
-        if (task.act === 'collect' && task.prod) this.think(`GATHERING ${(FACILITY_YIELD_NAME[task.prod.kind] || 'produce').toUpperCase()}!`);
-        else if (task.act === 'tend' && task.prod) this.think(task.prod.kind === 'pad' ? 'TENDING THE LILIES' : `FEEDING THE ${task.prod.kind.toUpperCase()}S`);
-        else if (task.act === 'mill') this.think('GRINDING WHEAT INTO GRAIN');
-        else if (task.act === 'hatch') this.think('SETTING A CLUTCH TO HATCH');
-        else if (task.act === 'harvest') this.think(`MY ${task.crop.type.toUpperCase()} IS READY!`);
-        else if (task.act === 'clear') this.think('CLEARING OUT THE DEAD ONES');
-        else if (task.act === 'water') this.think('WATER FOR THE THIRSTY ONES');
-        else if (task.act === 'plant') this.think(`SOWING ${(task.field ? this.world.cropForField(this, task.field.i, task.field.j) : this.sheet.crop).toUpperCase()} SEEDS`);
-        else if (task.act === 'till') this.think('BREAKING NEW GROUND');
+        const orc = this.world.culture === 'orc';   // #94 orc-speech: the same chore, spoken as taking
+        if (task.act === 'collect' && task.prod) this.think(`${orc ? 'SEIZING' : 'GATHERING'} ${(FACILITY_YIELD_NAME[task.prod.kind] || 'produce').toUpperCase()}!`);
+        else if (task.act === 'tend' && task.prod) this.think(task.prod.kind === 'pad' ? (orc ? 'MINDING THE LEECH-BOG' : 'TENDING THE LILIES') : `${orc ? 'FATTENING' : 'FEEDING'} THE ${task.prod.kind.toUpperCase()}S`);
+        else if (task.act === 'mill') this.think(orc ? 'GRINDING GRAIN IN THE BONE-MILL' : 'GRINDING WHEAT INTO GRAIN');
+        else if (task.act === 'hatch') this.think(orc ? 'SETTING A BROOD TO HATCH' : 'SETTING A CLUTCH TO HATCH');
+        else if (task.act === 'harvest') this.think(`MY ${task.crop.type.toUpperCase()} IS ${orc ? 'RIPE FOR TAKING!' : 'READY!'}`);
+        else if (task.act === 'clear') this.think(orc ? 'CULLING THE DEAD ONES' : 'CLEARING OUT THE DEAD ONES');
+        else if (task.act === 'water') this.think(orc ? 'DRINK OR DIE, WRETCHES' : 'WATER FOR THE THIRSTY ONES');
+        else if (task.act === 'plant') this.think(`${orc ? 'DRIVING' : 'SOWING'} ${(task.field ? this.world.cropForField(this, task.field.i, task.field.j) : this.sheet.crop).toUpperCase()} ${orc ? 'INTO THE DIRT' : 'SEEDS'}`);
+        else if (task.act === 'till') this.think(orc ? 'BREAKING THIS GROUND' : 'BREAKING NEW GROUND');
     }
 
     #decideHelp() {
