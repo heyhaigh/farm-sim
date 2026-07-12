@@ -131,6 +131,7 @@ class FarmAudio {
         this.hasRooster = false;
         this.crickets = [];         // panned chirp voices
         this.owls = [];             // winter-night hooters
+        this.toads = [];            // #3.1 orc spring/summer-night ribbits
     }
 
     // create + start the context (must be called from a user gesture)
@@ -164,6 +165,12 @@ class FarmAudio {
         this.owls = [-0.5, 0.55].map(pan => ({
             next: t + 2 + Math.random() * 5, pan,
             f: 300 + Math.random() * 70,
+            out: this.#panned(this.cricketGain, pan),
+        }));
+        // #3.1 orc spring/summer nights: TOADS instead of crickets — low, throaty, sparse ribbits
+        this.toads = [-0.55, 0.15, 0.6].map(pan => ({
+            next: t + Math.random() * 2.5, pan,
+            f: 175 + Math.random() * 95,
             out: this.#panned(this.cricketGain, pan),
         }));
         // lookahead scheduler for the music + night chorus
@@ -232,18 +239,23 @@ class FarmAudio {
             this.nextBar += bar;
             this.barIdx = (this.barIdx + 1) % song.chords.length;
         }
-        // night chorus: crickets in the green months, owls on winter nights
+        // night chorus: crickets in the green months, owls on winter nights — but an ORC warband's spring/
+        // summer nights ribbit with TOADS instead of chirp with crickets (#3.1).
         const winter = this.season === 3;
+        const orcToads = this.culture === 'orc' && (this.season === 0 || this.season === 1);
         if (this.nightMix > 0.15) {
-            if (!winter) for (const v of this.crickets) {
+            if (!winter && !orcToads) for (const v of this.crickets) {
                 while (v.next < t + 0.4) { this.#chirp(v.next, v); v.next += 0.3 + Math.random() * 1.1; }
+            }
+            if (orcToads) for (const v of this.toads) {
+                while (v.next < t + 0.4) { this.#croak(v.next, v); v.next += 1.4 + Math.random() * 3.2; }
             }
             if (winter) for (const v of this.owls) {
                 while (v.next < t + 0.4) { this.#hoot(v.next, v); v.next += 4 + Math.random() * 7; }
             }
         }
         // idle voices drift forward so they don't burst on the next nightfall
-        for (const v of [...this.crickets, ...this.owls]) if (v.next < t) v.next = t + Math.random() * 2;
+        for (const v of [...this.crickets, ...this.owls, ...this.toads]) if (v.next < t) v.next = t + Math.random() * 2;
     }
 
     #scheduleBar(t0, song, idx) {
@@ -445,6 +457,27 @@ class FarmAudio {
             o.connect(g); g.connect(voice.out);
             o.start(t); o.stop(t + dur + 0.05);
         }
+    }
+
+    #croak(t0, voice) {
+        // one toad: a low, throaty "rrr-ribbit" — a buzzy sawtooth burst gated by a fast amplitude tremolo
+        // (the pulsing "rrr"), bandpassed for a wet throat, with a slight upward "-bit" bend at the end.
+        const f = voice.f, dur = 0.26 + Math.random() * 0.16;
+        const o = this.ctx.createOscillator(); o.type = 'sawtooth';
+        o.frequency.setValueAtTime(f, t0);
+        o.frequency.linearRampToValueAtTime(f * 1.14, t0 + dur);
+        const bp = this.ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = f * 2.6; bp.Q.value = 3.2;
+        const g = this.ctx.createGain();
+        g.gain.setValueAtTime(0.0001, t0);
+        g.gain.linearRampToValueAtTime(0.12, t0 + 0.03);
+        g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+        // the ribbit texture: a fast square LFO chopping the amplitude ~26-36 Hz
+        const lfo = this.ctx.createOscillator(); lfo.type = 'square'; lfo.frequency.value = 26 + Math.random() * 10;
+        const lfoG = this.ctx.createGain(); lfoG.gain.value = 0.05;
+        lfo.connect(lfoG); lfoG.connect(g.gain);
+        o.connect(bp); bp.connect(g); g.connect(voice.out);
+        o.start(t0); o.stop(t0 + dur + 0.05);
+        lfo.start(t0); lfo.stop(t0 + dur + 0.05);
     }
 
     // debug/preview hook — RYFARMS.audio.playCrow() triggers a crow on demand
