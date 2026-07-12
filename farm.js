@@ -1590,16 +1590,25 @@ export class World {
                     { tier: 'callout', tone: 'somber', why: 'a broken parley' });
                 n++;
             } else if (e.kind === 'traveler') {
-                // Slice C — a surviving traveler's warning reaches town (day >= arrivalDay). It PRIMES the
-                // town's most-curious soul for contact: their curiosity lifts, so as envoy they're likelier to
-                // come to the table — the traveler's peaceful word is literally what earns the first parley
-                // (Fable rec 3, wired through the existing envoy/willParley gate; no new balance surface).
-                const warn = (e.payload && e.payload.warning) || 'strangers are near';
-                const f = this.#mostCuriousFarmer();
-                this.addChronicle('lineage', `A weary traveler reached ${this.name}: ${warn}.`, f, null, '#c8b0e0',
-                    { tier: 'callout', tone: 'somber', why: 'word carried from beyond the frontier', day: this.day });
-                if (f) f.hearTraveler(e.payload || {});
-                n++;
+                const pl = e.payload || {};
+                if (pl.type === 'news') {
+                    // Slice D — word of a DISTANT clash reaches town: memory travelling the graph (town A raided
+                    // town B, and town C hears of it). Chronicle only (no mechanical effect on a third party).
+                    this.addChronicle('lineage', `Word reached ${this.name} from afar: ${pl.text}.`, null, null, '#b0b8d0',
+                        { tier: 'callout', tone: 'somber', why: 'news carried across the frontier', day: this.day });
+                    n++;
+                } else {
+                    // Slice C — a surviving traveler's WARNING reaches town (day >= arrivalDay). It PRIMES the
+                    // town's most-curious soul for contact: their curiosity lifts, so as envoy they're likelier to
+                    // come to the table — the traveler's peaceful word is literally what earns the first parley
+                    // (Fable rec 3, wired through the existing envoy/willParley gate; no new balance surface).
+                    const warn = pl.warning || 'strangers are near';
+                    const f = this.#mostCuriousFarmer();
+                    this.addChronicle('lineage', `A weary traveler reached ${this.name}: ${warn}.`, f, null, '#c8b0e0',
+                        { tier: 'callout', tone: 'somber', why: 'word carried from beyond the frontier', day: this.day });
+                    if (f) f.hearTraveler(pl);
+                    n++;
+                }
             }
         }
         return n;

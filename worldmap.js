@@ -8,7 +8,7 @@
 // town's seeded sim; it's display/persistence only, the same boundary as the LLM/shader side-channels.
 
 import { hashString } from './dna.js';
-import { lineagePairKey, isCrossFaction, foldDisposition, dispositionTier, resolveEncounter, applyOutcome, seedTraveler, TRAVELER } from './reconciliation.js';
+import { lineagePairKey, isCrossFaction, foldDisposition, dispositionTier, resolveEncounter, applyOutcome, seedTraveler, seedNews, newsLine, TRAVELER } from './reconciliation.js';
 
 const WORLD_W = 1000, WORLD_H = 640;   // abstract world-plane units (the map view scales these to the screen)
 
@@ -99,7 +99,7 @@ export function detectEncounters(index) {
                 pairKey: key, ordinal: 0, aSeed: A.seed, bSeed: B.seed, aCulture: A.culture, bCulture: B.culture,
                 aName: A.name, bName: B.name, ax: A.x, ay: A.y, bx: B.x, by: B.y, discoveryDay, dist,
             });
-            index.pairs[key] = { state: 'enRoute', origin: t.origin, destination: t.destination, fate: t.fate,
+            index.pairs[key] = { state: 'enRoute', origin: t.origin, destination: t.destination, fate: t.fate, lostAt: t.lostAt,
                 discoveryDay, arrivalDay: t.arrivalDay, warning: t.warning, bearing: t.bearing, fromCulture: t.fromCulture };
             // Slice C: a LOST traveler delivers nothing — no inbox event, so the destination never learns and
             // the pair meets by surprise (base curiosity, no parley boost). Only a survivor's warning arrives.
@@ -109,6 +109,7 @@ export function detectEncounters(index) {
 
         if (d2 > rr * rr) continue;              // not yet within reach of each other
         met.add(key);
+        (index.pairs[key] = index.pairs[key] || {}).state = 'met';   // Slice D: the traveler marker retires once they actually meet
         const day = Math.max(A.day, B.day);
 
         if (!isCrossFaction(A, B)) {
@@ -155,6 +156,26 @@ export function detectEncounters(index) {
             queueInbox(index, victimTown.seed, { kind: 'betrayed', pairKey: lpk, ordinal, day, envoy: victimTown.envoy && victimTown.envoy.seed, by: (res.betrayer === 'orc' ? orc.name : human.name) });
         }
         fresh.push(ev);
+
+        // Slice D — NEWS PROPAGATION: word of this clash travels to the NEAREST THIRD town (memory across the
+        // graph). Seeded carrier (payload.type='news'); a lost courier delivers nothing. Exactly-once via id.
+        const d2To = (n, T) => { const ex = n.x - T.x, ey = n.y - T.y; return ex * ex + ey * ey; };
+        let third = null, bestD = Infinity;
+        for (const n of nodes) {
+            if (n === A || n === B) continue;
+            const nd = Math.min(d2To(n, A), d2To(n, B));
+            if (nd < bestD || (nd === bestD && third && n.seed < third.seed)) { bestD = nd; third = n; }
+        }
+        if (third) {
+            const fromNode = d2To(third, A) <= d2To(third, B) ? A : B;
+            const news = seedNews({ eventKey: lpk, ordinal, toSeed: third.seed, discoveryDay: day, dist: Math.sqrt(bestD) });
+            if (news.fate === 'arrives') queueInbox(index, third.seed, {
+                kind: 'traveler', pairKey: `news:${lpk}`, ordinal, day: news.arrivalDay, id: `news:${lpk}:${ordinal}:${third.seed}`,
+                payload: { type: 'news', text: newsLine(ev.kind, orc.name, human.name), of: ev.kind, fromCulture: fromNode.culture },
+            });
+            index.news = (index.news || []).concat([{ origin: fromNode.seed, destination: third.seed, fate: news.fate,
+                lostAt: news.lostAt, discoveryDay: day, arrivalDay: news.arrivalDay, of: ev.kind }]).slice(-40);
+        }
     }
     if (fresh.length) index.encounters = (index.encounters || []).concat(fresh);
     index.v = WORLD_INDEX_VERSION;

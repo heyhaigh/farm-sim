@@ -2880,11 +2880,39 @@ function drawWorldMap() {
         const ox = toX(O), oy = toY(O), dsx = toX(D), dsy = toY(D);
         ctx.strokeStyle = 'rgba(220,200,150,0.20)'; ctx.setLineDash([2, 3]); ctx.lineWidth = 1;
         ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(dsx, dsy); ctx.stroke(); ctx.setLineDash([]);
-        const mx = ox + (dsx - ox) * prog, my = oy + (dsy - oy) * prog;
-        const col = p.fromCulture === 'orc' ? '#e0806a' : '#8fd070';   // whose traveler it is
-        const pulse = 1.5 + Math.sin(performance.now() / 300) * 0.5;
-        ctx.fillStyle = col; ctx.beginPath(); ctx.arc(mx, my, pulse, 0, Math.PI * 2); ctx.fill();
-        ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.lineWidth = 0.5; ctx.stroke();
+        // Slice D: a LOST traveler falls at its seeded point — show a dim '×' there, not a live pulsing dot.
+        const lost = p.fate === 'lost', lostAt = p.lostAt || 1;
+        const eff = lost ? Math.min(prog, lostAt) : prog;
+        const mx = ox + (dsx - ox) * eff, my = oy + (dsy - oy) * eff;
+        if (lost && prog >= lostAt) {
+            ctx.strokeStyle = 'rgba(150,150,150,0.65)'; ctx.lineWidth = 0.7;
+            ctx.beginPath(); ctx.moveTo(mx - 2, my - 2); ctx.lineTo(mx + 2, my + 2); ctx.moveTo(mx + 2, my - 2); ctx.lineTo(mx - 2, my + 2); ctx.stroke();
+        } else {
+            const col = p.fromCulture === 'orc' ? '#e0806a' : '#8fd070';   // whose traveler it is
+            const pulse = 1.5 + Math.sin(performance.now() / 300) * 0.5;
+            ctx.fillStyle = col; ctx.beginPath(); ctx.arc(mx, my, pulse, 0, Math.PI * 2); ctx.fill();
+            ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.lineWidth = 0.5; ctx.stroke();
+        }
+    }
+    // Slice D — NEWS couriers: amber markers carrying word of a distant clash to a third town (memory across the
+    // graph). Retire on delivery (prog>=1); a lost courier leaves a faint '×'.
+    for (const nw of (idx.news || [])) {
+        const O = bySeed.get(String(nw.origin)), D = bySeed.get(String(nw.destination)); if (!O || !D) continue;
+        const span = Math.max(1, nw.arrivalDay - nw.discoveryDay);
+        const prog = Math.max(0, Math.min(1, ((D.day || 0) - nw.discoveryDay) / span));
+        const lost = nw.fate === 'lost', lostAt = nw.lostAt || 1;
+        if (!lost && prog >= 1) continue;                        // delivered — retire
+        const ox = toX(O), oy = toY(O), dsx = toX(D), dsy = toY(D);
+        ctx.strokeStyle = 'rgba(224,200,96,0.16)'; ctx.setLineDash([1, 3]); ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(dsx, dsy); ctx.stroke(); ctx.setLineDash([]);
+        const eff = lost ? Math.min(prog, lostAt) : prog;
+        const mx = ox + (dsx - ox) * eff, my = oy + (dsy - oy) * eff;
+        if (lost && prog >= lostAt) {
+            ctx.strokeStyle = 'rgba(150,150,150,0.6)'; ctx.lineWidth = 0.7;
+            ctx.beginPath(); ctx.moveTo(mx - 1.6, my - 1.6); ctx.lineTo(mx + 1.6, my + 1.6); ctx.moveTo(mx + 1.6, my - 1.6); ctx.lineTo(mx - 1.6, my + 1.6); ctx.stroke();
+        } else {
+            ctx.fillStyle = '#e0c060'; ctx.beginPath(); ctx.arc(mx, my, 1.4, 0, Math.PI * 2); ctx.fill();
+        }
     }
     // town dots + labels
     for (const n of nodes) {

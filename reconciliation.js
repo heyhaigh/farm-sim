@@ -138,6 +138,7 @@ export function seedTraveler({ pairKey, ordinal, aSeed, bSeed, aCulture, bCultur
     const [tx, ty] = originIsA ? [bx, by] : [ax, ay];
     const bearing = BEARING(ox - tx, oy - ty);
     const fate = rand() < TRAVELER.loseOdds ? 'lost' : 'arrives';
+    const lostAt = fate === 'lost' ? +(0.3 + rand() * 0.5).toFixed(3) : 1;   // where along the path a lost one falls
     const arrivalDay = discoveryDay + journeyDays(dist);
     const cross = (fromCulture === 'orc') !== (toCulture === 'orc');
     const warning = cross
@@ -145,5 +146,22 @@ export function seedTraveler({ pairKey, ordinal, aSeed, bSeed, aCulture, bCultur
             ? `an orc warband stirs to the ${bearing}`
             : `smoke from human hearths to the ${bearing}`)
         : `kin are near — a ${toCulture === 'orc' ? 'warband' : 'village'} to the ${bearing}`;
-    return { origin, destination, fromCulture, toCulture, fromName, bearing, fate, arrivalDay, warning, ordinal, pairKey };
+    return { origin, destination, fromCulture, toCulture, fromName, bearing, fate, lostAt, arrivalDay, warning, ordinal, pairKey };
+}
+
+// Slice D — NEWS PROPAGATION. When two towns clash (or keep faith), word of it travels to a THIRD town: memory
+// moving across the whole graph, the SuperMemory showpiece. Same seeded-carrier machinery, payload.type='news'.
+export function newsLine(kind, orcName, humanName) {
+    const o = String(orcName || 'a warband').split(' ')[0], h = String(humanName || 'a village').split(' ')[0];
+    if (kind === 'raid') return `the ${o} warband fell upon ${h}`;
+    if (kind === 'reconciled') return `${h} and the ${o} warband kept faith at the frontier`;
+    if (kind === 'betrayed') return `a parley between ${h} and the ${o} warband was broken`;
+    return `${h} and ${o} came into each other's reach`;
+}
+export function seedNews({ eventKey, ordinal, toSeed, discoveryDay, dist }) {
+    const rand = mulberry32(hashString(`news:${eventKey}:${ordinal}:${toSeed}`));
+    const fate = rand() < TRAVELER.loseOdds ? 'lost' : 'arrives';
+    const lostAt = fate === 'lost' ? +(0.3 + rand() * 0.5).toFixed(3) : 1;
+    const arrivalDay = discoveryDay + journeyDays(dist);
+    return { fate, lostAt, arrivalDay };
 }
