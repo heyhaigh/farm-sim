@@ -3832,7 +3832,7 @@ function drawCivicBand(PX, y, PW) {
         const hLabel = cultureWord(world.culture, 'role.healer');
         drawText(ctx, hLabel, IX, ty, '#9a7fc0');
         drawText(ctx, hlr.sheet.name.split(' ')[0].toUpperCase(), IX + textWidth(hLabel + ' '), ty, '#e8c860');
-        if (roles.healerNeedsHerbs) drawText(ctx, 'NEEDS HERBS', IX + textWidth('HEALER ') + textWidth(hlr.sheet.name.split(' ')[0].toUpperCase() + '  '), ty, '#e0a03c');
+        if (roles.healerNeedsHerbs) drawText(ctx, 'NEEDS HERBS', IX + textWidth(hLabel + ' ') + textWidth(hlr.sheet.name.split(' ')[0].toUpperCase() + '  '), ty, '#e0a03c');
         const ha = Math.max(0, Math.min(1, roles.healerApproval));
         const hbW = 46, hbx = RX - hbW;
         drawText(ctx, 'TRUST', hbx - textWidth('TRUST '), ty, '#6a6f7c');
