@@ -34,11 +34,33 @@ function idbReq(mode, fn) {
     }));
 }
 
-// Persist the world. Returns the saved day, or null if storage failed (never throws).
+// Persist the world. Returns the saved day, or null if storage failed / was refused (never throws).
+// Codex #22.1 — the town snapshot carries a monotonic `_rev`. The write is a COMPARE-AND-SET inside ONE
+// transaction: read the stored snapshot; if another tab has advanced past our rev, REFUSE the write (don't
+// clobber a newer snapshot with our stale state and regress the town's day). On success, advance our rev.
 export async function saveTown(world) {
     try {
-        const data = world.serialize();
-        await idbReq('readwrite', s => s.put(data, 'town:' + world.seed));
+        const data = world.serialize();               // data._rev = world._rev
+        const key = 'town:' + world.seed, myRev = data._rev || 0;
+        const db = await openDb();
+        const committed = await new Promise((resolve, reject) => {
+            const tx = db.transaction(STORE, 'readwrite');
+            const store = tx.objectStore(STORE);
+            let ahead = false;
+            const g = store.get(key);
+            g.onsuccess = () => {
+                const stored = g.result;
+                if (stored && (stored._rev || 0) > myRev) { ahead = true; return; }   // another tab is ahead — don't put
+                data._rev = myRev + 1;
+                store.put(data, key);
+            };
+            g.onerror = () => reject(g.error);
+            tx.oncomplete = () => resolve(!ahead);
+            tx.onerror = () => reject(tx.error);
+            tx.onabort = () => reject(tx.error || new Error('save txn aborted'));
+        });
+        if (!committed) { console.warn('ry-farms: save refused — another tab holds a newer snapshot of this town (reload to catch up)'); return null; }
+        world._rev = data._rev;                        // adopt the advanced rev in memory
         await idbReq('readwrite', s => s.put({ seed: world.seed, day: data.day, season: data.season, year: data.year, savedAt: Date.now() }, 'latest'));
         return data.day;
     } catch (err) {

@@ -1559,7 +1559,13 @@ export class World {
         // inbox re-delivers on reload); tracking APPLIED event ids makes the effect exactly-once — a re-delivered
         // raid can't dock the stores twice. The applied set rides the save (capped so it can't grow unbounded).
         this._inboxApplied = this._inboxApplied || [];
-        const applied = new Set(this._inboxApplied);
+        // Codex #22.2: the capped applied-id list is a FIFO — an old event re-delivered after 200 newer ones
+        // could re-apply. A DURABLE per-pairKey ordinal WATERMARK closes it: events crossing into a town from a
+        // given pairKey namespace (lpk for raids/parleys, the town-pair for the one traveler, `news:lpk` for
+        // news) arrive with monotonically-increasing ordinals, so anything at-or-below the highest already
+        // applied for that pairKey is a stale re-delivery — skip it even if its id was evicted from the list.
+        this._inboxWatermark = this._inboxWatermark || {};
+        const applied = new Set(this._inboxApplied), wm = this._inboxWatermark;
         const sorted = events.slice().sort((a, b) =>
             (a.day - b.day) ||
             (a.pairKey < b.pairKey ? -1 : a.pairKey > b.pairKey ? 1 : 0) ||
@@ -1568,11 +1574,14 @@ export class World {
         let n = 0;
         for (const e of sorted) {
             const eid = e.id || `${e.pairKey}:${e.ordinal}:${e.kind}`;
+            const pk = e.pairKey, ord = e.ordinal || 0;
             if (applied.has(eid)) continue;                       // already applied — skip (exactly-once)
+            if (pk != null && wm[pk] != null && ord <= wm[pk]) continue;   // stale re-delivery below the watermark
             // Slice C: a traveler still en route (arrivalDay in the future) is left UNAPPLIED so it lands only
             // when the sim actually reaches that day (deterministic; wall-clock/reloads can't move it).
             if (e.kind === 'traveler' && this.day < (e.day || 0)) continue;
             applied.add(eid); this._inboxApplied.push(eid);
+            if (pk != null) wm[pk] = Math.max(wm[pk] ?? -1, ord);   // advance the watermark on apply
             if (this._inboxApplied.length > 200) this._inboxApplied.splice(0, this._inboxApplied.length - 200);
             const envoy = e.envoy != null ? this.farmers.find(f => f.sheet.seed === e.envoy) : null;
             if (e.kind === 'raided') {
@@ -2377,7 +2386,9 @@ export class World {
         const plotIdx = new Map(this.plots.map((p, i) => [p, i]));
         const snap = {
             v: World.SAVE_VERSION, seed: this.seed, name: this.name, culture: this.culture, lineageRoot: this.lineageRoot,
+            _rev: this._rev || 0,   // Codex #22.1 monotonic save revision (CAS in saveTown rejects a stale overwrite)
             inboxApplied: (this._inboxApplied || []).slice(-200),   // #reconciliation exactly-once inbox ledger
+            inboxWatermark: { ...(this._inboxWatermark || {}) },    // Codex #22.2 durable per-pairKey ordinal watermark
             // continue the RNG from a save-derived seed WITHOUT consuming the live stream
             // (saving must never be observable to the sim)
             randSeed: (this.seed ^ Math.imul(this.day, 2654435761) ^ ((this.time * 997) | 0)) >>> 0,
@@ -2494,7 +2505,9 @@ export class World {
 
     #restoreFrom(d) {
         this.culture = d.culture === 'orc' ? 'orc' : 'human';   // #3.1 (pre-culture saves default to human)
+        this._rev = d._rev || 0;   // Codex #22.1 save revision (loaded snapshot's rev; saveTown advances it)
         this._inboxApplied = Array.isArray(d.inboxApplied) ? d.inboxApplied : [];   // #reconciliation exactly-once
+        this._inboxWatermark = (d.inboxWatermark && typeof d.inboxWatermark === 'object') ? { ...d.inboxWatermark } : {};
         this.lineageRoot = d.lineageRoot != null ? String(d.lineageRoot) : String(this.seed);   // #reconciliation lineage root
         this.name = d.name || generateTownName(this.seed, this.culture);   // (pre-name saves regenerate deterministically)
         this.rand = mulberry32(d.randSeed >>> 0);
