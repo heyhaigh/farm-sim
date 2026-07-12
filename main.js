@@ -2689,16 +2689,35 @@ function drawSpeakerIcon(x, y, on) {
     }
 }
 
-// a clean, symmetric gear cog (icon-only) for the settings button — drawn procedurally on a
-// 9x9 field so the round body, 8 teeth, and centre hole all stay uniform at pixel scale.
+// Settings cog — the pixel-style cog from cog-solid.svg, rasterized once to a small field and tinted for
+// active/idle. Inline SVG data-URI (no external fetch; CSP-safe). Falls back to the procedural gear until it
+// rasterizes. The SVG is white-filled so each tint is made by masking a colour rect through its alpha.
+const COG_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#fff" d="m21,10v-1h-1v-2h1v-2h-1v-1h-1v-1h-2v1h-2v-1h-1V1h-4v2h-1v1h-2v-1h-2v1h-1v1h-1v2h1v2h-1v1H1v4h2v1h1v2h-1v2h1v1h1v1h2v-1h2v1h1v2h4v-2h1v-1h2v1h2v-1h1v-1h1v-2h-1v-2h1v-1h2v-4h-2Zm-11,0v-1h4v1h1v4h-1v1h-4v-1h-1v-4h1Z"/></svg>';
+const cogImg = new Image(); let cogReady = false;
+cogImg.onload = () => { cogReady = true; }; cogImg.onerror = () => {};
+cogImg.src = 'data:image/svg+xml,' + encodeURIComponent(COG_SVG);
+const _cogTint = {};   // "size:color" -> tinted offscreen canvas
+function cogIcon(size, color) {
+    if (!cogReady || !cogImg.naturalWidth) return null;
+    const key = size + ':' + color; let c = _cogTint[key];
+    if (!c) {
+        const [cv, cx] = makeCanvas(size, size); cx.imageSmoothingEnabled = false;
+        cx.drawImage(cogImg, 0, 0, size, size);
+        cx.globalCompositeOperation = 'source-in'; cx.fillStyle = color; cx.fillRect(0, 0, size, size);
+        _cogTint[key] = c = cv;
+    }
+    return c;
+}
 function drawGearIcon(x, y, active) {
-    ctx.fillStyle = active ? '#7dd069' : '#c8ccd8';
-    const R = 4;   // field is (2R+1)=9 wide, centre at (R,R)
+    const col = active ? '#7dd069' : '#c8ccd8';
+    const icon = cogIcon(11, col);
+    if (icon) { ctx.imageSmoothingEnabled = false; ctx.drawImage(icon, x - 1, y - 1); return; }
+    // fallback (until the SVG rasterizes): the procedural gear on a 9x9 field
+    ctx.fillStyle = col;
+    const R = 4;
     for (let gy = 0; gy <= 2 * R; gy++) for (let gx = 0; gx <= 2 * R; gx++) {
         const dx = gx - R, dy = gy - R, ax = Math.abs(dx), ay = Math.abs(dy), r = Math.hypot(dx, dy);
-        const body = r <= 2.9;                                        // round hub/body
-        const tooth = r <= 3.9 && (ax <= 1 || ay <= 1 || ax === ay);  // 8 teeth: 4 cardinal + 4 diagonal
-        const hole = r <= 1.25;                                       // centre bore
+        const body = r <= 2.9, tooth = r <= 3.9 && (ax <= 1 || ay <= 1 || ax === ay), hole = r <= 1.25;
         if ((body || tooth) && !hole) ctx.fillRect(x + gx, y + gy, 1, 1);
     }
 }
