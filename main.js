@@ -2841,9 +2841,9 @@ function drawUI() {
     };
 
     // sound toggle — RIGHTMOST (drawn first), a speaker icon (with an X when muted), no text
-    barIconBtn(SND_BTN, 15, (x, y) => drawSpeakerIcon(x + 3, y + 2, audio.enabled));
+    barIconBtn(SND_BTN, 12, (x, y) => drawSpeakerIcon(x + 2, y + 2, audio.enabled));
     // settings cog — folds in New Town + music/SFX volume (sound on/off stays a top-bar quick action)
-    barIconBtn(SETTINGS_BTN, 15, (x, y) => drawGearIcon(x + 3, y + 2, settingsOpen));   // green icon = active, no bg swap
+    barIconBtn(SETTINGS_BTN, 12, (x, y) => drawGearIcon(x + 2, y + 2, settingsOpen));   // green icon = active, no bg swap
 
     // speed controls in the corner: > = 5x, >> = 20x; a 1X revert appears while sped up
     const spd = world._speedMult || 1;
@@ -2854,9 +2854,9 @@ function drawUI() {
     // look (not the red 'selected' fill), which is reserved for the >/>> that IS active.
     if (spd !== 1) barBtn(SPEED1_BTN, '1X', false);
 
-    barIconBtn(ROSTER_BTN, 15, (x, y, act) => drawUsersIcon(x + 3, y + 2, act), rosterOpen, '#7dd069');   // users icon (was ROSTER/WARBAND text)
-    barIconBtn(WORLD_BTN, 15, (x, y, act) => drawGlobeIcon(x + 3, y + 2, act), worldMapOpen, '#c8b0e0');   // globe icon (was 'WORLD' text)
-    barIconBtn(CHRON_BTN, 15, (x, y, act) => drawBankIcon(x + 3, y + 2, act), chronOpen, '#c8a0e0');   // bank icon (was CHRONICLE/THE SAGA text)
+    barIconBtn(ROSTER_BTN, 12, (x, y, act) => drawUsersIcon(x + 2, y + 2, act), rosterOpen, '#7dd069');   // users icon (was ROSTER/WARBAND text)
+    barIconBtn(WORLD_BTN, 12, (x, y, act) => drawGlobeIcon(x + 2, y + 2, act), worldMapOpen, '#c8b0e0');   // globe icon (was 'WORLD' text)
+    barIconBtn(CHRON_BTN, 12, (x, y, act) => drawBankIcon(x + 2, y + 2, act), chronOpen, '#c8a0e0');   // bank icon (was CHRONICLE/THE SAGA text)
     if ((world._chronTotal || 0) > chronReadTotal && !chronOpen) drawCoin(CHRON_BTN.x + CHRON_BTN.w - 3, CHRON_BTN.y - 2, 6);   // UNREAD only
 
     // (NEW TOWN moved into the settings menu.) A quiet "SAVED" tick under the cog whenever the town
