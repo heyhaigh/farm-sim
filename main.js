@@ -2768,7 +2768,12 @@ function drawWorldMap() {
                 worldMapVisit = { x: bx, y: by, w: vbw, h: 9, seed: n.seed };
             } else drawText(ctx, 'you are here', cardX + cardW - 52, cardY + cardH - 10, '#f0e0a0');
         }
-    } else drawText(ctx, 'click a town - lines: lineage - gold: encounters', PX + 8, PY + PH - 11, '#7a8090');
+    } else {
+        // colour-keyed legend so the lines explain themselves (each word in its own line colour)
+        let lx = PX + 8; const ly = PY + PH - 11;
+        const seg = (t, c) => { drawText(ctx, t, lx, ly, c); lx += textWidth(t + ' '); };
+        seg('LINEAGE', '#c8a0e0'); seg('RAID', '#e6503c'); seg('PEACE', '#7dd069'); seg('MEETING', '#e6c878'); seg('- click a town', '#7a8090');
+    }
 }
 
 // ---------------------------------------------------------------------------
