@@ -119,6 +119,17 @@ export const TRAVELER = {
     daysPerUnit: 0.045,  // sim-days of journey per world-map distance unit
     minDays: 2, maxDays: 16,
 };
+
+// #doctrine (strategist v1) — a town's war/movement posture, four historical models. `commit` = fraction of
+// the DEFENDER's stores a raid takes (replaces the flat 0.2); `scouts` = 0 silent/surprise, 1 normal, 2
+// telegraphed+reliable; `biteReduce` = the walled town's defensive reduction of an incoming raid. Pure data.
+export const DOCTRINE_DEFS = {
+    comitatus:   { commit: 0.15, scouts: 1, biteReduce: 1 },    // Germanic sworn band — orc default; disciplined raid
+    strandhogg:  { commit: 0.30, scouts: 0, biteReduce: 1 },    // Viking shore-snatch — silent, surprise, gone by tide
+    greatMuster: { commit: 0.55, scouts: 2, biteReduce: 1 },    // fyrd/hoplite levy — the whole host, slow + telegraphed
+    palisade:    { commit: 0,    scouts: 2, biteReduce: 0.5 },  // Pueblo/Swiss turtle — never raids; halves an incoming one
+};
+export function doctrineDef(id) { return DOCTRINE_DEFS[id] || DOCTRINE_DEFS.comitatus; }
 export function journeyDays(dist) {
     return Math.max(TRAVELER.minDays, Math.min(TRAVELER.maxDays, Math.round(dist * TRAVELER.daysPerUnit)));
 }
@@ -127,9 +138,14 @@ const BEARING = (dx, dy) => (Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'east' : 'w
 // Pure. Returns the whole traveler up front: origin/destination town seeds, fate, the sim-DAY it arrives, and
 // the procedural warning the destination will hear. `dx,dy` point origin->? we pass the raw vector A->B and
 // resolve bearing from the destination's side below.
-export function seedTraveler({ pairKey, ordinal, aSeed, bSeed, aCulture, bCulture, aName, bName, ax, ay, bx, by, discoveryDay, dist }) {
+export function seedTraveler({ pairKey, ordinal, aSeed, bSeed, aCulture, bCulture, aName, bName, ax, ay, bx, by, discoveryDay, dist, aScouts = 1, bScouts = 1 }) {
     const rand = mulberry32(hashString(`trav:${pairKey}:${ordinal}:${aSeed}:${bSeed}`));
-    const originIsA = rand() < 0.5;
+    let originIsA = rand() < 0.5;
+    // #doctrine scouting: the warning is carried by whoever SENDS scouts. A silent town (scouts=0) never
+    // originates one, so flip to the scouting side; if NEITHER scouts, no warning is ever carried -> the fate
+    // is forced 'lost' -> guaranteed surprise contact. A redundant pair (scouts=2) makes the warning reliable.
+    if ((originIsA ? aScouts : bScouts) === 0 && (originIsA ? bScouts : aScouts) > 0) originIsA = !originIsA;
+    const bothSilent = aScouts === 0 && bScouts === 0;
     const origin = originIsA ? aSeed : bSeed, destination = originIsA ? bSeed : aSeed;
     const fromCulture = originIsA ? aCulture : bCulture, toCulture = originIsA ? bCulture : aCulture;
     const fromName = originIsA ? aName : bName;
@@ -137,7 +153,9 @@ export function seedTraveler({ pairKey, ordinal, aSeed, bSeed, aCulture, bCultur
     const [ox, oy] = originIsA ? [ax, ay] : [bx, by];
     const [tx, ty] = originIsA ? [bx, by] : [ax, ay];
     const bearing = BEARING(ox - tx, oy - ty);
-    const fate = rand() < TRAVELER.loseOdds ? 'lost' : 'arrives';
+    const loseOdds = (originIsA ? aScouts : bScouts) >= 2 ? TRAVELER.loseOdds * 0.5 : TRAVELER.loseOdds;
+    const roll = rand();   // always drawn (keeps the rng stream stable) — bothSilent just overrides the result
+    const fate = (bothSilent || roll < loseOdds) ? 'lost' : 'arrives';
     const lostAt = fate === 'lost' ? +(0.3 + rand() * 0.5).toFixed(3) : 1;   // where along the path a lost one falls
     const arrivalDay = discoveryDay + journeyDays(dist);
     const cross = (fromCulture === 'orc') !== (toCulture === 'orc');

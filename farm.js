@@ -1577,7 +1577,9 @@ export class World {
             const envoy = e.envoy != null ? this.farmers.find(f => f.sheet.seed === e.envoy) : null;
             if (e.kind === 'raided') {
                 // STAKES: the season's labor taken in a night — dock the stores (drives reach + roster yield).
-                const lost = Math.round((this.harvestTotal || 0) * 0.2);
+                // #doctrine: the raider's commitment (x the defender's wall reduction) sets the bite; a pre-
+                // doctrine save has no e.commit -> falls back to the original flat 0.2, byte-identical.
+                const lost = Math.round((this.harvestTotal || 0) * (e.commit ?? 0.2));
                 this.harvestTotal = Math.max(0, (this.harvestTotal || 0) - lost);
                 this.addChronicle('raid', `A warband raided ${this.name} - ${lost} of the stores taken.`, null, null, '#e05840',
                     { tier: 'callout', tone: 'somber', why: `raided by ${e.by || 'a warband'}` });
@@ -2656,6 +2658,22 @@ export class World {
     // temperament (collaboration). All pure + seeded (stable tie-break by seed).
     #managerFitness(f) { const s = f.sheet; return mod(s.stats.cha) * 0.5 + s.personality.collaboration + f.reputation + (s.level || 1) * 0.08; }
     #watchFitness(f) { const s = f.sheet; return (mod(s.stats.str) + mod(s.stats.con)) * 0.35 + s.personality.honesty + f.reputation + (s.level || 1) * 0.06; }
+
+    // #doctrine (strategist v1) — the town's war/movement posture, a PURE fn of who leads it + its character.
+    // Baked onto the world-index summary (display/world tier); the sim never reads it. A Watch-led town is
+    // martial (raids); a Manager-led or leaderless peaceable town holds the wall. Refined by the pair ledger
+    // in the world layer (a much-raided town turns to the palisade). See DOCTRINE_DEFS in reconciliation.js.
+    doctrine() {
+        const mgr = this.managerFarmer(), wch = this.watchFarmer();
+        const martial = !!wch && (!mgr || this.#watchFitness(wch) >= this.#managerFitness(mgr) * 1.05);
+        const collab = this.townCollab ?? 0.5, big = this.farmers.length >= 7;
+        if (this.culture === 'orc') {
+            if (martial && big) return 'greatMuster';       // a strong, disciplined horde musters the whole host
+            if (collab < 0.40) return 'strandhogg';         // no cohesion -> a lone brutal smash-and-grab
+            return 'comitatus';                             // orc default: the sworn band
+        }
+        return martial ? 'comitatus' : 'palisade';          // a martial human town CAN raid; else it holds the wall
+    }
     #healerFitness(f) { const s = f.sheet; return (mod(s.stats.wis) + mod(s.stats.int)) * 0.35 + s.personality.collaboration + f.reputation + (s.level || 1) * 0.06; }
     #bestFor(fitFn, ...exclude) {
         const ex = new Set(exclude.filter(Boolean).map(x => x.sheet ? x.sheet.seed : x));

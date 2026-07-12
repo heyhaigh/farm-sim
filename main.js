@@ -4559,6 +4559,7 @@ function townSummary(w) {
         seed: w.seed, name: w.name, day: w.day, year: w.year, pop: w.farmers.length,
         harvestTotal: w.harvestTotal || 0, lineage: [...anc], motto, fingerprint: fp >>> 0,
         culture: w.culture || 'human', lineageRoot: w.lineageRoot || String(w.seed), envoy, lastSeen: Date.now(),   // #3.2
+        doctrine: w.doctrine(),   // #doctrine (strategist v1) — the town's war/movement posture, read by detectEncounters
     };
 }
 let _worldBusy = false;

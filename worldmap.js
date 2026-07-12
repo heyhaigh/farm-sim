@@ -8,7 +8,7 @@
 // town's seeded sim; it's display/persistence only, the same boundary as the LLM/shader side-channels.
 
 import { hashString } from './dna.js';
-import { lineagePairKey, isCrossFaction, foldDisposition, dispositionTier, resolveEncounter, applyOutcome, seedTraveler, seedNews, newsLine, TRAVELER } from './reconciliation.js';
+import { lineagePairKey, isCrossFaction, foldDisposition, dispositionTier, resolveEncounter, applyOutcome, seedTraveler, seedNews, newsLine, doctrineDef, TRAVELER } from './reconciliation.js';
 
 const WORLD_W = 1000, WORLD_H = 640;   // abstract world-plane units (the map view scales these to the screen)
 
@@ -52,6 +52,7 @@ export function computeLayout(index) {
             seed: t.seed, name: t.name || `Town ${t.seed}`, pop: t.pop || 0, day: t.day || 0, year: t.year || 1,
             harvestTotal: t.harvestTotal || 0, motto: t.motto || null, lastSeen: t.lastSeen || 0,
             culture: t.culture === 'orc' ? 'orc' : 'human', envoy: t.envoy || null, lineageRoot: t.lineageRoot != null ? String(t.lineageRoot) : String(t.seed),
+            doctrine: t.doctrine || 'comitatus',   // #doctrine (fallback for pre-doctrine summaries)
             ...townPos(t.seed), reach: townReach(t), tint: townTint(t),
             // edges to ancestor towns that we actually have on the map (skip lineage from unknown/foreign towns)
             ancestors: (t.lineage || []).map(String).filter(s => s !== String(t.seed) && known.has(s)),
@@ -98,6 +99,7 @@ export function detectEncounters(index) {
             const t = seedTraveler({
                 pairKey: key, ordinal: 0, aSeed: A.seed, bSeed: B.seed, aCulture: A.culture, bCulture: B.culture,
                 aName: A.name, bName: B.name, ax: A.x, ay: A.y, bx: B.x, by: B.y, discoveryDay, dist,
+                aScouts: doctrineDef(A.doctrine).scouts, bScouts: doctrineDef(B.doctrine).scouts,   // #doctrine scouting posture
             });
             index.pairs[key] = { state: 'enRoute', origin: t.origin, destination: t.destination, fate: t.fate, lostAt: t.lostAt,
                 discoveryDay, arrivalDay: t.arrivalDay, warning: t.warning, bearing: t.bearing, fromCulture: t.fromCulture };
@@ -141,7 +143,10 @@ export function detectEncounters(index) {
             ev.kind = 'raid';
             ev.aCarried = `${shortO} took what ${shortH} had gathered`;    // both readings — the contested record
             ev.bCarried = `${shortH} remembers the ${shortO} raid`;
-            queueInbox(index, human.seed, { kind: 'raided', pairKey: lpk, ordinal, day, by: orc.name });
+            // #doctrine: the raider's COMMITMENT (lone band .15 -> mass host .55) times the defender's wall
+            // reduction (palisade halves it) sets the bite the victim's applyInbox docks from its stores.
+            const bite = +(doctrineDef(orc.doctrine).commit * (doctrineDef(human.doctrine).biteReduce ?? 1)).toFixed(3);
+            queueInbox(index, human.seed, { kind: 'raided', pairKey: lpk, ordinal, day, by: orc.name, commit: bite });
         } else if (res.outcome === 'honored') {
             ev.kind = 'reconciled';
             ev.aCarried = `${shortO} was written into ${shortH}'s record - and kept faith`;
