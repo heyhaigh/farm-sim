@@ -107,3 +107,43 @@ export function applyOutcome(ledger, outcome, meta) {
     }
     return l;
 }
+
+// ── Slice B: the weary traveler ────────────────────────────────────────────────────────────────────────────
+// The AWARENESS step before an encounter. Everything a traveler "is" — who set out, from where, whether they
+// make it, and WHICH SIM-DAY they arrive — is decided the moment two towns come within rumor range, as a PURE
+// seeded fn. The world-map marker only interpolates toward that pre-decided arrival; the animation decides
+// nothing. So the mechanical effect (Slice C) lands deterministically no matter the wall-clock/reload/tab.
+export const TRAVELER = {
+    rumorMult: 1.9,      // rumor radius = reach-sum * this (wider than the raid radius, so a warning gets lead time)
+    loseOdds: 0.20,      // ~1 in 5 travelers is lost en route -> the warning never comes -> surprise contact (Slice C)
+    daysPerUnit: 0.045,  // sim-days of journey per world-map distance unit
+    minDays: 2, maxDays: 16,
+};
+export function journeyDays(dist) {
+    return Math.max(TRAVELER.minDays, Math.min(TRAVELER.maxDays, Math.round(dist * TRAVELER.daysPerUnit)));
+}
+const BEARING = (dx, dy) => (Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'east' : 'west') : (dy > 0 ? 'south' : 'north'));
+
+// Pure. Returns the whole traveler up front: origin/destination town seeds, fate, the sim-DAY it arrives, and
+// the procedural warning the destination will hear. `dx,dy` point origin->? we pass the raw vector A->B and
+// resolve bearing from the destination's side below.
+export function seedTraveler({ pairKey, ordinal, aSeed, bSeed, aCulture, bCulture, aName, bName, ax, ay, bx, by, discoveryDay, dist }) {
+    const rand = mulberry32(hashString(`trav:${pairKey}:${ordinal}:${aSeed}:${bSeed}`));
+    const originIsA = rand() < 0.5;
+    const origin = originIsA ? aSeed : bSeed, destination = originIsA ? bSeed : aSeed;
+    const fromCulture = originIsA ? aCulture : bCulture, toCulture = originIsA ? bCulture : aCulture;
+    const fromName = originIsA ? aName : bName;
+    // bearing FROM the destination TOWARD the origin (where the danger/kin lies)
+    const [ox, oy] = originIsA ? [ax, ay] : [bx, by];
+    const [tx, ty] = originIsA ? [bx, by] : [ax, ay];
+    const bearing = BEARING(ox - tx, oy - ty);
+    const fate = rand() < TRAVELER.loseOdds ? 'lost' : 'arrives';
+    const arrivalDay = discoveryDay + journeyDays(dist);
+    const cross = (fromCulture === 'orc') !== (toCulture === 'orc');
+    const warning = cross
+        ? (fromCulture === 'orc'
+            ? `an orc warband stirs to the ${bearing}`
+            : `smoke from human hearths to the ${bearing}`)
+        : `kin are near — a ${toCulture === 'orc' ? 'warband' : 'village'} to the ${bearing}`;
+    return { origin, destination, fromCulture, toCulture, fromName, bearing, fate, arrivalDay, warning, ordinal, pairKey };
+}

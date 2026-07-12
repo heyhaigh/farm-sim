@@ -8,7 +8,7 @@
 // town's seeded sim; it's display/persistence only, the same boundary as the LLM/shader side-channels.
 
 import { hashString } from './dna.js';
-import { lineagePairKey, isCrossFaction, foldDisposition, dispositionTier, resolveEncounter, applyOutcome } from './reconciliation.js';
+import { lineagePairKey, isCrossFaction, foldDisposition, dispositionTier, resolveEncounter, applyOutcome, seedTraveler, TRAVELER } from './reconciliation.js';
 
 const WORLD_W = 1000, WORLD_H = 640;   // abstract world-plane units (the map view scales these to the screen)
 
@@ -64,7 +64,7 @@ const pairKey = (a, b) => (a < b ? `${a}:${b}` : `${b}:${a}`);
 // Detect NEW encounters: any two towns whose reaches now overlap and that haven't met before. Appends an
 // encounter event (with a creed CARRIED from each town to the other — #2.4) to the index. Returns the list of
 // newly-created encounters so the caller can surface them. Idempotent: a met pair is never re-created.
-export const WORLD_INDEX_VERSION = 2;   // v2 adds ledgers + inbox; a v1 index (string encounters only) still loads
+export const WORLD_INDEX_VERSION = 3;   // v3 adds pairs[] (traveler awareness state machine); v1/v2 still load
 
 // Queue a structured event into a town's inbox (the world->sim crossing; the town consumes it deterministically
 // at load/dawn). Keyed by town seed so a dormant town gets its due when it's next played.
@@ -79,14 +79,33 @@ export function detectEncounters(index) {
     const nodes = computeLayout(index);
     const met = new Set((index.encounters || []).map(e => pairKey(String(e.a), String(e.b))));
     index.ledgers = index.ledgers || {};       // #reconciliation: per faction-lineage-pair grievance/reconciliation record
+    index.pairs = index.pairs || {};           // Slice B: per town-pair awareness state (unknown->rumored->aware->met)
     const fresh = [];
     for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) {
         const A = nodes[i], B = nodes[j];
         const key = pairKey(String(A.seed), String(B.seed));
         if (met.has(key)) continue;
         // F2: exact squared-distance geometry now that overlap is outcome-bearing (no Math.hypot rounding).
-        const dx = A.x - B.x, dy = A.y - B.y, rr = A.reach + B.reach;
-        if (dx * dx + dy * dy > rr * rr) continue;              // not yet within reach of each other
+        const dx = A.x - B.x, dy = A.y - B.y, d2 = dx * dx + dy * dy, rr = A.reach + B.reach;
+
+        // ── Slice B: RUMOR phase — when a pair first drifts within the (wider) rumor radius, a traveler sets
+        // out. Its whole fate + arrival sim-day is decided NOW as a pure fn; the map marker just walks toward
+        // it. The traveler inbox event goes to the DESTINATION (asymmetric: only they learn). NO raid gating
+        // yet (Slice C) — the existing encounter logic below still runs unchanged.
+        const rumorR = rr * TRAVELER.rumorMult;
+        if (!index.pairs[key] && d2 <= rumorR * rumorR) {
+            const discoveryDay = Math.max(A.day, B.day), dist = Math.sqrt(d2);
+            const t = seedTraveler({
+                pairKey: key, ordinal: 0, aSeed: A.seed, bSeed: B.seed, aCulture: A.culture, bCulture: B.culture,
+                aName: A.name, bName: B.name, ax: A.x, ay: A.y, bx: B.x, by: B.y, discoveryDay, dist,
+            });
+            index.pairs[key] = { state: 'enRoute', origin: t.origin, destination: t.destination, fate: t.fate,
+                discoveryDay, arrivalDay: t.arrivalDay, warning: t.warning, bearing: t.bearing, fromCulture: t.fromCulture };
+            queueInbox(index, t.destination, { kind: 'traveler', pairKey: key, ordinal: 0, day: t.arrivalDay,
+                payload: { type: 'warning', origin: String(t.origin), fromCulture: t.fromCulture, warning: t.warning, bearing: t.bearing } });
+        }
+
+        if (d2 > rr * rr) continue;              // not yet within reach of each other
         met.add(key);
         const day = Math.max(A.day, B.day);
 

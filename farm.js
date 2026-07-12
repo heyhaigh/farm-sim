@@ -1564,6 +1564,10 @@ export class World {
         for (const e of sorted) {
             const eid = e.id || `${e.pairKey}:${e.ordinal}:${e.kind}`;
             if (applied.has(eid)) continue;                       // already applied — skip (exactly-once)
+            // Slice B: the traveler event is recognized but not yet consumed — leave it UNAPPLIED so it survives
+            // to Slice C (which plants the arrival awareness once the sim reaches its arrivalDay). Skipping
+            // before marking applied keeps it in the inbox for next time.
+            if (e.kind === 'traveler') continue;
             applied.add(eid); this._inboxApplied.push(eid);
             if (this._inboxApplied.length > 200) this._inboxApplied.splice(0, this._inboxApplied.length - 200);
             const envoy = e.envoy != null ? this.farmers.find(f => f.sheet.seed === e.envoy) : null;

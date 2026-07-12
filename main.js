@@ -4545,7 +4545,9 @@ async function consumeInbox(w, events) {
     w.applyInbox(events);                          // idempotent: re-delivered events are skipped by applied-id
     const saved = await saveTown(w);               // persist applied effects + applied-ids BEFORE clearing
     if (saved == null) return;                     // save failed -> do NOT clear; the inbox replays next time
-    const done = new Set(events.map(inboxEventId));
+    // clear everything we processed — EXCEPT a traveler still en route (arrivalDay in the future): it must
+    // linger in the inbox until the sim reaches its day, when Slice C consumes it. (applyInbox leaves it too.)
+    const done = new Set(events.filter(e => !(e.kind === 'traveler' && (e.day || 0) > w.day)).map(inboxEventId));
     await updateWorldIndex(index => {              // remove ONLY the ids we processed, keeping concurrent appends
         const box = index.inbox && index.inbox[String(w.seed)];
         if (box) index.inbox[String(w.seed)] = box.filter(e => !done.has(inboxEventId(e)));
