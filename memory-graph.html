@@ -67,64 +67,92 @@ function wrap(str, maxW) { const words=String(str).split(' '), out=[]; let cur='
 
 // ---- state ----
 const view = { x:0, y:0, z:1 };
-let nodes=[], links=[], farmerNodes=[], townNode=null, selected=null, hover=null, alpha=1;
+let nodes=[], links=[], farmerNodes=[], townNodes=[], selected=null, hover=null, alpha=1;
 let panelX=GW, sheetLines=[], sheetScroll=0, sheetH=0;
 function reheat(a=0.5){ alpha=Math.max(alpha,a); }
 
+// pull town display-names from the game's IndexedDB world index (same origin) so every hub is labelled,
+// not just the ones with a civic record. Best-effort: resolves {} if the db/store isn't there.
+function townNames() {
+  return new Promise(resolve=>{
+    let done=false; const finish=v=>{ if(!done){ done=true; resolve(v||{}); } };
+    try {
+      const req = indexedDB.open('ryfarms', 1);
+      req.onupgradeneeded = () => finish({});   // db/store missing -> no names
+      req.onerror = () => finish({});
+      req.onsuccess = () => { const db=req.result;
+        try { if(!db.objectStoreNames.contains('towns')) return finish({});
+          const g=db.transaction('towns','readonly').objectStore('towns').get('world');
+          g.onsuccess=()=>{ const idx=g.result||{}, out={};
+            for (const [seed,t] of Object.entries(idx.towns||{})) if(t&&t.name) out[String(seed)]=String(t.name).toUpperCase();
+            finish(out); };
+          g.onerror=()=>finish({});
+        } catch { finish({}); } };
+    } catch { finish({}); }
+    setTimeout(()=>finish({}), 1200);
+  });
+}
+
 async function load() {
   let data; try { data = await (await fetch('/api/memory-graph')).json(); }
-  catch { data = { farmers:[], links:[], source:'offline' }; }
+  catch { data = { towns:[], source:'offline' }; }
   document.getElementById('boot').style.display='none';
-  const farmers = data.farmers || []; window._src = data.source; window._ties = (data.links||[]).length;
-  if (!farmers.length) { window._empty = data.source==='offline'
+  const towns = data.towns || [];
+  const totalFarmers = towns.reduce((a,t)=>a+(t.farmers||[]).length,0);
+  window._src = data.source;
+  window._ties = towns.reduce((a,t)=>a+(t.links||[]).length,0);
+  window._townCount = towns.length;
+  if (!totalFarmers && !towns.length) { window._empty = data.source==='offline'
       ? 'SUPERMEMORY IS OFFLINE - RUN ./SUPERMEMORY-START.SH'
       : 'NO MEMORIES STORED YET - OPEN A TOWN AND LET IT RUN'; requestAnimationFrame(tick); return; }
-  const cx=GW/2, cy=GH/2, byName=new Map();
-  farmers.forEach((f,i)=>{ const a=(i/farmers.length)*Math.PI*2;
-    const fn={ type:'farmer', name:f.name, first:f.name.split(' ')[0], memories:f.memories, mass:1,
-               x:cx+Math.cos(a)*100, y:cy+Math.sin(a)*100, vx:0, vy:0, r:9, col:nameColor(f.name) };
-    nodes.push(fn); farmerNodes.push(fn); byName.set(f.name, fn);
-    f.memories.forEach((text,j)=>{ const b=a+(j-f.memories.length/2)*0.5, kind=kindOf(text);
-      nodes.push({ type:'mem', kind, text, parent:fn, mass:0.28,
-        x:fn.x+Math.cos(b)*26, y:fn.y+Math.sin(b)*26, vx:0, vy:0, r:2.5, col:KIND_COL[kind] });
-      links.push({ a:fn, b:nodes[nodes.length-1], sat:true }); });
+  const names = await townNames();
+  const cx=GW/2, cy=GH/2, R=Math.min(GW,GH)*0.34;
+  // Each TOWN is its own cluster: a gold-diamond hub pinned on a ring, its farmers orbiting, their memories
+  // as satellites, the town's inventions off the hub. Farmers are sprung to THEIR hub so towns stay distinct.
+  towns.forEach((t, ti) => {
+    const ang = towns.length===1 ? -Math.PI/2 : (ti/towns.length)*Math.PI*2 - Math.PI/2;
+    const hx = towns.length===1 ? cx : cx + Math.cos(ang)*R;
+    const hy = towns.length===1 ? cy : cy + Math.sin(ang)*R;
+    const label = names[String(t.seed)] || (t.name ? String(t.name).toUpperCase() : ('TOWN ' + String(t.seed).slice(-4)));
+    const tn={ type:'town', name:label, first:label, text:t.townHistory, seed:t.seed, farmers:[],
+               mass:3, x:hx, y:hy, ax:hx, ay:hy, vx:0, vy:0, r:12, col:'#e8c860' };
+    nodes.push(tn); townNodes.push(tn);
+    const byName=new Map();
+    (t.farmers||[]).forEach((f,i)=>{ const n=(t.farmers||[]).length||1, a=(i/n)*Math.PI*2;
+      const fn={ type:'farmer', name:f.name, first:f.name.split(' ')[0], memories:f.memories, town:tn, mass:1,
+                 x:hx+Math.cos(a)*46, y:hy+Math.sin(a)*46, vx:0, vy:0, r:8, col:nameColor(f.name) };
+      nodes.push(fn); farmerNodes.push(fn); tn.farmers.push(fn); byName.set(f.name, fn);
+      links.push({ a:tn, b:fn, hub:true });   // spring each farmer to its own town hub
+      (f.memories||[]).forEach((text,j)=>{ const b=a+(j-f.memories.length/2)*0.5, kind=kindOf(text);
+        nodes.push({ type:'mem', kind, text, parent:fn, mass:0.28,
+          x:fn.x+Math.cos(b)*22, y:fn.y+Math.sin(b)*22, vx:0, vy:0, r:2.5, col:KIND_COL[kind] });
+        links.push({ a:fn, b:nodes[nodes.length-1], sat:true }); });
+    });
+    (t.links||[]).forEach(l=>{ const a=byName.get(l.a), b=byName.get(l.b); if(a&&b) links.push({ a, b, label:l.label }); });
+    (t.inventions||[]).forEach((text,j)=>{ const n=(t.inventions||[]).length||1, a=(j/n)*Math.PI*2;
+      nodes.push({ type:'mem', kind:'invention', text, parent:tn, mass:0.3,
+        x:hx+Math.cos(a)*26, y:hy+Math.sin(a)*26, vx:0, vy:0, r:3, col:KIND_COL.invention });
+      links.push({ a:tn, b:nodes[nodes.length-1], sat:true }); });
   });
-  (data.links||[]).forEach(l=>{ const a=byName.get(l.a), b=byName.get(l.b); if(a&&b) links.push({ a, b, label:l.label }); });
-  // #94 P3: the TOWN node — the civic record hub, pinned at centre; its mass clears a ring the farmers
-  // orbit, and faint gold lines tie every farmer to it (the town remembers everyone). Click it to read
-  // the town's political history (who was voted in/out, and why) as SuperMemory holds it.
-  if (data.townHistory) {
-    townNode = { type:'town', name:(data.townHistory.town||'THE TOWN'), first:(data.townHistory.town||'THE TOWN'), text:data.townHistory.text,
-                 mass:3, x:cx, y:cy, vx:0, vy:0, r:13, col:'#e8c860' };
-    nodes.push(townNode);
-    window._town = townNode.name;
-  }
-  // #97 P5 — the town's INVENTIONS as amber recipe satellites off the town hub
-  if (townNode && (data.inventions||[]).length) {
-    data.inventions.forEach((text,j)=>{ const a=(j/data.inventions.length)*Math.PI*2;
-      nodes.push({ type:'mem', kind:'invention', text, parent:townNode, mass:0.3,
-        x:townNode.x+Math.cos(a)*30, y:townNode.y+Math.sin(a)*30, vx:0, vy:0, r:3, col:KIND_COL.invention });
-      links.push({ a:townNode, b:nodes[nodes.length-1], sat:true }); });
-  }
   requestAnimationFrame(tick);
 }
 
 function step() {
-  const cx=GW/2, cy=GH/2;
-  for (let i=0;i<nodes.length;i++){ const n=nodes[i]; let fx=0, fy=0;
+  for (let i=0;i<nodes.length;i++){ const n=nodes[i]; if(n.type==='town') continue; let fx=0, fy=0;   // hubs are pinned
     for (let k=0;k<nodes.length;k++){ if(k===i) continue; const m=nodes[k];
       let dx=n.x-m.x, dy=n.y-m.y, d2=dx*dx+dy*dy+0.01, d=Math.sqrt(d2);
-      const rep=780*n.mass*m.mass/d2; fx+=dx/d*rep; fy+=dy/d*rep; }
-    const g = n.type==='farmer' ? 0.008 : 0.0012; fx+=(cx-n.x)*g; fy+=(cy-n.y)*g;
+      const rep=640*n.mass*m.mass/d2; fx+=dx/d*rep; fy+=dy/d*rep; }
     n.vx=(n.vx+fx*alpha)*0.82; n.vy=(n.vy+fy*alpha)*0.82;
   }
   for (const l of links){ const dx=l.b.x-l.a.x, dy=l.b.y-l.a.y, d=Math.hypot(dx,dy)||1, ux=dx/d, uy=dy/d;
-    if (l.sat){ const k=(d-24)*0.09*alpha;
-      if(l.b!==dragNode){ l.b.vx-=ux*k; l.b.vy-=uy*k; } if(l.a!==dragNode){ l.a.vx+=ux*k*0.12; l.a.vy+=uy*k*0.12; } }
-    else { const k=(d-90)*0.02*alpha;
+    if (l.sat){ const k=(d-22)*0.09*alpha;
+      if(l.b!==dragNode){ l.b.vx-=ux*k; l.b.vy-=uy*k; } if(l.a!==dragNode && l.a.type!=='town'){ l.a.vx+=ux*k*0.12; l.a.vy+=uy*k*0.12; } }
+    else if (l.hub){ const k=(d-48)*0.05*alpha;   // farmer <- its pinned town hub (keeps the cluster together)
+      if(l.b!==dragNode){ l.b.vx-=ux*k; l.b.vy-=uy*k; } }
+    else { const k=(d-40)*0.02*alpha;             // intra-town relationship edge
       if(l.a!==dragNode){ l.a.vx+=ux*k; l.a.vy+=uy*k; } if(l.b!==dragNode){ l.b.vx-=ux*k; l.b.vy-=uy*k; } }
   }
-  for (const n of nodes){ if(n===dragNode || n.type==='town') continue; n.x+=n.vx; n.y+=n.vy; }   // town is pinned at centre
+  for (const n of nodes){ if(n===dragNode || n.type==='town') continue; n.x+=n.vx; n.y+=n.vy; }   // town hubs pinned at their anchors
   if (!dragNode) alpha*=0.985;
 }
 
@@ -141,9 +169,9 @@ function draw() {
   sctx.fillStyle=C.bg; sctx.fillRect(0,0,GW,GH);
   // faint starfield-ish speckle so the void isn't dead flat (cheap, deterministic by position)
   sctx.save(); sctx.translate(view.x,view.y); sctx.scale(view.z,view.z);
-  // faint gold ties from the TOWN hub to every farmer (drawn first, under everything)
-  if (townNode){ sctx.strokeStyle='rgba(232,200,96,.16)'; sctx.lineWidth=1;
-    for (const f of farmerNodes){ sctx.beginPath(); sctx.moveTo(townNode.x,townNode.y); sctx.lineTo(f.x,f.y); sctx.stroke(); } }
+  // faint gold ties from each TOWN hub to its own farmers (drawn first, under everything)
+  sctx.strokeStyle='rgba(232,200,96,.16)'; sctx.lineWidth=1;
+  for (const tn of townNodes){ for (const f of tn.farmers){ sctx.beginPath(); sctx.moveTo(tn.x,tn.y); sctx.lineTo(f.x,f.y); sctx.stroke(); } }
   // links
   for (const l of links){
     if (l.sat){ const lit=selected && l.a===selected; sctx.strokeStyle=lit?'rgba(201,164,90,.35)':'rgba(120,110,86,.16)'; sctx.lineWidth=1; }
@@ -163,12 +191,12 @@ function draw() {
     sctx.strokeStyle=(sel||hov)?'#fff':C.rivet; sctx.lineWidth=1; sctx.beginPath(); sctx.arc(n.x,n.y,n.r,0,7); sctx.stroke();
     const nm=n.first.toUpperCase(); drawText(sctx, nm, Math.round(n.x-textWidth(nm)/2), Math.round(n.y+n.r+3), C.label);
   }
-  // the TOWN hub — a gold diamond (distinct from the round farmer tokens), name below
-  if (townNode){ const n=townNode, sel=n===selected, hov=n===hover, r=n.r;
+  // the TOWN hubs — gold diamonds (distinct from the round farmer tokens), name below each
+  for (const n of townNodes){ const sel=n===selected, hov=n===hover, r=n.r;
     sctx.fillStyle=n.col; sctx.beginPath();
     sctx.moveTo(n.x,n.y-r); sctx.lineTo(n.x+r,n.y); sctx.lineTo(n.x,n.y+r); sctx.lineTo(n.x-r,n.y); sctx.closePath(); sctx.fill();
     sctx.strokeStyle=(sel||hov)?'#fff':'#8a6b44'; sctx.lineWidth=1.5; sctx.stroke();
-    sctx.fillStyle='#3a2c10'; drawText(sctx,'TOWN', Math.round(n.x-textWidth('TOWN')/2), n.y-2, '#3a2c10');
+    drawText(sctx,'TOWN', Math.round(n.x-textWidth('TOWN')/2), n.y-2, '#3a2c10');
     const nm=n.name.toUpperCase(); drawText(sctx, nm, Math.round(n.x-textWidth(nm)/2), Math.round(n.y+r+3), C.sub);
   }
   sctx.restore();
@@ -181,7 +209,7 @@ function draw() {
 function chrome() {
   drawText(sctx, 'RY FARMS', 6, 6, C.title, 2);
   drawText(sctx, "THE TOWN'S MEMORY", 6, 18, C.sub);
-  if (window._src) drawText(sctx, `${farmerNodes.length} FARMERS - ${window._ties||0} TIES - LIVE FROM SUPERMEMORY`, 6, 27, C.dim);
+  if (window._src) drawText(sctx, `${window._townCount||0} TOWNS - ${farmerNodes.length} FARMERS - ${window._ties||0} TIES - LIVE FROM SUPERMEMORY`, 6, 27, C.dim);
   const leg = 'CREED  BELIEF  MEMORY  RIFT   HOVER A DOT - CLICK A FARMER';
   const ly = GH-9; let lx=6;
   const swatch=(col)=>{ sctx.fillStyle=col; sctx.fillRect(lx,ly,3,3); lx+=6; };
@@ -189,7 +217,7 @@ function chrome() {
   swatch(C.belief); drawText(sctx,'BELIEF',lx,ly,C.dim); lx+=textWidth('BELIEF')+7;
   swatch(C.mem); drawText(sctx,'MEMORY',lx,ly,C.dim); lx+=textWidth('MEMORY')+7;
   swatch(C.rift); drawText(sctx,'RIFT',lx,ly,C.dim); lx+=textWidth('RIFT')+10;
-  drawText(sctx, townNode?'CLICK THE GOLD TOWN FOR ITS VOTING RECORD':'HOVER A DOT - CLICK A FARMER', lx, ly, C.dim);
+  drawText(sctx, townNodes.length?'CLICK A GOLD TOWN FOR ITS VOTING RECORD':'HOVER A DOT - CLICK A FARMER', lx, ly, C.dim);
   if (window._empty) { const w=textWidth(window._empty); drawText(sctx, window._empty, Math.round(GW/2-w/2), Math.round(GH/2), C.sub); }
 }
 
@@ -206,7 +234,9 @@ function buildSheet(n) {
   const L=[];
   if (n.type==='town') {   // the civic record: the town's political history, as SuperMemory holds it
     L.push({t:n.name.toUpperCase(), c:C.sub, s:2}); L.push({t:"THE TOWN'S CIVIC RECORD", c:C.dim, s:1}); L.push({gap:4});
-    for (const raw of String(n.text).split(/\n|(?= - )/)) {
+    const fc=(n.farmers||[]).length; if(fc) L.push({t:`${fc} ${fc===1?'SETTLER':'SETTLERS'} REMEMBERED`, c:C.dim, s:1});
+    if (!n.text) { L.push({gap:3}); wrap('No civic record yet - this town has held no elections or recalls.', PW-16).forEach(ln=> L.push({t:ln, c:C.dim})); }
+    else for (const raw of String(n.text).split(/\n|(?= - )/)) {
       const line=raw.trim(); if(!line) continue;
       const bullet=line.startsWith('-'); const t=bullet?line.replace(/^-\s*/,''):line;
       wrap(t, PW-16).forEach((ln,i)=> L.push({t:ln, c:i===0&&bullet?C.mem:C.label, bar:i===0&&bullet?'#e8c860':null}));
@@ -243,7 +273,7 @@ function world(e){ const p=ptr(e); return { x:(p.x-view.x)/view.z, y:(p.y-view.y
 function overSheet(e){ return panelX<GW-1 && ptr(e).x>panelX; }
 function hit(e){ const p=world(e);
   for (const n of farmerNodes) if(Math.hypot(n.x-p.x,n.y-p.y)<=n.r+2) return n;
-  if (townNode && Math.hypot(townNode.x-p.x,townNode.y-p.y)<=townNode.r+2) return townNode;
+  for (const n of townNodes) if(Math.hypot(n.x-p.x,n.y-p.y)<=n.r+2) return n;
   for (const n of nodes) if(n.type==='mem' && Math.hypot(n.x-p.x,n.y-p.y)<=n.r+2) return n;
   return null; }
 function far(e){ return downAt && Math.hypot(e.clientX-downAt.x, e.clientY-downAt.y) > 4; }

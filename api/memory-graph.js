@@ -1,10 +1,11 @@
 // api/memory-graph.js — the read side of the farmer-memory PORTAL (#95).
 //
-// Pulls the town's stored lives back out of self-hosted SuperMemory (the same store the writeback fills)
-// and shapes them into a graph the portal page renders: one node per FARMER, the memories SuperMemory
-// has distilled for each, and inferred EDGES between farmers (who nursed / traded / feuded with whom,
-// read off the memory text). Best-effort: if SuperMemory is down, returns an empty graph and the page
-// shows an "offline" state. Read-only; never writes.
+// Pulls EVERY town's stored lives back out of self-hosted SuperMemory (the same store the writeback fills)
+// and shapes them into a multi-town graph the portal renders: one hub per TOWN, its FARMERS orbiting, the
+// memories SuperMemory has distilled for each, that town's civic record + inventions, and inferred EDGES
+// between farmers (who nursed / traded / feuded with whom, read off the memory text). Farmers are grouped by
+// (townSeed + name) so same-named settlers across towns / `?fresh` boots never merge. Best-effort: if
+// SuperMemory is down, returns an empty graph and the page shows an "offline" state. Read-only; never writes.
 
 const DEFAULT_URL = 'http://127.0.0.1:6767';
 const DEADLINE_MS = 9000;
@@ -80,88 +81,71 @@ module.exports = async function handler(req, res) {
     // merge the broad pass + every per-farmer slice into one row list; dedup is per-text below
     const allRows = (data.results || []).concat(...perName.map(r => (r && r.results) || []));
 
-    // Choose ONE town to render — the NEWEST (the active/current town). Farmer NAMES recur across `?fresh`
-    // boots, so grouping by name alone silently merges different towns' lives into one inflated node. Each
-    // stored doc carries its townSeed + an updatedAt; partition farmer-life rows by townSeed, and keep only
-    // the town whose most-recent doc is newest. (Deterministic tie-break by townSeed so it never flickers.)
-    const townLatest = new Map();
+    // MULTI-TOWN (portal shows the WHOLE world now). Farmer NAMES recur across towns / `?fresh` boots, so we
+    // partition every farmer-life row by townSeed and key farmers by (townSeed + name) — grouping stays
+    // town-scoped and never merges two towns' same-named settlers into one inflated node.
+    const townsMap = new Map();   // townSeed -> { seed, name, byName, civic[], inventions[] }
+    const getTown = (ts) => { let t = townsMap.get(ts); if (!t) { t = { seed: ts, name: null, byName: new Map(), civic: [], inventions: [] }; townsMap.set(ts, t); } return t; };
     for (const row of allRows) {
         const m = row.metadata || {};
         if (m.kind !== 'farmer-life') continue;
-        const ts = String(m.townSeed ?? ''), when = Date.parse(row.updatedAt || '') || 0;
-        if (!townLatest.has(ts) || when > townLatest.get(ts)) townLatest.set(ts, when);
+        const name = m.name; if (!name) continue;
+        const text = String(row.memory || '').trim(); if (!text) continue;
+        const t = getTown(String(m.townSeed ?? ''));
+        let f = t.byName.get(name);
+        if (!f) { f = { name, seed: String(m.farmerSeed ?? ''), memories: [] }; t.byName.set(name, f); }
+        if (!f.memories.includes(text)) f.memories.push(text);
     }
-    let activeTown = null, bestWhen = -1;
-    for (const [ts, when] of townLatest) {
-        if (when > bestWhen || (when === bestWhen && (activeTown == null || ts > activeTown))) { bestWhen = when; activeTown = ts; }
-    }
-    const inActiveTown = (m) => activeTown == null || String(m.townSeed ?? '') === activeTown;
 
-    // Now fetch the active town's civic record + inventions SPECIFICALLY, filtered by townSeed so ranking
-    // truncation can't blank them. (Falls back to an unfiltered search when there's no active town, e.g. a
-    // store with civic docs but no farmer-life rows.) A failed sub-search degrades to empty, never 500s.
-    const townFilter = (kind) => activeTown != null
-        ? { AND: [{ key: 'kind', value: kind }, { key: 'townSeed', value: activeTown }] }
-        : { AND: [{ key: 'kind', value: kind }] };
+    // civic records + inventions ACROSS ALL TOWNS: one broad search each (kind-filtered, high limit), then
+    // partition by townSeed. Bigger cap than the single-town path so several towns' records survive ranking.
+    // Best-effort; a failed sub-search degrades to empty and never 500s.
     let civicData = { results: [] }, inventData = { results: [] };
     try {
         [civicData, inventData] = await Promise.all([
-            search('the town civic record - manager watch voted in out elected recalled served', 24, townFilter('town-history')).catch(() => ({ results: [] })),
-            search('the town book of inventions recipes crafted brewed charm poultice tonic', 24, townFilter('town-inventions')).catch(() => ({ results: [] })),
+            search('the town civic record - manager watch voted in out elected recalled served', 80, { AND: [{ key: 'kind', value: 'town-history' }] }).catch(() => ({ results: [] })),
+            search('the town book of inventions recipes crafted brewed charm poultice tonic', 80, { AND: [{ key: 'kind', value: 'town-inventions' }] }).catch(() => ({ results: [] })),
         ]);
     } catch { civicData = { results: [] }; inventData = { results: [] }; }
-
-    // group the distilled memories by farmer, WITHIN the chosen town. The TOWN-HISTORY doc (#94 P3 — the
-    // civic record) has no farmer name, so it's pulled aside into its own node rather than dropped.
-    const byName = new Map();
-    for (const row of allRows) {
-        const m = row.metadata || {};
-        if (m.kind === 'town-history') continue;   // the civic record comes from the dedicated search
-        if (!inActiveTown(m)) continue;            // one town only — the newest — so recurring names don't merge
-        const name = m.name; if (!name) continue;
-        const text = String(row.memory || '').trim(); if (!text) continue;
-        let f = byName.get(name);
-        if (!f) { f = { name, seed: String(m.farmerSeed ?? ''), town: String(m.townSeed ?? ''), memories: [] }; byName.set(name, f); }
-        if (!f.memories.includes(text)) f.memories.push(text);
-    }
-    // the town's political record, pulled from its own targeted search. SuperMemory distils a doc into
-    // several fact-chunks, so gather ALL the civic chunks into one record rather than a single line.
-    let townHistory = null, civicTown = null;
-    const civicLines = [];
     for (const row of (civicData?.results || [])) {
-        const m = row.metadata || {};
-        if (m.kind !== 'town-history' || !inActiveTown(m)) continue;   // the ACTIVE town's politics, not a prior boot's
-        const text = String(row.memory || '').trim(); if (!text) continue;
-        if (!civicLines.includes(text)) civicLines.push(text);
-        if (!civicTown) civicTown = m.town || null;
+        const m = row.metadata || {}; if (m.kind !== 'town-history') continue;
+        const t = getTown(String(m.townSeed ?? ''));
+        if (m.town && !t.name) t.name = m.town;   // the civic doc carries the town's display name
+        const text = String(row.memory || '').trim(); if (text && !t.civic.includes(text)) t.civic.push(text);
     }
-    if (civicLines.length) townHistory = { town: civicTown, text: civicLines.join('\n') };
-    // #97 P5 — the town's inventions, as distilled fact-chunks, rendered as recipe nodes off the town hub
-    const inventions = [];
     for (const row of (inventData?.results || [])) {
-        const m = row.metadata || {};
-        if (m.kind !== 'town-inventions' || !inActiveTown(m)) continue;   // the ACTIVE town's book, not a prior boot's
-        const text = String(row.memory || '').trim(); if (!text || inventions.includes(text)) continue;
-        inventions.push(text);
+        const m = row.metadata || {}; if (m.kind !== 'town-inventions') continue;
+        const t = getTown(String(m.townSeed ?? ''));
+        const text = String(row.memory || '').trim(); if (text && !t.inventions.includes(text)) t.inventions.push(text);
     }
-    const farmers = [...byName.values()].filter(f => f.memories.length);
-    const firsts = new Map(farmers.map(f => [f.name.split(' ')[0], f.name]));   // "Mercurial" -> "Mercurial Ry"
 
-    // infer edges: a memory of A that names another farmer B (by first name) -> an edge A—B labelled by verb
-    const seen = new Set(), links = [];
-    for (const f of farmers) {
-        const meFirst = f.name.split(' ')[0];
-        for (const text of f.memories) {
-            for (const [first, full] of firsts) {
-                if (first === meFirst) continue;
-                if (!new RegExp(`\\b${first}\\b`).test(text)) continue;
-                const key2 = [f.name, full].sort().join('|');
-                if (seen.has(key2)) continue;
-                let label = 'knows';
-                for (const [re, lab] of RELS) if (re.test(text)) { label = lab; break; }
-                seen.add(key2); links.push({ a: f.name, b: full, label });
+    // shape each town: farmers (with memories), intra-town relationship edges, civic record, inventions.
+    let totalFarmers = 0;
+    const townsOut = [];
+    for (const t of townsMap.values()) {
+        const farmers = [...t.byName.values()].filter(f => f.memories.length);
+        if (!farmers.length && !t.civic.length && !t.inventions.length) continue;
+        totalFarmers += farmers.length;
+        const firsts = new Map(farmers.map(f => [f.name.split(' ')[0], f.name]));   // "Mercurial" -> "Mercurial Ry"
+        // edges: a memory of A that names another farmer B (by first name) -> an A—B edge labelled by verb
+        const seen = new Set(), links = [];
+        for (const f of farmers) {
+            const meFirst = f.name.split(' ')[0];
+            for (const text of f.memories) {
+                for (const [first, full] of firsts) {
+                    if (first === meFirst) continue;
+                    if (!new RegExp(`\\b${first}\\b`).test(text)) continue;
+                    const key2 = [f.name, full].sort().join('|'); if (seen.has(key2)) continue;
+                    let label = 'knows';
+                    for (const [re, lab] of RELS) if (re.test(text)) { label = lab; break; }
+                    seen.add(key2); links.push({ a: f.name, b: full, label });
+                }
             }
         }
+        townsOut.push({ seed: t.seed, name: t.name, farmers, links,
+            townHistory: t.civic.length ? t.civic.join('\n') : null, inventions: t.inventions });
     }
-    return send(res, 200, { farmers, links, townHistory, inventions, source: data.results ? 'supermemory-local' : 'empty', count: farmers.length });
+    // biggest towns first, deterministic tie-break by seed (display order only)
+    townsOut.sort((a, b) => (b.farmers.length - a.farmers.length) || String(a.seed).localeCompare(String(b.seed)));
+    return send(res, 200, { towns: townsOut, source: data.results ? 'supermemory-local' : 'empty', count: totalFarmers, townCount: townsOut.length });
 };
