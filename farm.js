@@ -4994,7 +4994,9 @@ export class World {
                 }
                 f.workedLate = false; continue;
             }
-            if (f.workedLate) f.sleepDebt += 1.5; else f.sleepDebt = Math.max(0, f.sleepDebt - 1);
+            // cap sleep debt so a night owl who works late EVERY night can't spiral it upward without bound
+            // (the source of the chronic town-wide overwork sick-out); a night off still pays it down.
+            if (f.workedLate) f.sleepDebt = Math.min(6, f.sleepDebt + 1.5); else f.sleepDebt = Math.max(0, f.sleepDebt - 1.5);
             f.workedLate = false;
             // sleeping rough with no roof is a health hazard that WORSENS the longer they go
             // without a home: a fresh settler gets a night or two, then exposure bites hard —
@@ -5005,9 +5007,12 @@ export class World {
             // ramps gently (+2/+4/+6). The old +3/+6/+9 from night 2 sicked out a whole homeless founding cast by
             // night 3 — before any tipi could go up (a mass day-3 sick-out).
             const exposure = homeless ? Math.min(6, Math.max(0, f.nightsExposed - 3) * 2) : 0;
-            const risky = (homeless && f.nightsExposed >= 4) || f.energy < 0.3 || f.sleepDebt >= 4 || f.strain >= 4;
+            const risky = (homeless && f.nightsExposed >= 4) || f.energy < 0.3 || f.sleepDebt >= 5 || f.strain >= 4;
             if (risky) {
-                const dc = 10 + Math.floor(f.sleepDebt) + (f.energy < 0.2 ? 3 : 0) + Math.floor(f.strain / 3) + exposure;
+                // sleep debt drives the DC only at HALF weight (was full): a chronic night-owl still risks
+                // illness, but a whole warband of late workers no longer spirals into a perpetual town-wide
+                // sick-out (the debt itself is capped below so the DC can't run away).
+                const dc = 10 + Math.floor(f.sleepDebt / 2) + (f.energy < 0.2 ? 3 : 0) + Math.floor(f.strain / 3) + exposure;
                 const save = d20(this.rand, mod(f.sheet.stats.con));
                 const exposed = exposure > 0;
                 if (save.total < dc && !save.crit) {
