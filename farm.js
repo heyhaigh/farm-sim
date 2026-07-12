@@ -1554,12 +1554,14 @@ export class World {
                     { tier: 'callout', tone: 'somber', why: `raided by ${e.by || 'a warband'}` });
                 n++;
             } else if (e.kind === 'reconciled') {
-                if (envoy) envoy.remember('event', `${(e.withName || 'they').split(' ')[0]} kept faith at the frontier - not all of them betray`, null, 1.0);
+                // Slice C: the envoy EARNS a cross-faction belief that begins to overwrite their raid-creed.
+                if (envoy) envoy.earnCrossFaction(e.withName, e.pairKey, +1);
                 this.addChronicle('lineage', `${this.name} kept faith with ${(e.withName || 'the frontier').split(' ')[0]} - the wall cracked a little.`, envoy, null, '#c8b0e0',
                     { tier: 'callout', tone: 'triumph', why: 'a parley honored across the old line' });
                 n++;
             } else if (e.kind === 'betrayed') {
-                if (envoy) envoy.remember('event', `The open hand was a snare - ${(e.by || 'they').split(' ')[0]} proved the old fear`, null, 1.0);
+                // the old fear is proven — a betrayal HARDENS the creed (re-inflates its authority)
+                if (envoy) envoy.earnCrossFaction(e.by, e.pairKey, -1);
                 this.addChronicle('raid', `A parley was broken against ${this.name}. The old fear is proven again.`, envoy, null, '#e05840',
                     { tier: 'callout', tone: 'somber', why: 'a broken parley' });
                 n++;
@@ -6122,6 +6124,7 @@ export class Farmer {
         const ks = this.creeds; if (!ks.length) return null;
         let best = null, bestScore = -1;
         for (const k of ks) {
+            if (k.overwritten) continue;   // #reconciliation: a creed an earned belief has outweighed no longer drives decisions
             const match = prefTags.some(t => k.tags.includes(t)) ? 1 : 0;
             const score = match * 10 + k.weight;
             if (score > bestScore) { bestScore = score; best = k; }
@@ -6221,6 +6224,55 @@ export class Farmer {
             } else kept.push(b);
         }
         if (kept.length !== bel.length) { this.sheet.beliefs = kept; const id = personalityLabel(this.p); this.p.label = id.label; this.p.creed = id.creed; }
+    }
+
+    // #reconciliation Slice C — "the mechanism of hope". An honest cross-faction moment (an honored parley the
+    // envoy kept faith through) EARNS a belief that CONTRADICTS the raid/fear creed the farmer was grown from.
+    // Called when a 'reconciled' inbox event lands on the envoy. `dir` = +1 confirm (honored) / -1 betray.
+    earnCrossFaction(withName, pairKey, dir = 1) {
+        const s = this.sheet; s.beliefs = s.beliefs || [];
+        // the creed this belief argues against: an orc's raid-creed (theme 'orc') or any inherited raid/grievance creed
+        const raid = (this.creeds || []).find(c => c.theme === 'orc' || (c.tags && (c.tags.includes('raid') || c.tags.includes('grievance'))));
+        let b = s.beliefs.find(x => x.tag === 'crossfaction' && x.pairKey === pairKey);
+        if (!b) {
+            b = { text: `${String(withName || 'they').split(' ')[0]} did not betray me - I saw it`, tag: 'crossfaction',
+                source: 'parley', pairKey, contradicts: raid ? raid.theme : null, day: this.world.day, confirms: 0, betrays: 0 };
+            s.beliefs.push(b);
+            this.remember('event', b.text, null, 1.1);
+        }
+        if (dir > 0) b.confirms = (b.confirms || 0) + 1; else b.betrays = (b.betrays || 0) + 1;
+        b.strength = Math.max(0, Math.min(1.5, 0.5 + 0.15 * (b.confirms || 0) - 0.3 * (b.betrays || 0)));
+        this.applyCreedOverwrite();
+    }
+
+    // Re-derive (count-based, order-independent, quantized) the authority of any creed CONTRADICTED by a
+    // cross-faction belief: it decays with each confirmation, re-inflates with a betrayal, floored at 0.25 (an
+    // eon of documents isn't unmade by one handshake). When it falls below the next-strongest creed, `creedFor`
+    // stops selecting it — the raid-creed is "overwritten", and that crossover is the payoff beat. Runs on each
+    // new confirmation AND at dawn (idempotent — always recomputed from the stored counts, never accumulated).
+    applyCreedOverwrite() {
+        const beliefs = (this.sheet.beliefs || []).filter(b => b.tag === 'crossfaction' && b.contradicts);
+        if (!beliefs.length) return;
+        // net evidence per contradicted theme. Negativity bias (balance council): a betrayal counts 3x a
+        // confirmation ("the peacemaker is martyred") — hardening is quick, softening slow.
+        const net = new Map();
+        for (const b of beliefs) net.set(b.contradicts, Math.max(net.get(b.contradicts) || 0, (b.confirms || 0) - 3 * (b.betrays || 0)));
+        for (const c of (this.creeds || [])) {
+            if (!net.has(c.theme)) continue;
+            if (c.baseWeight == null) c.baseWeight = c.weight;   // remember the original authority (rides the save)
+            const n = net.get(c.theme);
+            const authority = +Math.max(0.25, Math.min(c.baseWeight, c.baseWeight - 0.15 * n)).toFixed(3);
+            const nextStrongest = (this.creeds || []).filter(k => k !== c).reduce((m, k) => Math.max(m, k.weight), 0);
+            c.weight = authority;
+            const overwritten = authority < nextStrongest - 0.05;   // hysteresis margin so it doesn't flicker
+            if (overwritten && !c.overwritten) {
+                c.overwritten = true;
+                this.world.addChronicle('lineage', `${shortName(this)} no longer quotes the old fear - a belief they earned has outweighed the creed they were grown from.`, this, null, '#eef0f4',
+                    { tier: 'grand', tone: 'triumph', why: beliefs[0].text });
+            } else if (!overwritten && c.overwritten && authority > nextStrongest + 0.05) {
+                c.overwritten = false;   // a betrayal re-hardened it past the challenger
+            }
+        }
     }
 
     // #96 — the denied farmer RECKONS with being turned away in their sickness. Real introspection: they
