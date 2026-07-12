@@ -495,7 +495,19 @@ for (const img of Object.values(statueImgs)) img.onerror = () => {};
 const STATUE_DRAW_W = { statue1: 46, statue2: 80, statue3: 134 };   // grander tiers loom larger
 const YURT_L1_SRC = { x: 26, y: 20, w: 75, h: 87 };   // trim of Yurt2_grass_shadow.png
 const YURT_L2_SRC = { x: 24, y: 26, w: 80, h: 76 };   // trim of Yurt1_grass_shadow.png
+// #94 orc dwellings — cave mouths carved into the rock: L2 a plain cave, L3 a great skull-cave. The 64px
+// sprites are scaled up (via art.scale) so they read as dwellings, not scenery. L1 keeps the tipi (war-tent).
+const orcCaveL2 = new Image(); let orcCaveL2Ready = false; orcCaveL2.onload = () => { orcCaveL2Ready = true; }; orcCaveL2.onerror = () => {};
+const orcCaveL3 = new Image(); let orcCaveL3Ready = false; orcCaveL3.onload = () => { orcCaveL3Ready = true; }; orcCaveL3.onerror = () => {};
+orcCaveL2.src = ROCKY_BASE + 'Cave_entrance3_ground_shadow.png';   // plain cave mouth -> L2
+orcCaveL3.src = ROCKY_BASE + 'Cave_entrance2_ground_shadow.png';   // SKULL cave -> L3 (eyes glow at night)
+const ORC_CAVE_SRC = { x: 0, y: 0, w: 64, h: 64 };
 function buildingArt(level) {
+    if (typeof world !== 'undefined' && world && world.culture === 'orc') {
+        if (level >= 3) return { img: orcCaveL3, src: ORC_CAVE_SRC, ready: orcCaveL3Ready, scale: 1.6 };
+        if (level === 2) return { img: orcCaveL2, src: ORC_CAVE_SRC, ready: orcCaveL2Ready, scale: 1.6 };
+        // L1 falls through to the tipi below (a small war-tent reads fine for a fresh orc)
+    }
     if (level >= 3) return { img: homeSheet, src: HOUSE_SRC, ready: homeReady };
     if (level === 2) return { img: yurtL2, src: YURT_L2_SRC, ready: yurtL2Ready };
     return { img: yurtL1, src: YURT_L1_SRC, ready: yurtL1Ready };
@@ -1569,7 +1581,7 @@ function collectDrawables() {
                 let roofY;
                 if (art.ready) {
                     const S = art.src;
-                    const dispW = Math.round(S.w * HOUSE_ART_SCALE), dispH = Math.round(dispW * S.h / S.w);
+                    const dispW = Math.round(S.w * HOUSE_ART_SCALE * (art.scale || 1)), dispH = Math.round(dispW * S.h / S.w);
                     const hx = Math.floor(sx - dispW / 2), hy = Math.floor(sy + TILE_H - dispH + 13);   // sink ~1 tile so the sprite reads centred in the 5x5
                     ctx.imageSmoothingEnabled = false;
                     ctx.drawImage(art.img, S.x, S.y, S.w, S.h, hx, hy, dispW, dispH);
