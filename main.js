@@ -634,6 +634,13 @@ const GRASS_DECALS = [    // source rects into ground_grass_details.png (green t
 const DIRT_DECALS = [
     { x: 10, y: 14, w: 34, h: 26 }, { x: 96, y: 40, w: 34, h: 26 }, { x: 210, y: 70, w: 34, h: 26 },
 ];
+// #94 orc desert: only the GROUND details (dirt specks, pebble + rock clusters — the TOP half of
+// ground_grass_details.png), never the grass tufts. An assortment for character on the bare sand.
+const ORC_GROUND_DECALS = [
+    { x: 10, y: 14, w: 34, h: 26 }, { x: 96, y: 40, w: 34, h: 26 }, { x: 210, y: 70, w: 34, h: 26 },
+    { x: 6, y: 96, w: 46, h: 32 }, { x: 120, y: 100, w: 46, h: 32 }, { x: 200, y: 106, w: 46, h: 30 },
+    { x: 30, y: 40, w: 34, h: 26 }, { x: 250, y: 40, w: 40, h: 24 },
+];
 
 // Garden crops from CraftPix Plants.png / Supplies.png (left half of Plants is a duplicate).
 const PLANTS_BASE = './assets/craftpix-net-200380-free-pixel-art-plants-for-farm/PNG/';
@@ -1324,9 +1331,9 @@ function bakeChunk(cx, cy) {
             } else if (grassy) {
                 const scatter = rand2(i, j, 41);
                 const density = patch === 3 ? 0.34 : patch === 2 ? 0.24 : 0.15;
-                if (t === T.GRASS && grassDetailsReady && scatter < density && !winter && !orc) {   // no green tufts under snow, none in orc desert
-                    const useDirt = rand2(i, j, 42) < 0.18;
-                    const set = useDirt ? DIRT_DECALS : GRASS_DECALS;
+                if (t === T.GRASS && grassDetailsReady && scatter < density && !winter) {   // no tufts under snow
+                    // orc desert scatters ONLY ground details (dirt/pebble/rock); human ground mixes grass + dirt
+                    const set = orc ? ORC_GROUND_DECALS : (rand2(i, j, 42) < 0.18 ? DIRT_DECALS : GRASS_DECALS);
                     const d = pickTile(set, i, j, 43);
                     const scale = 0.44 + rand2(i, j, 44) * 0.24;
                     const dw = Math.round(d.w * scale), dh = Math.round(d.h * scale);
