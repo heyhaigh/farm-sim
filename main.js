@@ -4922,7 +4922,7 @@ function frame(now) {
     // building hover tooltip — only when hovering the world (not over a panel, not dragging,
     // and not while an inventory-slot tooltip is already showing on the open sheet)
     let worldHover = false;
-    if (booted && mouse.x >= 0 && !mouse.dragging && !rosterOpen && !boardOpen && !chronOpen && !settingsOpen && mouse.y > 18 &&
+    if (booted && mouse.x >= 0 && !mouse.dragging && !rosterOpen && !boardOpen && !chronOpen && !settingsOpen && !worldMapOpen && mouse.y > 18 &&
         !(selected && inRect(mouse, SHEET_RECT)) && !inRect(mouse, MINIMAP)) {
         const info = buildingUnder(mouse.x, mouse.y);
         if (info) { drawInfoBox(mouse.x, mouse.y, info); worldHover = true; }
