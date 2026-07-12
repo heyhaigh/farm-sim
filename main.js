@@ -382,6 +382,10 @@ const THREAT_ART = {
 };
 const threatImg = {};
 for (const [k, c] of Object.entries(THREAT_ART)) { const im = new Image(); im.src = c.base + c.file + '.png'; threatImg[k] = im; }
+// #3.1 orc FARMERS use the shadowless orc idle (the game draws its own foot-shadow — the with-shadow foe sheet
+// baked in a second blob). Separate from threatImg.orc (which stays with-shadow for wilderness foes).
+const orcFarmerImg = new Image();
+orcFarmerImg.src = './assets/craftpix-net-363992-free-top-down-orc-game-character-pixel-art/Tiled_files/orc1_idle_without_shadow.png';
 
 // Roaming WILD PREY sprites (hunted for meat — see world.prey / #tickPrey). All 32x32, 4-frame idle
 // cycles; row 2 = side profile. Deer/hare side-frames face LEFT (srcFace -1), the turkey faces RIGHT.
@@ -795,9 +799,9 @@ function characterSprites(f) {
 // cell, scale it to a farmer-ish height (orcs a touch taller), and slice a few idle columns so it still has a
 // little life. All facings use the front-menacing pose (row 2), matching how the foe orcs render.
 const orcCharCache = new Map();
-function orcSpriteReady() { const im = threatImg.orc; return im && im.complete && im.naturalWidth > 0; }
+function orcSpriteReady() { return orcFarmerImg && orcFarmerImg.complete && orcFarmerImg.naturalWidth > 0; }
 function orcCharSets(f) {
-    const img = threatImg.orc, FW = 64;
+    const img = orcFarmerImg, FW = 64;
     const cols = Math.max(1, Math.round(img.naturalWidth / FW));
     const rows = Math.max(1, Math.round(img.naturalHeight / FW));
     const row = Math.min(2, rows - 1);
@@ -2086,8 +2090,10 @@ function drawFarmer(f, sx, sy) {
     ctx.fillStyle = 'rgba(10,14,10,0.35)';
     ctx.fillRect(px + 4, footY, fw - 8, 2);
 
-    // flip for left/right only on the side view (front/back rows shouldn't mirror)
-    if (f.facing < 0 && (!charReady() || f.moveDir === 'side')) {
+    // flip for left/right only on the side view (front/back rows shouldn't mirror). Orc farmers use a single
+    // front-facing pose (like the foe orcs) — mirroring it made them face BACKWARDS when walking, so never flip.
+    const orcFrame = f.sheet.culture === 'orc' && orcSpriteReady();
+    if (!orcFrame && f.facing < 0 && (!charReady() || f.moveDir === 'side')) {
         ctx.save();
         ctx.translate(px + fw, dy);
         ctx.scale(-1, 1);
@@ -3499,8 +3505,10 @@ function drawRoster() {
     ctx.fillStyle = '#20242f';
     ctx.fillRect(PX + 4, hy + 8, PW - 8, 1);
 
-    // the window splits: the roster LIST is locked to the top, the CONSCIENCE CHAT to the bottom
-    const splitY = PY + Math.floor(PH * 0.46);
+    // the window splits: the roster LIST is locked to the top, the CONSCIENCE CHAT to the bottom. The list gets
+    // the lion's share so the whole cast is visible (was 0.46 — the chat's empty middle wasted rows + clipped
+    // the last settler); the chat keeps a compact strip that still holds its prompt + recent lines.
+    const splitY = PY + Math.floor(PH * 0.66);
 
     // scrollable body (clipped) — ends above the split, leaving a line for the hint + divider
     const bodyTop = hy + 11;
