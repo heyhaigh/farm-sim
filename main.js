@@ -3031,8 +3031,8 @@ function buildingUnder(mx, my) {
       let ghx = Math.floor(sx - gcw / 2), ghw = gcw;
       if (world.townLevel >= 5) { const glw = Math.round(GH_LWING.w * gsc), grwg = Math.round(GH_RWING.w * gsc); ghx -= glw; ghw += glw + grwg; }
       push(ghx - 2, gTop, ghw + 4, gFoot - gTop,
-        [{ t: `${(world.name || 'TOWN').toUpperCase()} SILO — LV ${world.townLevel}`, c: TT_G }, { t: world.townCharacter(), c: TT_L },
-         { t: 'Settlers give surplus goods here', c: TT_GR },
+        [{ t: `${(world.name || 'TOWN').toUpperCase()} ${cultureWord(world.culture, 'struct.silo')} — LV ${world.townLevel}`, c: TT_G }, { t: world.townCharacter(), c: TT_L },
+         { t: cultureWord(world.culture, 'struct.siloDesc'), c: TT_GR },
          { t: maxed ? 'The town is fully grown' : `${world.townXP} / ${world.townXpNeed()} to level ${world.townLevel + 1}`, c: TT_B }]); }
     // legend monuments — hover to read the deed they mark (#85)
     for (const m of (world.monuments || [])) {

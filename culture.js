@@ -26,6 +26,7 @@ export const CULTURE_COPY = {
         'board.help': 'HELP WANTED', 'board.ambitions': 'AMBITIONS',
         // world nouns
         'struct.well': 'TOWN WELL',
+        'struct.silo': 'SILO', 'struct.siloDesc': 'Settlers give surplus goods here',
         // facilities
         'fac.coop': 'CHICKEN COOP', 'fac.pen': 'LIVESTOCK PEN', 'fac.sheeppen': 'SHEEP PEN',
         'fac.pond': 'WATER GARDEN', 'fac.mill': 'MILL', 'fac.hatchery': 'HATCH HOUSE',
@@ -46,6 +47,7 @@ export const CULTURE_COPY = {
         'board.title': 'WAR-POST', 'board.project': 'WAR-WORK', 'board.plans': 'CAMP PLANS',
         'board.help': 'FISTS WANTED', 'board.ambitions': 'AMBITIONS',
         'struct.well': 'BLOOD-CISTERN',
+        'struct.silo': 'WAR-HOARD', 'struct.siloDesc': 'Warriors haul plunder to the hoard',
         'fac.coop': 'CROW-ROOST', 'fac.pen': 'BEAST-PEN', 'fac.sheeppen': 'PELT-PEN',
         'fac.pond': 'LEECH-BOG', 'fac.mill': 'BONE-MILL', 'fac.hatchery': 'BROOD-HUTCH',
         'boot.newTown': 'RAISE A NEW WARBAND', 'boot.newTownConfirm': 'SURE? - THIS WARBAND IS DISBANDED',
