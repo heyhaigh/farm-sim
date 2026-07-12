@@ -456,8 +456,11 @@ function assignFirst(pool, startIdx, used) {
         const name = pool[(s + k) % n];
         if (!used.has(name)) { used.add(name); return name; }
     }
-    let k = 2, name;   // pool exhausted (roster > pool) — disambiguate deterministically, still unique
-    do { name = `${pool[s]} ${k++}`; } while (used.has(name));
+    // pool exhausted (roster > pool) — disambiguate deterministically. NO space: the numeral must stay part of
+    // the FIRST-name token so `name.split(' ')[0]` (shortName + the used-set rebuild in fromSave) round-trips it
+    // as one unique first name (`Grok2`), never collapsing back to the base (`Grok`) and re-colliding on reload.
+    let k = 2, name;
+    do { name = `${pool[s]}${k++}`; } while (used.has(name));
     used.add(name); return name;
 }
 function pickSurname(pool, seed) { return pool[hashString('sn:' + (seed >>> 0)) % pool.length]; }

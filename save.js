@@ -140,6 +140,19 @@ export async function wipeTown(seed) {
         if (latest) await idbReq('readwrite', s => s.put(latest, 'backup:latest'));
         await idbReq('readwrite', s => s.delete('town:' + seed));
         if (latest && latest.seed === seed) await idbReq('readwrite', s => s.delete('latest'));
+        // Codex #22.3 — retire the town from the WORLD index too (atomically), else it lingers as a zombie:
+        // still on the map, still in encounter detection, its inbox/pair records growing forever. Summaries
+        // regenerate on next play; ledgers are lineage-keyed and intentionally persist. detectEncounters GCs
+        // any pair/news records orphaned by this removal.
+        const s = String(seed);
+        await updateWorldIndex(index => {
+            if (index.towns) delete index.towns[s];
+            if (index.inbox) delete index.inbox[s];
+            if (index.pairs) for (const k of Object.keys(index.pairs)) { const [a, b] = k.split(':'); if (a === s || b === s) delete index.pairs[k]; }
+            if (Array.isArray(index.news)) index.news = index.news.filter(n => String(n.origin) !== s && String(n.destination) !== s);
+            if (Array.isArray(index.encounters)) index.encounters = index.encounters.filter(e => String(e.a) !== s && String(e.b) !== s);
+            return index;
+        });
     } catch (err) {
         console.warn('ry-farms: wipe failed', err);
     }

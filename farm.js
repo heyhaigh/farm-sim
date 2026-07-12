@@ -3587,7 +3587,7 @@ export class World {
         const h = plot.house, S = World.SITE;
         for (let dj = S.dj0; dj <= S.dj1; dj++) for (let di = S.di0; di <= S.di1; di++) {
             const t = this.get(h.i + di, h.j + dj);
-            if (t === T.TREE || t === T.STUMP || t === T.ROCK || t === T.WATER || t === T.FLOWER || t === T.WHEAT) return false;
+            if (t === T.TREE || t === T.STUMP || t === T.ROCK || t === T.WATER || t === T.FLOWER || t === T.WHEAT || t === T.BONES) return false;
         }
         return true;
     }
@@ -3848,7 +3848,7 @@ export class World {
     // Solid obstacles farmers must walk AROUND (buildings, wells, rocks, the board).
     pathBlocked(i, j) {
         const t = this.get(i, j);
-        if (t === T.HOUSE || t === T.WELL || t === T.STRUCT || t === T.COOP || t === T.BARN || t === T.ROCK || t === T.WATER || t === T.MILL || t === T.HATCH) return true;
+        if (t === T.HOUSE || t === T.WELL || t === T.STRUCT || t === T.COOP || t === T.BARN || t === T.ROCK || t === T.WATER || t === T.MILL || t === T.HATCH || t === T.BONES) return true;
         if (this.board && this.board.i === i && this.board.j === j) return true;
         return false;
     }

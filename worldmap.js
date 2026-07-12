@@ -81,6 +81,10 @@ export function detectEncounters(index) {
     const met = new Set((index.encounters || []).map(e => pairKey(String(e.a), String(e.b))));
     index.ledgers = index.ledgers || {};       // #reconciliation: per faction-lineage-pair grievance/reconciliation record
     index.pairs = index.pairs || {};           // Slice B: per town-pair awareness state (unknown->rumored->aware->met)
+    // Codex #22.3 — GC records orphaned by a wiped town (endpoints no longer in the index): bounds pair/news growth.
+    const live = new Set(Object.keys(index.towns || {}));
+    for (const k of Object.keys(index.pairs)) { const [a, b] = k.split(':'); if (!live.has(a) || !live.has(b)) delete index.pairs[k]; }
+    if (Array.isArray(index.news)) index.news = index.news.filter(n => live.has(String(n.origin)) && live.has(String(n.destination)));
     const fresh = [];
     for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) {
         const A = nodes[i], B = nodes[j];
