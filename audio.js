@@ -55,6 +55,53 @@ const SEASON_SONGS = [
     },
 ];
 
+// #3.1 ORC WARBAND SCORE — the dark mirror of the human seasons: low register, phrygian/locrian modes (the
+// "war/menace" sound), harsh sawtooth/square leads, HEAVY low bass as the war-drum, sparse + relentless. Same
+// four-season structure so the season crossfade + scheduler work unchanged. (Refined from the fantasy-writer's
+// sonic direction; see ORC_BRANDING_NOTES / the music brief.)
+const ORC_SEASON_SONGS = [
+    {   // SPRING — the raiding season: E phrygian, driving, harsh; a phrygian F->E cadence as the menace
+        tempo: 88, lead: { type: 'sawtooth', gain: 0.045, vibrato: false },
+        padGain: 0.05, bassGain: 0.44, pluckProb: 0.5, restProb: 0.5,
+        chords: [
+            { bass: 82.41, notes: [164.81, 174.61, 246.94], melody: [329.63, 349.23, 392.00, 493.88] },   // Em + b2(F) drone
+            { bass: 87.31, notes: [174.61, 220.00, 261.63], melody: [349.23, 392.00, 440.00, 523.25] },   // F (the phrygian neighbour)
+            { bass: 82.41, notes: [164.81, 174.61, 246.94], melody: [329.63, 392.00, 493.88] },
+            { bass: 61.74, notes: [123.47, 164.81, 196.00], melody: [246.94, 329.63, 392.00] },           // B — the tension before the fall
+        ],
+    },
+    {   // SUMMER — gorging, peak raid: A phrygian, faster + aggressive
+        tempo: 100, lead: { type: 'sawtooth', gain: 0.05, vibrato: false },
+        padGain: 0.045, bassGain: 0.42, pluckProb: 0.62, restProb: 0.4,
+        chords: [
+            { bass: 55.00, notes: [110.00, 116.54, 164.81], melody: [220.00, 233.08, 261.63, 329.63] },   // Am + b2(Bb)
+            { bass: 58.27, notes: [116.54, 146.83, 174.61], melody: [233.08, 293.66, 349.23] },           // Bb
+            { bass: 55.00, notes: [110.00, 130.81, 164.81], melody: [220.00, 261.63, 329.63] },
+            { bass: 65.41, notes: [130.81, 164.81, 196.00], melody: [261.63, 329.63, 392.00] },           // C
+        ],
+    },
+    {   // FALL — grim, the reckoning: D phrygian/minor, slow + heavy, square lead
+        tempo: 74, lead: { type: 'square', gain: 0.06, vibrato: false },
+        padGain: 0.05, bassGain: 0.4, pluckProb: 0.45, restProb: 0.55,
+        chords: [
+            { bass: 73.42, notes: [146.83, 174.61, 220.00], melody: [293.66, 349.23, 440.00] },           // Dm
+            { bass: 77.78, notes: [155.56, 185.00, 233.08], melody: [311.13, 369.99, 466.16] },           // Eb (b2)
+            { bass: 73.42, notes: [146.83, 174.61, 220.00], melody: [293.66, 349.23, 440.00] },
+            { bass: 55.00, notes: [110.00, 130.81, 164.81], melody: [220.00, 261.63, 329.63] },           // Am
+        ],
+    },
+    {   // WINTER — starving, hunkered, dread: A locrian (the b5 tritone), very slow + sparse
+        tempo: 60, lead: { type: 'square', gain: 0.07, vibrato: false },
+        padGain: 0.04, bassGain: 0.34, pluckProb: 0.32, restProb: 0.62,
+        chords: [
+            { bass: 55.00, notes: [110.00, 116.54, 155.56], melody: [220.00, 233.08, 311.13] },           // A locrian: A, b2(Bb), b5(Eb) — the dread
+            { bass: 58.27, notes: [116.54, 146.83, 174.61], melody: [233.08, 293.66] },
+            { bass: 51.91, notes: [103.83, 138.59, 155.56], melody: [207.65, 277.18] },                   // Ab drone
+            { bass: 55.00, notes: [110.00, 155.56, 164.81], melody: [220.00, 311.13, 329.63] },           // the tritone held: A - Eb
+        ],
+    },
+];
+
 class FarmAudio {
     constructor() {
         this.ctx = null;
@@ -146,8 +193,9 @@ class FarmAudio {
     toggleSfx() { this.sfxOn = !this.sfxOn; this.#save('sfxOn', this.sfxOn ? '1' : '0'); this.#applySfx(); return this.sfxOn; }
 
     // called every frame with sim state
-    update({ isNight, weather, flash, season = 0, hasRooster = false, building = false }) {
+    update({ isNight, weather, flash, season = 0, culture = 'human', hasRooster = false, building = false }) {
         this.hasRooster = hasRooster;
+        this.culture = culture === 'orc' ? 'orc' : 'human';   // #3.1 orc warbands get their own dark score
         if (!this.ctx) { this.wasNight = isNight; this.season = season; return; }
         const t = this.ctx.currentTime;
         // (structure-raising hammer is now emitted PER FARMER by the renderer via workSfx(), so it's
@@ -174,7 +222,8 @@ class FarmAudio {
 
     #schedule() {
         const t = this.ctx.currentTime;
-        const song = SEASON_SONGS[this.season] || SEASON_SONGS[0];
+        const songs = this.culture === 'orc' ? ORC_SEASON_SONGS : SEASON_SONGS;   // #3.1 dark warband score
+        const song = songs[this.season] || songs[0] || SEASON_SONGS[0];
         const bar = (60 / song.tempo) * 4;
         while (this.nextBar < t + 0.4) {
             if (this.nightMix < 0.85) this.#scheduleBar(this.nextBar, song, this.barIdx);

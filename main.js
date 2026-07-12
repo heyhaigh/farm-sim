@@ -4840,7 +4840,7 @@ function frame(now) {
     // soundtrack follows the sim: seasonal theme by day, crickets/owls at night,
     // rain/thunder by weather, and a rooster crow at dawn once the town has one
     const anyBuilding = world.farmers.some(f => f.state === 'housebuild' || f.state === 'fencepost' || f.state === 'build' || f.state === 'coopbuild' || f.state === 'scarecrow');
-    audio.update({ isNight: world.isNight(), weather: world.weather, flash: world.lightningFlash, season: world.season, hasRooster: world.hasRooster(), building: anyBuilding });
+    audio.update({ isNight: world.isNight(), weather: world.weather, flash: world.lightningFlash, season: world.season, culture: world.culture, hasRooster: world.hasRooster(), building: anyBuilding });
     // at extreme speeds keep a bounded backlog (spread over coming frames) rather than dropping
     // all the leftover time, but cap it so we never spiral.
     if (steps >= 800) simAccumulator = Math.min(simAccumulator, 800 * FIXED_DT);
