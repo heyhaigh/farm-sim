@@ -67,7 +67,7 @@ MY {crop} IS READY!→MY {crop} IS RIPE FOR TAKING! / CLEARING OUT THE DEAD ONES
 THE THIRSTY ONES→DRINK OR DIE, WRETCHES / SOWING {crop} SEEDS→DRIVING {crop} INTO THE DIRT / BREAKING NEW GROUND→
 BREAKING THIS GROUND
 
-## 2b-2p — INLINE ONE-OFFS  [TODO — batch by category]
+## 2b-2p — INLINE ONE-OFFS  [DONE — 113 static via ORC_SPEECH map + 37 templates via #tr, gated on culture]
 The full line-numbered table (work-results, building, well, help-economy, idle, sickness, weather, combat,
 social/theft, dream, role/silo, healer, trade, forage/mine, treasure) is in the fantasy-writer's report — grep
 the human string and swap on culture. New culture nouns implied: silo→WAR-HOARD, scarecrow→WARD-TOTEM,

@@ -2519,7 +2519,7 @@ export class World {
             f.journal = fd.journal.map(e => ({ ...e })); f.gossip = fd.gossip.map(g => ({ ...g }));
             f.opinions = new Map(fd.opinions);
             f.visitedSick = new Set(fd.visitedSick); f.tools = new Set(fd.tools);
-            f.thought = 'ANOTHER DAY ON THE FARM';
+            f.thought = this.culture === 'orc' ? 'ANOTHER DAY ON THE WARPATH' : 'ANOTHER DAY ON THE FARM';
             return f;
         });
 
@@ -3171,7 +3171,7 @@ export class World {
         // (heard-of, not known), so a hoarded recipe can still surface + spread by being seen made.
         for (const o of this.farmers) {
             if (o === f || o.health !== 'healthy') continue;
-            if (Math.abs(o.pos.i - f.pos.i) + Math.abs(o.pos.j - f.pos.j) < 4 && o.hearOf(recipeId)) o.think(`SO THAT'S HOW ${r.name.toUpperCase()} IS MADE...`);
+            if (Math.abs(o.pos.i - f.pos.i) + Math.abs(o.pos.j - f.pos.j) < 4 && o.hearOf(recipeId)) o.think(this.culture === 'orc' ? `SO THAT'S HOW ${r.name.toUpperCase()} IS FORGED...` : `SO THAT'S HOW ${r.name.toUpperCase()} IS MADE...`);
         }
         return r;
     }
@@ -5765,6 +5765,124 @@ function deriveStance(f) {
 
 const ACTION_TIME = { till: 3.2, plant: 2.2, water: 1.6, harvest: 2.6, clear: 2.0, mill: 5.5, hatch: 2.4 };   // #99b/#100
 
+// #94 orc-speech — the inline one-off bubbles, human -> orc (static strings; templates handled inline via #tr).
+// Applied at emit time in say()/think()/#orcLine when world.culture===orc. Pure display; never affects rng/digest.
+const ORC_SPEECH = new Map([
+    ['a rooster!', 'a dawn-screamer!'],
+    ['AN ORE LODE!', 'ORE FOR THE FORGE!'],
+    ['A TIMBER STASH!', 'A TIMBER HAUL!'],
+    ['A TRADE BUNDLE!', 'SPOILS TO TRADE!'],
+    ['A RELIC!', 'A WAR-RELIC!'],
+    ['TREASURE!', 'PLUNDER!'],
+    ['IS THAT... TREASURE?! MINE!', 'PLUNDER?! IT\'S MINE!'],
+    ['SOMETHING GLIMMERS OUT PAST THE FOG...', 'A GLINT OUT PAST THE FOG... MINE.'],
+    ['NEW LAND!', 'NEW GROUND TAKEN!'],
+    ['A MILL!', 'A BONE-MILL!'],
+    ['A HATCH HOUSE!', 'A BROOD-PIT!'],
+    ['NEW GROUNDS!', 'GROUND SEIZED!'],
+    ['LEVEL UP!', 'STRONGER NOW!'],
+    ['shelter, at last', 'a roof, at last'],
+    ['CLEARING THE FENCE LINE', 'CLEARING THE PALISADE LINE'],
+    ['CLEARING GROUND FOR MY HOME', 'CLEARING GROUND FOR MY DEN'],
+    ['MINING STONE FOR MY HOME', 'TEARING STONE FOR MY DEN'],
+    ['CLEARING SPACE TO UPGRADE MY HOME', 'CLEARING SPACE FOR A BIGGER DEN'],
+    ['FENCED!', 'PALISADE UP!'],
+    ['MY STORES ARE FULL - A BIGGER HOME WOULD HOLD MORE', 'MY HOARD\'S FULL - A BIGGER DEN WOULD HOLD MORE'],
+    ['HOORAY!', 'GRRAH!'],
+    ['SURPLUS GOODS FOR THE TOWN SILO', 'SPOILS FOR THE WAR-HOARD'],
+    ['TIMBER TO GROW THE TOWN', 'TIMBER TO GROW THE WARBAND'],
+    ['THE GUARDIAN WILL WARD THESE STORMS', 'THE STORM-TOTEM WILL WARD THIS SKY'],
+    ['I\'d sooner haul it myself', 'I\'ll haul it myself, then'],
+    ['fine. the long way, then', 'the long way, then'],
+    ['-1 crop toll', '-1 crop tribute'],
+    ['THE WELL\'S A LONG HAUL - WE SHOULD DIG OUR OWN', 'A LONG HAUL - WE DIG OUR OWN CISTERN'],
+    ['a well of our own!', 'our own blood-cistern!'],
+    ['NO NEIGHBORS OUT HERE — I\'LL SINK MY OWN WELL', 'NO KIN OUT HERE — I SINK MY OWN CISTERN'],
+    ['a well of my own!', 'my own blood-cistern!'],
+    ['count me in!', 'count my fist in!'],
+    ['for a cut? sure', 'for a cut? done'],
+    ['happy to help', 'for blood-kin, gladly'],
+    ['-1 crop share', '-1 crop, the cut'],
+    ['+1 crop share', '+1 crop, my cut'],
+    ['HAULING MATERIALS TO OUR WELL SITE', 'HAULING TO OUR CISTERN DIG'],
+    ['TIMBER FOR OUR SHARED WELL', 'TIMBER FOR OUR BLOOD-CISTERN'],
+    ['STONE FOR OUR SHARED WELL', 'STONE FOR OUR BLOOD-CISTERN'],
+    ['DIGGING OUR OWN WELL!', 'DIGGING OUR OWN CISTERN!'],
+    ['a fair trade!', 'a fair take!'],
+    ['THE MERCHANT IS IN TOWN — GOODS FOR ORE', 'MERCHANT IN CAMP — SPOILS FOR ORE'],
+    ['...gone', '...slunk off'],
+    ['...no deal', '...nothing to take'],
+    ['...suit yourself', '...your loss'],
+    ['...fine', '...so be it'],
+    ['deal!', 'done!'],
+    ['I ASKED FOR HELP. NOBODY CAME.', 'I CALLED. NO FIST ANSWERED.'],
+    ['IF I LOOK BUSY, SOMEONE WILL HELP', 'LOOK BURDENED, DRAW A FIST'],
+    ['SO MUCH TO DO... I COULD USE A HAND', 'TOO MUCH... I NEED A FIST'],
+    ['THERE WAS NOTHING TO DO HERE. HMPH.', 'NOTHING TO DO HERE. GRUH.'],
+    ['...you tricked me', '...you played me'],
+    ['...they couldn\'t pay', '...no spoils from them'],
+    ['THANKS FRIEND!', 'MY THANKS, BLOOD-KIN!'],
+    ['TOO STRONG — FALL BACK!', 'TOO STRONG — BREAK OFF!'],
+    ['...I LIVE.', '...I LIVE YET.'],
+    ['ALL BETTER!', 'STRONG AGAIN!'],
+    ['MAYBE I BROUGHT THIS ON MYSELF.', 'MAYBE THIS IS ON ME.'],
+    ['SO THAT IS HOW IT IS. FINE.', 'SO THAT\'S HOW IT IS. SO BE IT.'],
+    ['NEED TO REST AND GET WELL', 'MUST MEND. REST.'],
+    ['I overdid it...', 'pushed too hard...'],
+    ['GATHERING HERBS FOR THE SICK', 'GATHERING HERBS FOR THE FALLEN'],
+    ['RESTING SO I\'M READY WHEN NEEDED', 'RESTING - READY WHEN CALLED'],
+    ['THE HEALER NEEDS HERBS - I\'LL BRING GRASS', 'THE BONESETTER NEEDS HERBS - I\'LL BRING GRASS'],
+    ['good as new', 'whole again'],
+    ['THANK YOU...', 'MY THANKS...'],
+    ['REST UP, FRIEND', 'MEND UP, BLOOD-KIN'],
+    ['BLESS YOU', 'MY THANKS, KIN!'],
+    ['NOBODYS WATCHING THAT ONE...', 'NO EYES ON THAT ONE...'],
+    ['WHY WORK WHEN THAT ONE\'S RIPE FOR THE TAKING...', 'WHY WORK? THAT ONE\'S RIPE FOR TAKING...'],
+    ['HEY! THIEF!', 'THIEF! SEIZE THEM!'],
+    ['...i cannot', '...not like this'],
+    ['LET THEM WONDER WHO.', 'LET THEM GUESS WHO.'],
+    ['NOTHING TO TINKER WITH YET.', 'NOTHING TO FORGE WITH YET.'],
+    ['I\'VE TRIED THAT MIX BEFORE...', 'TRIED THAT MIX BEFORE...'],
+    ['AHA!', 'GRRAH — IT WORKS!'],
+    ['MY DREAM - REAL!', 'MY DREAM MADE REAL!'],
+    ['CRAFTED!', 'FORGED!'],
+    ['WHAT IF I TRIED SOMETHING NEW...', 'TIME TO FORGE SOMETHING NEW...'],
+    ['LIKE THIS -', 'WATCH CLOSE -'],
+    ['AH, I SEE!', 'AH — I SEE!'],
+    ['THE STORMS KEEP TAKING MY CROPS', 'THE STORMS KEEP TAKING MY HAUL'],
+    ['STORM\'S HERE. SAVE THE CROPS!', 'STORM\'S ON US. SAVE THE HAUL!'],
+    ['I HATE THUNDER. HIDING.', 'CURSED THUNDER. TO COVER.'],
+    ['WHITEOUT! GET INSIDE.', 'WHITEOUT! TO THE DEN.'],
+    ['A WILD LAKE — GOOD FISHING.', 'A WILD LAKE — EASY TAKINGS.'],
+    ['GOOD STONE HERE — ORE FOR BUILDING.', 'GOOD STONE HERE — ORE FOR THE FORGE.'],
+    ['BUMPER!', 'A FAT HAUL!'],
+    ['CRITICAL!', 'A GREAT TAKE!'],
+    ['nothing biting', 'not a bite'],
+    ['lost it', 'lost the scent'],
+    ['CLUTCH SET', 'BROOD SET'],
+    ['TIMBER FOR A SCARECROW', 'TIMBER FOR A WARDING-SKULL'],
+    ['THESE CROWS HAVE HAD THEIR LAST FREE MEAL', 'THESE CROWS HAVE STOLEN THEIR LAST'],
+    ['SCAT, CROWS!', 'BEGONE, CROWS!'],
+    ['SCOUTING FOR GOOD GROUND TO SETTLE', 'SCOUTING GROUND TO CLAIM'],
+    ['NOT HERE — KEEP LOOKING', 'NOT HERE — ON WE GO'],
+    ['CLEARING THIS ROCK FOR MORE FIELD', 'SMASHING THIS ROCK FOR MORE GROUND'],
+    ['CLEARING BRUSH FOR MORE FIELD', 'TEARING BRUSH FOR MORE GROUND'],
+    ['CLEARING TIMBER FOR MORE FIELD', 'HEWING TIMBER FOR MORE GROUND'],
+    ['CLEARING TREES FOR MORE LAND', 'HEWING TREES FOR MORE GROUND'],
+    ['MY FARM GROWS', 'MY CAMP GROWS'],
+    ['MY STONE IS SPENT — OFF TO THE HIGHLANDS FOR ORE', 'STONE\'S SPENT — TO THE HIGHLANDS FOR ORE'],
+    ['GOOD LAND OUT THERE. STAKING IT.', 'GOOD GROUND OUT THERE. CLAIMING IT.'],
+    ['THE CLAIM FELL THROUGH.', 'THE CLAIM SLIPPED AWAY.'],
+    ['A FRONTIER FIELD!', 'A FRONTIER CLAIM!'],
+    ['TOP OF THE TOWN!', 'TOP OF THE WARBAND!'],
+    ['HOW DID I END UP HERE?!', 'PENNED IN?! GRUH.'],
+    ['NO ROOF YET — I\'LL REST, NOT SLEEP', 'NO DEN YET — I\'LL REST, NOT SLEEP'],
+    ['good morning!', 'dawn again'],
+    ['back to it', 'enough rest'],
+    ['ANOTHER DAY ON THE FARM', 'ANOTHER DAY ON THE WARPATH'],
+    ['A NEW FARM. A NEW LIFE.', 'A NEW CAMP. A NEW WARPATH.'],
+]);
+
 const IDLE_THOUGHTS = [
     'NICE DAY OUT HERE',
     'THE SOIL SMELLS GOOD TODAY',
@@ -5806,7 +5924,7 @@ export class Farmer {
         this.chatCooldown = 2 + this.rand() * 8;   // gates neighbourly small talk
         this.animTime = this.rand() * 10;
 
-        this.thought = 'A NEW FARM. A NEW LIFE.';
+        this.thought = this.#orcLine('A NEW FARM. A NEW LIFE.');
         this.thoughtBubbleTimer = 4 + this.rand() * 8;
         this.helpTask = null;
         this.helpCooldown = 0;
@@ -6377,7 +6495,7 @@ export class Farmer {
         this.learnRecipe(inv.id); s.dryStreak = 0;
         this.gainXP(6); this.sparkle = 2; this.say('AHA!', '#ffd24a');
         this.remember('event', `Worked out the ${inv.name} — ${comboDesc(combo)}`, null, 1.1);
-        this.think(`I MADE SOMETHING NEW — THE ${inv.name.toUpperCase()}!`);
+        this.think(this.#tr(`I FORGED SOMETHING NEW — THE ${inv.name.toUpperCase()}!`, `I MADE SOMETHING NEW — THE ${inv.name.toUpperCase()}!`));
         w.addChronicle('discovery', `${shortName(this)} invented the ${inv.name} (${comboDesc(combo)}).`, this, null, '#ffd24a', { tier: 'callout', tone: 'triumph' });
         w.addLog(`${s.name} invented the ${inv.name} after much trial and error`, '#ffd24a');
     }
@@ -6617,7 +6735,7 @@ export class Farmer {
                 if (rv && rv.plot && this.plot && rv.plot.built.level >= 3 && this.plot.built.level < 3) {
                     d.crisis = w.day;
                     this.remember('lesson', `${d.rivalName} raised a cottage first - the gap is real`, rv, 1.0);
-                    this.think(`${(d.rivalName || 'THE RIVAL').toUpperCase()} IS AHEAD. NOT FOR LONG.`);
+                    this.think(this.#tr(`${(d.rivalName || 'THE RIVAL').toUpperCase()} IS AHEAD. I'LL BREAK THEM.`, `${(d.rivalName || 'THE RIVAL').toUpperCase()} IS AHEAD. NOT FOR LONG.`));
                 }
             } else if (d.id === 'deed' && this.downed) {
                 d.crisis = w.day;
@@ -6780,10 +6898,15 @@ export class Farmer {
         return Math.max(0.2, s);
     }
 
-    say(text, color = '#fff') { this.bubble = { text, color, t: 2.4 }; }
+    // #94 orc-speech: translate a static bubble line to its orc form (no-op for humans / unmapped/template text)
+    #orcLine(text) { return (this.world.culture === 'orc' && typeof text === 'string' && ORC_SPEECH.has(text)) ? ORC_SPEECH.get(text) : text; }
+    // template bubbles (with ${}) can't be map-keyed — callsites pass both forms and pick by culture
+    #tr(orc, human) { return this.world.culture === 'orc' ? orc : human; }
+
+    say(text, color = '#fff') { this.bubble = { text: this.#orcLine(text), color, t: 2.4 }; }
 
     think(text) {
-        this.thought = text.toUpperCase();
+        this.thought = this.#orcLine(text).toUpperCase();
         if (this.thoughtBubbleTimer <= 0) {
             this.say(this.thought.length > 26 ? this.thought.slice(0, 26) + '..' : this.thought, '#c8ccd8');
             this.thoughtBubbleTimer = 9 + this.rand() * 10;
@@ -6862,7 +6985,7 @@ export class Farmer {
         const r = this.#nextCraftable();
         if (r) {   // materials in hand — walk home and forge it
             this.craftTarget = r;
-            this.think(`ENOUGH ORE — TIME TO FORGE A ${r.name}`);
+            this.think(this.#tr(`ORE ENOUGH — FORGE A ${r.name}`, `ENOUGH ORE — TIME TO FORGE A ${r.name}`));
             const d = this.world.houseDoor(this.plot);
             return this.#goTo(d.i + 0.5, d.j + 0.5, 'craft');
         }
@@ -6872,7 +6995,7 @@ export class Farmer {
         if (next && this.plot.built.level >= 1 && this.sheet.level >= next.reqLevel &&
             this.wood >= next.wood && this.ore < next.ore && this.energy > 0.35) {
             const rock = this.world.nearestRock(this.pos, 34);
-            if (rock) { this.think(`MINING ORE FOR A ${next.name}`); this.mineTarget = rock; return this.#goTo(rock.i + 0.5, rock.j + 0.5, 'mine'); }
+            if (rock) { this.think(this.#tr(`TEARING ORE FOR A ${next.name}`, `MINING ORE FOR A ${next.name}`)); this.mineTarget = rock; return this.#goTo(rock.i + 0.5, rock.j + 0.5, 'mine'); }
             if (this.#seekOreAfar(next.name)) return true;   // no rock nearby → venture to the highlands
         }
         return false;
@@ -7111,18 +7234,18 @@ export class Farmer {
         const site = pr.site;
         if (w.projectNeedsMaterials(pr)) {
             const canGive = (pr.wood < pr.needWood && this.wood > 0) || (pr.ore < pr.needOre && this.ore > 0);
-            if (canGive) { this.think(`HAULING STONE FOR THE ${pr.label}`); if (this.#goTo(site.i + 0.5, site.j + 1.6, 'projdrop')) return true; }
+            if (canGive) { this.think(this.#tr(`DRAGGING STONE FOR THE ${pr.label}`, `HAULING STONE FOR THE ${pr.label}`)); if (this.#goTo(site.i + 0.5, site.j + 1.6, 'projdrop')) return true; }
             else if (pr.wood < pr.needWood) {
                 const src = w.nearestWood(this.pos);
-                if (src) { this.think(`TIMBER FOR THE ${pr.label}`); if (this.#goToWood(src)) return true; }
+                if (src) { this.think(this.#tr(`HEWING TIMBER FOR THE ${pr.label}`, `TIMBER FOR THE ${pr.label}`)); if (this.#goToWood(src)) return true; }
             } else if (pr.ore < pr.needOre) {
                 const rock = w.nearestRock(this.pos, 60);
-                if (rock) { this.think(`STONE FOR THE ${pr.label}`); this.mineTarget = rock; if (this.#goTo(rock.i + 0.5, rock.j + 0.5, 'mine')) return true; }
+                if (rock) { this.think(this.#tr(`TEARING STONE FOR THE ${pr.label}`, `STONE FOR THE ${pr.label}`)); this.mineTarget = rock; if (this.#goTo(rock.i + 0.5, rock.j + 0.5, 'mine')) return true; }
                 else if (this.#seekOreAfar(pr.label)) return true;   // valley tapped out → expedition
             }
             return false;   // nothing haulable/gatherable right now — get on with the farm
         }
-        this.think(`RAISING THE ${pr.label}!`);
+        this.think(this.#tr(`THE ${pr.label} RISES!`, `RAISING THE ${pr.label}!`));
         // already at the site? build in place — don't re-walk on every redecide (the jitter)
         if (Math.abs(this.pos.i - (site.i + 0.5)) + Math.abs(this.pos.j - (site.j + 1.6)) < 2.2 + (pr.size || 1)) { this.state = 'build'; return true; }
         const off = (this.sheet.seed % 3) - 1;
@@ -7212,7 +7335,7 @@ export class Farmer {
         this.gainXP(2);
         this.mood = Math.min(1, this.mood + 0.08);
         this.sparkle = 1.5;
-        this.say(`+${given} to the silo`, '#f0d060');
+        this.say(this.#tr(`+${given} to the hoard`, `+${given} to the silo`), '#f0d060');
         this.remember('event', `Gave ${parts.join(', ')} to the town silo — we grow this place together`, null, 0.8);
         this.donateCooldown = 2 + Math.floor(this.rand() * 3);   // days before the itch to give returns
     }
@@ -7348,7 +7471,7 @@ export class Farmer {
         if (mine) { this.#faceThreat(mine); return true; }
         const helping = w.encounters.find(e => !e.done && e.helpers.has(this));
         if (helping) {
-            this.think(`HELPING vs ${helping.def.name.toUpperCase()}`);
+            this.think(this.#tr(`LENDING A FIST vs ${helping.def.name.toUpperCase()}`, `HELPING vs ${helping.def.name.toUpperCase()}`));
             const d = Math.hypot(this.pos.i - helping.i, this.pos.j - helping.j);
             if (d > 1.3) { if (!this.#goTo(helping.i, helping.j, 'fight')) { this.fightTimer = 0.6; this.state = 'fight'; } return true; }
             this.fightTimer = 0.8; this.state = 'fight'; return true;
@@ -7381,14 +7504,14 @@ export class Farmer {
             this.combatStance = 'flee'; this.say('TOO STRONG — FALL BACK!', '#e05040'); e.helpWanted = true;
         }
         if (this.combatStance === 'fight') {
-            this.think(`FIGHTING ${def.name.toUpperCase()}`);
+            this.think(this.#tr(`CUTTING DOWN ${def.name.toUpperCase()}`, `FIGHTING ${def.name.toUpperCase()}`));
             if (Math.hypot(this.pos.i - e.i, this.pos.j - e.j) > 1.3) {
                 if (!this.#goTo(e.i, e.j, 'fight')) { this.fightTimer = 0.6; this.state = 'fight'; }
                 return;
             }
             this.fightTimer = 0.8; this.state = 'fight'; return;   // hold + trade blows (encounter tick resolves)
         }
-        this.think(`RUN — ${def.name.toUpperCase()}!`); this.fleeTimer = 0.5; this.state = 'flee';   // bolt for the plaza
+        this.think(this.#tr(`FLEE — ${def.name.toUpperCase()}!`, `RUN — ${def.name.toUpperCase()}!`)); this.fleeTimer = 0.5; this.state = 'flee';   // bolt for the plaza
     }
 
     // Brave neighbours answer a threat: either a cry for help within earshot, OR a foe that's strayed
@@ -7471,7 +7594,7 @@ export class Farmer {
             }
             const spot = w.fencePostSpot(p, p.fencePosts);   // fence line is clear now — pick a post spot
             this.pendingFence = { cost: FENCE_POST_WOOD };
-            this.think(`RAISING FENCE POST ${p.fencePosts + 1}/${p.fenceTarget}`);
+            this.think(this.#tr(`RAISING PALISADE POST ${p.fencePosts + 1}/${p.fenceTarget}`, `RAISING FENCE POST ${p.fencePosts + 1}/${p.fenceTarget}`));
             if (this.#goTo(spot.i + 0.5, spot.j + 0.5, 'fencepost')) return true;
             p.fencePosts++; this.#backoff(); return true;   // spot unreachable — skip it, don't loop
         }
@@ -7614,7 +7737,7 @@ export class Farmer {
         // a cold shoulder and move on — no exchange (see also the wander steering-away below).
         if (Math.min(this.opinionOf(other), other.opinionOf(this)) <= -0.35) {
             this.chatCooldown = 10 + this.rand() * 10;
-            if (this.opinionOf(other) <= -0.35 && this.rand() < 0.5) this.think(`NOT A WORD TO ${shortName(other).toUpperCase()}.`);
+            if (this.opinionOf(other) <= -0.35 && this.rand() < 0.5) this.think(this.#tr(`NO WORDS FOR ${shortName(other).toUpperCase()}.`, `NOT A WORD TO ${shortName(other).toUpperCase()}.`));
             return false;
         }
         // Not every passing counts as a conversation — a farmer stops to talk only sometimes,
@@ -7668,7 +7791,7 @@ export class Farmer {
         if (this.invented().length && this.rand() < 0.3 + this.p.curiosity * 0.2) {
             const mine = this.invented();
             const id = mine[Math.floor(this.rand() * mine.length)];
-            if (other.hearOf(id)) other.think(`SO ${shortName(this).toUpperCase()} WORKED OUT ${(RECIPE_BY_ID[id] ? RECIPE_BY_ID[id].name : id).toUpperCase()}...`);
+            if (other.hearOf(id)) other.think(this.#tr(`SO ${shortName(this).toUpperCase()} FORGED ${(RECIPE_BY_ID[id] ? RECIPE_BY_ID[id].name : id).toUpperCase()}...`, `SO ${shortName(this).toUpperCase()} WORKED OUT ${(RECIPE_BY_ID[id] ? RECIPE_BY_ID[id].name : id).toUpperCase()}...`));
         }
         // The DETERMINISTIC scripted outcome IS the sim state: opinions, bonds, and journal memories are applied
         // NOW, synchronously, from seeded logic. The LLM (if enabled) is a pure DISPLAY embellishment — it later
@@ -7699,7 +7822,7 @@ export class Farmer {
         if (!best) return false;
         this.teachTarget = best;
         this.teachCooldown = 60 + this.rand() * 60;
-        this.think(`I'LL SHOW ${shortName(best.student).toUpperCase()} HOW TO MAKE ${(RECIPE_BY_ID[best.id] ? RECIPE_BY_ID[best.id].name : best.id).toUpperCase()}`);
+        this.think(this.#tr(`I'LL SHOW ${shortName(best.student).toUpperCase()} HOW TO FORGE ${(RECIPE_BY_ID[best.id] ? RECIPE_BY_ID[best.id].name : best.id).toUpperCase()}`, `I'LL SHOW ${shortName(best.student).toUpperCase()} HOW TO MAKE ${(RECIPE_BY_ID[best.id] ? RECIPE_BY_ID[best.id].name : best.id).toUpperCase()}`));
         if (this.#goTo(best.student.pos.i + 0.5, best.student.pos.j + 0.5, 'teach')) return true;
         this.teachTarget = null; return false;
     }
@@ -7727,7 +7850,7 @@ export class Farmer {
         this.sabotageCooldown = 140 + this.rand() * 160;   // rare, whether or not it lands
         if (this.rand() > 0.5 + Math.max(0, -worst - 0.45) * 0.8) return false;   // even the spiteful don't always act
         this.sabotageTarget = victim;
-        this.think(`${shortName(victim).toUpperCase()} WILL REGRET CROSSING ME...`);
+        this.think(this.#tr(`${shortName(victim).toUpperCase()} WILL PAY FOR CROSSING ME...`, `${shortName(victim).toUpperCase()} WILL REGRET CROSSING ME...`));
         const cx = victim.plot.x + Math.floor(victim.plot.w / 2), cy = victim.plot.y + Math.floor(victim.plot.h / 2);
         if (this.#goTo(cx + 0.5, cy + 0.5, 'sabotage')) return true;
         this.sabotageTarget = null; return false;
@@ -7748,7 +7871,7 @@ export class Farmer {
             const info = w.expansionInfo(p);
             if (info.state !== 'blocked') {   // there's room to grow — annex land first, then build
                 this.wantExpand = true;
-                if (this.rand() < 0.2) this.think(`MY FARM IS TOO SMALL FOR A ${HOUSE_TIERS[next].name.toUpperCase()} — TIME TO EXPAND`);
+                if (this.rand() < 0.2) this.think(this.#tr(`MY CAMP IS TOO SMALL FOR A ${HOUSE_TIERS[next].name.toUpperCase()} — TAKE MORE GROUND`, `MY FARM IS TOO SMALL FOR A ${HOUSE_TIERS[next].name.toUpperCase()} — TIME TO EXPAND`));
                 return this.#pursueGrowth();   // put a shift into growing the plot right now
             }
             // truly hemmed in by neighbours — let the house rise in the existing yard rather than deadlock
@@ -7769,7 +7892,7 @@ export class Farmer {
         if (!p.building && !w.startHouseBuild(this, level)) return false;
         const b = p.building;
         if (!b) return false;
-        this.think(`RAISING MY ${HOUSE_TIERS[b.level].name.toUpperCase()} — ${b.points}/${b.needed}`);
+        this.think(this.#tr(`THROWING UP MY ${HOUSE_TIERS[b.level].name.toUpperCase()} — ${b.points}/${b.needed}`, `RAISING MY ${HOUSE_TIERS[b.level].name.toUpperCase()} — ${b.points}/${b.needed}`));
         const d = w.houseDoor(p);
         if (Math.abs(this.pos.i - (d.i + 0.5)) + Math.abs(this.pos.j - (d.j + 0.5)) < 1.9) {
             this.buildTimer = this.#laborTime('housebuild'); this.state = 'housebuild'; return true;
@@ -7869,7 +7992,7 @@ export class Farmer {
             if ((g[m] || 0) <= 0) continue;
             g[m]--;
             this.hp = Math.min(this.maxHp, this.hp + Math.round(this.maxHp * MEAT_HEAL[m]));
-            this.say(`ate ${MEAT_NAME[m]}`, '#e07868'); this.sparkle = 1;
+            this.say(this.#tr(`tore into ${MEAT_NAME[m]}`, `ate ${MEAT_NAME[m]}`), '#e07868'); this.sparkle = 1;
             this.remember('event', `Ate ${MEAT_NAME[m]} to mend after a scuffle`, null, 0.7);
             return true;
         }
@@ -8017,7 +8140,7 @@ export class Farmer {
                 Math.abs(o.pos.i - this.pos.i) + Math.abs(o.pos.j - this.pos.j) < 16);
             if (sick && this.rand() < (this.goal === 'good neighbor' ? 0.8 : 0.5)) {
                 this.visitedSick.add(sick.sheet.seed); this.careTarget = sick;
-                this.think(`${sick.sheet.name.split(' ')[0].toUpperCase()} IS SICK. I'LL LOOK IN.`);
+                this.think(this.#tr(`${sick.sheet.name.split(' ')[0].toUpperCase()} IS DOWN. I'LL LOOK IN.`, `${sick.sheet.name.split(' ')[0].toUpperCase()} IS SICK. I'LL LOOK IN.`));
                 const cd = w.houseDoor(sick.plot);
                 this.#goTo(cd.i + 0.5, cd.j + 0.5, 'care'); return;
             }
@@ -8078,10 +8201,10 @@ export class Farmer {
             else if (this.sheet.harvested >= c.harvested) {
                 if (this.wood < c.wood) {
                     const src = w.nearestWood(this.pos);
-                    if (src) { this.think(`TIMBER FOR THE ${c.name.toUpperCase()} - ${this.wood}/${c.wood}`); if (this.#goToWood(src)) return; }
+                    if (src) { this.think(this.#tr(`HEWING FOR THE ${c.name.toUpperCase()} - ${this.wood}/${c.wood}`, `TIMBER FOR THE ${c.name.toUpperCase()} - ${this.wood}/${c.wood}`)); if (this.#goToWood(src)) return; }
                 } else if (this.ore < c.ore) {
                     const rock = w.nearestRock(this.pos, 50);
-                    if (rock) { this.think(`STONE FOR THE ${c.name.toUpperCase()} - ${this.ore}/${c.ore}`); this.mineTarget = rock; if (this.#goTo(rock.i + 0.5, rock.j + 0.5, 'mine')) return; }
+                    if (rock) { this.think(this.#tr(`TEARING STONE FOR THE ${c.name.toUpperCase()} - ${this.ore}/${c.ore}`, `STONE FOR THE ${c.name.toUpperCase()} - ${this.ore}/${c.ore}`)); this.mineTarget = rock; if (this.#goTo(rock.i + 0.5, rock.j + 0.5, 'mine')) return; }
                     else if (this.#seekOreAfar(c.name.toUpperCase())) return;   // mined out at home → expedition
                 } else this.wantUpgrade = false;   // affordable — the next decide pass raises it
             }
@@ -8144,9 +8267,9 @@ export class Farmer {
             if (taken) {
                 const req = taken.req;
                 this.helpTask = { requester: req.farmer, actionsLeft: 3 + Math.floor(this.rand() * 3), genuine: req.genuine, didWork: false, reward: taken.agreed };
-                this.think(`${req.farmer.sheet.name.toUpperCase()} NEEDS A HAND!`);
+                this.think(this.#tr(`${req.farmer.sheet.name.toUpperCase()} NEEDS A FIST!`, `${req.farmer.sheet.name.toUpperCase()} NEEDS A HAND!`));
                 const payFor = taken.agreed ? ` FOR ${taken.agreed.amount} ${w.goodLabel(taken.agreed.good).toUpperCase()}` : '';
-                this.say(`COMING ${req.farmer.sheet.name.split(' ')[0].toUpperCase()}!`, '#7dd069');
+                this.say(this.#tr(`ON MY WAY, ${req.farmer.sheet.name.split(' ')[0].toUpperCase()}!`, `COMING ${req.farmer.sheet.name.split(' ')[0].toUpperCase()}!`), '#7dd069');
                 w.addLog(`${s.name} took ${req.farmer.sheet.name}'s job${payFor}`, '#7dd069');
                 this.state = 'decide-help'; return;
             }
@@ -8222,7 +8345,7 @@ export class Farmer {
                             + (this.dream('deed') ? 0.08 : 0)   // #89: a deed-dreamer takes the chase
                             + this.urgeBias('hunt');            // #93: a whispered urge to hunt
                 if (this.rand() < knack) {
-                    this.think(`WILD ${a.kind.toUpperCase()} — MEAT IF I CAN CATCH IT`);
+                    this.think(this.#tr(`WILD ${a.kind.toUpperCase()} — MEAT IF I RUN IT DOWN`, `WILD ${a.kind.toUpperCase()} — MEAT IF I CAN CATCH IT`));
                     // proud/competitive hands overextend (chase long); the timid quit early (#86)
                     this.huntTarget = a; a.hunter = this; this.huntTimer = 6 + this.p.competitiveness * 8; this.state = 'hunt'; return;
                 }
@@ -8236,7 +8359,7 @@ export class Farmer {
             this.rand() < 0.08 + this.effCollab() * 0.22 + this.p.curiosity * 0.1 + (this.goal === 'sharp trader' ? 0.35 : 0) + this.urgeBias('trade')) {
             const deal = this.#findBarter();
             if (deal) {
-                this.think(`TRADE MY ${deal.give.toUpperCase()} FOR ${deal.partner.sheet.name.split(' ')[0].toUpperCase()}'S ${deal.get.toUpperCase()}`);
+                this.think(this.#tr(`SWAP MY ${deal.give.toUpperCase()} FOR ${deal.partner.sheet.name.split(' ')[0].toUpperCase()}'S ${deal.get.toUpperCase()}`, `TRADE MY ${deal.give.toUpperCase()} FOR ${deal.partner.sheet.name.split(' ')[0].toUpperCase()}'S ${deal.get.toUpperCase()}`));
                 this.barterDeal = deal; this.barterCooldown = 45 + this.rand() * 45;
                 if (this.#goTo(deal.partner.pos.i + 0.5, deal.partner.pos.j + 0.5, 'barter')) return;
                 this.barterDeal = null;
@@ -8263,7 +8386,7 @@ export class Farmer {
             if (vu && vu.kind === 'visit' && vu.target && !w.isNight()) {
                 const t = w.farmers.find(o => o !== this && shortName(o).toLowerCase() === String(vu.target).toLowerCase());
                 if (t && this.opinionOf(t) > -0.35) {
-                    this.think(`I SHOULD LOOK IN ON ${shortName(t).toUpperCase()}.`);
+                    this.think(this.#tr(`I'LL LOOK IN ON ${shortName(t).toUpperCase()}.`, `I SHOULD LOOK IN ON ${shortName(t).toUpperCase()}.`));
                     if (this.#goTo(t.pos.i + 0.5, t.pos.j + 0.5, 'wander')) return;
                 }
             }
@@ -8276,7 +8399,7 @@ export class Farmer {
             const useId = this.#usefulInvention();
             if (useId) {
                 const made = w.applyInvention(this, useId);
-                if (made) { this.say(`MADE ${made.name.toUpperCase()}`, '#8fd0d0'); this.think(`A FRESH ${made.name.toUpperCase()} — HANDY`); }
+                if (made) { this.say(this.#tr(`FORGED ${made.name.toUpperCase()}`, `MADE ${made.name.toUpperCase()}`), '#8fd0d0'); this.think(this.#tr(`A FRESH ${made.name.toUpperCase()} — USEFUL`, `A FRESH ${made.name.toUpperCase()} — HANDY`)); }
             }
         }
 
@@ -8298,7 +8421,7 @@ export class Farmer {
             // retreat to the corner of my own land farthest from them
             let best = spots[0], bd = -1;
             for (const c of spots) { const d = Math.abs(c.i - avoid.pos.i) + Math.abs(c.j - avoid.pos.j); if (d > bd) { bd = d; best = c; } }
-            this.think(`KEEPING MY DISTANCE FROM ${shortName(avoid).toUpperCase()}.`);
+            this.think(this.#tr(`STAYING CLEAR OF ${shortName(avoid).toUpperCase()}.`, `KEEPING MY DISTANCE FROM ${shortName(avoid).toUpperCase()}.`));
             this.#goTo(best.i + 0.5, best.j + 0.5, 'wander');
             return;
         }
@@ -8433,7 +8556,7 @@ export class Farmer {
                 if (w.expandPlot(this)) { this.nextExpand = Math.round(this.nextExpand * 2.1); this.wantExpand = false; this.think('MY FARM GROWS'); return true; }
                 this.wantExpand = false; return false;
             }
-            this.think(`NEED ${net} WOOD TO FENCE THE NEW LINE`);
+            this.think(this.#tr(`NEED ${net} WOOD FOR THE NEW PALISADE`, `NEED ${net} WOOD TO FENCE THE NEW LINE`));
             this.#goChop(); return true;
         }
         return false;
@@ -8453,7 +8576,7 @@ export class Farmer {
         if (w.isNight() || this.energy < 0.4) return false;
         // a prior leg may already have revealed an outcrop within a walkable reach (findPath-safe)
         const near = w.nearestRock(this.pos, 55);
-        if (near) { this.think(`ORE AT LAST — FOR THE ${name}`); this.mineTarget = near; return this.#goTo(near.i + 0.5, near.j + 0.5, 'mine'); }
+        if (near) { this.think(this.#tr(`ORE ENOUGH — FOR THE ${name}`, `ORE AT LAST — FOR THE ${name}`)); this.mineTarget = near; return this.#goTo(near.i + 0.5, near.j + 0.5, 'mine'); }
         if (this.oreExpedCooldown > 0) return false;
         const tgt = this.#outwardFrontierTarget();
         if (!tgt) { this.oreExpedCooldown = 25; return false; }   // hemmed in — try again shortly
@@ -8680,7 +8803,7 @@ export class Farmer {
         if (this.plot.cells.size + Farmer.ANNEX * Farmer.ANNEX > World.tierCellCap(this.plot.built.level)) return false;
         if (this.pendingAnnex) {   // already committed — keep walking / keep funding it
             const net = this.pendingAnnex.net;
-            if (this.wood < net) { this.think(`${net} POSTS FOR THE FRONTIER FIELD`); this.#goChop(); return true; }
+            if (this.wood < net) { this.think(this.#tr(`${net} PALISADE POSTS FOR THE CLAIM`, `${net} POSTS FOR THE FRONTIER FIELD`)); this.#goChop(); return true; }
             const c = this.pendingAnnex.center;
             return this.#goTo(c.i + 0.5, c.j + 0.5, 'annex');
         }
@@ -9377,12 +9500,12 @@ export class Farmer {
                         this.avoidCooldown = 1.2;
                         const foe = this.#dislikedNear(2.8);
                         if (foe) {
-                            this.think(`NOT NEAR ${shortName(foe).toUpperCase()}. NO THANKS.`); this.emote = 'grudge'; this.emoteT = 1.6;
+                            this.think(this.#tr(`NOT NEAR ${shortName(foe).toUpperCase()}. NOT ME.`, `NOT NEAR ${shortName(foe).toUpperCase()}. NO THANKS.`)); this.emote = 'grudge'; this.emoteT = 1.6;
                             // #86 — a VOLATILE hand doesn't just avoid; they escalate: a sharper grudge and,
                             // now and then, a public blow-up that sours it for good (a rift beat).
                             if (this.volatility > 0.66) {
                                 this.adjustOpinion(foe, -0.06, `bristled at ${shortName(foe)}`);
-                                if (this.rand() < 0.2) { this.say(`I'VE HAD IT WITH ${shortName(foe).toUpperCase()}!`, '#e05040');
+                                if (this.rand() < 0.2) { this.say(this.#tr(`I'M DONE WITH ${shortName(foe).toUpperCase()}!`, `I'VE HAD IT WITH ${shortName(foe).toUpperCase()}!`), '#e05040');
                                     foe.adjustOpinion(this, -0.1, 'blew up at me over nothing');
                                     this.world.addChronicle('rift', `${this.sheet.name.split(' ')[0]} blew up at ${foe.sheet.name.split(' ')[0]} in the open.`, this, foe, '#e05040'); }
                             }
