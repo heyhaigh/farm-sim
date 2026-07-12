@@ -374,14 +374,19 @@ const ROCK_NAMES = ['Rock4_1', 'Rock4_2', 'Rock4_3', 'Rock4_4', 'Rock4_5'];
 // (see the orc branch in wildSpec). Trees become dead trees / mushroom-trees / chanterelles; the green
 // foliage becomes ground mushrooms; rocks become glowing magma boulders; and rare dragon skeletons litter
 // the land as impassable decor. Loaded lazily like the human sets; pure display, no sim/determinism effect.
-const ORC_FOREST_BASE = './assets/craftpix-net-505052-free-forest-objects-top-down-pixel-art/PNG/Assets/';
+// Assets_no_shadow (NOT Assets/ or the texture-shadow dirs): the with-shadow variants bake a GREEN grass
+// tuft under each sprite, which reads wrong on the orc desert — the shadowless cut sits clean on the sand.
+const ORC_FOREST_BASE = './assets/craftpix-net-505052-free-forest-objects-top-down-pixel-art/PNG/Assets_no_shadow/';
 const ORC_TREE_NAMES = ['White_tree1', 'White_tree2', 'White-red_mushroom1', 'White-red_mushroom2', 'White-red_mushroom3', 'Chanterelles1', 'Chanterelles2', 'Chanterelles3'];
 const ORC_ROCKY_BASE = './assets/craftpix-net-639143-free-rocky-area-objects-pixel-art/PNG/Objects_separately/';
 const ORC_FLOWER_NAMES = ['Black_mushrooms1_ground_shadow', 'Black_mushrooms2_ground_shadow'];
 const ORC_WHEAT_NAMES = ['Orange_mushrooms1_ground_shadow', 'Orange_mushrooms2_ground_shadow'];
 const ORC_BONE_NAMES = ['Dragon_bones_full_ground_shadow', 'Dragon_bones_body_ground_shadow', 'Dragon_bones_tail_ground_shadow', 'Dragon_bones_wing1_ground_shadow', 'Dragon_bones_wing2_ground_shadow'];
-const ORC_ROCK_NAMES = ['Rock8_1', 'Rock8_2', 'Rock8_3', 'Rock8_4', 'Rock8_5', 'Rock7_1', 'Rock7_2', 'Rock7_3', 'Rock7_4', 'Rock7_5'];
-const orcTreeImg = {}, orcRockyImg = {}, orcRockImg = {};
+const ORC_ROCK_NAMES = ['Rock7_1', 'Rock7_2', 'Rock7_3', 'Rock7_4', 'Rock7_5'];   // grey boulders (Rock8 magma dropped per request)
+// The ONLY green in the wastes: cacti (bushes pack, plain Assets/ — no grass tuft), sprinkled among the foliage.
+const ORC_CACTUS_BASE = './assets/craftpix-net-141354-free-top-down-bushes-pixel-art/PNG/Assets/';
+const ORC_CACTUS_NAMES = ['Cactus1_1', 'Cactus1_2', 'Cactus1_3', 'Cactus2_1', 'Cactus2_2', 'Cactus2_3'];
+const orcTreeImg = {}, orcRockyImg = {}, orcRockImg = {}, orcCactusImg = {};
 
 // The Dungeon Master's wilderness threats. Each sheet is a directional frame GRID; we slice one
 // side-profile frame per sprite (`row`), which in these packs faces LEFT — so it's mirrored to face
@@ -659,6 +664,7 @@ function loadAssetArt() {
     loadImageSet(ORC_FOREST_BASE, { ORCTREES: ORC_TREE_NAMES }, orcTreeImg, () => {});
     loadImageSet(ORC_ROCKY_BASE, { ORCROCKY: ORC_FLOWER_NAMES.concat(ORC_WHEAT_NAMES, ORC_BONE_NAMES) }, orcRockyImg, () => {});
     loadImageSet(ROCK_ART_BASE, { ORCROCKS: ORC_ROCK_NAMES }, orcRockImg, () => {});
+    loadImageSet(ORC_CACTUS_BASE, { ORCCACTI: ORC_CACTUS_NAMES }, orcCactusImg, () => {});
     loadAnimalArt();
     homeSheet.onload = () => { homeReady = true; };
     homeSheet.onerror = () => {};
@@ -957,10 +963,13 @@ function wildSpec(i, j, t, season) {
             return { img, w, h, anchor: 0.82, depth: 0.4, seed: hash2(i, j, 73), tree: true, chopKey: i + ',' + j };
         }
         if (t === T.FLOWER) {
-            const img = pickLoadedImage(orcRockyImg, ORC_FLOWER_NAMES, i, j, 64);
+            // mostly black ground mushrooms, with the occasional CACTUS — the only green in the wastes
+            const cactus = (hash2(i, j, 77) % 4) === 0;
+            const img = cactus ? pickLoadedImage(orcCactusImg, ORC_CACTUS_NAMES, i, j, 78)
+                               : pickLoadedImage(orcRockyImg, ORC_FLOWER_NAMES, i, j, 64);
             if (!img) return null;
             const { w, h } = wildDims(img);
-            return { img, w, h, anchor: 0.72, depth: -1 };
+            return { img, w, h, anchor: cactus ? 0.82 : 0.72, depth: -1 };
         }
         if (t === T.WHEAT) {
             const img = pickLoadedImage(orcRockyImg, ORC_WHEAT_NAMES, i, j, 66);
