@@ -18,6 +18,7 @@ import { enrichStories } from './dm.js';
 import { persistLives, persistTownHistory } from './memory-writeback.js';
 import { enrichInventions, persistTownInventions } from './memory-invent.js';
 import { whisper } from './conscience.js';
+import { cultureWord } from './culture.js';   // #3.1 orc-vs-human display copy
 
 // ---------------------------------------------------------------------------
 // Canvases
@@ -2653,9 +2654,9 @@ function drawUI() {
     // look (not the red 'selected' fill), which is reserved for the >/>> that IS active.
     if (spd !== 1) barBtn(SPEED1_BTN, '1X', false);
 
-    barBtn(ROSTER_BTN, 'ROSTER', rosterOpen, '#7dd069', '#10240c');
+    barBtn(ROSTER_BTN, cultureWord(world.culture, 'panel.roster'), rosterOpen, '#7dd069', '#10240c');
     barBtn(WORLD_BTN, 'WORLD', worldMapOpen, '#c8b0e0', '#160f22');
-    barBtn(CHRON_BTN, 'CHRONICLE', chronOpen, '#c8a0e0', '#1a1024');
+    barBtn(CHRON_BTN, cultureWord(world.culture, 'panel.chronicle'), chronOpen, '#c8a0e0', '#1a1024');
     if ((world._chronTotal || 0) > chronReadTotal && !chronOpen) drawCoin(CHRON_BTN.x + CHRON_BTN.w - 3, CHRON_BTN.y - 2, 6);   // UNREAD only
 
     // (NEW TOWN moved into the settings menu.) A quiet "SAVED" tick under the cog whenever the town
@@ -2665,7 +2666,7 @@ function drawUI() {
     BOARD_BTN.hidden = !world.board;   // only exists once the town has built the board
     if (!BOARD_BTN.hidden) {
         const postCount = world.helpBoard.filter(r => r.genuine).length + (world.project ? 1 : 0);
-        barBtn(BOARD_BTN, 'BOARD', boardOpen, '#c9a45a', '#221a0e');
+        barBtn(BOARD_BTN, cultureWord(world.culture, 'panel.board'), boardOpen, '#c9a45a', '#221a0e');
         if (postCount > 0 && !boardOpen) drawCoin(BOARD_BTN.x + BOARD_BTN.w - 3, BOARD_BTN.y - 2, 6);
     }
 
@@ -3192,7 +3193,7 @@ function drawSheet(f) {
         drawText(ctx, cropMix.slice(0, 24), IX + 32, y, SHEET_VAL); y += 7;
         const facs = ['crops', ...f.plot.facilities.map(fc => FAC_SHORT[fc.type] || fc.type)];
         drawText(ctx, 'HAS', IX, y, SHEET_LABEL); drawText(ctx, facs.join(', ').slice(0, 26), IX + 32, y, SHEET_VAL); y += 7;
-        kv(IX, 'LAND', `${f.plot.cells.size}t`); drawText(ctx, 'YIELD', IX + 76, y, SHEET_LABEL); drawText(ctx, String(s.cropsHarvested || 0), IX + 108, y, SHEET_VAL); y += 7;
+        kv(IX, 'LAND', `${f.plot.cells.size}t`); drawText(ctx, cultureWord(world.culture, 'stat.yield'), IX + 76, y, SHEET_LABEL); drawText(ctx, String(s.cropsHarvested || 0), IX + 108, y, SHEET_VAL); y += 7;
         kv(IX, 'REP', Math.round(f.reputation * 100)); drawText(ctx, 'BONDS', IX + 76, y, SHEET_LABEL); drawText(ctx, String(world.bondCount(f)), IX + 108, y, SHEET_VAL); y += 8;
         if (f.wantExpand || f.wantFacility) { drawText(ctx, f.wantExpand ? '> wants more land' : '> wants to build', IX, y, SHEET_GOLD); y += 8; }
         y += 2;
@@ -3486,8 +3487,8 @@ function drawRoster() {
     uiPanel(PX, PY, PW, PH);
 
     // header
-    drawText(ctx, 'TOWN ROSTER', PX + 7, PY + 5, '#7dd069', 1);
-    drawText(ctx, `${world.farmers.length} RYS`, PX + PW - 40, PY + 5, '#9aa0b4');
+    drawText(ctx, cultureWord(world.culture, 'panel.rosterTitle'), PX + 7, PY + 5, '#7dd069', 1);
+    drawText(ctx, `${world.farmers.length} ${cultureWord(world.culture, 'noun.settlers')}`, PX + PW - 40, PY + 5, '#9aa0b4');
     // close X
     drawText(ctx, 'X', PX + PW - 10, PY + 5, '#c8ccd8');
 
@@ -3501,7 +3502,7 @@ function drawRoster() {
     drawText(ctx, 'LV', colLv, hy, '#6a6f7c');
     ['ST', 'DE', 'CO', 'IN', 'WI', 'CH'].forEach((c, i) =>
         drawText(ctx, c, Math.floor(colStats + i * statW), hy, '#6a6f7c'));
-    drawText(ctx, 'YLD', PX + PW - 22, hy, '#6a6f7c');
+    drawText(ctx, cultureWord(world.culture, 'stat.yld'), PX + PW - 22, hy, '#6a6f7c');
     ctx.fillStyle = '#20242f';
     ctx.fillRect(PX + 4, hy + 8, PW - 8, 1);
 
@@ -3786,8 +3787,9 @@ function drawCivicBand(PX, y, PW) {
     const IX = PX + 8, RX = PX + PW - 8;
     let ty = y + 1;
     // manager + approval meter
-    drawText(ctx, 'MANAGER', IX, ty, '#9a7fc0');
-    drawText(ctx, m.sheet.name.split(' ')[0].toUpperCase(), IX + textWidth('MANAGER '), ty, '#e8c860');
+    const mgrLabel = cultureWord(world.culture, 'role.manager');
+    drawText(ctx, mgrLabel, IX, ty, '#9a7fc0');
+    drawText(ctx, m.sheet.name.split(' ')[0].toUpperCase(), IX + textWidth(mgrLabel + ' '), ty, '#e8c860');
     const barW = 46, bx = RX - barW, ap = Math.max(0, Math.min(1, roles.approval));
     drawText(ctx, 'APPROVAL', bx - textWidth('APPROVAL '), ty, '#6a6f7c');
     ctx.fillStyle = '#171a22'; ctx.fillRect(bx, ty, barW, 4);
@@ -3814,8 +3816,9 @@ function drawCivicBand(PX, y, PW) {
     // the Watch (#94 P2), if one is seated: name + their standing with the town
     const wch = world.watchFarmer && world.watchFarmer();
     if (wch) {
-        drawText(ctx, 'WATCH', IX, ty, '#9a7fc0');
-        drawText(ctx, wch.sheet.name.split(' ')[0].toUpperCase(), IX + textWidth('WATCH '), ty, '#e8c860');
+        const wLabel = cultureWord(world.culture, 'role.watch');
+        drawText(ctx, wLabel, IX, ty, '#9a7fc0');
+        drawText(ctx, wch.sheet.name.split(' ')[0].toUpperCase(), IX + textWidth(wLabel + ' '), ty, '#e8c860');
         const wa = Math.max(0, Math.min(1, roles.watchApproval));
         const wbW = 46, wbx = RX - wbW;
         drawText(ctx, 'TRUST', wbx - textWidth('TRUST '), ty, '#6a6f7c');
@@ -3826,8 +3829,9 @@ function drawCivicBand(PX, y, PW) {
     // the Healer (#97 Slice 1), if one is seated: name + standing, and a herb-call flag when low
     const hlr = world.healerFarmer && world.healerFarmer();
     if (hlr) {
-        drawText(ctx, 'HEALER', IX, ty, '#9a7fc0');
-        drawText(ctx, hlr.sheet.name.split(' ')[0].toUpperCase(), IX + textWidth('HEALER '), ty, '#e8c860');
+        const hLabel = cultureWord(world.culture, 'role.healer');
+        drawText(ctx, hLabel, IX, ty, '#9a7fc0');
+        drawText(ctx, hlr.sheet.name.split(' ')[0].toUpperCase(), IX + textWidth(hLabel + ' '), ty, '#e8c860');
         if (roles.healerNeedsHerbs) drawText(ctx, 'NEEDS HERBS', IX + textWidth('HEALER ') + textWidth(hlr.sheet.name.split(' ')[0].toUpperCase() + '  '), ty, '#e0a03c');
         const ha = Math.max(0, Math.min(1, roles.healerApproval));
         const hbW = 46, hbx = RX - hbW;
@@ -3873,7 +3877,7 @@ function drawChronicleRoles(PX, top, PW, bot) {
         for (let i = hist.length - 1; i >= 0 && y < bot - 8; i--) {
             const rec = hist[i];
             const first = String(rec.name || '?').split(' ')[0].toUpperCase();
-            drawText(ctx, rec.office === 'manager' ? 'MANAGER' : 'WATCH', IX + 4, y, '#9a7fc0');
+            drawText(ctx, cultureWord(world.culture, rec.office === 'manager' ? 'role.manager' : 'role.watch'), IX + 4, y, '#9a7fc0');
             drawText(ctx, first, IX + 4 + textWidth('MANAGER '), y, '#e8c860');
             const span = rec.fromYear === rec.toYear ? `Y${rec.fromYear}` : `Y${rec.fromYear}-${rec.toYear}`;
             const tail = `${span} - ${END_REASON_LABEL[rec.endReason] || rec.endReason}`;
@@ -4000,8 +4004,8 @@ function drawChronicle() {
 
     // header — the panel title reflects the active tab (NEWS can narrow to one Ry's saga)
     const cf = chronTab === 0 ? chronFocusFarmer() : null;
-    const title = chronTab === 1 ? 'TOWN ROLES' : chronTab === 2 ? 'TOWN RECIPES' : chronTab === 3 ? 'TALES OF THE WILDS'
-        : cf ? `SAGA OF ${cf.sheet.name.split(' ')[0].toUpperCase()}` : 'TOWN CHRONICLE';
+    const title = chronTab === 1 ? cultureWord(world.culture, 'panel.rolesTitle') : chronTab === 2 ? cultureWord(world.culture, 'panel.recipesTitle') : chronTab === 3 ? cultureWord(world.culture, 'panel.talesTitle')
+        : cf ? `SAGA OF ${cf.sheet.name.split(' ')[0].toUpperCase()}` : cultureWord(world.culture, 'panel.chronicleTitle');
     drawText(ctx, title, PX + 7, PY + 5, CHRON_ACCENT, 1);
     const entries = chronEntries();
     drawText(ctx, 'X', PX + PW - 10, PY + 5, '#c8ccd8');

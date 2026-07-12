@@ -10,6 +10,7 @@
 // collects from. Which facility comes first reflects the farmer's archetype.
 
 import { mulberry32, mod, growFarmer, growHeir, personalityLabel, compileCreeds, docLexicon, hashString, ALL_CROPS } from './dna.js';
+import { cultureWord } from './culture.js';   // #3.1 orc-vs-human display copy (roles etc.)
 export { ALL_CROPS };   // re-exported so tools/tests can pull the crop list from the sim entrypoint
 
 // The FOUNDING VALLEY: the hand-tuned region generated with the original global algorithm
@@ -2567,9 +2568,9 @@ export class World {
     healerFarmer() { return this.roles.healer != null ? this.farmers.find(f => f.sheet.seed === this.roles.healer) : null; }
     roleOf(f) {   // the civic role a farmer holds (or null) — for the card/roster label
         if (!f) return null;
-        if (this.roles.manager === f.sheet.seed) return 'MANAGER';
-        if (this.roles.watch === f.sheet.seed) return 'WATCH';
-        if (this.roles.healer === f.sheet.seed) return 'HEALER';
+        if (this.roles.manager === f.sheet.seed) return cultureWord(this.culture, 'role.manager');
+        if (this.roles.watch === f.sheet.seed) return cultureWord(this.culture, 'role.watch');
+        if (this.roles.healer === f.sheet.seed) return cultureWord(this.culture, 'role.healer');
         return null;
     }
 
@@ -2854,7 +2855,7 @@ export class World {
     // term into history, stamp the new tenure, hand off any other office they held). Journal the vote for
     // each farmer so the choice becomes a remembered, SuperMemory-persisted beat.
     #seatElected(office, winner, incumbentSeed, winVotes, nVoters, ballots, acclaimed) {
-        const r = this.roles, winSeed = winner.sheet.seed, roleWord = office === 'manager' ? 'Manager' : 'Watch';
+        const r = this.roles, winSeed = winner.sheet.seed, roleWord = cultureWord(this.culture, office === 'manager' ? 'roleProse.manager' : 'roleProse.watch');
         const reelected = winSeed === incumbentSeed;
         const outF = incumbentSeed != null ? this.farmers.find(f => f.sheet.seed === incumbentSeed) : null;
         const mandate = nVoters > 0 ? winVotes / nVoters : 1;
