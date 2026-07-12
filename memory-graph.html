@@ -97,7 +97,14 @@ async function load() {
   let data; try { data = await (await fetch('/api/memory-graph')).json(); }
   catch { data = { towns:[], source:'offline' }; }
   document.getElementById('boot').style.display='none';
-  const towns = data.towns || [];
+  let towns = data.towns || [];
+  // backward-compat: a dev server that hasn't reloaded the API still returns the OLD single-town {farmers}
+  // shape. Wrap it as one town so the portal populates from either server version (restart for all towns).
+  if (!towns.length && Array.isArray(data.farmers) && data.farmers.length) {
+    towns = [{ seed: 'active', name: data.townHistory && data.townHistory.town, farmers: data.farmers,
+               links: data.links || [], townHistory: (data.townHistory && data.townHistory.text) || null,
+               inventions: data.inventions || [] }];
+  }
   const totalFarmers = towns.reduce((a,t)=>a+(t.farmers||[]).length,0);
   window._src = data.source;
   window._ties = towns.reduce((a,t)=>a+(t.links||[]).length,0);

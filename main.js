@@ -502,6 +502,12 @@ const orcCaveL3 = new Image(); let orcCaveL3Ready = false; orcCaveL3.onload = ()
 orcCaveL2.src = ROCKY_BASE + 'Cave_entrance3_ground_shadow.png';   // plain cave mouth -> L2
 orcCaveL3.src = ROCKY_BASE + 'Cave_entrance2_ground_shadow.png';   // SKULL cave -> L3 (eyes glow at night)
 const ORC_CAVE_SRC = { x: 0, y: 0, w: 64, h: 64 };
+// #94 orc TOWN SILO (the WAR-HOARD): a carved ent-idol totem, upgrading to a great living-tree gazebo at
+// town LV5 — the orc parallel to the human guild hall earning its wings.
+const orcSilo = new Image(); let orcSiloReady = false; orcSilo.onload = () => { orcSiloReady = true; }; orcSilo.onerror = () => {};
+orcSilo.src = ROCKY_BASE + 'Cave_entrance1_ground_shadow.png';
+const orcSilo5 = new Image(); let orcSilo5Ready = false; orcSilo5.onload = () => { orcSilo5Ready = true; }; orcSilo5.onerror = () => {};
+orcSilo5.src = ORC_FOREST_BASE + 'Living gazebo1.png';
 function buildingArt(level) {
     if (typeof world !== 'undefined' && world && world.culture === 'orc') {
         if (level >= 3) return { img: orcCaveL3, src: ORC_CAVE_SRC, ready: orcCaveL3Ready, scale: 1.6 };
@@ -1983,6 +1989,24 @@ function drawStall(sx, sy) {
 // Procedural (no asset): tan cylinder + hooped bands + conical roof, with a floating TOWN LV tag.
 function drawSilo(sx, sy) {
     const footY = Math.floor(sy + TILE_H);
+    if (world.culture === 'orc') {   // #94 the WAR-HOARD: ent-idol totem, or the living-tree gazebo at LV5+
+        const big = world.townLevel >= 5;
+        const img = big ? orcSilo5 : orcSilo, ready = big ? orcSilo5Ready : orcSiloReady;
+        let topY = footY - 20;
+        if (ready && img.naturalWidth) {
+            ctx.imageSmoothingEnabled = false;
+            const s = ASSET_SCALE * (big ? 1.05 : 0.95);
+            const dw = Math.round(img.naturalWidth * s), dh = Math.round(img.naturalHeight * s);
+            const dx = Math.floor(sx - dw / 2), dy = footY - dh + 8;   // base seated on the tile
+            ctx.fillStyle = 'rgba(10,14,10,0.28)'; ctx.fillRect(dx + Math.round(dw * 0.30), footY - 2, Math.round(dw * 0.40), 3);
+            ctx.drawImage(img, dx, dy);
+            topY = dy;
+        } else { ctx.fillStyle = '#7a5a3a'; ctx.fillRect(Math.floor(sx - 8), footY - 20, 16, 20); }
+        const tag = `LV ${world.townLevel}`, tw = textWidth(tag), ty = topY - 12;
+        ctx.fillStyle = 'rgba(20,16,8,0.78)'; ctx.fillRect(Math.floor(sx - tw / 2) - 2, ty, tw + 4, 9);
+        drawText(ctx, tag, Math.floor(sx - tw / 2), ty + 1, '#f0d060');
+        return;
+    }
     if (!guildExtReady || !guildExtSheet.naturalWidth) {   // sheet not loaded — a small stand-in
         ctx.fillStyle = '#c9a24e'; ctx.fillRect(Math.floor(sx - 8), footY - 20, 16, 20);
     } else {
