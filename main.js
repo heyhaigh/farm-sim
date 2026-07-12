@@ -2721,7 +2721,7 @@ const USERS_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><
 const cogIconFn = makeSvgIcon(COG_SVG), globeIconFn = makeSvgIcon(GLOBE_SVG), bankIconFn = makeSvgIcon(BANK_SVG), usersIconFn = makeSvgIcon(USERS_SVG);
 function drawGearIcon(x, y, active) {
     const col = active ? '#7dd069' : '#c8ccd8';
-    const icon = cogIconFn(9, col);
+    const icon = cogIconFn(8, col);
     if (icon) { ctx.imageSmoothingEnabled = false; ctx.drawImage(icon, x, y); return; }
     // fallback (until the SVG rasterizes): the procedural gear on a 9x9 field
     ctx.fillStyle = col;
@@ -2753,17 +2753,17 @@ function drawGlobeIcon(x, y, active) {
         return;
     }
     // active = dark globe on the light-purple button fill (matches the text WORLD button's selected look)
-    const icon = globeIconFn(9, active ? '#160f22' : '#c8ccd8');
+    const icon = globeIconFn(8, active ? '#160f22' : '#c8ccd8');
     if (icon) { ctx.imageSmoothingEnabled = false; ctx.drawImage(icon, x, y); return; }
     ctx.fillStyle = active ? '#160f22' : '#c8ccd8'; ctx.fillRect(x + 2, y + 2, 6, 6);   // tiny fallback blob
 }
 function drawBankIcon(x, y, active) {   // the CHRONICLE / THE SAGA button — the town's ledger of record
-    const icon = bankIconFn(9, active ? '#1a1024' : '#c8ccd8');
+    const icon = bankIconFn(8, active ? '#1a1024' : '#c8ccd8');
     if (icon) { ctx.imageSmoothingEnabled = false; ctx.drawImage(icon, x, y); return; }
     ctx.fillStyle = active ? '#1a1024' : '#c8ccd8'; ctx.fillRect(x + 2, y + 3, 6, 5);
 }
 function drawUsersIcon(x, y, active) {   // the ROSTER / WARBAND button — the town's people
-    const icon = usersIconFn(9, active ? '#10240c' : '#c8ccd8');
+    const icon = usersIconFn(8, active ? '#10240c' : '#c8ccd8');
     if (icon) { ctx.imageSmoothingEnabled = false; ctx.drawImage(icon, x, y); return; }
     ctx.fillStyle = active ? '#10240c' : '#c8ccd8'; ctx.fillRect(x + 2, y + 3, 6, 5);
 }
