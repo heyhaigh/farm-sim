@@ -234,7 +234,9 @@ module.exports = async function handler(req, res) {
         // Merge + dedup by a STABLE forebear key (Codex r20 P2): the legacy path ids by doc UUID and the search
         // path by `ry-farms:<town>:<farmer>` — deduping by `id` would let the SAME forebear enter twice on a
         // server exposing both. Key by (townSeed, farmerSeed) — the actual identity — which both paths carry.
-        const lifeKey = l => `${l.townSeed ?? 'x'}:${l.farmerSeed ?? l.name ?? l.id}`;
+        // dedup by identity when seeds are present; otherwise by the UNIQUE doc id — NOT the name (Codex r21 P2:
+        // two distinct metadata-poor lives sharing a name would otherwise collapse to `x:<name>` and one drops).
+        const lifeKey = l => (l.townSeed != null && l.farmerSeed != null) ? `${l.townSeed}:${l.farmerSeed}` : String(l.id || l.name || '');
         const seenLife = new Set(lineage.map(lifeKey));
         for (const l of await searchLineage(base, headers)) { const k = lifeKey(l); if (!seenLife.has(k)) { seenLife.add(k); lineage.push(l); } }
         // stable order -> deterministic cast + deterministic heir pairing for a given corpus

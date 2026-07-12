@@ -51,20 +51,19 @@ function fnv(s) {
     for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
     return ('00000000' + h.toString(16)).slice(-8);
 }
-// Identity-INDEPENDENT behavioral fingerprint (Codex r20 P2): the old digest included `seed`/`pos`, which
-// change with the source document REGARDLESS of whether memory affects behavior — so it "proved" divergence
-// from identity alone. This captures only the SOCIETY the memories grew: the sorted archetype distribution,
-// the cast's aggregate memory-derived stats, and lived outcomes. If memory were inert these would be identical
-// across real/shuffled/fallback; that they differ is the actual proof that memory is load-bearing.
-const STAT_KEYS = ['str', 'dex', 'con', 'int', 'wis', 'cha'];
+// SEMANTIC fingerprint (Codex r20/r21 P2): the digest must diverge ONLY because memory CONTENT is interpreted
+// differently — not because a different document id seeds a different RNG stream. Earlier versions included
+// seed/pos (pure identity) and then stat totals / XP / harvest — but stats are `roll4d6DropLowest` off a
+// doc-id-derived seed, so those diverge from RNG alone even if classification and every keyword effect were
+// disabled. The one signal that is purely SEMANTIC is the ARCHETYPE distribution: `classifyMemory` is a
+// deterministic keyword scan with NO rng. If classification were inert (all one archetype), archMix would be
+// identical across real/shuffled/fallback and this test would (correctly) FAIL. That it differs is the proof
+// that the MEANING of the memories — not their identity — grows a different society.
 function digest(w) {
     const mix = {};
     for (const f of w.farmers) mix[f.sheet.archetypeKey] = (mix[f.sheet.archetypeKey] || 0) + 1;
     const archMix = Object.entries(mix).sort((a, b) => (a[0] < b[0] ? -1 : 1));
-    const statTotals = STAT_KEYS.map(k => w.farmers.reduce((s, f) => s + (f.sheet.stats[k] || 0), 0));
-    const totalXP = w.farmers.reduce((s, f) => s + (f.sheet.xp || 0), 0);
-    const totalHarv = w.farmers.reduce((s, f) => s + (f.sheet.harvested || 0), 0);
-    return fnv(JSON.stringify({ archMix, statTotals, totalXP, totalHarv }));
+    return fnv(JSON.stringify(archMix));
 }
 // Human-legible fingerprint of the society that GREW — this is the demo beat, not just a hash.
 function society(w) {

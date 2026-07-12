@@ -4374,13 +4374,26 @@ async function registerWorld(w) {
         });
         if (!idx) return;
         for (const ev of fresh) if (w === world) world.addLog(encounterLine(ev), '#c8b0e0');   // surface on the town log
-        // consume THIS town's inbox: apply (idempotent) -> PERSIST the town -> only THEN clear the inbox
-        // atomically, so a crash between can never lose an effect or double-apply it (exactly-once).
-        if (mine.length && w === world && w.applyInbox(mine)) {
-            await saveTown(w);
-            await updateWorldIndex(index => { if (index.inbox) index.inbox[String(w.seed)] = []; return index; });
-        }
+        if (mine.length && w === world) await consumeInbox(w, mine);
     } finally { _worldBusy = false; }
+}
+
+// #reconciliation exactly-once inbox consumption (Codex r20/r21). apply (idempotent) -> PERSIST the town -> and
+// ONLY IF the save succeeded, remove EXACTLY the processed event ids (not the whole slice) atomically. Closes
+// three windows r21 found: (P1) a swallowed saveTown failure that used to clear the inbox anyway -> event lost;
+// (P1) a concurrent tab appending a new event that a whole-slice `= []` clear used to wipe; (P2) an all-duplicate
+// inbox that never got acknowledged because the clear was gated on applyInbox's return count.
+const inboxEventId = e => e.id || `${e.pairKey}:${e.ordinal}:${e.kind}`;
+async function consumeInbox(w, events) {
+    w.applyInbox(events);                          // idempotent: re-delivered events are skipped by applied-id
+    const saved = await saveTown(w);               // persist applied effects + applied-ids BEFORE clearing
+    if (saved == null) return;                     // save failed -> do NOT clear; the inbox replays next time
+    const done = new Set(events.map(inboxEventId));
+    await updateWorldIndex(index => {              // remove ONLY the ids we processed, keeping concurrent appends
+        const box = index.inbox && index.inbox[String(w.seed)];
+        if (box) index.inbox[String(w.seed)] = box.filter(e => !done.has(inboxEventId(e)));
+        return index;
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -4984,11 +4997,7 @@ function drawBootScreen(t) {
     try {
         const widx = await loadWorldIndex();
         const pending = (widx.inbox && widx.inbox[String(world.seed)]) || [];
-        // apply (idempotent) -> persist the town -> clear the inbox atomically (exactly-once; Codex r20 P1)
-        if (pending.length && world.applyInbox(pending)) {
-            await saveTown(world);
-            await updateWorldIndex(idx => { if (idx.inbox) idx.inbox[String(world.seed)] = []; return idx; });
-        }
+        if (pending.length) await consumeInbox(world, pending);   // exactly-once (Codex r20/r21)
     } catch (err) { console.warn('ry-farms: inbox consume failed', err); }
 
     if (resumed) {
