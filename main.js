@@ -2759,17 +2759,19 @@ function drawWorldMap() {
             const cardW = PW - 16, cardH = CARD_H, cardX = PX + 8, cardY = PY + PH - cardH - 4;
             ctx.fillStyle = 'rgba(20,16,28,0.92)'; ctx.fillRect(cardX, cardY, cardW, cardH);
             ctx.strokeStyle = n.tint.css; ctx.strokeRect(cardX + 0.5, cardY + 0.5, cardW - 1, cardH - 1);
-            drawText(ctx, n.name.toUpperCase() + (n.culture === 'orc' ? ' - WARBAND' : ''), cardX + 4, cardY + 4, n.tint.css);
+            const nameStr = n.name.toUpperCase() + (n.culture === 'orc' ? ' - WARBAND' : '');
+            drawText(ctx, nameStr, cardX + 4, cardY + 4, n.tint.css);
             drawText(ctx, `Year ${n.year} - day ${n.day} - ${n.pop} ${n.culture === 'orc' ? 'raiders' : 'settlers'} - ${n.harvestTotal} ${n.culture === 'orc' ? 'plundered' : 'harvested'}`, cardX + 4, cardY + 13, '#b0b6c8');
             if (n.ancestors.length) drawText(ctx, `heir of ${n.ancestors.length} remembered town${n.ancestors.length > 1 ? 's' : ''}`, cardX + 4, cardY + 22, '#c8b0e0');
             if (n.motto) { const ln = wrapText(`"${n.motto}"`, 46)[0]; drawText(ctx, ln, cardX + 4, cardY + 31, '#eef0f4'); }
             const active = world && String(n.seed) === String(world.seed);
+            const tagX = cardX + 4 + textWidth(nameStr) + 6;   // sit the action right after the town name
             if (!active) {
-                const vbw = 42, bx = cardX + cardW - vbw - 3, by = cardY + cardH - 11;
+                const vbw = 42, bx = tagX, by = cardY + 1;
                 ctx.fillStyle = 'rgba(125,208,105,0.25)'; ctx.fillRect(bx, by, vbw, 9);
-                drawText(ctx, 'VISIT', bx + 9, by + 1, '#7dd069');
+                drawText(ctx, 'VISIT', bx + Math.round((vbw - textWidth('VISIT')) / 2), by + 2, '#7dd069');
                 worldMapVisit = { x: bx, y: by, w: vbw, h: 9, seed: n.seed };
-            } else drawText(ctx, 'you are here', cardX + cardW - 52, cardY + cardH - 10, '#f0e0a0');
+            } else drawText(ctx, 'you are here', tagX, cardY + 4, '#f0e0a0');
         }
     } else {
         // colour-keyed legend so the lines explain themselves (each word in its own line colour)
