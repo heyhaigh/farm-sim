@@ -2715,7 +2715,8 @@ function makeSvgIcon(svg) {
 const COG_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m21,10v-1h-1v-2h1v-2h-1v-1h-1v-1h-2v1h-2v-1h-1V1h-4v2h-1v1h-2v-1h-2v1h-1v1h-1v2h1v2h-1v1H1v4h2v1h1v2h-1v2h1v1h1v1h2v-1h2v1h1v2h4v-2h1v-1h2v1h2v-1h1v-1h1v-2h-1v-2h1v-1h2v-4h-2Zm-11,0v-1h4v1h1v4h-1v1h-4v-1h-1v-4h1Z"/></svg>';
 const GLOBE_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="9" y="1" width="1" height="1"/><polygon points="9 2 9 3 8 3 8 5 7 5 7 8 2 8 2 7 3 7 3 5 4 5 4 4 5 4 5 3 7 3 7 2 9 2"/><polygon points="13 2 14 2 14 4 15 4 15 6 16 6 16 8 8 8 8 6 9 6 9 4 10 4 10 2 11 2 11 1 13 1 13 2"/><rect x="14" y="1" width="1" height="1"/><polygon points="22 7 22 8 17 8 17 5 16 5 16 3 15 3 15 2 17 2 17 3 19 3 19 4 20 4 20 5 21 5 21 7 22 7"/><polygon points="17 10 17 14 16 14 16 15 8 15 8 14 7 14 7 10 8 10 8 9 16 9 16 10 17 10"/><polygon points="1 9 7 9 7 10 6 10 6 14 7 14 7 15 1 15 1 9"/><polygon points="23 9 23 15 17 15 17 14 18 14 18 10 17 10 17 9 23 9"/><polygon points="22 16 22 17 21 17 21 19 20 19 20 20 19 20 19 21 17 21 17 22 15 22 15 21 16 21 16 19 17 19 17 16 22 16"/><rect x="9" y="22" width="1" height="1"/><polygon points="9 21 9 22 7 22 7 21 5 21 5 20 4 20 4 19 3 19 3 17 2 17 2 16 7 16 7 19 8 19 8 21 9 21"/><rect x="14" y="22" width="1" height="1"/><polygon points="14 22 13 22 13 23 11 23 11 22 10 22 10 20 9 20 9 18 8 18 8 16 16 16 16 18 15 18 15 20 14 20 14 22"/></svg>';
 const BANK_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><polygon points="23 20 23 22 22 22 22 23 2 23 2 22 1 22 1 20 3 20 3 19 4 19 4 10 6 10 6 19 8 19 8 10 10 10 10 19 14 19 14 10 16 10 16 19 18 19 18 10 20 10 20 19 21 19 21 20 23 20"/><path d="m20,5v-1h-2v-1h-2v-1h-2v-1h-4v1h-2v1h-2v1h-2v1H1v2h1v1h1v1h18v-1h1v-1h1v-2h-3Zm-9,2v-1h-1v-2h1v-1h2v1h1v2h-1v1h-2Z"/></svg>';
-const cogIconFn = makeSvgIcon(COG_SVG), globeIconFn = makeSvgIcon(GLOBE_SVG), bankIconFn = makeSvgIcon(BANK_SVG);
+const USERS_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><polygon points="2 13 2 12 1 12 1 10 2 10 2 9 7 9 7 12 8 12 8 13 2 13"/><polygon points="5 7 4 7 4 5 5 5 5 4 7 4 7 5 8 5 8 6 7 6 7 8 5 8 5 7"/><polygon points="8 7 9 7 9 6 10 6 10 5 14 5 14 6 15 6 15 7 16 7 16 11 15 11 15 12 14 12 14 13 10 13 10 12 9 12 9 11 8 11 8 7"/><polygon points="19 18 20 18 20 21 19 21 19 22 5 22 5 21 4 21 4 18 5 18 5 17 6 17 6 16 8 16 8 15 16 15 16 16 18 16 18 17 19 17 19 18"/><polygon points="23 10 23 12 22 12 22 13 16 13 16 12 17 12 17 9 22 9 22 10 23 10"/><polygon points="17 6 16 6 16 5 17 5 17 4 19 4 19 5 20 5 20 7 19 7 19 8 17 8 17 6"/></svg>';
+const cogIconFn = makeSvgIcon(COG_SVG), globeIconFn = makeSvgIcon(GLOBE_SVG), bankIconFn = makeSvgIcon(BANK_SVG), usersIconFn = makeSvgIcon(USERS_SVG);
 function drawGearIcon(x, y, active) {
     const col = active ? '#7dd069' : '#c8ccd8';
     const icon = cogIconFn(9, col);   // 9px: sits with padding in the 15x12 button (was 11px, too large)
@@ -2739,6 +2740,11 @@ function drawBankIcon(x, y, active) {   // the CHRONICLE / THE SAGA button — t
     const icon = bankIconFn(10, active ? '#1a1024' : '#c8ccd8');
     if (icon) { ctx.imageSmoothingEnabled = false; ctx.drawImage(icon, x, y); return; }
     ctx.fillStyle = active ? '#1a1024' : '#c8ccd8'; ctx.fillRect(x + 2, y + 3, 6, 5);
+}
+function drawUsersIcon(x, y, active) {   // the ROSTER / WARBAND button — the town's people
+    const icon = usersIconFn(10, active ? '#10240c' : '#c8ccd8');
+    if (icon) { ctx.imageSmoothingEnabled = false; ctx.drawImage(icon, x, y); return; }
+    ctx.fillStyle = active ? '#10240c' : '#c8ccd8'; ctx.fillRect(x + 2, y + 3, 6, 5);
 }
 
 function drawUI() {
@@ -2827,7 +2833,7 @@ function drawUI() {
     // look (not the red 'selected' fill), which is reserved for the >/>> that IS active.
     if (spd !== 1) barBtn(SPEED1_BTN, '1X', false);
 
-    barBtn(ROSTER_BTN, cultureWord(world.culture, 'panel.roster'), rosterOpen, '#7dd069', '#10240c');
+    barIconBtn(ROSTER_BTN, 15, (x, y, act) => drawUsersIcon(x + 3, y + 1, act), rosterOpen, '#7dd069');   // users icon (was ROSTER/WARBAND text)
     barIconBtn(WORLD_BTN, 15, (x, y, act) => drawGlobeIcon(x + 3, y + 1, act), worldMapOpen, '#c8b0e0');   // globe icon (was 'WORLD' text)
     barIconBtn(CHRON_BTN, 15, (x, y, act) => drawBankIcon(x + 3, y + 1, act), chronOpen, '#c8a0e0');   // bank icon (was CHRONICLE/THE SAGA text)
     if ((world._chronTotal || 0) > chronReadTotal && !chronOpen) drawCoin(CHRON_BTN.x + CHRON_BTN.w - 3, CHRON_BTN.y - 2, 6);   // UNREAD only
