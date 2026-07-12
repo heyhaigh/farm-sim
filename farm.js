@@ -667,7 +667,8 @@ export class World {
                        // the chair (tenure), a live election in the winter window, and the town's remembered
                        // roll of past office-holders (who, how long, how it ended, and why).
                        managerTerms: 0, watchTerms: 0, managerSince: null, watchSince: null,
-                       managerRecalls: 0, watchRecalls: 0, election: null, history: [] };
+                       managerRecalls: 0, watchRecalls: 0, election: null, history: [],
+                       founded: false };   // #founding: no offices until the day-10 founding gathering
         this.sabotage = [];    // #97 Slice 4: planted-but-not-yet-sprung harm ({perp,victim,kind,effectDay})
         this.suspicion = {};   // #97 Slice 4: the Watch's slow-building trail on unsolved crimes (seed -> score)
         this.recipes = {};     // #97 P3: the town's generatively-discovered recipes (canonical key -> record)
@@ -2405,6 +2406,7 @@ export class World {
                 managerRecalls: this.roles.managerRecalls, watchRecalls: this.roles.watchRecalls,
                 election: this.roles.election ? { ...this.roles.election } : null,
                 history: this.roles.history.map(h => ({ ...h })),
+                founded: this.roles.founded,
             },
             sabotage: this.sabotage.map(s => ({ ...s })),   // #97 Slice 4: pending harm + the Watch's trail
             suspicion: { ...this.suspicion },
@@ -2520,7 +2522,8 @@ export class World {
             managerRecalls: d.roles.managerRecalls || 0, watchRecalls: d.roles.watchRecalls || 0,
             election: d.roles.election ? { ...d.roles.election } : null,
             history: Array.isArray(d.roles.history) ? d.roles.history.map(h => ({ ...h })) : [],
-        } : { manager: null, approval: 0.6, lowDays: 0, watch: null, watchApproval: 0.6, watchLowDays: 0, healer: null, healerApproval: 0.6, healerLowDays: 0, directive: null, directiveSeq: 0, cooldown: 0, caseSeq: 0, managerTerms: 0, watchTerms: 0, managerSince: null, watchSince: null, managerRecalls: 0, watchRecalls: 0, election: null, history: [] };
+            founded: d.roles.founded != null ? d.roles.founded : true,   // pre-#founding saves already hold offices -> treat as founded
+        } : { manager: null, approval: 0.6, lowDays: 0, watch: null, watchApproval: 0.6, watchLowDays: 0, healer: null, healerApproval: 0.6, healerLowDays: 0, directive: null, directiveSeq: 0, cooldown: 0, caseSeq: 0, managerTerms: 0, watchTerms: 0, managerSince: null, watchSince: null, managerRecalls: 0, watchRecalls: 0, election: null, history: [], founded: false };
         this.sabotage = Array.isArray(d.sabotage) ? d.sabotage.map(s => ({ ...s })) : [];   // #97 Slice 4
         this.suspicion = d.suspicion ? { ...d.suspicion } : {};
         this.recipes = d.recipes ? Object.fromEntries(Object.entries(d.recipes).map(([k, v]) => [k, { ...v }])) : {};
@@ -2668,6 +2671,15 @@ export class World {
         const r = this.roles;
         if (!this.farmers.length) return;
 
+        // #founding — a new town holds NO offices from day 1. It's watched for its first FOUNDING_VOTE_DAY days,
+        // then the whole town GATHERS to elect its first Manager + Watch (a celebratory beat), instead of the
+        // fittest silently taking the chair on day one. The yearly winter election handles turnover thereafter.
+        if (!r.founded) {
+            if (this.day < FOUNDING_VOTE_DAY) { r.directive = null; return; }   // ungoverned until the gathering
+            this.#foundingElection();
+            // fall through: with officers now seated, the day's approval/directive machinery runs as usual
+        }
+
         // seat the MANAGER if empty (fitness fills a vacant chair between elections; elections handle
         // the yearly turnover). Stamp the tenure + reset the term count for fatigue.
         if (r.manager == null || !this.managerFarmer()) {
@@ -2811,6 +2823,27 @@ export class World {
                 imp[w.sheet.seed] = clamp((imp[w.sheet.seed] || 0) + dv, -1, 1);
             }
         }
+    }
+
+    // #founding — the town's FIRST officers, chosen by the whole town on FOUNDING_VOTE_DAY (not silently
+    // auto-seated on day 1). Runs the SAME memory-driven ballot as the yearly vote (via holdElection), seats
+    // the Healer by fitness (not an elected office), and crowns it with a grand celebratory gathering beat.
+    #foundingElection() {
+        const r = this.roles;
+        r.election = { year: this.year, founding: true, phase: 'campaign',
+            mgrCands: this.#electionCandidates('manager'), watchCands: this.#electionCandidates('watch'), result: null };
+        this.holdElection();               // seats Manager + Watch via #seatElected (grand "THE TOWN DECIDES" beats)
+        r.election = null;
+        const hl = this.#bestFor(f => this.#healerFitness(f), this.managerFarmer(), this.watchFarmer());
+        if (hl) {
+            r.healer = hl.sheet.seed; r.healerApproval = 0.6; r.healerLowDays = 0;
+            this.addChronicle('town', `${shortName(hl)} took up the ${cultureWord(this.culture, 'roleProse.healer').toLowerCase()}'s satchel.`, hl, null, '#e0c060');
+        }
+        const where = this.culture === 'orc' ? 'the war-post' : 'the town well';
+        this.addChronicle('town', `After ${FOUNDING_VOTE_DAY} days watched, ${this.name} gathered at ${where} and raised up its first officers.`,
+            this.managerFarmer(), null, '#f0d060',
+            { tier: 'grand', tone: 'triumph', label: this.culture === 'orc' ? 'THE WARBAND SPEAKS' : 'THE TOWN SPEAKS', why: `the town chose, rather than being handed, its leaders` });
+        r.founded = true;
     }
 
     // The winter election runs across the window: open the slates, a campaign beat, then tally on the
