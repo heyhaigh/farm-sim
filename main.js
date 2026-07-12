@@ -2829,7 +2829,9 @@ function drawWorldMap() {
     const idx = worldMapIdx || { towns: {}, encounters: [] };
     const nodes = computeLayout(idx);
     const enc = idx.encounters || [];
-    drawText(ctx, `${nodes.length} town${nodes.length !== 1 ? 's' : ''} - ${enc.length} encounter${enc.length !== 1 ? 's' : ''}`, PX + 7, PY + 14, '#9aa0b4');
+    const travCount = Object.values(idx.pairs || {}).filter(p => p.state === 'enRoute').length;
+    const hdr = `${nodes.length} town${nodes.length !== 1 ? 's' : ''} - ${enc.length} encounter${enc.length !== 1 ? 's' : ''}${travCount ? ` - ${travCount} traveling` : ''}`;
+    drawText(ctx, hdr, PX + 7, PY + 14, '#9aa0b4');
 
     // RESERVE the footer's height (+padding) out of the map region, so the town nodes are always laid out
     // ABOVE the bottom info bar and none is drawn behind it (e.g. Dunton getting clipped).
@@ -2865,6 +2867,24 @@ function drawWorldMap() {
         ctx.strokeStyle = (e.kind === 'raid' || e.kind === 'betrayed') ? 'rgba(230,80,60,0.6)'
             : e.kind === 'reconciled' ? 'rgba(125,208,105,0.55)' : 'rgba(240,200,120,0.4)';
         ctx.beginPath(); ctx.moveTo(toX(A), toY(A)); ctx.lineTo(toX(B), toY(B)); ctx.stroke();
+    }
+    // Slice B: TRAVELERS en route — a faint dashed path + a marker interpolating origin->destination by the
+    // DESTINATION town's progress toward the pre-decided arrival day (Fable's "show pair state" beat). A traveler
+    // heading to a dormant town sits frozen until that town is next played, exactly like the raid inbox.
+    const pairs = idx.pairs || {};
+    for (const key in pairs) {
+        const p = pairs[key]; if (p.state !== 'enRoute') continue;
+        const O = bySeed.get(String(p.origin)), D = bySeed.get(String(p.destination)); if (!O || !D) continue;
+        const span = Math.max(1, p.arrivalDay - p.discoveryDay);
+        const prog = Math.max(0, Math.min(1, ((D.day || 0) - p.discoveryDay) / span));
+        const ox = toX(O), oy = toY(O), dsx = toX(D), dsy = toY(D);
+        ctx.strokeStyle = 'rgba(220,200,150,0.20)'; ctx.setLineDash([2, 3]); ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(dsx, dsy); ctx.stroke(); ctx.setLineDash([]);
+        const mx = ox + (dsx - ox) * prog, my = oy + (dsy - oy) * prog;
+        const col = p.fromCulture === 'orc' ? '#e0806a' : '#8fd070';   // whose traveler it is
+        const pulse = 1.5 + Math.sin(performance.now() / 300) * 0.5;
+        ctx.fillStyle = col; ctx.beginPath(); ctx.arc(mx, my, pulse, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.lineWidth = 0.5; ctx.stroke();
     }
     // town dots + labels
     for (const n of nodes) {
