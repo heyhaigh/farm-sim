@@ -21,6 +21,11 @@ export const CULTURE_COPY = {
         'role.manager': 'MANAGER', 'role.watch': 'WATCH', 'role.healer': 'HEALER',
         // role titles (Title Case — prose beats)
         'roleProse.manager': 'Manager', 'roleProse.watch': 'Watch', 'roleProse.healer': 'Healer',
+        // board panel
+        'board.title': 'TOWN BOARD', 'board.project': 'TOWN PROJECT', 'board.plans': 'NEIGHBORHOOD PLANS',
+        'board.help': 'HELP WANTED', 'board.ambitions': 'AMBITIONS',
+        // world nouns
+        'struct.well': 'TOWN WELL',
     },
     orc: {
         'noun.settlers': 'ORCS',
@@ -31,6 +36,9 @@ export const CULTURE_COPY = {
         'stat.yield': 'HAUL', 'stat.yld': 'HAUL',
         'role.manager': 'WARCHIEF', 'role.watch': 'ENFORCER', 'role.healer': 'BONESETTER',
         'roleProse.manager': 'Warchief', 'roleProse.watch': 'Enforcer', 'roleProse.healer': 'Bonesetter',
+        'board.title': 'WAR-POST', 'board.project': 'WAR-WORK', 'board.plans': 'CAMP PLANS',
+        'board.help': 'FISTS WANTED', 'board.ambitions': 'AMBITIONS',
+        'struct.well': 'BLOOD-CISTERN',
     },
 };
 

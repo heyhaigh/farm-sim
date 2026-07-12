@@ -2433,7 +2433,7 @@ function drawBoard() {
 
     ctx.fillStyle = '#2b2016'; ctx.fillRect(IX - 2, PY + 16, IW + 4, 12);
     ctx.fillStyle = SHEET_GOLD; ctx.fillRect(IX - 2, PY + 16, IW + 4, 1); ctx.fillRect(IX - 2, PY + 27, IW + 4, 1);
-    drawText(ctx, 'TOWN BOARD', IX, PY + 19, '#ffffff', 1);
+    drawText(ctx, cultureWord(world.culture, 'board.title'), IX, PY + 19, '#ffffff', 1);
 
     const bodyY = PY + 32, bodyH = PH - 32 - 5;
     ctx.save(); ctx.beginPath(); ctx.rect(IX - 3, bodyY, IW + 6, bodyH); ctx.clip();
@@ -2441,7 +2441,7 @@ function drawBoard() {
     const wrap = (t, col, ind = 0) => { for (const ln of wrapText(t, 30 - ind)) { drawText(ctx, ln, IX + ind, y, col); y += 7; } };
 
     // --- Town project ---
-    y = sectionBand(IX, y, IW, 'TOWN PROJECT');
+    y = sectionBand(IX, y, IW, cultureWord(world.culture, 'board.project'));
     if (world.project) {
         const pr = world.project;
         drawText(ctx, pr.label, IX, y, SHEET_VAL); y += 7;
@@ -2453,7 +2453,7 @@ function drawBoard() {
 
     // --- Neighborhood plans (farmer-proposed co-ops) ---
     if (world.coops.length) {
-        y = sectionBand(IX, y, IW, 'NEIGHBORHOOD PLANS');
+        y = sectionBand(IX, y, IW, cultureWord(world.culture, 'board.plans'));
         for (const c of world.coops) {
             drawText(ctx, c.label, IX, y, SHEET_VAL); y += 7;
             wrap(`${c.proposer.sheet.name}'s idea - ${c.members.size} signed on`, SHEET_LABEL);
@@ -2469,7 +2469,7 @@ function drawBoard() {
 
     // --- Help wanted ---
     const reqs = world.helpBoard.filter(r => r.genuine);
-    y = sectionBand(IX, y, IW, `HELP WANTED (${reqs.length})`);
+    y = sectionBand(IX, y, IW, `${cultureWord(world.culture, 'board.help')} (${reqs.length})`);
     if (reqs.length) {
         for (const r of reqs) {
             const nm = r.farmer.sheet.name;
@@ -3011,7 +3011,7 @@ function buildingUnder(mx, my) {
     { const wl = world.well, sx = cam.x + isoX(wl.i, wl.j), sy = cam.y + isoY(wl.i, wl.j);
       const wdw = Math.round(WELL_SRC.w * ASSET_SCALE), wdh = Math.round(WELL_SRC.h * ASSET_SCALE);
       push(Math.floor(sx + TILE_W / 2 - wdw / 2 - 10), Math.floor(sy + TILE_H - wdh + 2), wdw, wdh,
-        [{ t: 'TOWN WELL', c: TT_G }, { t: 'Water source', c: TT_L }, { t: 'Water for the whole town', c: TT_B }]); }
+        [{ t: cultureWord(world.culture, 'struct.well'), c: TT_G }, { t: 'Water source', c: TT_L }, { t: 'Water for the whole town', c: TT_B }]); }
     { const s = world.silo, sx = cam.x + isoX(s.i, s.j), sy = cam.y + isoY(s.i, s.j);
       const maxed = world.townLevel >= 10;
       // hover box matches the GUILD-HALL bounds (drawSilo geometry), widening for the L5 wings
