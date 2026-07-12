@@ -55,49 +55,51 @@ const SEASON_SONGS = [
     },
 ];
 
-// #3.1 ORC WARBAND SCORE — the dark mirror of the human seasons: low register, phrygian/locrian modes (the
-// "war/menace" sound), harsh sawtooth/square leads, HEAVY low bass as the war-drum, sparse + relentless. Same
-// four-season structure so the season crossfade + scheduler work unchanged. (Refined from the fantasy-writer's
-// sonic direction; see ORC_BRANDING_NOTES / the music brief.)
+// #3.1 ORC WARBAND SCORE — "a war-drum with a grievance": the dark mirror of the human peace theme (fantasy-
+// writer direction). Design: the BASS is the instrument — dropped a full octave below the human songs (32-58 Hz)
+// and loud (bassGain 0.46-0.55) so its two-hit low pulse reads as a frame-drum driving a column forward; the
+// PAD is a root+fifth POWER-CHORD drone (NO thirds — a hundred throats on one note); the LEAD hammers root<->
+// flat-2 (the phrygian "blade") on a buzzing sawtooth. Each season descends into a darker mode as the raiding
+// year turns grim. Same four-season structure so the season crossfade + scheduler are unchanged.
 const ORC_SEASON_SONGS = [
-    {   // SPRING — the raiding season: E phrygian, driving, harsh; a phrygian F->E cadence as the menace
-        tempo: 88, lead: { type: 'sawtooth', gain: 0.045, vibrato: false },
-        padGain: 0.05, bassGain: 0.44, pluckProb: 0.5, restProb: 0.5,
+    {   // ORC SPRING — The Muster: E Phrygian march (i-bII-bIII-i), rising menace
+        tempo: 100, lead: { type: 'sawtooth', gain: 0.050, vibrato: false },
+        padGain: 0.060, bassGain: 0.50, pluckProb: 0.70, restProb: 0.30,
         chords: [
-            { bass: 82.41, notes: [164.81, 174.61, 246.94], melody: [329.63, 349.23, 392.00, 493.88] },   // Em + b2(F) drone
-            { bass: 87.31, notes: [174.61, 220.00, 261.63], melody: [349.23, 392.00, 440.00, 523.25] },   // F (the phrygian neighbour)
-            { bass: 82.41, notes: [164.81, 174.61, 246.94], melody: [329.63, 392.00, 493.88] },
-            { bass: 61.74, notes: [123.47, 164.81, 196.00], melody: [246.94, 329.63, 392.00] },           // B — the tension before the fall
+            { bass: 41.20, notes: [82.41, 123.47], melody: [164.81, 174.61, 196.00, 220.00, 246.94] },   // E  (root + bII stinger F3)
+            { bass: 43.65, notes: [87.31, 130.81], melody: [174.61, 196.00, 220.00, 261.63] },           // F (bII)
+            { bass: 49.00, notes: [98.00, 146.83], melody: [196.00, 246.94, 293.66] },                   // G (bIII)
+            { bass: 41.20, notes: [82.41, 123.47], melody: [164.81, 174.61, 246.94] },                   // E  (land on E-F)
         ],
     },
-    {   // SUMMER — gorging, peak raid: A phrygian, faster + aggressive
-        tempo: 100, lead: { type: 'sawtooth', gain: 0.05, vibrato: false },
-        padGain: 0.045, bassGain: 0.42, pluckProb: 0.62, restProb: 0.4,
+    {   // ORC SUMMER — The Gorging: E Phrygian-dominant war-dance (G# major-3), frenzied
+        tempo: 116, lead: { type: 'sawtooth', gain: 0.058, vibrato: true },
+        padGain: 0.055, bassGain: 0.52, pluckProb: 0.82, restProb: 0.24,
         chords: [
-            { bass: 55.00, notes: [110.00, 116.54, 164.81], melody: [220.00, 233.08, 261.63, 329.63] },   // Am + b2(Bb)
-            { bass: 58.27, notes: [116.54, 146.83, 174.61], melody: [233.08, 293.66, 349.23] },           // Bb
-            { bass: 55.00, notes: [110.00, 130.81, 164.81], melody: [220.00, 261.63, 329.63] },
-            { bass: 65.41, notes: [130.81, 164.81, 196.00], melody: [261.63, 329.63, 392.00] },           // C
+            { bass: 41.20, notes: [82.41, 123.47], melody: [164.81, 174.61, 207.65, 246.94, 329.63] },   // E  (F3 bII + G#3 maj-3)
+            { bass: 43.65, notes: [87.31, 130.81], melody: [174.61, 207.65, 261.63, 329.63] },           // F (bII)
+            { bass: 65.41, notes: [130.81, 196.00], melody: [207.65, 261.63, 293.66, 329.63] },          // C
+            { bass: 41.20, notes: [82.41, 123.47], melody: [174.61, 207.65, 329.63, 415.30] },           // E  (wailing G#4)
         ],
     },
-    {   // FALL — grim, the reckoning: D phrygian/minor, slow + heavy, square lead
-        tempo: 74, lead: { type: 'square', gain: 0.06, vibrato: false },
-        padGain: 0.05, bassGain: 0.4, pluckProb: 0.45, restProb: 0.55,
+    {   // ORC FALL — The Grim Turning: D Phrygian dirge (i-bII-bVI-i), bone-flute lament
+        tempo: 76, lead: { type: 'triangle', gain: 0.070, vibrato: true },
+        padGain: 0.060, bassGain: 0.55, pluckProb: 0.50, restProb: 0.48,
         chords: [
-            { bass: 73.42, notes: [146.83, 174.61, 220.00], melody: [293.66, 349.23, 440.00] },           // Dm
-            { bass: 77.78, notes: [155.56, 185.00, 233.08], melody: [311.13, 369.99, 466.16] },           // Eb (b2)
-            { bass: 73.42, notes: [146.83, 174.61, 220.00], melody: [293.66, 349.23, 440.00] },
-            { bass: 55.00, notes: [110.00, 130.81, 164.81], melody: [220.00, 261.63, 329.63] },           // Am
+            { bass: 36.71, notes: [73.42, 110.00], melody: [146.83, 155.56, 174.61, 220.00] },           // D  (Eb3 bII stinger)
+            { bass: 38.89, notes: [77.78, 116.54], melody: [155.56, 174.61, 233.08] },                   // Eb (bII)
+            { bass: 58.27, notes: [116.54, 174.61], melody: [174.61, 233.08, 293.66] },                  // Bb (bVI)
+            { bass: 36.71, notes: [73.42, 110.00], melody: [146.83, 155.56, 174.61] },                   // D  (land on D-Eb)
         ],
     },
-    {   // WINTER — starving, hunkered, dread: A locrian (the b5 tritone), very slow + sparse
-        tempo: 60, lead: { type: 'square', gain: 0.07, vibrato: false },
-        padGain: 0.04, bassGain: 0.34, pluckProb: 0.32, restProb: 0.62,
+    {   // ORC WINTER — The Starving Watch: C Locrian dread, low sine + tritone drone (C+Gb)
+        tempo: 64, lead: { type: 'sine', gain: 0.080, vibrato: false },
+        padGain: 0.050, bassGain: 0.46, pluckProb: 0.28, restProb: 0.60,
         chords: [
-            { bass: 55.00, notes: [110.00, 116.54, 155.56], melody: [220.00, 233.08, 311.13] },           // A locrian: A, b2(Bb), b5(Eb) — the dread
-            { bass: 58.27, notes: [116.54, 146.83, 174.61], melody: [233.08, 293.66] },
-            { bass: 51.91, notes: [103.83, 138.59, 155.56], melody: [207.65, 277.18] },                   // Ab drone
-            { bass: 55.00, notes: [110.00, 155.56, 164.81], melody: [220.00, 311.13, 329.63] },           // the tritone held: A - Eb
+            { bass: 32.70, notes: [65.41, 92.50], melody: [130.81, 138.59, 155.56, 185.00] },            // C  (pad = C+Gb TRITONE; Db3 bII)
+            { bass: 34.65, notes: [69.30, 103.83], melody: [138.59, 155.56, 174.61] },                   // Db (bII)
+            { bass: 46.25, notes: [92.50, 138.59], melody: [185.00, 207.65, 233.08] },                   // Gb (bV, the tritone)
+            { bass: 32.70, notes: [65.41, 92.50], melody: [130.81, 138.59, 185.00] },                    // C  (land on Gb tritone stinger)
         ],
     },
 ];
