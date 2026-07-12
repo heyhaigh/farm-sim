@@ -1166,10 +1166,23 @@ function bakeChunk(cx, cy) {
     const [cv, bctx] = makeCanvas(CHUNK_PX_W, CHUNK_PX_H);
     const org = chunkOrigin(cx, cy);
     const season = world.seasonDef;
-    const [GRASS_A, GRASS_B] = season.ground;
-    const TILLED_C = season.tilled;
     const winter = season.name === 'WINTER';
-    const flower = winter ? '#e8eef4' : season.name === 'FALL' ? '#c89040' : season.name === 'SUMMER' ? '#f0d84a' : '#e8709a';
+    // #94 orc lands are a rocky, scorched DESERT — no grass, no green. Override the seasonal ground palette
+    // with warm sun-baked earth (a touch redder in summer, dust-bleached in winter) and swap the floral
+    // speckle for dusty pebbles; the green grass decals are skipped below.
+    const orc = world.culture === 'orc';
+    let [GRASS_A, GRASS_B] = season.ground;
+    let TILLED_C = season.tilled;
+    let flower = winter ? '#e8eef4' : season.name === 'FALL' ? '#c89040' : season.name === 'SUMMER' ? '#f0d84a' : '#e8709a';
+    if (orc) {
+        const DESERT = {
+            SPRING: ['#9d7448', '#8f6a40'], SUMMER: ['#ab7440', '#9c683b'],
+            FALL:   ['#946a44', '#87603e'], WINTER: ['#8c7a62', '#7f6d58'],
+        }[season.name] || ['#9d7448', '#8f6a40'];
+        GRASS_A = DESERT[0]; GRASS_B = DESERT[1];
+        TILLED_C = winter ? '#6b5946' : '#5d4229';
+        flower = winter ? '#c6baa6' : '#7c6852';   // dusty pebble specks, never floral
+    }
     const i0 = cx * CHUNK, j0 = cy * CHUNK;
     for (let j = j0; j < j0 + CHUNK; j++) {
         for (let i = i0; i < i0 + CHUNK; i++) {
@@ -1219,7 +1232,7 @@ function bakeChunk(cx, cy) {
             } else if (grassy) {
                 const scatter = rand2(i, j, 41);
                 const density = patch === 3 ? 0.34 : patch === 2 ? 0.24 : 0.15;
-                if (t === T.GRASS && grassDetailsReady && scatter < density && !winter) {   // no green tufts under snow
+                if (t === T.GRASS && grassDetailsReady && scatter < density && !winter && !orc) {   // no green tufts under snow, none in orc desert
                     const useDirt = rand2(i, j, 42) < 0.18;
                     const set = useDirt ? DIRT_DECALS : GRASS_DECALS;
                     const d = pickTile(set, i, j, 43);
