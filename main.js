@@ -2699,14 +2699,16 @@ function makeSvgIcon(svg) {
         if (!ready || !img.naturalWidth) return null;
         const key = size + ':' + color; let c = tints[key];
         if (!c) {
-            const [cv, cx] = makeCanvas(size, size); cx.imageSmoothingEnabled = false;
-            cx.drawImage(img, 0, 0, size, size);
-            cx.globalCompositeOperation = 'source-in'; cx.fillStyle = color; cx.fillRect(0, 0, size, size);
-            cx.globalCompositeOperation = 'source-over';
-            // threshold to a hard 1-bit alpha so the icon reads as CRISP pixels, not a soft anti-aliased haze
-            const id = cx.getImageData(0, 0, size, size), d = id.data;
-            for (let i = 3; i < d.length; i += 4) d[i] = d[i] > 100 ? 255 : 0;
-            cx.putImageData(id, 0, 0);
+            // SUPERSAMPLE: render + tint at 4x, then ONE high-quality anti-aliased downscale to the target size.
+            // Beats both a direct tiny render (loses detail -> mush) and a 1-bit threshold (blocky when the CRT
+            // upscales it). The clean AA holds a complex glyph (globe grid, 3-person users) far better small.
+            const S = size * 4;
+            const [big, bx] = makeCanvas(S, S);
+            bx.drawImage(img, 0, 0, S, S);
+            bx.globalCompositeOperation = 'source-in'; bx.fillStyle = color; bx.fillRect(0, 0, S, S);
+            const [cv, cx] = makeCanvas(size, size);
+            cx.imageSmoothingEnabled = true; cx.imageSmoothingQuality = 'high';
+            cx.drawImage(big, 0, 0, size, size);
             tints[key] = c = cv;
         }
         return c;
@@ -2719,7 +2721,7 @@ const USERS_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><
 const cogIconFn = makeSvgIcon(COG_SVG), globeIconFn = makeSvgIcon(GLOBE_SVG), bankIconFn = makeSvgIcon(BANK_SVG), usersIconFn = makeSvgIcon(USERS_SVG);
 function drawGearIcon(x, y, active) {
     const col = active ? '#7dd069' : '#c8ccd8';
-    const icon = cogIconFn(9, col);   // 9px: sits with padding in the 15x12 button (was 11px, too large)
+    const icon = cogIconFn(11, col);
     if (icon) { ctx.imageSmoothingEnabled = false; ctx.drawImage(icon, x, y); return; }
     // fallback (until the SVG rasterizes): the procedural gear on a 9x9 field
     ctx.fillStyle = col;
@@ -2732,17 +2734,17 @@ function drawGearIcon(x, y, active) {
 }
 function drawGlobeIcon(x, y, active) {
     // active = dark globe on the light-purple button fill (matches the text WORLD button's selected look)
-    const icon = globeIconFn(10, active ? '#160f22' : '#c8ccd8');
+    const icon = globeIconFn(11, active ? '#160f22' : '#c8ccd8');
     if (icon) { ctx.imageSmoothingEnabled = false; ctx.drawImage(icon, x, y); return; }
     ctx.fillStyle = active ? '#160f22' : '#c8ccd8'; ctx.fillRect(x + 2, y + 2, 6, 6);   // tiny fallback blob
 }
 function drawBankIcon(x, y, active) {   // the CHRONICLE / THE SAGA button — the town's ledger of record
-    const icon = bankIconFn(10, active ? '#1a1024' : '#c8ccd8');
+    const icon = bankIconFn(11, active ? '#1a1024' : '#c8ccd8');
     if (icon) { ctx.imageSmoothingEnabled = false; ctx.drawImage(icon, x, y); return; }
     ctx.fillStyle = active ? '#1a1024' : '#c8ccd8'; ctx.fillRect(x + 2, y + 3, 6, 5);
 }
 function drawUsersIcon(x, y, active) {   // the ROSTER / WARBAND button — the town's people
-    const icon = usersIconFn(10, active ? '#10240c' : '#c8ccd8');
+    const icon = usersIconFn(11, active ? '#10240c' : '#c8ccd8');
     if (icon) { ctx.imageSmoothingEnabled = false; ctx.drawImage(icon, x, y); return; }
     ctx.fillStyle = active ? '#10240c' : '#c8ccd8'; ctx.fillRect(x + 2, y + 3, 6, 5);
 }
@@ -2822,7 +2824,7 @@ function drawUI() {
     // sound toggle — RIGHTMOST (drawn first), a speaker icon (with an X when muted), no text
     barIconBtn(SND_BTN, 15, (x, y) => drawSpeakerIcon(x + 3, y + 2, audio.enabled));
     // settings cog — folds in New Town + music/SFX volume (sound on/off stays a top-bar quick action)
-    barIconBtn(SETTINGS_BTN, 15, (x, y) => drawGearIcon(x + 3, y + 2, settingsOpen));   // green icon = active, no bg swap
+    barIconBtn(SETTINGS_BTN, 15, (x, y) => drawGearIcon(x + 2, y + 1, settingsOpen));   // green icon = active, no bg swap
 
     // speed controls in the corner: > = 5x, >> = 20x; a 1X revert appears while sped up
     const spd = world._speedMult || 1;
@@ -2833,9 +2835,9 @@ function drawUI() {
     // look (not the red 'selected' fill), which is reserved for the >/>> that IS active.
     if (spd !== 1) barBtn(SPEED1_BTN, '1X', false);
 
-    barIconBtn(ROSTER_BTN, 15, (x, y, act) => drawUsersIcon(x + 3, y + 1, act), rosterOpen, '#7dd069');   // users icon (was ROSTER/WARBAND text)
-    barIconBtn(WORLD_BTN, 15, (x, y, act) => drawGlobeIcon(x + 3, y + 1, act), worldMapOpen, '#c8b0e0');   // globe icon (was 'WORLD' text)
-    barIconBtn(CHRON_BTN, 15, (x, y, act) => drawBankIcon(x + 3, y + 1, act), chronOpen, '#c8a0e0');   // bank icon (was CHRONICLE/THE SAGA text)
+    barIconBtn(ROSTER_BTN, 15, (x, y, act) => drawUsersIcon(x + 2, y + 1, act), rosterOpen, '#7dd069');   // users icon (was ROSTER/WARBAND text)
+    barIconBtn(WORLD_BTN, 15, (x, y, act) => drawGlobeIcon(x + 2, y + 1, act), worldMapOpen, '#c8b0e0');   // globe icon (was 'WORLD' text)
+    barIconBtn(CHRON_BTN, 15, (x, y, act) => drawBankIcon(x + 2, y + 1, act), chronOpen, '#c8a0e0');   // bank icon (was CHRONICLE/THE SAGA text)
     if ((world._chronTotal || 0) > chronReadTotal && !chronOpen) drawCoin(CHRON_BTN.x + CHRON_BTN.w - 3, CHRON_BTN.y - 2, 6);   // UNREAD only
 
     // (NEW TOWN moved into the settings menu.) A quiet "SAVED" tick under the cog whenever the town
