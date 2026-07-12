@@ -804,20 +804,20 @@ function orcSpriteReady() { return orcFarmerImg && orcFarmerImg.complete && orcF
 function orcCharSets(f) {
     const img = orcFarmerImg, FW = 64;
     const cols = Math.max(1, Math.round(img.naturalWidth / FW));
-    // ROW 0 = the FRONT-FACING idle (faces the camera, like the DM's foe orcs) — so it never mis-faces when
-    // walking, and it has no downward weapon (the side rows hold a sword that read as a "weird shadow" below).
-    const row = 0;
-    const sx0 = 12, sy0 = 8, sw = 40, sh = 44;          // crop just the character body (no bottom gap / weapon)
-    const targetH = 28, scale = targetH / sh;
+    // Directional: ROW 0 = front (used for down AND up — the sheet has no back view), ROW 2 = side profile
+    // (mirrored by facing in drawFarmer so they face their movement). Crop the body with the feet near the
+    // bottom edge so there's no empty gap under them (the orc foot-shadow is disabled in drawFarmer anyway).
+    const sx0 = 12, sy0 = 8, sw = 40, sh = 40;
+    const targetH = 26, scale = targetH / sh;
     const dw = Math.max(1, Math.round(sw * scale)), dh = Math.max(1, Math.round(sh * scale));
-    const frameCol = (col) => {
+    const frameCol = (col, row) => {
         const c = Math.min(col, cols - 1);
         const [out, ox] = makeCanvas(dw, dh); ox.imageSmoothingEnabled = false;
         ox.drawImage(img, c * FW + sx0, row * FW + sy0, sw, sh, 0, 0, dw, dh);
         return out;
     };
-    const set = { idle: frameCol(0), walk1: frameCol(1), walk2: frameCol(2), work: frameCol(1), sleep: frameCol(0) };
-    return { down: set, side: set, up: set };
+    const setRow = (row) => ({ idle: frameCol(0, row), walk1: frameCol(1, row), walk2: frameCol(2, row), work: frameCol(1, row), sleep: frameCol(0, row) });
+    return { down: setRow(0), side: setRow(2), up: setRow(0) };
 }
 
 function farmerSprites(f) {
@@ -2088,14 +2088,16 @@ function drawFarmer(f, sx, sy) {
         ctx.restore();
     }
 
-    // tiny shadow
-    ctx.fillStyle = 'rgba(10,14,10,0.35)';
-    ctx.fillRect(px + 4, footY, fw - 8, 2);
-
-    // flip for left/right only on the side view (front/back rows shouldn't mirror). Orc farmers use a single
-    // front-facing pose (like the foe orcs) — mirroring it made them face BACKWARDS when walking, so never flip.
     const orcFrame = f.sheet.culture === 'orc' && orcSpriteReady();
-    if (!orcFrame && f.facing < 0 && (!charReady() || f.moveDir === 'side')) {
+
+    // tiny foot-shadow — SKIPPED for orcs (the orc crop leaves the rect floating below the feet as a "drop shadow")
+    if (!orcFrame) { ctx.fillStyle = 'rgba(10,14,10,0.35)'; ctx.fillRect(px + 4, footY, fw - 8, 2); }
+
+    // flip for left/right on the side view so they face their movement. Humans mirror when facing<0 (their
+    // source faces right); the ORC side row faces LEFT, so mirror when facing>0. Front/back rows never mirror.
+    const flip = orcFrame ? (f.moveDir === 'side' && f.facing > 0)
+                          : (f.facing < 0 && (!charReady() || f.moveDir === 'side'));
+    if (flip) {
         ctx.save();
         ctx.translate(px + fw, dy);
         ctx.scale(-1, 1);
