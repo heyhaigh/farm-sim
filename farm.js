@@ -2255,7 +2255,7 @@ export class World {
         // the moment a working acquaintance becomes a real friendship, note it (once per pair)
         if (v >= 4 && !this._chronBonds.has(key)) {
             this._chronBonds.add(key);
-            this.addChronicle('bond', `${a.sheet.name.split(' ')[0]} and ${b.sheet.name.split(' ')[0]} have grown close.`, a, b, '#7dd069', { tier: 'callout', tone: 'triumph' });
+            this.addChronicle('bond', `${a.sheet.name.split(' ')[0]} and ${b.sheet.name.split(' ')[0]} ${this.culture === 'orc' ? 'swore a blood-bond' : 'have grown close'}.`, a, b, '#7dd069', { tier: 'callout', tone: 'triumph' });
         }
     }
     bondCount(f) {
@@ -3180,10 +3180,11 @@ export class World {
         const r = this.roles, m = this.managerFarmer();
         if (!m) { r.directive = null; return; }
         let kind = null, text = null;
+        const orc = this.culture === 'orc';
         if (this.project) {
-            kind = 'project'; text = `${shortName(m)} calls the town to raise the ${this.project.label ? this.project.label.toLowerCase() : 'town project'}.`;
+            kind = 'project'; text = `${shortName(m)} calls the ${orc ? 'warband' : 'town'} to raise the ${this.project.label ? this.project.label.toLowerCase() : (orc ? 'war-work' : 'town project')}.`;
         } else if (this.townLevel < TOWN_MAX_LEVEL) {
-            kind = 'donate'; text = `${shortName(m)} asks for surplus at the silo to grow the town.`;
+            kind = 'donate'; text = orc ? `${shortName(m)} demands tribute for the hoard.` : `${shortName(m)} asks for surplus at the silo to grow the town.`;
         }
         if (!kind) { r.directive = null; return; }
         r.directive = { id: ++r.directiveSeq, kind, text, day: this.day, heeders: new Set(), refusers: new Map() };
@@ -8510,7 +8511,7 @@ export class Farmer {
                 this.adjustReputation(-0.05);
                 this.gainXP(2);
                 B.remember('event', `${this.sheet.name.split(' ')[0]} shortchanged me - ${gave} ${deal.give} for my ${got} ${deal.get}`, this, 0.7);
-                w.addChronicle('rift', `${this.sheet.name.split(' ')[0]} drove a hard bargain with ${B.sheet.name.split(' ')[0]} - ${gave} ${deal.give} for ${got} ${deal.get}.`, this, B, '#c05840');
+                w.addChronicle('rift', `${this.sheet.name.split(' ')[0]} ${w.culture === 'orc' ? 'took the better cut from' : 'drove a hard bargain with'} ${B.sheet.name.split(' ')[0]} - ${gave} ${deal.give} for ${got} ${deal.get}.`, this, B, '#c05840');
             } else if (gave > got) w.transferGood(B, this, deal.give, gave - got);
             return;
         }

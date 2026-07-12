@@ -26,6 +26,13 @@ export const CULTURE_COPY = {
         'board.help': 'HELP WANTED', 'board.ambitions': 'AMBITIONS',
         // world nouns
         'struct.well': 'TOWN WELL',
+        // facilities
+        'fac.coop': 'CHICKEN COOP', 'fac.pen': 'LIVESTOCK PEN', 'fac.sheeppen': 'SHEEP PEN',
+        'fac.pond': 'WATER GARDEN', 'fac.mill': 'MILL', 'fac.hatchery': 'HATCH HOUSE',
+        // boot / settings
+        'boot.newTown': 'START A NEW TOWN', 'boot.newTownConfirm': 'SURE? - THIS TOWN IS SET ASIDE',
+        'boot.merchant': 'MERCHANT IN TOWN', 'boot.merchantArriving': 'MERCHANT ARRIVING',
+        'boot.unwritten': 'THE TOWN WAITS, ITS STORY UNWRITTEN.',
     },
     orc: {
         'noun.settlers': 'ORCS',
@@ -39,6 +46,11 @@ export const CULTURE_COPY = {
         'board.title': 'WAR-POST', 'board.project': 'WAR-WORK', 'board.plans': 'CAMP PLANS',
         'board.help': 'FISTS WANTED', 'board.ambitions': 'AMBITIONS',
         'struct.well': 'BLOOD-CISTERN',
+        'fac.coop': 'CROW-ROOST', 'fac.pen': 'BEAST-PEN', 'fac.sheeppen': 'PELT-PEN',
+        'fac.pond': 'LEECH-BOG', 'fac.mill': 'BONE-MILL', 'fac.hatchery': 'BROOD-HUTCH',
+        'boot.newTown': 'RAISE A NEW WARBAND', 'boot.newTownConfirm': 'SURE? - THIS WARBAND IS DISBANDED',
+        'boot.merchant': 'TRADER AT THE GATE', 'boot.merchantArriving': 'A TRADER APPROACHES',
+        'boot.unwritten': 'THE WARBAND WAITS, ITS SAGA UNSUNG.',
     },
 };
 

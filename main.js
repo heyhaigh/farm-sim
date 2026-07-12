@@ -2616,7 +2616,7 @@ function drawUI() {
 
     // merchant-in-town banner (blinks coin-gold) so the player heads over to trade
     if (world.merchant) {
-        const ml = world.merchant.state === 'trading' ? 'MERCHANT IN TOWN' : 'MERCHANT ARRIVING';
+        const ml = world.merchant.state === 'trading' ? cultureWord(world.culture, 'boot.merchant') : cultureWord(world.culture, 'boot.merchantArriving');
         const mblink = Math.floor(performance.now() / 420) % 2 === 0;
         drawText(ctx, ml, hx, 7, mblink ? '#f0c850' : '#b8902f');
         hx += textWidth(ml) + 8;
@@ -2832,7 +2832,7 @@ function drawSettings() {
     const nb = { x: IX, y: PY + 100, w: PW - 16, h: 14 };
     ctx.fillStyle = confirming ? '#3a1010' : '#2a0e0e'; ctx.fillRect(nb.x, nb.y, nb.w, nb.h);
     ctx.strokeStyle = '#e05040'; ctx.strokeRect(nb.x + 0.5, nb.y + 0.5, nb.w - 1, nb.h - 1);
-    const nlabel = confirming ? 'SURE? - THIS TOWN IS SET ASIDE' : 'START A NEW TOWN';
+    const nlabel = confirming ? cultureWord(world.culture, 'boot.newTownConfirm') : cultureWord(world.culture, 'boot.newTown');
     drawText(ctx, nlabel, nb.x + Math.floor((nb.w - textWidth(nlabel)) / 2), nb.y + 4, confirming ? '#ff9080' : '#e07868');
     settingsHits.newBtn = nb;
     drawText(ctx, 'A NEW TOWN GROWS A NEW CAST - THIS ONE IS SAVED, NOT LOST.', IX, PY + 120, '#5a5f6c');
@@ -2979,8 +2979,9 @@ const FAC_INFO = {
 };
 function facLines(fac, owner) {
     const m = FAC_INFO[fac.type] || [String(fac.type).toUpperCase(), ''];
+    const label = cultureWord(world.culture, 'fac.' + fac.type);   // orc-aware; falls back to the human label
     const who = owner ? owner.sheet.name.split(' ')[0] + "'s " : '';
-    const lines = [{ t: m[0], c: TT_G }, { t: `${who}facility`, c: TT_L }];
+    const lines = [{ t: (label === 'fac.' + fac.type ? m[0] : label), c: TT_G }, { t: `${who}facility`, c: TT_L }];
     if (m[1]) lines.push({ t: m[1], c: TT_GR });
     return lines;
 }
@@ -3082,16 +3083,17 @@ function farmerRole(f) {
 }
 
 function currentStatus(f) {
-    if (f.downed) return 'RECOVERING AT HOME';
+    const orc = !!(f.world && f.world.culture === 'orc');   // #3.1 orc warband status flavour
+    if (f.downed) return orc ? 'LICKING WOUNDS IN THE DEN' : 'RECOVERING AT HOME';
     if (f.carryTrophy) return 'CARRYING HOME A FRESH KILL';
     if (f.state === 'hunt' || f.huntTarget) return 'STALKING WILD GAME FOR MEAT';
     if (f.barterDeal || (f.path && f.path.then === 'barter')) {
         const p = f.barterDeal && f.barterDeal.partner;
-        return p ? `OFF TO BARTER WITH ${p.sheet.name.split(' ')[0].toUpperCase()}` : 'OFF TO BARTER GOODS';
+        return p ? `OFF TO ${orc ? 'TRADE SPOILS WITH' : 'BARTER WITH'} ${p.sheet.name.split(' ')[0].toUpperCase()}` : (orc ? 'OFF TO TRADE SPOILS' : 'OFF TO BARTER GOODS');
     }
-    if (f.helpTask) return 'LENDING A NEIGHBOR A HAND';
+    if (f.helpTask) return orc ? 'ANSWERING THE WAR-HORN' : 'LENDING A NEIGHBOR A HAND';
     if (f.emote === 'grudge') return 'STEERING CLEAR OF SOMEONE THEY DISLIKE';
-    if (f.emote === 'bond') return 'WARMING TO A NEIGHBOR';
+    if (f.emote === 'bond') return orc ? 'SWEARING A BLOOD-BOND' : 'WARMING TO A NEIGHBOR';
     const hpFrac = f.maxHp ? f.hp / f.maxHp : 1;
     if (hpFrac < 0.35) return 'BADLY WOUNDED - LIMPING IT OFF';
     if (hpFrac < 0.9) return 'NURSING A WOUND';
@@ -3101,6 +3103,10 @@ function currentStatus(f) {
         sleep: 'ASLEEP', rest: 'RESTING UP', sick: 'LAID UP SICK', shelter: 'SHELTERING FROM THE STORM',
         care: 'TENDING A SICK NEIGHBOR', fight: 'STANDING AND FIGHTING', flee: 'FLEEING DANGER',
         donate: 'HAULING SURPLUS TO THE SILO', scarecrow: 'RAISING A SCARECROW' };
+    if (orc) Object.assign(map, { work: 'MINDING THE CAMP', chop: 'HEWING TIMBER FOR THE PALISADE',
+        forage: 'SCAVENGING THE WILDS', build: 'RAISING THE PALISADE', housebuild: 'THROWING UP A DEN',
+        coopbuild: 'RAISING A CROW-ROOST', fencepost: 'RAISING THE PALISADE', care: 'TENDING A WOUNDED ORC',
+        donate: 'HAULING PLUNDER TO THE HOARD', scarecrow: 'RAISING A WARDING-SKULL' });
     return map[f.state] || (f.thought ? f.thought : 'GOING ABOUT THEIR DAY');
 }
 function drawSheet(f) {
@@ -4321,7 +4327,7 @@ function drawResumeCard() {
     ctx.fillStyle = '#2a2e3a'; ctx.fillRect(PX + 4, PY + 23, PW - 8, 1);
 
     let y = PY + headH + 3;
-    if (!lines.length) drawText(ctx, 'THE TOWN WAITS, ITS STORY UNWRITTEN.', PX + 8, y, '#6a6f7c');
+    if (!lines.length) drawText(ctx, cultureWord(world.culture, 'boot.unwritten'), PX + 8, y, '#6a6f7c');
     else for (const ln of lines) { if (ln.head) { ctx.fillStyle = ln.c; ctx.fillRect(PX + 6, y + 2, 2, 2); } drawText(ctx, ln.t, PX + 11, y, ln.c); y += 8; }
     const cue = 'CLICK TO CONTINUE';
     drawText(ctx, cue, PX + Math.floor((PW - textWidth(cue)) / 2), PY + PH - 9, performance.now() % 1000 < 620 ? '#c8ccd8' : '#6a6f7c');
