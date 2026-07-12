@@ -181,10 +181,11 @@ function draw() {
   for (const tn of townNodes){ for (const f of tn.farmers){ sctx.beginPath(); sctx.moveTo(tn.x,tn.y); sctx.lineTo(f.x,f.y); sctx.stroke(); } }
   // links
   for (const l of links){
+    if (l.hub) continue;   // farmer<->town hub ties are already the faint gold lines above (and carry no label)
     if (l.sat){ const lit=selected && l.a===selected; sctx.strokeStyle=lit?'rgba(201,164,90,.35)':'rgba(120,110,86,.16)'; sctx.lineWidth=1; }
     else { sctx.strokeStyle=RIFT.test(l.label)?'rgba(224,88,74,.6)':'rgba(125,208,105,.55)'; sctx.lineWidth=1; }
     sctx.beginPath(); sctx.moveTo(l.a.x,l.a.y); sctx.lineTo(l.b.x,l.b.y); sctx.stroke();
-    if(!l.sat){ const mx=(l.a.x+l.b.x)/2, my=(l.a.y+l.b.y)/2; drawText(sctx, l.label, mx-textWidth(l.label)/2, my-6, '#9a9078'); }
+    if(!l.sat && l.label){ const mx=(l.a.x+l.b.x)/2, my=(l.a.y+l.b.y)/2; drawText(sctx, l.label, mx-textWidth(l.label)/2, my-6, '#9a9078'); }
   }
   // memory satellites
   for (const n of nodes){ if(n.type!=='mem') continue; const hov=n===hover, dim=selected&&n.parent!==selected;
