@@ -2689,29 +2689,36 @@ function drawSpeakerIcon(x, y, on) {
     }
 }
 
-// Settings cog — the pixel-style cog from cog-solid.svg, rasterized once to a small field and tinted for
-// active/idle. Inline SVG data-URI (no external fetch; CSP-safe). Falls back to the procedural gear until it
-// rasterizes. The SVG is white-filled so each tint is made by masking a colour rect through its alpha.
-const COG_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#fff" d="m21,10v-1h-1v-2h1v-2h-1v-1h-1v-1h-2v1h-2v-1h-1V1h-4v2h-1v1h-2v-1h-2v1h-1v1h-1v2h1v2h-1v1H1v4h2v1h1v2h-1v2h1v1h1v1h2v-1h2v1h1v2h4v-2h1v-1h2v1h2v-1h1v-1h1v-2h-1v-2h1v-1h2v-4h-2Zm-11,0v-1h4v1h1v4h-1v1h-4v-1h-1v-4h1Z"/></svg>';
-const cogImg = new Image(); let cogReady = false;
-cogImg.onload = () => { cogReady = true; }; cogImg.onerror = () => {};
-cogImg.src = 'data:image/svg+xml,' + encodeURIComponent(COG_SVG);
-const _cogTint = {};   // "size:color" -> tinted offscreen canvas
-function cogIcon(size, color) {
-    if (!cogReady || !cogImg.naturalWidth) return null;
-    const key = size + ':' + color; let c = _cogTint[key];
-    if (!c) {
-        const [cv, cx] = makeCanvas(size, size); cx.imageSmoothingEnabled = false;
-        cx.drawImage(cogImg, 0, 0, size, size);
-        cx.globalCompositeOperation = 'source-in'; cx.fillStyle = color; cx.fillRect(0, 0, size, size);
-        _cogTint[key] = c = cv;
-    }
-    return c;
+// Inline pixel-style SVG icons (cog-solid, globe-solid), each rasterized once to a small field and TINTED per
+// state by masking a colour rect through the SVG's alpha (source-in). Data-URI, no external fetch (CSP-safe).
+function makeSvgIcon(svg) {
+    const img = new Image(); let ready = false; const tints = {};
+    img.onload = () => { ready = true; }; img.onerror = () => {};
+    img.src = 'data:image/svg+xml,' + encodeURIComponent(svg);
+    return (size, color) => {
+        if (!ready || !img.naturalWidth) return null;
+        const key = size + ':' + color; let c = tints[key];
+        if (!c) {
+            const [cv, cx] = makeCanvas(size, size); cx.imageSmoothingEnabled = false;
+            cx.drawImage(img, 0, 0, size, size);
+            cx.globalCompositeOperation = 'source-in'; cx.fillStyle = color; cx.fillRect(0, 0, size, size);
+            cx.globalCompositeOperation = 'source-over';
+            // threshold to a hard 1-bit alpha so the icon reads as CRISP pixels, not a soft anti-aliased haze
+            const id = cx.getImageData(0, 0, size, size), d = id.data;
+            for (let i = 3; i < d.length; i += 4) d[i] = d[i] > 100 ? 255 : 0;
+            cx.putImageData(id, 0, 0);
+            tints[key] = c = cv;
+        }
+        return c;
+    };
 }
+const COG_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m21,10v-1h-1v-2h1v-2h-1v-1h-1v-1h-2v1h-2v-1h-1V1h-4v2h-1v1h-2v-1h-2v1h-1v1h-1v2h1v2h-1v1H1v4h2v1h1v2h-1v2h1v1h1v1h2v-1h2v1h1v2h4v-2h1v-1h2v1h2v-1h1v-1h1v-2h-1v-2h1v-1h2v-4h-2Zm-11,0v-1h4v1h1v4h-1v1h-4v-1h-1v-4h1Z"/></svg>';
+const GLOBE_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="9" y="1" width="1" height="1"/><polygon points="9 2 9 3 8 3 8 5 7 5 7 8 2 8 2 7 3 7 3 5 4 5 4 4 5 4 5 3 7 3 7 2 9 2"/><polygon points="13 2 14 2 14 4 15 4 15 6 16 6 16 8 8 8 8 6 9 6 9 4 10 4 10 2 11 2 11 1 13 1 13 2"/><rect x="14" y="1" width="1" height="1"/><polygon points="22 7 22 8 17 8 17 5 16 5 16 3 15 3 15 2 17 2 17 3 19 3 19 4 20 4 20 5 21 5 21 7 22 7"/><polygon points="17 10 17 14 16 14 16 15 8 15 8 14 7 14 7 10 8 10 8 9 16 9 16 10 17 10"/><polygon points="1 9 7 9 7 10 6 10 6 14 7 14 7 15 1 15 1 9"/><polygon points="23 9 23 15 17 15 17 14 18 14 18 10 17 10 17 9 23 9"/><polygon points="22 16 22 17 21 17 21 19 20 19 20 20 19 20 19 21 17 21 17 22 15 22 15 21 16 21 16 19 17 19 17 16 22 16"/><rect x="9" y="22" width="1" height="1"/><polygon points="9 21 9 22 7 22 7 21 5 21 5 20 4 20 4 19 3 19 3 17 2 17 2 16 7 16 7 19 8 19 8 21 9 21"/><rect x="14" y="22" width="1" height="1"/><polygon points="14 22 13 22 13 23 11 23 11 22 10 22 10 20 9 20 9 18 8 18 8 16 16 16 16 18 15 18 15 20 14 20 14 22"/></svg>';
+const cogIconFn = makeSvgIcon(COG_SVG), globeIconFn = makeSvgIcon(GLOBE_SVG);
 function drawGearIcon(x, y, active) {
     const col = active ? '#7dd069' : '#c8ccd8';
-    const icon = cogIcon(11, col);
-    if (icon) { ctx.imageSmoothingEnabled = false; ctx.drawImage(icon, x - 1, y - 1); return; }
+    const icon = cogIconFn(9, col);   // 9px: sits with padding in the 15x12 button (was 11px, too large)
+    if (icon) { ctx.imageSmoothingEnabled = false; ctx.drawImage(icon, x, y); return; }
     // fallback (until the SVG rasterizes): the procedural gear on a 9x9 field
     ctx.fillStyle = col;
     const R = 4;
@@ -2720,6 +2727,12 @@ function drawGearIcon(x, y, active) {
         const body = r <= 2.9, tooth = r <= 3.9 && (ax <= 1 || ay <= 1 || ax === ay), hole = r <= 1.25;
         if ((body || tooth) && !hole) ctx.fillRect(x + gx, y + gy, 1, 1);
     }
+}
+function drawGlobeIcon(x, y, active) {
+    // active = dark globe on the light-purple button fill (matches the text WORLD button's selected look)
+    const icon = globeIconFn(10, active ? '#160f22' : '#c8ccd8');
+    if (icon) { ctx.imageSmoothingEnabled = false; ctx.drawImage(icon, x, y); return; }
+    ctx.fillStyle = active ? '#160f22' : '#c8ccd8'; ctx.fillRect(x + 2, y + 2, 6, 6);   // tiny fallback blob
 }
 
 function drawUI() {
@@ -2784,19 +2797,20 @@ function drawUI() {
         ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
         drawText(ctx, label, rect.x + BPAD, rect.y + 4, active ? activeFg : '#c8ccd8');
     };
-    // a small icon-only button in the same right-to-left strip (used for the sound toggle)
-    const barIconBtn = (rect, w, drawIcon) => {
+    // a small icon-only button in the same right-to-left strip (sound toggle, settings cog, world globe).
+    // Optional active/activeBg gives it the same highlighted-when-open look as the text buttons.
+    const barIconBtn = (rect, w, drawIcon, active, activeBg) => {
         rect.w = w; rect.h = 12; rect.y = 3;
         bx -= rect.w; rect.x = bx; bx -= BGAP;
-        ctx.fillStyle = 'rgba(255,255,255,0.08)';
+        ctx.fillStyle = active ? activeBg : 'rgba(255,255,255,0.08)';
         ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
-        drawIcon(rect.x, rect.y);
+        drawIcon(rect.x, rect.y, active);
     };
 
     // sound toggle — RIGHTMOST (drawn first), a speaker icon (with an X when muted), no text
     barIconBtn(SND_BTN, 15, (x, y) => drawSpeakerIcon(x + 3, y + 2, audio.enabled));
     // settings cog — folds in New Town + music/SFX volume (sound on/off stays a top-bar quick action)
-    barIconBtn(SETTINGS_BTN, 15, (x, y) => drawGearIcon(x + 3, y + 1, settingsOpen));
+    barIconBtn(SETTINGS_BTN, 15, (x, y) => drawGearIcon(x + 3, y + 2, settingsOpen));   // green icon = active, no bg swap
 
     // speed controls in the corner: > = 5x, >> = 20x; a 1X revert appears while sped up
     const spd = world._speedMult || 1;
@@ -2808,7 +2822,7 @@ function drawUI() {
     if (spd !== 1) barBtn(SPEED1_BTN, '1X', false);
 
     barBtn(ROSTER_BTN, cultureWord(world.culture, 'panel.roster'), rosterOpen, '#7dd069', '#10240c');
-    barBtn(WORLD_BTN, 'WORLD', worldMapOpen, '#c8b0e0', '#160f22');
+    barIconBtn(WORLD_BTN, 15, (x, y, act) => drawGlobeIcon(x + 3, y + 1, act), worldMapOpen, '#c8b0e0');   // globe icon (was 'WORLD' text)
     barBtn(CHRON_BTN, cultureWord(world.culture, 'panel.chronicle'), chronOpen, '#c8a0e0', '#1a1024');
     if ((world._chronTotal || 0) > chronReadTotal && !chronOpen) drawCoin(CHRON_BTN.x + CHRON_BTN.w - 3, CHRON_BTN.y - 2, 6);   // UNREAD only
 
