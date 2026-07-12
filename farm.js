@@ -586,6 +586,7 @@ export class World {
         this.fishedAt = new Map();   // "i,j" -> day a wild-water tile was last fished (bounty cooldown)
         this.plots = [];
         this.farmers = [];
+        this._usedFirstNames = new Set();   // #names — per-town, so no two living farmers share a first name (deterministic in stable roster order)
         this.log = [];
         // The CHRONICLE: the town's lasting story. Where `log` is the ephemeral ticker (last ~80
         // lines, decays), the chronicle keeps the BIG beats forever — foundings, homes raised,
@@ -1607,6 +1608,17 @@ export class World {
     // happen to include an agent-of-chaos manipulator and a moody/mercurial farmer, nudge the
     // nearest candidates into those roles. Deterministic: the same roster always resolves the
     // same way (sorted picks, no rand), so it never breaks reproducibility.
+    // #names — give a standout founder a memorable FIRST name while keeping their (already de-duped) surname
+    // for humans (the "Ry" surname is retired); orcs get a fixed orc-flavoured full name. Keeps the used-set
+    // honest so later spawns don't collide.
+    #renameStandout(f, humanFirst, orcFull) {
+        const old = String(f.sheet.name).split(' ')[0];
+        if (this.culture === 'orc') f.sheet.name = orcFull;
+        else { const sur = String(f.sheet.name).split(' ').slice(1).join(' ') || 'Vale'; f.sheet.name = `${humanFirst} ${sur}`; }
+        const nf = String(f.sheet.name).split(' ')[0];
+        if (this._usedFirstNames) { this._usedFirstNames.delete(old); this._usedFirstNames.add(nf); }
+    }
+
     ensureFounderVariety() {
         const fs = this.farmers;
         if (fs.length < 3) return;
@@ -1625,7 +1637,7 @@ export class World {
             relabel(chaos);
         }
         // named so they're easy to spot in the roster (#3.1 orc towns get orc-flavoured standouts)
-        chaos.sheet.name = this.culture === 'orc' ? 'Skarn Ragefang' : 'Chaos Ry';
+        this.#renameStandout(chaos, 'Chaos', 'Skarn Ragefang');
         this.addLog(`${chaos.sheet.name} has a scheming glint in their eye...`, '#c07050');
 
         // 2) a mercurial — high temper, middling everything else (warm then cold, quick to bristle)
@@ -1640,7 +1652,7 @@ export class World {
             }
         }
         if (moody) {
-            moody.sheet.name = this.culture === 'orc' ? 'Grull Blackmood' : 'Mercurial Ry';
+            this.#renameStandout(moody, 'Mercurial', 'Grull Blackmood');
             this.addLog(`${moody.sheet.name} runs hot and cold — hard to read.`, '#c8a060');
         }
 
@@ -1652,7 +1664,7 @@ export class World {
             if (wanderer) { P(wanderer).curiosity = 0.86; relabel(wanderer); }
         }
         if (wanderer) {
-            wanderer.sheet.name = this.culture === 'orc' ? 'Drokk Farwander' : 'Rover Ry';
+            this.#renameStandout(wanderer, 'Rover', 'Drokk Farwander');
             this.addLog(`${wanderer.sheet.name} keeps one eye on the horizon.`, '#40c8c0');
         }
 
@@ -1665,7 +1677,7 @@ export class World {
             if (loner) { P(loner).collaboration = 0.14; relabel(loner); }
         }
         if (loner) {
-            loner.sheet.name = this.culture === 'orc' ? 'Zarr Lonefang' : 'Nomad Ry';
+            this.#renameStandout(loner, 'Nomad', 'Zarr Lonefang');
             this.addLog(`${loner.sheet.name} would sooner farm alone at the edge of the world.`, '#9a8fb0');
         }
 
@@ -2542,6 +2554,8 @@ export class World {
             f.thought = this.culture === 'orc' ? 'ANOTHER DAY ON THE WARPATH' : 'ANOTHER DAY ON THE FARM';
             return f;
         });
+        // #names — rebuild the used-first-name set from the restored roster so post-load spawns still de-dup
+        this._usedFirstNames = new Set(this.farmers.map(f => String(f.sheet.name || '').split(' ')[0]));
 
         // crops re-link to their restored owners; an orphaned crop (shouldn't happen) is dropped
         const bySeed = new Map(this.farmers.map(f => [f.sheet.seed, f]));
@@ -3242,7 +3256,7 @@ export class World {
         // #1.1 an heir is grown from this fresh memory BUT carries a creed inherited from a forebear a past
         // town wrote back (lineage life); a plain founder when there's no forebear to descend from. #3.1 the
         // town's culture (human/orc) decides which lens the same memory is read through.
-        const sheet = lineage ? growHeir(memory, lineage, mutation, this.culture) : growFarmer(memory, mutation, '', this.culture);
+        const sheet = lineage ? growHeir(memory, lineage, mutation, this.culture, this._usedFirstNames) : growFarmer(memory, mutation, '', this.culture, this._usedFirstNames);
         const plot = {
             x: slot.i, y: slot.j, w: B, h: B,
             // house upper-center: ~4 tiles of fenced yard behind it, garden room in front, facility room to the sides

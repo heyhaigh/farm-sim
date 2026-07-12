@@ -28,7 +28,7 @@ const BASELINE = {
     3: 'da9f09e4',
 };
 
-function boot(seed) {
+function boot(seed, culture) {
     const m = generateCrew(seed);
     const used = new Set();
     // stable, seed-ordered founder pick (mirrors the game's founder selection; no Math.random)
@@ -38,7 +38,7 @@ function boot(seed) {
         for (const x of un) { const h = hashString((x.id || x.title || '') + ':pick'); if (h < bh) { bh = h; b = x; } }
         used.add(b.id); return b;
     };
-    const w = new World(seed);
+    const w = new World(seed, culture);
     for (let i = 0; i < 8; i++) w.addFarmer(pick(), 0);
     w.ensureFounderVariety();
     return w;
@@ -86,3 +86,19 @@ for (const seed of SEEDS) {
 
 if (failed) { console.error(`\n${failed} seed(s) failed the same-twice invariant — P0 determinism bug.`); process.exit(1); }
 console.log('\nAll seeds self-compare identical. Determinism holds.');
+
+// #names — no two living farmers in a town may share a FIRST name (both cultures), and the assignment is
+// stable per seed. Guards the per-town de-dup against regressions (e.g. a global set sneaking back in).
+let nameFail = 0;
+for (const seed of SEEDS) {
+    for (const culture of ['human', 'orc']) {
+        const a = boot(seed, culture).farmers.map(f => String(f.sheet.name).split(' ')[0]);
+        const b = boot(seed, culture).farmers.map(f => String(f.sheet.name).split(' ')[0]);
+        const dup = a.length - new Set(a).size;
+        const stable = a.join(',') === b.join(',');
+        if (dup > 0) { nameFail++; console.log(`  NAME COLLISION seed ${seed} ${culture}: ${dup} dup — ${a.join(',')}`); }
+        if (!stable) { nameFail++; console.log(`  NAME NONDETERMINISM seed ${seed} ${culture}`); }
+    }
+}
+if (nameFail) { console.error(`\n${nameFail} name-uniqueness/stability failure(s).`); process.exit(1); }
+console.log('Names unique within every town (human + orc), stable per seed.');

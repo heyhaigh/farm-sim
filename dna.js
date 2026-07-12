@@ -98,7 +98,8 @@ export const ARCHETYPES = {
         statBias: { cha: 2, int: 1 },
         crop: 'sunflower', hat: 'headset',
         shirt: '#5dc9a0', hair: '#7a4a28',
-        names: ['Echo', 'Herald', 'Whisper', 'Signal', 'Chirp'],
+        names: ['Echo', 'Herald', 'Whisper', 'Signal', 'Chirp', 'Cadence', 'Timbre', 'Sonnet', 'Verse', 'Murmur', 'Lyric', 'Refrain', 'Aria', 'Peal', 'Chime', 'Vox', 'Reed', 'Carol'],
+        surnames: ['Bell', 'Vane', 'Waverly', 'Crier', 'Sonder', 'Ashwood', 'Clearwater', 'Vale', 'Marsh', 'Fenn', 'Reeves', 'Ry'],
         facilities: ['pond', 'coop', 'pen'], penAnimal: 'goat',
     },
     athlete: {
@@ -107,7 +108,8 @@ export const ARCHETYPES = {
         statBias: { dex: 2, con: 1 },
         crop: 'carrot', hat: 'headband',
         shirt: '#e86a5e', hair: '#2e2620',
-        names: ['Turbo', 'Scout', 'Sprint', 'Striker', 'Dash'],
+        names: ['Turbo', 'Scout', 'Sprint', 'Striker', 'Dash', 'Volley', 'Rally', 'Blitz', 'Vault', 'Stride', 'Racer', 'Nimble', 'Dart', 'Comet', 'Fleet', 'Bolt', 'Pacer', 'Sprig'],
+        surnames: ['Swift', 'Fleetwood', 'Strider', 'Harrow', 'Quick', 'Runnels', 'Ashford', 'Bounder', 'Marsh', 'Steele', 'Vale', 'Ry'],
         facilities: ['coop', 'pen', 'pond'], penAnimal: 'goat',
     },
     designer: {
@@ -116,7 +118,8 @@ export const ARCHETYPES = {
         statBias: { int: 2, wis: 1 },
         crop: 'grapes', hat: 'beret',
         shirt: '#c77dba', hair: '#503a2a',
-        names: ['Pixel', 'Vector', 'Kerning', 'Bezier', 'Swatch'],
+        names: ['Pixel', 'Vector', 'Kerning', 'Bezier', 'Swatch', 'Serif', 'Gradient', 'Palette', 'Margin', 'Baseline', 'Glyph', 'Raster', 'Hue', 'Leading', 'Tint', 'Grid', 'Stipple', 'Ligature'],
+        surnames: ['Type', 'Weft', 'Loomis', 'Etching', 'Ashline', 'Quill', 'Vellum', 'Marsh', 'Frame', 'Draper', 'Vale', 'Ry'],
         facilities: ['pond', 'coop', 'pen'], penAnimal: 'pig',
     },
     builder: {
@@ -125,7 +128,8 @@ export const ARCHETYPES = {
         statBias: { str: 2, con: 1 },
         crop: 'pumpkin', hat: 'hardhat',
         shirt: '#e0a03c', hair: '#3a2a1c',
-        names: ['Rivet', 'Forge', 'Crane', 'Girder', 'Hex'],
+        names: ['Rivet', 'Forge', 'Crane', 'Girder', 'Hex', 'Anvil', 'Mortar', 'Beam', 'Sawyer', 'Bolt', 'Truss', 'Ridge', 'Foundry', 'Keel', 'Piston', 'Wrench', 'Cobble', 'Gambit'],
+        surnames: ['Stone', 'Ironwood', 'Mason', 'Steele', 'Ashfell', 'Ridge', 'Kilnly', 'Braddock', 'Marsh', 'Hammer', 'Vale', 'Ry'],
         facilities: ['pen', 'coop', 'pond'], penAnimal: 'cow',
     },
     homebody: {
@@ -134,7 +138,8 @@ export const ARCHETYPES = {
         statBias: { wis: 2, con: 1 },
         crop: 'pepper', hat: 'strawhat',
         shirt: '#8fb85e', hair: '#6a4a30',
-        names: ['Biscuit', 'Clay', 'Mochi', 'Pudding', 'Bun'],
+        names: ['Biscuit', 'Clay', 'Mochi', 'Pudding', 'Bun', 'Cobbler', 'Marrow', 'Kettle', 'Butter', 'Crumb', 'Nutmeg', 'Tansy', 'Barley', 'Custard', 'Hearth', 'Poppy', 'Cricket', 'Bramble'],
+        surnames: ['Hearth', 'Meadowes', 'Thistle', 'Kettle', 'Ashby', 'Comfrey', 'Willowes', 'Downy', 'Marsh', 'Cozen', 'Vale', 'Ry'],
         facilities: ['pond', 'pen', 'coop'], penAnimal: 'pig',
     },
     greeter: {
@@ -143,7 +148,8 @@ export const ARCHETYPES = {
         statBias: { cha: 2, dex: 1 },
         crop: 'wheat', hat: 'cap',
         shirt: '#6a9ade', hair: '#4a3624',
-        names: ['Concierge', 'Beacon', 'Usher', 'Ping', 'Docent'],
+        names: ['Concierge', 'Beacon', 'Usher', 'Ping', 'Docent', 'Lantern', 'Warden', 'Marquee', 'Foyer', 'Bellhop', 'Hail', 'Sunny', 'Placard', 'Compass', 'Wicket', 'Almanac', 'Ledger', 'Guidepost'],
+        surnames: ['Gate', 'Doorley', 'Threshold', 'Welcomb', 'Ashgate', 'Porter', 'Lambert', 'Halloway', 'Marsh', 'Fairwind', 'Vale', 'Ry'],
         facilities: ['coop', 'pond', 'pen'], penAnimal: 'cow',
     },
 };
@@ -432,8 +438,29 @@ const ORC_ROLES = {   // the human archetype -> its war-camp counterpart (same u
     herald: 'War Drummer', athlete: 'Berserker', designer: 'Runecarver',
     builder: 'Siegewright', homebody: 'Denkeeper', greeter: 'Warband Caller',
 };
-const ORC_FIRST = ['Grok', 'Zug', 'Mog', 'Krull', 'Thok', 'Grash', 'Urzog', 'Skarr', 'Brak', 'Drozz', 'Gorluk', 'Vrag', 'Karg', 'Ugluk', 'Nazgra', 'Sludge'];
-const ORC_CLAN = ['Bloodmaw', 'Skullcrush', 'Ashfang', 'Ironhide', 'Gutspike', 'Rotgrip', 'Bonesnap', 'Grimtooth', 'Blackscar', 'Dredmaw'];
+const ORC_FIRST = ['Grok', 'Zug', 'Mog', 'Krull', 'Thok', 'Grash', 'Urzog', 'Skarr', 'Brak', 'Drozz', 'Gorluk', 'Vrag', 'Karg', 'Ugluk', 'Nazgra', 'Sludge',
+    'Morg', 'Ghazul', 'Rukk', 'Vozz', 'Snaga', 'Durg', 'Krthak', 'Bogrol', 'Zagg', 'Hrunk', 'Muzga', 'Drask', 'Grimm', 'Yark',
+    'Orzu', 'Wrenk', 'Bruga', 'Skorr', 'Threg', 'Gnash', 'Vurm', 'Krul', 'Ozgra', 'Dukk', 'Rathok', 'Grubb'];
+const ORC_CLAN = ['Bloodmaw', 'Skullcrush', 'Ashfang', 'Ironhide', 'Gutspike', 'Rotgrip', 'Bonesnap', 'Grimtooth', 'Blackscar', 'Dredmaw',
+    'Ragefang', 'Blackmood', 'Farwander', 'Lonefang', 'Skarhide', 'Gorewind', 'Deadeye', 'Cinderjaw', 'Wormgut', 'Stonefist'];
+
+// #names — unique first names WITHIN a town. `used` is a per-TOWN Set (seeded only by that town's own seed +
+// stable roster order — NEVER a global cross-town set), so a town's names reproduce regardless of what other
+// towns exist or the order they were generated in. assignFirst consumes NO rng: the caller passes the start
+// index from ONE existing rand() draw, and collisions advance deterministically through the pool (numeral
+// fallback only if the roster somehow exceeds the pool). So swapping in unique names changes ONLY the name
+// string, never the rest of a sheet. Surname derives from a HASH of the seed (no rng draw) for the same reason.
+function assignFirst(pool, startIdx, used) {
+    const n = pool.length, s = (((startIdx % n) + n) % n);
+    for (let k = 0; k < n; k++) {
+        const name = pool[(s + k) % n];
+        if (!used.has(name)) { used.add(name); return name; }
+    }
+    let k = 2, name;   // pool exhausted (roster > pool) — disambiguate deterministically, still unique
+    do { name = `${pool[s]} ${k++}`; } while (used.has(name));
+    used.add(name); return name;
+}
+function pickSurname(pool, seed) { return pool[hashString('sn:' + (seed >>> 0)) % pool.length]; }
 const ORC_CREEDS = [
     'What the soft ones grow, the strong take.',
     'A hoard remembers who raided it.',
@@ -454,10 +481,11 @@ const ORC_SHIRT = ['#7a3428', '#5a2a20', '#6a3a2a', '#4a2418'];
 // Re-skin a finished human sheet into an orc: war-role, guttural name, ashen palette, raider personality, and
 // an orc CREED prepended (the memory's values, reinterpreted as spoils). The memory-derived creeds stay — an
 // orc grown from a mapmaker's memory still thinks like a mapmaker, just aimed at plunder.
-function orcify(sheet, rand) {
+function orcify(sheet, rand, used = new Set()) {
     sheet.culture = 'orc';
     sheet.archetype = ORC_ROLES[sheet.archetypeKey] || 'Raider';
-    sheet.name = `${ORC_FIRST[Math.floor(rand() * ORC_FIRST.length)]} ${ORC_CLAN[Math.floor(rand() * ORC_CLAN.length)]}`;
+    // de-dup the orc FIRST name within the warband (the roster shows it); clan is the orc "surname"/lineage.
+    sheet.name = `${assignFirst(ORC_FIRST, Math.floor(rand() * ORC_FIRST.length), used)} ${ORC_CLAN[Math.floor(rand() * ORC_CLAN.length)]}`;
     sheet.colors.skin = ORC_SKIN[Math.floor(rand() * ORC_SKIN.length)];
     sheet.colors.hair = ORC_HAIR[Math.floor(rand() * ORC_HAIR.length)];
     sheet.colors.shirt = ORC_SHIRT[Math.floor(rand() * ORC_SHIRT.length)];
@@ -480,7 +508,7 @@ function orcify(sheet, rand) {
     return sheet;
 }
 
-export function growFarmer(memory, mutation = 0, seedSalt = '', culture = 'human') {
+export function growFarmer(memory, mutation = 0, seedSalt = '', culture = 'human', used = new Set()) {
     // seedSalt folds an extra identity term into the seed so a farmer grown from the same doc can still be a
     // DISTINCT person (used by growHeir to shape an heir by both the fresh doc AND their forebear). Empty salt
     // reproduces the original farmer exactly, so non-heir founding is byte-identical.
@@ -504,7 +532,12 @@ export function growFarmer(memory, mutation = 0, seedSalt = '', culture = 'human
 
     const sheet = {
         seed,
-        name: `${arch.names[Math.floor(rand() * arch.names.length)]} Ry`,
+        // one rand() draw (as before) picks the start; human names de-dup within the town + get a themed
+        // surname. Orc towns overwrite this in orcify() — keep a single rand() draw here for parity, no de-dup
+        // (the discarded human name must not pollute the town's used-name set).
+        name: culture === 'orc'
+            ? `${arch.names[Math.floor(rand() * arch.names.length)]} orc`
+            : `${assignFirst(arch.names, Math.floor(rand() * arch.names.length), used)} ${pickSurname(arch.surnames, seed)}`,
         archetype: arch.label,
         archetypeKey: key,
         stats,
@@ -538,7 +571,7 @@ export function growFarmer(memory, mutation = 0, seedSalt = '', culture = 'human
         culture: 'human',
     };
     // #3.1 an orc town reads the SAME memory through the raider's lens (deterministic; human sheets untouched).
-    if (culture === 'orc') orcify(sheet, mulberry32(hashString('orc:' + seed)));
+    if (culture === 'orc') orcify(sheet, mulberry32(hashString('orc:' + seed)), used);
     return sheet;
 }
 
@@ -548,8 +581,15 @@ export function growFarmer(memory, mutation = 0, seedSalt = '', culture = 'human
 // forebear is provenance (`f.lineage`), surfaced on the sheet + chronicle so the loop is visible. Determinism
 // is untouched: the whole heir derives from one seed, and the fresh-doc<->forebear pairing is chosen
 // deterministically at founding and baked into the save (the sim never re-reads SuperMemory).
-export function growHeir(freshDoc, lineage, mutation = 0, culture = 'human') {
-    const f = growFarmer(freshDoc, mutation, `heir:${lineage.id}`, culture);
+export function growHeir(freshDoc, lineage, mutation = 0, culture = 'human', used = new Set()) {
+    const f = growFarmer(freshDoc, mutation, `heir:${lineage.id}`, culture, used);
+    // #names — the heir keeps its own (de-duped) FIRST name but inherits the forebear's SURNAME, so the
+    // surname becomes the visible generational thread on the memory graph. (Human lineages only — an orc
+    // heir keeps its warband clan.) The first name was already de-duped in growFarmer above.
+    if (culture !== 'orc' && lineage.name) {
+        const foreSurname = String(lineage.name).split(' ').slice(1).join(' ');
+        if (foreSurname) f.name = `${f.name.split(' ')[0]} ${foreSurname}`;
+    }
     const inheritedCreed = {
         theme: 'inherited', tags: ['lineage', 'inheritance'], weight: 1,
         quote: lineage.creed,
