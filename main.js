@@ -377,7 +377,9 @@ const ROCK_NAMES = ['Rock4_1', 'Rock4_2', 'Rock4_3', 'Rock4_4', 'Rock4_5'];
 // Assets_no_shadow (NOT Assets/ or the texture-shadow dirs): the with-shadow variants bake a GREEN grass
 // tuft under each sprite, which reads wrong on the orc desert — the shadowless cut sits clean on the sand.
 const ORC_FOREST_BASE = './assets/craftpix-net-505052-free-forest-objects-top-down-pixel-art/PNG/Assets_no_shadow/';
-const ORC_TREE_NAMES = ['White_tree1', 'White_tree2', 'White-red_mushroom1', 'White-red_mushroom2', 'White-red_mushroom3', 'Chanterelles1', 'Chanterelles2', 'Chanterelles3'];
+const ORC_TREE_NAMES = ['White_tree1', 'White_tree2', 'White-red_mushroom1', 'White-red_mushroom2', 'White-red_mushroom3'];   // chanterelles dropped per request
+const ORC_BURNED_BASE = './assets/craftpix-net-385863-free-top-down-trees-pixel-art/PNG/Assets_separately/Trees/';
+const ORC_BURNED_NAMES = ['Burned_tree1', 'Burned_tree2', 'Burned_tree3'];   // charred dead trees, a third of the orc canopy
 const ORC_ROCKY_BASE = './assets/craftpix-net-639143-free-rocky-area-objects-pixel-art/PNG/Objects_separately/';
 const ORC_FLOWER_NAMES = ['Black_mushrooms1_ground_shadow', 'Black_mushrooms2_ground_shadow'];
 const ORC_WHEAT_NAMES = ['Orange_mushrooms1_ground_shadow', 'Orange_mushrooms2_ground_shadow'];
@@ -386,7 +388,7 @@ const ORC_ROCK_NAMES = ['Rock7_1', 'Rock7_2', 'Rock7_3', 'Rock7_4', 'Rock7_5']; 
 // The ONLY green in the wastes: cacti (bushes pack, plain Assets/ — no grass tuft), sprinkled among the foliage.
 const ORC_CACTUS_BASE = './assets/craftpix-net-141354-free-top-down-bushes-pixel-art/PNG/Assets/';
 const ORC_CACTUS_NAMES = ['Cactus1_1', 'Cactus1_2', 'Cactus1_3', 'Cactus2_1', 'Cactus2_2', 'Cactus2_3'];
-const orcTreeImg = {}, orcRockyImg = {}, orcRockImg = {}, orcCactusImg = {};
+const orcTreeImg = {}, orcRockyImg = {}, orcRockImg = {}, orcCactusImg = {}, orcBurnedImg = {};
 
 // The Dungeon Master's wilderness threats. Each sheet is a directional frame GRID; we slice one
 // side-profile frame per sprite (`row`), which in these packs faces LEFT — so it's mirrored to face
@@ -513,6 +515,10 @@ const orcSilo = new Image(); let orcSiloReady = false; orcSilo.onload = () => { 
 orcSilo.src = ROCKY_BASE + 'Cave_entrance1_ground_shadow.png';
 const orcSilo5 = new Image(); let orcSilo5Ready = false; orcSilo5.onload = () => { orcSilo5Ready = true; }; orcSilo5.onerror = () => {};
 orcSilo5.src = ORC_FOREST_BASE + 'Living gazebo1.png';
+// content trim boxes (the 128px frames have transparent padding) — drawing from these centres the sprite on
+// its tile and lets the LV label sit right above the VISIBLE art, not the empty frame top.
+const ORC_SILO_SRC = { x: 23, y: 16, w: 82, h: 96 };
+const ORC_SILO5_SRC = { x: 11, y: 10, w: 106, h: 107 };
 function buildingArt(level) {
     if (typeof world !== 'undefined' && world && world.culture === 'orc') {
         if (level >= 3) return { img: orcCaveL3, src: ORC_CAVE_SRC, ready: orcCaveL3Ready, scale: 1.6 };
@@ -606,6 +612,8 @@ const MERCHANT_SHEETS = ['Citizen1_Walk', 'Citizen2_Walk', 'Fighter2_Walk'].map(
 // facing (0=down,1=left,2=right,3=up) -> sheet row. The Citizen sheet rows run [down, up, left, right].
 const MERCHANT_ROW = [0, 2, 3, 1];
 const WELL_SRC = { x: 48, y: 498, w: 38, h: 38 };    // grass-base stone well in exterior.png
+const ORC_WELL_SRC = { x: 1, y: 497, w: 34, h: 41 };   // #94 the grass-FREE stone well (brown dirt base) for orc towns
+function wellArt() { return (typeof world !== 'undefined' && world && world.culture === 'orc') ? ORC_WELL_SRC : WELL_SRC; }
 const SCARECROW_SRC = { x: 4, y: 547, w: 52, h: 53 };   // scarecrow in exterior.png
 const SMOKE_ENABLED = false;   // chimney smoke off until per-house (sheet-row) alignment is nailed
 const smokeSheet = new Image();
@@ -665,6 +673,7 @@ function loadAssetArt() {
     loadImageSet(ORC_ROCKY_BASE, { ORCROCKY: ORC_FLOWER_NAMES.concat(ORC_WHEAT_NAMES, ORC_BONE_NAMES) }, orcRockyImg, () => {});
     loadImageSet(ROCK_ART_BASE, { ORCROCKS: ORC_ROCK_NAMES }, orcRockImg, () => {});
     loadImageSet(ORC_CACTUS_BASE, { ORCCACTI: ORC_CACTUS_NAMES }, orcCactusImg, () => {});
+    loadImageSet(ORC_BURNED_BASE, { ORCBURNED: ORC_BURNED_NAMES }, orcBurnedImg, () => {});
     loadAnimalArt();
     homeSheet.onload = () => { homeReady = true; };
     homeSheet.onerror = () => {};
@@ -957,7 +966,10 @@ function wildSpec(i, j, t, season) {
     // fall through to a GREEN human sprite — the orc land never flashes green.
     if (world.culture === 'orc') {
         if (t === T.TREE) {
-            const img = pickTieredImage(orcTreeImg, ORC_TREE_NAMES, i, j, 63, obstacleTier(i, j));
+            // ~1/3 charred burned trees, the rest dead white trees + pink mushroom-trees
+            const img = (hash2(i, j, 63) % 3 === 2)
+                ? pickLoadedImage(orcBurnedImg, ORC_BURNED_NAMES, i, j, 65)
+                : pickTieredImage(orcTreeImg, ORC_TREE_NAMES, i, j, 63, obstacleTier(i, j));
             if (!img) return null;
             const { w, h } = wildDims(img);
             return { img, w, h, anchor: 0.82, depth: 0.4, seed: hash2(i, j, 73), tree: true, chopKey: i + ',' + j };
@@ -1658,12 +1670,12 @@ function collectDrawables() {
     {
         const w = world.well;
         const sx = cam.x + isoX(w.i, w.j), sy = cam.y + isoY(w.i, w.j);
-        const wdw = Math.round(WELL_SRC.w * ASSET_SCALE), wdh = Math.round(WELL_SRC.h * ASSET_SCALE);
+        const wdw = Math.round(wellArt().w * ASSET_SCALE), wdh = Math.round(wellArt().h * ASSET_SCALE);
         list.push({
             y: sy + TILE_H, draw: () => {
                 if (homeReady && imageLoaded(homeSheet)) {
                     ctx.imageSmoothingEnabled = false;
-                    ctx.drawImage(homeSheet, WELL_SRC.x, WELL_SRC.y, WELL_SRC.w, WELL_SRC.h,
+                    ctx.drawImage(homeSheet, wellArt().x, wellArt().y, wellArt().w, wellArt().h,
                         Math.floor(sx + TILE_W / 2 - wdw / 2 - 10), Math.floor(sy + TILE_H - wdh + 2), wdw, wdh);
                 } else ctx.drawImage(wellSprite, Math.floor(sx - 10 + TILE_W / 2 - 10), Math.floor(sy - 14));
             }
@@ -1739,11 +1751,11 @@ function collectDrawables() {
         const sx = cam.x + isoX(st.i, st.j), sy = cam.y + isoY(st.i, st.j);
         if (st.type === 'well2' && homeReady && imageLoaded(homeSheet)) {
             // extra wells (town second well, neighborhood shared wells) use the real well sprite
-            const wdw = Math.round(WELL_SRC.w * ASSET_SCALE), wdh = Math.round(WELL_SRC.h * ASSET_SCALE);
+            const wdw = Math.round(wellArt().w * ASSET_SCALE), wdh = Math.round(wellArt().h * ASSET_SCALE);
             list.push({
                 y: sy + TILE_H, draw: () => {
                     ctx.imageSmoothingEnabled = false;
-                    ctx.drawImage(homeSheet, WELL_SRC.x, WELL_SRC.y, WELL_SRC.w, WELL_SRC.h,
+                    ctx.drawImage(homeSheet, wellArt().x, wellArt().y, wellArt().w, wellArt().h,
                         Math.floor(sx + TILE_W / 2 - wdw / 2 - 10), Math.floor(sy + TILE_H - wdh + 2), wdw, wdh);
                 }
             });
@@ -2001,17 +2013,18 @@ function drawSilo(sx, sy) {
     if (world.culture === 'orc') {   // #94 the WAR-HOARD: ent-idol totem, or the living-tree gazebo at LV5+
         const big = world.townLevel >= 5;
         const img = big ? orcSilo5 : orcSilo, ready = big ? orcSilo5Ready : orcSiloReady;
+        const src = big ? ORC_SILO5_SRC : ORC_SILO_SRC;
         let topY = footY - 20;
         if (ready && img.naturalWidth) {
             ctx.imageSmoothingEnabled = false;
             const s = ASSET_SCALE * (big ? 1.05 : 0.95);
-            const dw = Math.round(img.naturalWidth * s), dh = Math.round(img.naturalHeight * s);
-            const dx = Math.floor(sx - dw / 2), dy = footY - dh + 8;   // base seated on the tile
+            const dw = Math.round(src.w * s), dh = Math.round(src.h * s);
+            const dx = Math.floor(sx - dw / 2), dy = footY - dh + 8;   // content centred on the tile, base seated
             ctx.fillStyle = 'rgba(10,14,10,0.28)'; ctx.fillRect(dx + Math.round(dw * 0.30), footY - 2, Math.round(dw * 0.40), 3);
-            ctx.drawImage(img, dx, dy);
+            ctx.drawImage(img, src.x, src.y, src.w, src.h, dx, dy, dw, dh);
             topY = dy;
         } else { ctx.fillStyle = '#7a5a3a'; ctx.fillRect(Math.floor(sx - 8), footY - 20, 16, 20); }
-        const tag = `LV ${world.townLevel}`, tw = textWidth(tag), ty = topY - 12;
+        const tag = `LV ${world.townLevel}`, tw = textWidth(tag), ty = topY - 4;
         ctx.fillStyle = 'rgba(20,16,8,0.78)'; ctx.fillRect(Math.floor(sx - tw / 2) - 2, ty, tw + 4, 9);
         drawText(ctx, tag, Math.floor(sx - tw / 2), ty + 1, '#f0d060');
         return;
@@ -3123,7 +3136,7 @@ function buildingUnder(mx, my) {
             const dw = STATUE_DRAW_W[s.type] || 46, dh = Math.round(dw * img.naturalHeight / img.naturalWidth);
             push(Math.floor(bx0 - dw / 2), Math.floor(by0 - dh + 4), dw, dh, structLines(s));
         } else if (s.type === 'well2') {
-            const wdw = Math.round(WELL_SRC.w * ASSET_SCALE), wdh = Math.round(WELL_SRC.h * ASSET_SCALE);
+            const wdw = Math.round(wellArt().w * ASSET_SCALE), wdh = Math.round(wellArt().h * ASSET_SCALE);
             push(Math.floor(sx + TILE_W / 2 - wdw / 2 - 10), Math.floor(sy + TILE_H - wdh + 2), wdw, wdh, structLines(s));
         } else {
             const spr = structSprites[s.type], sp = Array.isArray(spr) ? spr[0] : spr;
@@ -3131,7 +3144,7 @@ function buildingUnder(mx, my) {
         }
     }
     { const wl = world.well, sx = cam.x + isoX(wl.i, wl.j), sy = cam.y + isoY(wl.i, wl.j);
-      const wdw = Math.round(WELL_SRC.w * ASSET_SCALE), wdh = Math.round(WELL_SRC.h * ASSET_SCALE);
+      const wdw = Math.round(wellArt().w * ASSET_SCALE), wdh = Math.round(wellArt().h * ASSET_SCALE);
       push(Math.floor(sx + TILE_W / 2 - wdw / 2 - 10), Math.floor(sy + TILE_H - wdh + 2), wdw, wdh,
         [{ t: cultureWord(world.culture, 'struct.well'), c: TT_G }, { t: 'Water source', c: TT_L }, { t: 'Water for the whole town', c: TT_B }]); }
     { const s = world.silo, sx = cam.x + isoX(s.i, s.j), sy = cam.y + isoY(s.i, s.j);

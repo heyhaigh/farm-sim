@@ -647,7 +647,9 @@ export class World {
         this.townXP = 0;
         this.coffers = { wood: 0, crops: 0, ore: 0 };     // lifetime donations to the silo (accounting + flavor)
         this.townLevelFlash = 0;                          // brief UI pulse on a town level-up
-        this.silo = { i: CENTER - 4, j: CENTER - 1 };     // the donation heart of the plaza (present from day one)
+        // the donation heart of the plaza (present from day one). Orc towns push it further from the well —
+        // the big ent-idol/gazebo sprite would otherwise sprawl over the town well beside it.
+        this.silo = this.culture === 'orc' ? { i: CENTER - 6, j: CENTER - 3 } : { i: CENTER - 4, j: CENTER - 1 };
         this.set(this.silo.i, this.silo.j, T.STRUCT);
         // #94 CIVIC ROLES (P1): a Town Manager, appointed by fitness, posts one town DIRECTIVE at a
         // time; farmers weigh it through the autonomy kernel (below survival/dream/urgent work, capped
