@@ -2714,7 +2714,8 @@ function makeSvgIcon(svg) {
 }
 const COG_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m21,10v-1h-1v-2h1v-2h-1v-1h-1v-1h-2v1h-2v-1h-1V1h-4v2h-1v1h-2v-1h-2v1h-1v1h-1v2h1v2h-1v1H1v4h2v1h1v2h-1v2h1v1h1v1h2v-1h2v1h1v2h4v-2h1v-1h2v1h2v-1h1v-1h1v-2h-1v-2h1v-1h2v-4h-2Zm-11,0v-1h4v1h1v4h-1v1h-4v-1h-1v-4h1Z"/></svg>';
 const GLOBE_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="9" y="1" width="1" height="1"/><polygon points="9 2 9 3 8 3 8 5 7 5 7 8 2 8 2 7 3 7 3 5 4 5 4 4 5 4 5 3 7 3 7 2 9 2"/><polygon points="13 2 14 2 14 4 15 4 15 6 16 6 16 8 8 8 8 6 9 6 9 4 10 4 10 2 11 2 11 1 13 1 13 2"/><rect x="14" y="1" width="1" height="1"/><polygon points="22 7 22 8 17 8 17 5 16 5 16 3 15 3 15 2 17 2 17 3 19 3 19 4 20 4 20 5 21 5 21 7 22 7"/><polygon points="17 10 17 14 16 14 16 15 8 15 8 14 7 14 7 10 8 10 8 9 16 9 16 10 17 10"/><polygon points="1 9 7 9 7 10 6 10 6 14 7 14 7 15 1 15 1 9"/><polygon points="23 9 23 15 17 15 17 14 18 14 18 10 17 10 17 9 23 9"/><polygon points="22 16 22 17 21 17 21 19 20 19 20 20 19 20 19 21 17 21 17 22 15 22 15 21 16 21 16 19 17 19 17 16 22 16"/><rect x="9" y="22" width="1" height="1"/><polygon points="9 21 9 22 7 22 7 21 5 21 5 20 4 20 4 19 3 19 3 17 2 17 2 16 7 16 7 19 8 19 8 21 9 21"/><rect x="14" y="22" width="1" height="1"/><polygon points="14 22 13 22 13 23 11 23 11 22 10 22 10 20 9 20 9 18 8 18 8 16 16 16 16 18 15 18 15 20 14 20 14 22"/></svg>';
-const cogIconFn = makeSvgIcon(COG_SVG), globeIconFn = makeSvgIcon(GLOBE_SVG);
+const BANK_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><polygon points="23 20 23 22 22 22 22 23 2 23 2 22 1 22 1 20 3 20 3 19 4 19 4 10 6 10 6 19 8 19 8 10 10 10 10 19 14 19 14 10 16 10 16 19 18 19 18 10 20 10 20 19 21 19 21 20 23 20"/><path d="m20,5v-1h-2v-1h-2v-1h-2v-1h-4v1h-2v1h-2v1h-2v1H1v2h1v1h1v1h18v-1h1v-1h1v-2h-3Zm-9,2v-1h-1v-2h1v-1h2v1h1v2h-1v1h-2Z"/></svg>';
+const cogIconFn = makeSvgIcon(COG_SVG), globeIconFn = makeSvgIcon(GLOBE_SVG), bankIconFn = makeSvgIcon(BANK_SVG);
 function drawGearIcon(x, y, active) {
     const col = active ? '#7dd069' : '#c8ccd8';
     const icon = cogIconFn(9, col);   // 9px: sits with padding in the 15x12 button (was 11px, too large)
@@ -2733,6 +2734,11 @@ function drawGlobeIcon(x, y, active) {
     const icon = globeIconFn(10, active ? '#160f22' : '#c8ccd8');
     if (icon) { ctx.imageSmoothingEnabled = false; ctx.drawImage(icon, x, y); return; }
     ctx.fillStyle = active ? '#160f22' : '#c8ccd8'; ctx.fillRect(x + 2, y + 2, 6, 6);   // tiny fallback blob
+}
+function drawBankIcon(x, y, active) {   // the CHRONICLE / THE SAGA button — the town's ledger of record
+    const icon = bankIconFn(10, active ? '#1a1024' : '#c8ccd8');
+    if (icon) { ctx.imageSmoothingEnabled = false; ctx.drawImage(icon, x, y); return; }
+    ctx.fillStyle = active ? '#1a1024' : '#c8ccd8'; ctx.fillRect(x + 2, y + 3, 6, 5);
 }
 
 function drawUI() {
@@ -2823,7 +2829,7 @@ function drawUI() {
 
     barBtn(ROSTER_BTN, cultureWord(world.culture, 'panel.roster'), rosterOpen, '#7dd069', '#10240c');
     barIconBtn(WORLD_BTN, 15, (x, y, act) => drawGlobeIcon(x + 3, y + 1, act), worldMapOpen, '#c8b0e0');   // globe icon (was 'WORLD' text)
-    barBtn(CHRON_BTN, cultureWord(world.culture, 'panel.chronicle'), chronOpen, '#c8a0e0', '#1a1024');
+    barIconBtn(CHRON_BTN, 15, (x, y, act) => drawBankIcon(x + 3, y + 1, act), chronOpen, '#c8a0e0');   // bank icon (was CHRONICLE/THE SAGA text)
     if ((world._chronTotal || 0) > chronReadTotal && !chronOpen) drawCoin(CHRON_BTN.x + CHRON_BTN.w - 3, CHRON_BTN.y - 2, 6);   // UNREAD only
 
     // (NEW TOWN moved into the settings menu.) A quiet "SAVED" tick under the cog whenever the town
