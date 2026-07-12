@@ -370,6 +370,19 @@ const ROCK_ART_BASE = './assets/craftpix-net-974061-free-rocks-and-stones-top-do
 // Only the Rock4 variants, plain-shadow versions (no grass_shadow / no_shadow).
 const ROCK_NAMES = ['Rock4_1', 'Rock4_2', 'Rock4_3', 'Rock4_4', 'Rock4_5'];
 
+// #94 ORC BIOME — a rocky, fungal wasteland. These sets are used ONLY when world.culture === 'orc'
+// (see the orc branch in wildSpec). Trees become dead trees / mushroom-trees / chanterelles; the green
+// foliage becomes ground mushrooms; rocks become glowing magma boulders; and rare dragon skeletons litter
+// the land as impassable decor. Loaded lazily like the human sets; pure display, no sim/determinism effect.
+const ORC_FOREST_BASE = './assets/craftpix-net-505052-free-forest-objects-top-down-pixel-art/PNG/Assets/';
+const ORC_TREE_NAMES = ['White_tree1', 'White_tree2', 'White-red_mushroom1', 'White-red_mushroom2', 'White-red_mushroom3', 'Chanterelles1', 'Chanterelles2', 'Chanterelles3'];
+const ORC_ROCKY_BASE = './assets/craftpix-net-639143-free-rocky-area-objects-pixel-art/PNG/Objects_separately/';
+const ORC_FLOWER_NAMES = ['Black_mushrooms1_ground_shadow', 'Black_mushrooms2_ground_shadow'];
+const ORC_WHEAT_NAMES = ['Orange_mushrooms1_ground_shadow', 'Orange_mushrooms2_ground_shadow'];
+const ORC_BONE_NAMES = ['Dragon_bones_full_ground_shadow', 'Dragon_bones_body_ground_shadow', 'Dragon_bones_tail_ground_shadow', 'Dragon_bones_wing1_ground_shadow', 'Dragon_bones_wing2_ground_shadow'];
+const ORC_ROCK_NAMES = ['Rock8_1', 'Rock8_2', 'Rock8_3', 'Rock8_4', 'Rock8_5', 'Rock7_1', 'Rock7_2', 'Rock7_3', 'Rock7_4', 'Rock7_5'];
+const orcTreeImg = {}, orcRockyImg = {}, orcRockImg = {};
+
 // The Dungeon Master's wilderness threats. Each sheet is a directional frame GRID; we slice one
 // side-profile frame per sprite (`row`), which in these packs faces LEFT — so it's mirrored to face
 // RIGHT when moving right. The assassin uses the lvl-3 swordsman (the lvl-1 looks like our farmers).
@@ -624,6 +637,10 @@ function loadAssetArt() {
     loadImageSet(BUSH_ART_BASE, BUSH_SETS, bushImg, () => { bushArtReady = true; });
     loadImageSet(ROCK_ART_BASE, { ROCKS: ROCK_NAMES }, rockImg, () => { rockArtReady = true; });
     loadImageSet(STUMP_ART_BASE, { STUMPS: STUMP_NAMES }, stumpImg, () => { stumpArtReady = true; });
+    // #94 orc biome sets (dead/fungal trees, ground mushrooms + bones, magma rocks)
+    loadImageSet(ORC_FOREST_BASE, { ORCTREES: ORC_TREE_NAMES }, orcTreeImg, () => {});
+    loadImageSet(ORC_ROCKY_BASE, { ORCROCKY: ORC_FLOWER_NAMES.concat(ORC_WHEAT_NAMES, ORC_BONE_NAMES) }, orcRockyImg, () => {});
+    loadImageSet(ROCK_ART_BASE, { ORCROCKS: ORC_ROCK_NAMES }, orcRockImg, () => {});
     loadAnimalArt();
     homeSheet.onload = () => { homeReady = true; };
     homeSheet.onerror = () => {};
@@ -911,6 +928,36 @@ function pickTieredImage(store, names, i, j, seed, tier) {
 // Wild billboards use the shared ASSET_SCALE (defined up top) like everything else.
 function wildDims(img) { return { w: Math.round(img.naturalWidth * ASSET_SCALE), h: Math.round(img.naturalHeight * ASSET_SCALE) }; }
 function wildSpec(i, j, t, season) {
+    // #94 ORC BIOME: swap the whole living forest for a dead, fungal, rocky wasteland. Returns early with
+    // orc art when it's loaded; if an orc asset hasn't loaded yet we return null (a bare tile) rather than
+    // fall through to a GREEN human sprite — the orc land never flashes green.
+    if (world.culture === 'orc') {
+        if (t === T.TREE) {
+            const img = pickTieredImage(orcTreeImg, ORC_TREE_NAMES, i, j, 63, obstacleTier(i, j));
+            if (!img) return null;
+            const { w, h } = wildDims(img);
+            return { img, w, h, anchor: 0.82, depth: 0.4, seed: hash2(i, j, 73), tree: true, chopKey: i + ',' + j };
+        }
+        if (t === T.FLOWER) {
+            const img = pickLoadedImage(orcRockyImg, ORC_FLOWER_NAMES, i, j, 64);
+            if (!img) return null;
+            const { w, h } = wildDims(img);
+            return { img, w, h, anchor: 0.72, depth: -1 };
+        }
+        if (t === T.WHEAT) {
+            const img = pickLoadedImage(orcRockyImg, ORC_WHEAT_NAMES, i, j, 66);
+            if (!img) return null;
+            const { w, h } = wildDims(img);
+            return { img, w, h, anchor: 0.72, depth: -1 };
+        }
+        if (t === T.ROCK) {
+            const img = pickTieredImage(orcRockImg, ORC_ROCK_NAMES, i, j, 68, obstacleTier(i, j));
+            if (!img) return null;
+            const { w, h } = wildDims(img);
+            return { img, w, h, anchor: 0.86, depth: -0.25 };
+        }
+        // T.STUMP falls through to the shared stump art below (a chopped remnant reads fine either way)
+    }
     if (t === T.TREE) {
         // LIVING FOREST (spring/summer/fall): the animated tree sheet — frozen on frame 0, cycling only
         // while chopped. Winter falls through to the static snow trees below. Type: apple in fruit season,
