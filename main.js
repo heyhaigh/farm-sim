@@ -804,9 +804,10 @@ function orcSpriteReady() { return orcFarmerImg && orcFarmerImg.complete && orcF
 function orcCharSets(f) {
     const img = orcFarmerImg, FW = 64;
     const cols = Math.max(1, Math.round(img.naturalWidth / FW));
-    const rows = Math.max(1, Math.round(img.naturalHeight / FW));
-    const row = Math.min(2, rows - 1);
-    const sx0 = 14, sy0 = 6, sw = 36, sh = 54;          // crop the orc out of the 64px cell's padding
+    // ROW 0 = the FRONT-FACING idle (faces the camera, like the DM's foe orcs) — so it never mis-faces when
+    // walking, and it has no downward weapon (the side rows hold a sword that read as a "weird shadow" below).
+    const row = 0;
+    const sx0 = 12, sy0 = 8, sw = 40, sh = 44;          // crop just the character body (no bottom gap / weapon)
     const targetH = 28, scale = targetH / sh;
     const dw = Math.max(1, Math.round(sw * scale)), dh = Math.max(1, Math.round(sh * scale));
     const frameCol = (col) => {
