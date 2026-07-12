@@ -21,11 +21,11 @@ const SEEDS = [20260706, 42, 7, 3];
 // Baseline digests at HEAD (LLM + SuperMemory off, 30-day run). Update deliberately when a sim change
 // legitimately re-baselines; a DRIFT here on an unrelated change is a determinism regression to investigate.
 const BASELINE = {
-    // re-baselined 2026-07-11 when the snapshot gained creeds+beliefs (reconciliation Slice 0); same-twice held.
-    20260706: 'ba358e06',
-    42: '5e868c14',
-    7: '55efd73b',
-    3: 'da9f09e4',
+    // re-baselined 2026-07-12 when homeless-exposure was softened (fixed the day-3 mass sick-out); same-twice held.
+    20260706: '094d4cab',
+    42: '82841d2d',
+    7: '17dde35f',
+    3: '26045882',
 };
 
 function boot(seed, culture) {

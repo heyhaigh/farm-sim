@@ -309,6 +309,10 @@ export const SEASON_LENGTH = 15;
 // -> tally on the last winter day, right before the year turns). CAND_SLATE = how many stand per office.
 export const ELECTION_DAYS = 3;
 const CAND_SLATE = 3;
+// #founding — a new town holds NO offices on day 1. It's watched for its first FOUNDING_VOTE_DAY days, then
+// the whole town GATHERS to elect its first Manager + Watch (memory-driven ballot) with a celebratory beat —
+// instead of silently auto-seating the fittest on day one. (The yearly winter election handles turnover after.)
+export const FOUNDING_VOTE_DAY = 10;
 // Recall is the EMERGENCY removal between elections — deliberately rare so tenures are meaningful and the
 // yearly ballot does the ordinary turnover. A holder must sit below RECALL_FLOOR for RECALL_DWELL days
 // running (a sustained rejection, not statistical noise near the line), and a town can recall at most
@@ -4932,8 +4936,11 @@ export class World {
             // strong pressure to raise a tipi fast, without an instant town-wide sick-out.
             const homeless = f.plot.built.level === 0;
             f.nightsExposed = homeless ? f.nightsExposed + 1 : 0;
-            const exposure = homeless ? Math.min(9, (f.nightsExposed - 1) * 3) : 0;   // night 1 free, then +3/+6/+9
-            const risky = (homeless && f.nightsExposed >= 2) || f.energy < 0.35 || f.sleepDebt >= 3 || f.strain >= 4;
+            // Grace for a fresh settler to raise a tipi: the first THREE roofless nights are free, then exposure
+            // ramps gently (+2/+4/+6). The old +3/+6/+9 from night 2 sicked out a whole homeless founding cast by
+            // night 3 — before any tipi could go up (a mass day-3 sick-out).
+            const exposure = homeless ? Math.min(6, Math.max(0, f.nightsExposed - 3) * 2) : 0;
+            const risky = (homeless && f.nightsExposed >= 4) || f.energy < 0.3 || f.sleepDebt >= 4 || f.strain >= 4;
             if (risky) {
                 const dc = 10 + Math.floor(f.sleepDebt) + (f.energy < 0.2 ? 3 : 0) + Math.floor(f.strain / 3) + exposure;
                 const save = d20(this.rand, mod(f.sheet.stats.con));
