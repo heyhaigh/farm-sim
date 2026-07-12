@@ -26,15 +26,27 @@ try {
     }
 } catch { /* no .env — fine, handlers fall back */ }
 
-const API = {
-    '/api/knowledge-graph': require('./api/knowledge-graph.js'),
-    '/api/memory-writeback': require('./api/memory-writeback.js'),
-    '/api/memory-graph': require('./api/memory-graph.js'),
-    '/api/ry-farms-chat': require('./api/ry-farms-chat.js'),
-    '/api/ry-farms-dm': require('./api/ry-farms-dm.js'),
-    '/api/ry-farms-conscience': require('./api/ry-farms-conscience.js'),
-    '/api/ry-farms-invent': require('./api/ry-farms-invent.js'),
+// API routes -> module path. Handlers are (re)loaded PER REQUEST with the /api require-cache cleared first,
+// so editing a handler lands on the next request with no server restart — matching the static files'
+// "edits always land" contract. (The old map required each handler ONCE at boot, so an edited handler stayed
+// frozen at its start-of-process version — e.g. memory-graph kept returning the old shape after a rewrite.)
+const API_ROUTES = {
+    '/api/knowledge-graph': './api/knowledge-graph.js',
+    '/api/memory-writeback': './api/memory-writeback.js',
+    '/api/memory-graph': './api/memory-graph.js',
+    '/api/ry-farms-chat': './api/ry-farms-chat.js',
+    '/api/ry-farms-dm': './api/ry-farms-dm.js',
+    '/api/ry-farms-conscience': './api/ry-farms-conscience.js',
+    '/api/ry-farms-invent': './api/ry-farms-invent.js',
 };
+const API_DIR = path.join(ROOT, 'api');
+function loadHandler(rel) {
+    // drop every cached module living under /api so a handler AND its local deps (e.g. _llm.js) re-read disk
+    for (const key of Object.keys(require.cache)) {
+        if (key.startsWith(API_DIR + path.sep)) delete require.cache[key];
+    }
+    return require(rel);
+}
 
 const MIME = {
     '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript',
@@ -47,9 +59,9 @@ const MIME = {
 http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://localhost:${PORT}`);
 
-    const api = API[url.pathname];
-    if (api) {
-        try { await api(req, res); }
+    const apiRel = API_ROUTES[url.pathname];
+    if (apiRel) {
+        try { const api = loadHandler(apiRel); await api(req, res); }
         catch (err) {
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ fallback: true, error: err?.message || 'handler crashed' }));
