@@ -1581,20 +1581,21 @@ export class World {
                 // doctrine save has no e.commit -> falls back to the original flat 0.2, byte-identical.
                 const lost = Math.round((this.harvestTotal || 0) * (e.commit ?? 0.2));
                 this.harvestTotal = Math.max(0, (this.harvestTotal || 0) - lost);
-                this.addChronicle('raid', `A warband raided ${this.name} - ${lost} of the stores taken.`, null, null, '#e05840',
+                this.addChronicle('raid', `An orc warband raided ${this.name} in the night and carried off ${lost} of its stored harvest.`, null, null, '#e05840',
                     { tier: 'callout', tone: 'somber', why: `raided by ${e.by || 'a warband'}` });
                 n++;
             } else if (e.kind === 'reconciled') {
                 // Slice C: the envoy EARNS a cross-faction belief that begins to overwrite their raid-creed.
                 if (envoy) envoy.earnCrossFaction(e.withName, e.pairKey, +1);
-                this.addChronicle('lineage', `${this.name} kept faith with ${(e.withName || 'the frontier').split(' ')[0]} - the wall cracked a little.`, envoy, null, '#c8b0e0',
-                    { tier: 'callout', tone: 'triumph', why: 'a parley honored across the old line' });
+                const other = (e.withName || 'their neighbors').split(' ')[0];
+                this.addChronicle('lineage', `${this.name} and ${other} met at the frontier and chose to talk instead of fight — they made peace, a first step past the old hatred.`, envoy, null, '#c8b0e0',
+                    { tier: 'callout', tone: 'triumph', why: 'a peace kept across the human-orc divide' });
                 n++;
             } else if (e.kind === 'betrayed') {
                 // the old fear is proven — a betrayal HARDENS the creed (re-inflates its authority)
                 if (envoy) envoy.earnCrossFaction(e.by, e.pairKey, -1);
-                this.addChronicle('raid', `A parley was broken against ${this.name}. The old fear is proven again.`, envoy, null, '#e05840',
-                    { tier: 'callout', tone: 'somber', why: 'a broken parley' });
+                this.addChronicle('raid', `${this.name} tried to make peace at the frontier, but the truce was a trap and ended in an ambush — its distrust of outsiders hardens.`, envoy, null, '#e05840',
+                    { tier: 'callout', tone: 'somber', why: 'a broken truce' });
                 n++;
             } else if (e.kind === 'traveler') {
                 const pl = e.payload || {};

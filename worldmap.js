@@ -195,11 +195,11 @@ export function detectEncounters(index) {
 export function encounterLine(ev) {
     const a = String(ev.aName || `Town ${ev.a}`).split(' ')[0];   // orc side for cross-faction events
     const b = String(ev.bName || `Town ${ev.b}`).split(' ')[0];   // human side
-    if (ev.kind === 'raid') return `The ${a} warband fell upon ${b}. ${b} will remember.`;
-    if (ev.kind === 'reconciled') return `${b} and the ${a} warband met at the frontier - and kept faith.`;
-    if (ev.kind === 'betrayed') return `A parley between ${b} and the ${a} warband was broken. Blood, and a longer memory.`;
+    if (ev.kind === 'raid') return `The ${a} orc warband raided ${b} and took its harvest. ${b} won't forget.`;
+    if (ev.kind === 'reconciled') return `${b} and the ${a} orc warband met at the frontier and made peace instead of war.`;
+    if (ev.kind === 'betrayed') return `${b} and the ${a} orc warband tried to make peace, but the truce was broken in an ambush.`;
     // same-culture meeting
-    let s = `${a} and ${b} have grown into each other's reach.`;
+    let s = `${a} and ${b} have grown close enough to reach one another.`;
     if (ev.aCarried) s += ` ${a} carries word that "${ev.aCarried}".`;
     return s;
 }
