@@ -804,9 +804,9 @@ function orcSpriteReady() { return orcFarmerImg && orcFarmerImg.complete && orcF
 function orcCharSets(f) {
     const img = orcFarmerImg, FW = 64;
     const cols = Math.max(1, Math.round(img.naturalWidth / FW));
-    // Directional: ROW 0 = front (used for down AND up — the sheet has no back view), ROW 2 = side profile
-    // (mirrored by facing in drawFarmer so they face their movement). Crop the body with the feet near the
-    // bottom edge so there's no empty gap under them (the orc foot-shadow is disabled in drawFarmer anyway).
+    // Directional (256x256 sheet = 4 rows): ROW 0 = front view (down), ROW 2 = side profile facing LEFT
+    // (mirrored by facing in drawFarmer), ROW 3 = BACK view (up — orcs face away as they walk up). Crop the
+    // body with the feet near the bottom edge so there's no empty gap (the orc foot-shadow is disabled anyway).
     const sx0 = 12, sy0 = 8, sw = 40, sh = 40;
     const targetH = 26, scale = targetH / sh;
     const dw = Math.max(1, Math.round(sw * scale)), dh = Math.max(1, Math.round(sh * scale));
@@ -817,7 +817,7 @@ function orcCharSets(f) {
         return out;
     };
     const setRow = (row) => ({ idle: frameCol(0, row), walk1: frameCol(1, row), walk2: frameCol(2, row), work: frameCol(1, row), sleep: frameCol(0, row) });
-    return { down: setRow(0), side: setRow(2), up: setRow(0) };
+    return { down: setRow(0), side: setRow(2), up: setRow(3) };
 }
 
 function farmerSprites(f) {
