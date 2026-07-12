@@ -968,6 +968,12 @@ function wildSpec(i, j, t, season) {
             const { w, h } = wildDims(img);
             return { img, w, h, anchor: 0.86, depth: -0.25 };
         }
+        if (t === T.BONES) {   // rare dragon skeleton — scaled to ~half so the 256px full sheet reads as a landmark, not a wall
+            const img = pickLoadedImage(orcRockyImg, ORC_BONE_NAMES, i, j, 61);
+            if (!img) return null;
+            const { w, h } = wildDims(img);
+            return { img, w: Math.round(w * 0.5), h: Math.round(h * 0.5), anchor: 0.62, depth: -0.4 };
+        }
         // T.STUMP falls through to the shared stump art below (a chopped remnant reads fine either way)
     }
     if (t === T.TREE) {
@@ -1076,7 +1082,7 @@ function drawLeafDrift(spec, x, baseY) {
 }
 function addWildDrawable(list, i, j) {
     const t = world.get(i, j);
-    if (t !== T.TREE && t !== T.STUMP && t !== T.WHEAT && t !== T.FLOWER && t !== T.ROCK) return;
+    if (t !== T.TREE && t !== T.STUMP && t !== T.WHEAT && t !== T.FLOWER && t !== T.ROCK && t !== T.BONES) return;
     const spec = wildSpec(i, j, t, world.seasonDef);
     if (!spec) return;
     const jitter = wildJitter(i, j, t);

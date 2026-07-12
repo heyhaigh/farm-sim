@@ -23,7 +23,7 @@ const FOREST_BORDER = 5;   // keep trees this many tiles off the map edge
 const ISO_HALF_W = 10;     // mirrors TILE_W / 2 without importing renderer code
 const ISO_HALF_H = 5;      // mirrors TILE_H / 2 without importing renderer code
 
-export const T = { GRASS: 0, PATH: 1, TILLED: 2, HOUSE: 3, WELL: 4, SIGN: 5, STRUCT: 6, WATER: 7, COOP: 8, BARN: 9, TREE: 10, STUMP: 11, WHEAT: 12, FLOWER: 13, ROCK: 14, MILL: 15, HATCH: 16 };
+export const T = { GRASS: 0, PATH: 1, TILLED: 2, HOUSE: 3, WELL: 4, SIGN: 5, STRUCT: 6, WATER: 7, COOP: 8, BARN: 9, TREE: 10, STUMP: 11, WHEAT: 12, FLOWER: 13, ROCK: 14, MILL: 15, HATCH: 16, BONES: 17 };
 export const FORAGE_TILES = [T.WHEAT, T.FLOWER];
 export const FORAGE_NAME = { [T.WHEAT]: 'wild grass', [T.FLOWER]: 'wild bush' };
 
@@ -1118,6 +1118,24 @@ export class World {
         }
         this.#thinForest();
         this.#seedRocks();
+        if (this.culture === 'orc') this.#scatterBones();   // #94 rare dragon skeletons (orc wastes only)
+    }
+
+    // #94 — rare dragon-bone skeletons littering the orc wastes: spooky, IMPASSABLE (see blocked()), and in
+    // NO harvest/chop/mine target list, so they're pure decor a farmer walks around and can never remove.
+    // Positional tileRand (never the sequential rng stream) + culture-gated, so human towns are byte-identical.
+    #scatterBones() {
+        let placed = 0; const MAX = 8;
+        for (let j = FOREST_BORDER; j < GRID - FOREST_BORDER && placed < MAX; j++) {
+            for (let i = FOREST_BORDER; i < GRID - FOREST_BORDER && placed < MAX; i++) {
+                if (this.get(i, j) !== T.GRASS) continue;
+                if (Math.hypot(i - CENTER, j - CENTER) < 20) continue;   // out in the wastes, off the settled core
+                if (tileRand(i, j, this.seed + 61) >= 0.004) continue;   // very rare
+                let clear = true;   // needs a clear 3x3 so the big skeleton doesn't sit atop scenery
+                for (let dy = -1; dy <= 1 && clear; dy++) for (let dx = -1; dx <= 1; dx++) if (this.get(i + dx, j + dy) !== T.GRASS) { clear = false; break; }
+                if (clear) { this.set(i, j, T.BONES); placed++; }
+            }
+        }
     }
 
     #countTiles(i, j, tile, radius) {
@@ -1460,7 +1478,7 @@ export class World {
     }
     blocked(i, j) {
         const t = this.get(i, j);
-        return t === T.HOUSE || t === T.WELL || t === T.SIGN || t === T.STRUCT || t === T.COOP || t === T.BARN || t === T.ROCK || t === T.MILL || t === T.HATCH;
+        return t === T.HOUSE || t === T.WELL || t === T.SIGN || t === T.STRUCT || t === T.COOP || t === T.BARN || t === T.ROCK || t === T.MILL || t === T.HATCH || t === T.BONES;
     }
 
     isNight() { return this.clock > DAY_LENGTH; }
