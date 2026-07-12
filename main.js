@@ -4621,8 +4621,8 @@ out.addEventListener('pointerup', (e) => {
         if (!inRect(p, settingsHits.panel)) { settingsOpen = false; return; }   // click outside closes
         return;   // click inside the panel, no-op
     }
-    if (inRect(p, ROSTER_BTN)) { rosterOpen = !rosterOpen; if (rosterOpen) { boardOpen = false; chronOpen = false; } else { chatDropdownOpen = false; blurChatInput(); } return; }
-    if (CHRON_BTN.w && inRect(p, CHRON_BTN)) { chronOpen = !chronOpen; if (chronOpen) { boardOpen = false; rosterOpen = false; chronScroll = 0; blurChatInput(); chronTownWide = !(followMode && followTarget && world.farmers.includes(followTarget)); } return; }
+    if (inRect(p, ROSTER_BTN)) { rosterOpen = !rosterOpen; if (rosterOpen) { boardOpen = false; chronOpen = false; worldMapOpen = false; } else { chatDropdownOpen = false; blurChatInput(); } return; }
+    if (CHRON_BTN.w && inRect(p, CHRON_BTN)) { chronOpen = !chronOpen; if (chronOpen) { boardOpen = false; rosterOpen = false; worldMapOpen = false; chronScroll = 0; blurChatInput(); chronTownWide = !(followMode && followTarget && world.farmers.includes(followTarget)); } return; }
     if (WORLD_BTN.w && inRect(p, WORLD_BTN)) { if (worldMapOpen) worldMapOpen = false; else openWorldMap(); return; }
 
     // world-map overlay (modal): X / click-outside closes; a town node selects it; VISIT switches active town
@@ -4661,7 +4661,7 @@ out.addEventListener('pointerup', (e) => {
     }
 
     // board toggle button (only when the board has been built)
-    if (!BOARD_BTN.hidden && inRect(p, BOARD_BTN)) { boardOpen = !boardOpen; if (boardOpen) { selected = null; rosterOpen = false; boardScroll = 0; } return; }
+    if (!BOARD_BTN.hidden && inRect(p, BOARD_BTN)) { boardOpen = !boardOpen; if (boardOpen) { selected = null; rosterOpen = false; chronOpen = false; worldMapOpen = false; boardScroll = 0; } return; }
 
     // board panel interactions (X or click-outside closes; clicks inside are consumed)
     if (boardOpen) {
