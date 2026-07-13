@@ -120,13 +120,13 @@ let rtFail = 0; const rt = (c, m) => { if (!c) { rtFail++; console.log(`  ROUND-
     // stamp EVERY rng-gating cooldown/timer the sweeps cover (#Codex24-5 + #Codex25-5), world + farmer
     Object.assign(f0, { healSeekCd: 4.25, chatCooldown: 7.5, poachCooldown: 3.1, teachCooldown: 6.2, sabotageCooldown: 9.1,
         barterCooldown: 2.7, tradeCooldown: 8.3, coopCooldown: 5.5, helpCooldown: 3.9, wellAskCooldown: 4.4,
-        oreExpedCooldown: 7.1, annexCooldown: 6.6, thoughtBubbleTimer: 2.2, wanderTimer: 1.3, hp: Math.round(f0.maxHp * 0.4), _wasHurt: true });
+        oreExpedCooldown: 7.1, annexCooldown: 6.6, thoughtBubbleTimer: 2.2, wanderTimer: 1.3, assembleT: 4.75, hp: Math.round(f0.maxHp * 0.4), _wasHurt: true });
     w.lightningTimer = 3.7;   // #Codex25-5 world-level storm-strike gate
     // an authoritative raid populates the inbox ledger + watermark + a monument + docks harvest (dormant path)
     w.harvestTotal = 100;
     w.applyInbox([{ id: 'rt-raid', kind: 'raided', day: w.day, pairKey: 'rt-raid', ordinal: 1, commit: 0.4, by: 'the Ashfang clan' }]);
     const CDS = ['healSeekCd', 'chatCooldown', 'poachCooldown', 'teachCooldown', 'sabotageCooldown', 'barterCooldown',
-        'tradeCooldown', 'coopCooldown', 'helpCooldown', 'wellAskCooldown', 'oreExpedCooldown', 'annexCooldown', 'thoughtBubbleTimer', 'wanderTimer'];
+        'tradeCooldown', 'coopCooldown', 'helpCooldown', 'wellAskCooldown', 'oreExpedCooldown', 'annexCooldown', 'thoughtBubbleTimer', 'wanderTimer', 'assembleT'];
     const before = {
         cds: Object.fromEntries(CDS.map(k => [k, f0[k]])), lightningTimer: w.lightningTimer,
         hp: f0.hp, energy: f0.energy, sleepDebt: f0.sleepDebt,

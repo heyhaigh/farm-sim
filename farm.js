@@ -2547,6 +2547,7 @@ export class World {
                 // #Codex25-5: the rest of the rand()/action-gating farmer timers the first sweep missed
                 helpCooldown: f.helpCooldown, wellAskCooldown: f.wellAskCooldown, oreExpedCooldown: f.oreExpedCooldown,
                 annexCooldown: f.annexCooldown, thoughtBubbleTimer: f.thoughtBubbleTimer, wanderTimer: f.wanderTimer,
+                assembleT: f.assembleT,   // #Codex26-5 founding-assembly deliberation cadence (gates a rand() draw mid-gathering)
                 health: f.health, sickDays: f.sickDays, caution: f.caution, illnesses: f.illnesses,
                 nightsExposed: f.nightsExposed, reputation: f.reputation, mood: f.mood,
                 helpPostedDay: f.helpPostedDay, wood: f.wood, ore: f.ore, discovered: f.discovered,
@@ -2674,6 +2675,7 @@ export class World {
             f.helpCooldown = fd.helpCooldown ?? f.helpCooldown; f.wellAskCooldown = fd.wellAskCooldown ?? f.wellAskCooldown;
             f.oreExpedCooldown = fd.oreExpedCooldown ?? f.oreExpedCooldown; f.annexCooldown = fd.annexCooldown ?? f.annexCooldown;
             f.thoughtBubbleTimer = fd.thoughtBubbleTimer ?? f.thoughtBubbleTimer; f.wanderTimer = fd.wanderTimer ?? f.wanderTimer;
+            f.assembleT = fd.assembleT ?? f.assembleT;   // #Codex26-5
             f.health = fd.health; f.sickDays = fd.sickDays; f.caution = fd.caution; f.illnesses = fd.illnesses;
             f.nightsExposed = fd.nightsExposed; f.reputation = fd.reputation; f.mood = fd.mood;
             f.helpPostedDay = fd.helpPostedDay; f.wood = fd.wood; f.ore = fd.ore; f.discovered = fd.discovered;

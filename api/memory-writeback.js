@@ -41,24 +41,43 @@ const numOrNull = v => {
     return null;
 };
 
-// #Codex25-6 — a server-side MONOTONIC-revision guard. SuperMemory exposes no get-by-customId / conditional
-// write, so a true durable CAS isn't possible here; this in-process registry is the achievable server-side
-// defense for the local self-host: it rejects any write whose rev is <= the highest rev ALREADY COMMITTED for
-// that customId, which blocks the two-visible-tabs stale-overwrite within a session (paired with the client's
-// stale/hidden-tab guard). It's recorded only on a SUCCESSFUL write (a failed fetch doesn't poison it), and it
-// is NOT durable across a server restart — a limitation inherent to the store's API.
-const revRegistry = new Map();   // customId -> highest committed rev (this process)
-async function upsertDoc(base, headers, doc, rev) {
-    const prev = revRegistry.get(doc.customId);
+// #Codex25-6/#Codex26-3/#Codex26-4 — a server-side MONOTONIC-revision guard. SuperMemory exposes no
+// get-by-customId / conditional write, so a fully-durable CAS isn't possible here; this is the best achievable
+// server-side defense for the LOCAL self-host, made robust against the two holes review #26 found:
+//  - the dev server clears require.cache per request (re-loading this module), so the registry lives on
+//    globalThis and SURVIVES the reload;
+//  - a check-then-await-fetch is not atomic, so writes to the same customId are SERIALIZED through a per-id
+//    promise chain and the rev is reserved BEFORE the fetch (rolled back if it fails) — so a concurrent stale
+//    write is rejected and two in-flight revs can't land out of order.
+// The registry is BOUNDED (oldest-evicted). LIMITATION: this is per-PROCESS — it does NOT protect across a
+// server restart or multiple workers/serverless invocations (each has its own globalThis); there the client's
+// stale/hidden-tab guard remains the backstop. This endpoint is the long-running local self-host, not serverless.
+const REV_CAP = 4096;
+const revRegistry = (globalThis.__ryFarmsRevReg ||= new Map());       // customId -> highest committed/reserved rev
+const writeChains = (globalThis.__ryFarmsWriteChains ||= new Map());  // customId -> tail promise (serialize same-id writes)
+
+async function doUpsert(base, headers, doc, rev) {
+    const id = doc.customId, prev = revRegistry.get(id);
     if (prev !== undefined && rev <= prev) return { stale: true };
+    revRegistry.set(id, rev);                                          // RESERVE before the await (exclusive per id via the chain)
+    if (revRegistry.size > REV_CAP) revRegistry.delete(revRegistry.keys().next().value);   // bound: evict oldest
+    const rollback = () => { if (revRegistry.get(id) === rev) (prev === undefined ? revRegistry.delete(id) : revRegistry.set(id, prev)); };
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), DEADLINE_MS);
     try {
         const r = await fetch(`${base}/v3/documents`, { method: 'POST', headers, body: JSON.stringify(doc), signal: controller.signal });
-        if (r.ok) { revRegistry.set(doc.customId, rev); return { ok: true }; }
+        if (r.ok) return { ok: true };
+        rollback();
         return { ok: false, status: r.status, text: (await r.text()).slice(0, 200) };
-    } catch (e) { return { err: e?.message || 'threw', cause: e?.cause?.message || '' }; }
+    } catch (e) { rollback(); return { err: e?.message || 'threw', cause: e?.cause?.message || '' }; }
     finally { clearTimeout(timer); }
+}
+function upsertDoc(base, headers, doc, rev) {
+    const id = doc.customId;
+    const run = (writeChains.get(id) || Promise.resolve()).then(() => doUpsert(base, headers, doc, rev), () => doUpsert(base, headers, doc, rev));
+    writeChains.set(id, run);
+    run.finally(() => { if (writeChains.get(id) === run) writeChains.delete(id); });
+    return run;
 }
 
 function readBody(req) {

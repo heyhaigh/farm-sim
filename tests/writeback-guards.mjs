@@ -63,6 +63,23 @@ console.log('#24-3 writeback endpoint guards');
     ok(r.sent.length === 0, `equal rev 8 rejected (already committed)`);
     r = await run({}, { townSeed: 77, rev: 9, farmers: [{ seed: 3, name: 'v9' }] });
     ok(r.sent.length === 1, `newer rev 9 accepted`);
+
+    // #Codex26-3: two CONCURRENT writes to the same customId — the stale one must NOT land (per-id serialization
+    // + reserve-before-fetch). Fire rev 11 and stale rev 10 together for ry-farms:55:1.
+    sent = [];
+    const a = mockReqRes({}, { townSeed: 55, rev: 11, farmers: [{ seed: 1, name: 'v11' }] });
+    const b = mockReqRes({}, { townSeed: 55, rev: 10, farmers: [{ seed: 1, name: 'v10-stale' }] });
+    await Promise.all([handler(a.req, a.res), handler(b.req, b.res)]);
+    const wrote55 = sent.filter(s => s.doc.customId === 'ry-farms:55:1');
+    ok(wrote55.length === 1 && wrote55[0].doc.content.includes('v11'), `concurrent: only the newer rev 11 landed (stale 10 dropped)`);
+
+    // #Codex26-3: the registry lives on globalThis, so it survives the dev server re-requiring the module. A fresh
+    // import of the handler must still reject a stale rev for a customId already committed above.
+    const bust = await import('/Users/ryanhaigh/ry-farms/api/memory-writeback.js?bust=' + Math.floor(performance.now()));
+    const h2 = bust.default || bust;
+    sent = [];
+    { const m = mockReqRes({}, { townSeed: 77, rev: 5, farmers: [{ seed: 3, name: 'stale-after-reload' }] }); await h2(m.req, m.res); }
+    ok(sent.length === 0, `reloaded module still rejects a stale rev (globalThis registry survived)`);
 }
 
 console.log(pass ? '\nALL WRITEBACK-GUARD PROBES PASSED' : '\nSOME PROBES FAILED');

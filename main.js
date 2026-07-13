@@ -5472,6 +5472,13 @@ function frame(now) {
     // the interpolated pos, and restore it before weather/UI/autosave, so nothing that reads or SERIALIZES pos
     // ever sees the interpolated value (determinism + saves untouched).
     const _interpAlpha = Math.min(1, simAccumulator / FIXED_DT);
+    // #Codex26-1: EVERYTHING that runs while pos/cam are in their temporary (interpolated/snapped) state is inside
+    // ONE try — applyFarmerInterp itself, audio.update, the raid/camera easing, the snap, and the whole draw — so a
+    // throw ANYWHERE still hits the finally that restores them. A fractional interpolated pos must never survive
+    // into maybeAutosave (save corruption / determinism fork). _snapped gates the cam restore (false if we threw
+    // before snapping, in which case cam is still the correctly-eased float and needs no restore).
+    let _camFx = 0, _camFy = 0, _snapped = false;
+    try {
     applyFarmerInterp(_interpAlpha);
 
     // soundtrack follows the sim: seasonal theme by day, crickets/owls at night,
@@ -5531,12 +5538,8 @@ function frame(now) {
     // (restored after the world pass), so following stays smooth; sprites already step by whole pixels (pixel
     // art), so the followed target is unaffected. This only helps ON smooth motion — on the earlier stuttering
     // motion it amplified the jitter, which is why it's paired with the interpolation, not used alone.
-    const _camFx = cam.x, _camFy = cam.y;
+    _camFx = cam.x; _camFy = cam.y; _snapped = true;   // capture the eased float, then snap (finally restores it)
     cam.x = Math.round(cam.x) + _shakeX; cam.y = Math.round(cam.y) + _shakeY;
-    // #interp/#camera-snap: the world pass runs with pos + cam in their TEMPORARY (interpolated + snapped) state.
-    // A try/finally guarantees BOTH are restored even if a draw throws — otherwise a fractional interpolated pos
-    // could be autosaved (save corruption) and the camera left rounded.
-    try {
 
     // background
     ctx.fillStyle = '#2a3438';
@@ -5562,9 +5565,9 @@ function frame(now) {
 
     drawWeather(dt, t);
     } finally {
-        // always-run restore: TRUE sim pos back before autosave serializes it, and the float cam base back
+        // always-run restore: TRUE sim pos back before autosave serializes it, and (if we snapped) the float cam
         restoreFarmerInterp();
-        cam.x = _camFx; cam.y = _camFy;
+        if (_snapped) { cam.x = _camFx; cam.y = _camFy; }
     }
     drawUI();
     maybeAutosave();

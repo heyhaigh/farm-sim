@@ -155,8 +155,8 @@ export function updateWorldIndex(mutator) {
 // "NEW -> SURE?" is always undoable (learned the hard way, day one). Each wipe overwrites the
 // previous backup: one-deep undo, zero ceremony.
 // #Codex25-2 — the whole wipe runs in ONE readwrite transaction (all keys live in the same 'towns' store): read
-// snapshot + latest + world index, then write the three backups, delete the town, and put the pruned index —
-// atomically. There is no crash window that could leave the slice unbacked or the town half-removed.
+// snapshot + latest + world index, prune the town from the index, delete it, and write ONE coherent backup
+// (#Codex26-2) — atomically. No crash window that could leave the slice unbacked or the town half-removed.
 export async function wipeTown(seed) {
     try {
         const db = await openDb();
@@ -188,12 +188,14 @@ export async function wipeTown(seed) {
                 if (index.metPairs) for (const k of Object.keys(index.metPairs)) if (inPair(k)) delete index.metPairs[k];
                 if (Array.isArray(index.news)) index.news = index.news.filter(n => String(n.origin) !== s && String(n.destination) !== s);
                 if (Array.isArray(index.encounters)) index.encounters = index.encounters.filter(e => String(e.a) !== s && String(e.b) !== s);
-                if (snap) store.put(snap, 'backup:town');
-                if (latest) store.put(latest, 'backup:latest');
-                store.put(slice, 'backup:worldslice');
+                store.put(index, WORLD_KEY);          // the town is ALWAYS removed from the index (an unsaved town too — no zombie)
                 store.delete('town:' + seed);
                 if (latest && latest.seed === seed) store.delete('latest');
-                store.put(index, WORLD_KEY);
+                // #Codex26-2: ONE coherent one-deep backup object, written ONLY when there is committed state to
+                // restore. An UNSAVED town (no snapshot) has nothing to undo — leave the PREVIOUS backup intact
+                // rather than half-overwrite it (the old 3-key scheme could keep an old backup:town while
+                // replacing backup:worldslice for a different seed, so undo combined unrelated generations).
+                if (snap) store.put({ seed, snap, latest, slice }, 'backup:wipe');
             };
             tx.oncomplete = () => resolve();
             tx.onerror = () => reject(tx.error);
@@ -205,21 +207,20 @@ export async function wipeTown(seed) {
 }
 
 // #Codex25-2 — undo runs in ONE readwrite transaction too: restore the town + latest + the full index slice
-// (incl. metPairs) AND consume all three one-deep backups atomically, so a crash can't half-restore and a
-// second undo can't re-apply a stale backup over newer state. Returns the restored seed (or null).
+// (incl. metPairs) AND consume the one coherent backup atomically, so a crash can't half-restore and a second
+// undo can't re-apply a stale backup over newer state. Returns the restored seed (or null).
 export async function undoWipe() {
     try {
         const db = await openDb();
         return await new Promise((resolve, reject) => {
             const tx = db.transaction(STORE, 'readwrite');
             const store = tx.objectStore(STORE);
-            let snap, latest, slice, restoredSeed = null;
-            const rSnap = store.get('backup:town'); rSnap.onsuccess = () => { snap = rSnap.result; };
-            const rLatest = store.get('backup:latest'); rLatest.onsuccess = () => { latest = rLatest.result; };
-            const rSlice = store.get('backup:worldslice'); rSlice.onsuccess = () => { slice = rSlice.result; };
+            let backup, restoredSeed = null;
+            const rBackup = store.get('backup:wipe'); rBackup.onsuccess = () => { backup = rBackup.result; };
             const rWorld = store.get(WORLD_KEY);
             rWorld.onsuccess = () => {
-                if (!snap) return;   // nothing backed up — leave everything, oncomplete resolves null
+                if (!backup || !backup.snap) return;   // nothing coherent backed up — leave everything, resolve null
+                const { snap, latest, slice } = backup;   // #Codex26-2 one coherent generation: same seed's snap+latest+slice
                 restoredSeed = snap.seed;
                 const sk = String(snap.seed);
                 store.put(snap, 'town:' + snap.seed);
@@ -242,7 +243,7 @@ export async function undoWipe() {
                     for (const nn of (slice.news || [])) if (!haveNews.has(newsKey(nn))) index.news.push(nn);
                     store.put(index, WORLD_KEY);
                 }
-                store.delete('backup:town'); store.delete('backup:latest'); store.delete('backup:worldslice');   // consume the one-deep backup
+                store.delete('backup:wipe');   // consume the one-deep backup (a second undo finds nothing)
             };
             tx.oncomplete = () => resolve(restoredSeed);
             tx.onerror = () => reject(tx.error);
