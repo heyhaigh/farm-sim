@@ -5508,15 +5508,21 @@ function frame(now) {
     // and re-pointing it at the follow target would hijack that conversation.
     if (!chatWidgetOpen && followMode && followTarget && world.farmers.includes(followTarget)) chatFarmer = followTarget;
 
-    // #raidfx — jolt the WORLD (not the UI) while the shake is hot. Layered sines give an organic
-    // rattle; we offset the camera for the world pass and restore it before drawUI so the HUD stays put.
+    // #raidfx — jolt the WORLD (not the UI) while the shake is hot (integer offsets, folded into the snap below).
     let _shakeX = 0, _shakeY = 0;
     if (raidShake > 0.1) {
         const s = raidShake;
         _shakeX = Math.round((Math.sin(t * 91) * 0.6 + Math.sin(t * 47) * 0.4) * s);
         _shakeY = Math.round((Math.sin(t * 83) * 0.6 + Math.sin(t * 59) * 0.4) * s);
-        cam.x += _shakeX; cam.y += _shakeY;
     }
+    // #camera-snap — now that motion is INTERPOLATED (smooth), snap the render camera to whole pixels so the
+    // terrain chunks stop tearing against each other as the world scrolls — the residual "diagonal shimmer"
+    // (worst diagonally, where cam.x AND cam.y are both fractional at once). The camera still EASES as a float
+    // (restored after the world pass), so following stays smooth; sprites already step by whole pixels (pixel
+    // art), so the followed target is unaffected. This only helps ON smooth motion — on the earlier stuttering
+    // motion it amplified the jitter, which is why it's paired with the interpolation, not used alone.
+    const _camFx = cam.x, _camFy = cam.y;
+    cam.x = Math.round(cam.x) + _shakeX; cam.y = Math.round(cam.y) + _shakeY;
 
     // background
     ctx.fillStyle = '#2a3438';
@@ -5543,7 +5549,7 @@ function frame(now) {
     restoreFarmerInterp();   // #interp put the TRUE sim pos back before weather/UI/autosave read or serialize it
 
     drawWeather(dt, t);
-    if (_shakeX || _shakeY) { cam.x -= _shakeX; cam.y -= _shakeY; }   // restore before the HUD (UI never shakes)
+    cam.x = _camFx; cam.y = _camFy;   // #camera-snap restore the float base (easing precision; UI/input read the true camera)
     drawUI();
     maybeAutosave();
     // (end-of-day recap card removed — the Moments/callout banners + the chronicle carry the day's beats now;
