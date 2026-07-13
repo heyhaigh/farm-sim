@@ -5421,6 +5421,23 @@ let last = performance.now();
 const FIXED_DT = 1 / 30;
 let simAccumulator = 0;
 
+// #interp — render-only position interpolation (see the tick loop). applyFarmerInterp stashes each farmer's
+// TRUE sim pos and moves pos to lerp(pre-tick, sim, alpha) for the draw pass; restoreFarmerInterp puts the true
+// pos back. A large delta (a teleport/respawn, not a walk step) snaps to the true pos so we never slide a
+// farmer across the map. Never call one without the other, and always restore before anything serializes pos.
+function applyFarmerInterp(alpha) {
+    for (const f of world.farmers) {
+        if (f._riI === undefined) { f._riI = f.pos.i; f._riJ = f.pos.j; }   // freshly spawned — no prior step
+        f._trueI = f.pos.i; f._trueJ = f.pos.j;
+        const di = f._trueI - f._riI, dj = f._trueJ - f._riJ;
+        if (di * di + dj * dj > 4) continue;   // teleport (> 2 tiles in one tick) — don't interpolate
+        f.pos.i = f._riI + di * alpha; f.pos.j = f._riJ + dj * alpha;
+    }
+}
+function restoreFarmerInterp() {
+    for (const f of world.farmers) if (f._trueI !== undefined) { f.pos.i = f._trueI; f.pos.j = f._trueJ; }
+}
+
 function frame(now) {
     requestAnimationFrame(frame);
     const dt = Math.min((now - last) / 1000, 0.05);
@@ -5435,7 +5452,17 @@ function frame(now) {
 
     simAccumulator += dt * (world._speedMult || 1);
     let steps = 0;
-    while (simAccumulator >= FIXED_DT && steps < 800) { world.tick(FIXED_DT); simAccumulator -= FIXED_DT; steps++; }
+    while (simAccumulator >= FIXED_DT && steps < 800) {
+        for (const f of world.farmers) { f._riI = f.pos.i; f._riJ = f.pos.j; }   // #interp snapshot the PRE-tick pos as the "from"
+        world.tick(FIXED_DT); simAccumulator -= FIXED_DT; steps++;
+    }
+    // #interp — the sim ticks at 30Hz (FIXED_DT) but we render at 60/120Hz, so a farmer's pos only advances every
+    // 2nd/4th frame → its motion (and the follow camera tracking it) STUTTERS. Fix: render each farmer BETWEEN its
+    // last two sim positions by the leftover-accumulator fraction. Display-only — we stash the TRUE pos, draw at
+    // the interpolated pos, and restore it before weather/UI/autosave, so nothing that reads or SERIALIZES pos
+    // ever sees the interpolated value (determinism + saves untouched).
+    const _interpAlpha = Math.min(1, simAccumulator / FIXED_DT);
+    applyFarmerInterp(_interpAlpha);
 
     // soundtrack follows the sim: seasonal theme by day, crickets/owls at night,
     // rain/thunder by weather, and a rooster crow at dawn once the town has one
@@ -5512,6 +5539,8 @@ function frame(now) {
     const drawables = collectDrawables();
     drawables.sort((a, b) => (a.y - b.y) || ((a.layer || 0) - (b.layer || 0)) || ((a.x || 0) - (b.x || 0)));
     for (const d of drawables) d.draw();
+
+    restoreFarmerInterp();   // #interp put the TRUE sim pos back before weather/UI/autosave read or serialize it
 
     drawWeather(dt, t);
     if (_shakeX || _shakeY) { cam.x -= _shakeX; cam.y -= _shakeY; }   // restore before the HUD (UI never shakes)
