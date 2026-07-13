@@ -1984,6 +1984,15 @@ function collectDrawables() {
         list.push({ y: sy + TILE_H * 0.5 + 0.11, draw: () => drawThreat(e, sx, sy) });
     }
 
+    // #Codex23 the raid cinematic's warband — display-only raiders that live in world.raidEvent (NOT in
+    // world.encounters), so they're y-sorted in here alongside the real threats
+    if (world.raidEvent && world.raidEvent.raiders) {
+        for (const r of world.raidEvent.raiders) {
+            const sx = cam.x + isoX(r.i, r.j), sy = cam.y + isoY(r.i, r.j);
+            list.push({ y: sy + TILE_H * 0.5 + 0.11, draw: () => drawThreat(r, sx, sy) });
+        }
+    }
+
     // roaming wild game (deer/rabbit/turkey) to hunt, y-sorted in
     for (const a of world.prey) {
         if (a.done) continue;

@@ -1636,13 +1636,20 @@ export class World {
                 // doctrine save has no e.commit -> falls back to the original flat 0.2, byte-identical.
                 const lost = Math.round((this.harvestTotal || 0) * (e.commit ?? 0.2));
                 this.harvestTotal = Math.max(0, (this.harvestTotal || 0) - lost);
-                const out = this.#resolveRaid(e, lost);   // #Slice3: the ONE authoritative outcome (same either way)
-                this.addChronicle('raid', `An orc warband raided ${this.name} in the night and carried off ${lost} of its stored harvest.`, null, null, '#e05840',
-                    { tier: 'callout', tone: 'somber', why: `raided by ${e.by || 'a warband'}` });
-                // #108/#Slice3 — a WATCHED town stages the warband (a grand alarm, then the resolved outcome plays
-                // out as the skirmish ends); a dormant one applies the SAME resolved outcome silently, right now.
-                if (this._live) this.#spawnRaid(out, e);
-                else this.#applyRaidOutcome(out, e);
+                // #Codex23 P0(1,2,3): the authoritative outcome is applied SYNCHRONOUSLY for BOTH a watched and a
+                // dormant town — the grand alarm, the wounds, the deterministic monuments, and the result line all
+                // land NOW, before any autosave and regardless of whether anyone is watching. This closes: (1)
+                // save-mid-raid state-loss — the outcome can no longer be deferred past a save that has already
+                // marked the event applied; (2) back-to-back clobber — each raid resolves in full immediately, so
+                // there is no single in-flight slot for a second raid to overwrite; (3) watched≠dormant divergence
+                // — the live path no longer draws sim rng, mutates `encounters`, or reveals fog. The cinematic
+                // (live-only) is now PURE DISPLAY over this already-resolved snapshot.
+                const out = this.#resolveRaid(e, lost);
+                this.addChronicle('raid', `${out.clan} fell upon ${this.name}, carrying off ${lost} of its stored harvest — and the town rose to meet them.`,
+                    null, null, '#e05840', { tier: 'grand', tone: 'somber', label: 'RAIDERS AT THE GATE', why: `raided by ${out.clan}` });
+                this.addLog(`${out.clan} descends on ${this.name} — raiders at the fence!`, '#e05040');
+                const monSpots = this.#applyRaidOutcome(out, e);
+                if (this._live) this.#stageRaidCinematic(out, e, monSpots);
                 n++;
             } else if (e.kind === 'reconciled') {
                 // Slice C: the envoy EARNS a cross-faction belief that begins to overwrite their raid-creed.
@@ -5322,6 +5329,13 @@ export class World {
     // whether you WATCH it or it hits a dormant town (rendering is presentation only). Seeded on the raid's
     // stable inbox id (reproducible given the inbox; NEVER world.rand — the headless digest is untouched).
     // Weighs raider commitment against the town's able defenders (the Watch + hale hands) and its doctrine.
+    // #Codex23 P1 — the ONE place monuments are inserted, so the 40-entry cap is enforced for EVERY source
+    // (foe stands AND raid fellings). Without this, raid monuments grew the save/render unbounded.
+    #addMonument(m) {
+        this.monuments.push(m);
+        if (this.monuments.length > 40) this.monuments.shift();
+    }
+
     #resolveRaid(e, lost) {
         const rid = e.id || `${e.pairKey}:${e.ordinal}`;
         const r = mulberry32(hashString('raidres:' + rid + ':' + this.seed));
@@ -5351,20 +5365,25 @@ export class World {
         return { harvestLost: lost, n, felled, felledNames, woundSeeds, heroSeed: hero ? hero.sheet.seed : null, clan: e.by || 'a warband' };
     }
 
-    // #legibility Slice 3 — apply a resolved raid outcome (monuments for felled raiders, wounds on defenders,
-    // the result line). Identical for a dormant town (called immediately) and a watched one (called when the
-    // visible skirmish resolves). `spots` (optional) = where the felled raiders actually stood, so a watched
-    // raid raises its stones where the fight happened; a dormant one drops them along the fence line.
-    #applyRaidOutcome(out, e, spots = null) {
+    // #legibility Slice 3 / #Codex23 — apply a resolved raid outcome: monuments for felled raiders at
+    // DETERMINISTIC seeded town-edge spots (identical live or dormant — never the live-only marched positions),
+    // wounds on the ranked defenders, the whole town roused, and the result line. Runs SYNCHRONOUSLY in both the
+    // watched and dormant path. Returns the felled monument spots so a watched town's cinematic can march its
+    // raiders to fall there (display-only). Draws NO sim rng (seed-hashed placement only).
+    #applyRaidOutcome(out, e) {
+        const rid = e.id || `${e.pairKey}:${e.ordinal}`;
         const hero = out.heroSeed != null ? this.farmers.find(f => f.sheet.seed === out.heroSeed) : null;
+        const monSpots = [];
         for (let k = 0; k < out.felled; k++) {
-            let mi, mj;
-            if (spots && spots[k]) { mi = Math.round(spots[k].i); mj = Math.round(spots[k].j); }
-            else { const ang = (hashString('raidmon:' + (e.id || e.pairKey || '') + ':' + k) % 360) * Math.PI / 180, d = WILD_RADIUS - 4; mi = Math.round(CENTER + Math.cos(ang) * d); mj = Math.round(CENTER + Math.sin(ang) * d); }
+            const ang = (hashString('raidmon:' + rid + ':' + k) % 360) * Math.PI / 180;
+            const d = 7 + (hashString('raidmd:' + rid + ':' + k) % 4);   // 7-10 tiles out — the town's edge, where the warband is met
+            const mi = Math.round(CENTER + Math.cos(ang) * d), mj = Math.round(CENTER + Math.sin(ang) * d);
             const spot = this.nearestOpenTile({ i: mi, j: mj }) || { i: mi, j: mj };
-            this.monuments.push({ i: spot.i, j: spot.j, heroSeed: out.heroSeed, hero: hero ? shortName(hero) : 'the Watch', foe: out.felledNames[k] || 'a raider', day: this.day, party: 1, raid: true });
+            this.#addMonument({ i: spot.i, j: spot.j, heroSeed: out.heroSeed, hero: hero ? shortName(hero) : 'the Watch', foe: out.felledNames[k] || 'a raider', day: this.day, party: 1, raid: true });
+            monSpots.push(spot);
         }
         for (const seed of out.woundSeeds) { const f = this.farmers.find(x => x.sheet.seed === seed); if (f && !f.downed) { f.hp = Math.max(1, Math.round(f.maxHp * 0.45)); f._wasHurt = true; f.threatAlert = Math.max(f.threatAlert || 0, 2); } }
+        for (const f of this.farmers) f.threatAlert = Math.max(f.threatAlert || 0, 1.5);   // the whole town is roused — authoritative (both paths), so watched behaves like dormant
         if (out.felled > 0) {
             const tail = out.felled > 1 ? ` and ${out.felled - 1} more` : '';
             this.addChronicle('legend', `${this.name}'s Watch drove off ${out.clan}, felling ${out.felledNames[0]}${tail} — a stand the town won't forget.`,
@@ -5373,65 +5392,50 @@ export class World {
             this.addChronicle('raid', `${out.clan} slipped away clean with ${this.name}'s stores — not a raider felled.`,
                 null, null, '#e05840', { tier: 'callout', tone: 'somber', why: 'a raid that got away' });
         }
+        return monSpots;
     }
 
-    // #108 THE RAID, made VISIBLE — a cross-town warband descends on the (watched) town. A party of orc
-    // raiders appears together at the fence line and presses inward toward the townsfolk, reusing the
-    // encounter combat + rally + monument machinery (so felling one still raises a stone). Fires a grand
-    // "RAIDERS AT THE GATE" spotlight and rouses the whole town. `by` = the raiding clan, `commit` scales
-    // the party size (a heavier raid brings more), `lost` = the harvest already carried off (for the beat).
-    #spawnRaid(out, e) {
+    // #108 / #Codex23 — THE RAID, made VISIBLE, as a PURE DISPLAY layer over the already-resolved outcome. The
+    // warband here is cosmetic: these raider objects live ONLY in `this.raidEvent.raiders` (NEVER in
+    // `this.encounters`), they never call `reveal()` (fog is persisted — mutating it live would diverge from a
+    // dormant town), and their spread uses a PRIVATE `raidfx:` seeded stream (NOT `this.rand()`), so staging a
+    // watched raid draws zero sim rng and touches zero authoritative state. The felled raiders (first
+    // `out.felled`) march to their monument spots and drop there; survivors press the centre, then flee.
+    #stageRaidCinematic(out, e, monSpots) {
+        const rr = mulberry32(hashString('raidfx:' + (e.id || `${e.pairKey}:${e.ordinal}`) + ':' + this.seed));
         const def = ENCOUNTER_DEFS.orc, n = out.n;
-        const baseAng = this.rand() * Math.PI * 2, d = WILD_RADIUS - 3;   // the flank they came from (cosmetic)
-        const GEN = ['Gruk', 'Morg', 'Tharg', 'Uzka', 'Drek', 'Snaga', 'Krul', 'Bolg'];
+        const baseAng = rr() * Math.PI * 2, d = WILD_RADIUS - 3;   // the flank they came from (cosmetic)
         const raiders = [];
         for (let k = 0; k < n; k++) {
             const ang = baseAng + (k - (n - 1) / 2) * 0.28;
-            const ei = CENTER + Math.cos(ang) * d, ej = CENTER + Math.sin(ang) * d;
-            // PRESENTATIONAL — the DM combat/rally/monument path skips these; the resolved outcome (#tickRaidEvent)
-            // is authoritative. The first out.felled raiders wear the resolver's felled names (they'll fall here).
-            const enc = { kind: 'orc', def, target: null, i: ei, j: ej, home: { i: ei, j: ej }, facing: 1,
-                          hp: def.hp, clashTimer: 1, life: 999, done: false, helpWanted: false, helpers: new Set(), raid: true, presentational: true };
-            enc.foeName = out.felledNames[k] || `${GEN[Math.floor(this.rand() * GEN.length)]} the Raider`;
-            this.encounters.push(enc); this.reveal(Math.round(ei), Math.round(ej), 4);
-            raiders.push(enc);
+            const falls = k < out.felled;
+            const target = falls && monSpots[k] ? { i: monSpots[k].i, j: monSpots[k].j } : { i: CENTER, j: CENTER };
+            raiders.push({ kind: 'orc', def, i: CENTER + Math.cos(ang) * d, j: CENTER + Math.sin(ang) * d, facing: 1,
+                           hp: def.hp, foeName: out.felledNames[k] || null, falls, target });
         }
-        for (const f of this.farmers) f.threatAlert = Math.max(f.threatAlert || 0, 1.5);   // rouse the town
-        this.addLog(`${out.clan} descends on ${this.name} — raiders at the fence!`, '#e05040');
-        this.addChronicle('raid', `${out.clan} fell upon ${this.name} — raiders at the fence, and the town rises to meet them.`,
-            null, null, '#e05840', { tier: 'grand', tone: 'somber', label: 'RAIDERS AT THE GATE',
-                why: `${out.clan} carried off ${out.harvestLost} of the stores - now the town must drive them off` });
-        this.raidEvent = { out, e, raiders, phase: 'march', timer: 9 };   // resolves after the press (see #tickRaidEvent)
+        this.raidEvent = { out, e, raiders, phase: 'march', timer: 9 };   // display choreography (see #tickRaidEvent)
     }
 
-    // #Slice3 — the WATCHED raid choreography, converging on the resolver's outcome. The warband presses inward
-    // (~9s), then the resolved raiders FALL where they stand (monuments there) + defenders take the resolved
-    // wounds + the result line; survivors turn and flee. Live-only (raidEvent is set only on a watched raid),
-    // so the headless determinism harness never runs it.
+    // #Slice3 / #Codex23 — the WATCHED raid CHOREOGRAPHY. PURE DISPLAY: it moves only `raidEvent.raiders`
+    // (which are not in `this.encounters`), applies NO outcome (already applied synchronously in the inbox), and
+    // draws no rng. `raidEvent` is set only on a watched, live town and is never serialized, so a dormant/
+    // headless town has `raidEvent === null` here and this is a no-op — the sim/digest is untouched.
     #tickRaidEvent(dt) {
         const re = this.raidEvent; if (!re) return;
-        const active = re.raiders.filter(x => !x.done && this.encounters.includes(x));
         if (re.phase === 'march') {
-            for (const enc of active) {
-                const dx = CENTER - enc.i, dy = CENTER - enc.j, dist = Math.hypot(dx, dy);
-                if (dist > 11) { enc.i += dx / dist * 3.4 * dt; enc.j += dy / dist * 3.4 * dt; enc.facing = dx < 0 ? -1 : 1; }
-                this.reveal(Math.round(enc.i), Math.round(enc.j), 3);
+            for (const r of re.raiders) {
+                const dx = r.target.i - r.i, dy = r.target.j - r.j, dist = Math.hypot(dx, dy);
+                if (dist > 0.5) { r.i += dx / dist * 3.4 * dt; r.j += dy / dist * 3.4 * dt; r.facing = dx < 0 ? -1 : 1; }
             }
             re.timer -= dt;
-            if (re.timer <= 0) {
-                const spots = active.slice(0, re.out.felled).map(x => ({ i: x.i, j: x.j }));
-                this.#applyRaidOutcome(re.out, re.e, spots);
-                active.slice(0, re.out.felled).forEach(x => { x.done = true; });   // the doomed fall where they stood
-                this.encounters = this.encounters.filter(x => !x.done);
-                re.phase = 'flee'; re.timer = 2.8;
-            }
+            if (re.timer <= 0) { re.raiders = re.raiders.filter(r => !r.falls); re.phase = 'flee'; re.timer = 2.8; }   // the doomed drop; survivors turn to flee
         } else {   // flee — survivors run back out to the fog, then vanish
-            for (const enc of active) {
-                const dx = enc.i - CENTER, dy = enc.j - CENTER, dist = Math.hypot(dx, dy) || 1;
-                enc.i += dx / dist * 5.5 * dt; enc.j += dy / dist * 5.5 * dt; enc.facing = dx > 0 ? 1 : -1;
+            for (const r of re.raiders) {
+                const dx = r.i - CENTER, dy = r.j - CENTER, dist = Math.hypot(dx, dy) || 1;
+                r.i += dx / dist * 5.5 * dt; r.j += dy / dist * 5.5 * dt; r.facing = dx > 0 ? 1 : -1;
             }
             re.timer -= dt;
-            if (re.timer <= 0) { for (const enc of re.raiders) enc.done = true; this.encounters = this.encounters.filter(x => !x.done); this.raidEvent = null; }
+            if (re.timer <= 0) this.raidEvent = null;
         }
     }
 
