@@ -10,7 +10,7 @@
 import { readFileSync } from 'node:fs';
 import {
     factionLineage, lineagePairKey, isCrossFaction, foldDisposition, dispositionTier, DISPOSITION,
-    resolveEncounter, applyOutcome, envoyDigest,
+    resolveEncounter, applyOutcome, ledgerCount, envoyDigest,
 } from '../reconciliation.js';
 
 let fails = 0;
@@ -73,13 +73,19 @@ ok('a false extender CAN betray', liarBetray > 0);
 const honoredAt = (tier) => { let n = 0; for (let o = 0; o < 400; o++) if (resolveEncounter({ ...base, tier, ordinal: o, humanEnvoy: peaceHuman, orcEnvoy: peaceOrc }).outcome === 'honored') n++; return n; };
 ok('open honors more than hostile', honoredAt('open') > honoredAt('hostile'));
 
-console.log('\nLedger append (idempotent per ordinal):');
-let led = applyOutcome(null, 'raid', { ordinal: 1, day: 10 });
-led = applyOutcome(led, 'raid', { ordinal: 1, day: 10 });   // same ordinal -> no double
-ok('idempotent append (one grievance for a repeated ordinal)', led.grievances.length === 1);
-led = applyOutcome(led, 'honored', { ordinal: 2, day: 20 });
-ok('honored -> reconciliation entry', led.reconciliations.length === 1);
-ok('betrayed -> grievance kind betrayal', applyOutcome(null, 'betrayed', { ordinal: 1, day: 1 }).grievances[0].kind === 'betrayal');
+// #Codex24-4 the ledger is now compact COUNTERS (raidN/betrayalN/reconcileN) + a bounded recent tail; the
+// ordinal must be applied EXACTLY once and strictly in sequence (= ledgerCount). This guards #Codex25-4.
+console.log('\nLedger append (idempotent, exact-ordinal-only):');
+let led = applyOutcome(null, 'raid', { ordinal: 0, day: 10 });        // fresh ledger -> next ordinal is 0
+ok('first raid recorded', led.raidN === 1 && ledgerCount(led) === 1);
+led = applyOutcome(led, 'raid', { ordinal: 0, day: 10 });             // REPLAY of ordinal 0 -> no double count
+ok('idempotent: a repeated ordinal does not double-count', led.raidN === 1 && ledgerCount(led) === 1);
+led = applyOutcome(led, 'raid', { ordinal: 7, day: 10 });             // GAP (ordinal ahead of count) -> no-op
+ok('a gapped/out-of-order ordinal is a no-op', ledgerCount(led) === 1);
+led = applyOutcome(led, 'honored', { ordinal: 1, day: 20 });         // the exact next ordinal -> lands
+ok('honored -> reconcileN', led.reconcileN === 1 && ledgerCount(led) === 2);
+ok('recent tail is bounded + present', Array.isArray(led.recent) && led.recent.length >= 1);
+ok('betrayed -> betrayalN', applyOutcome(null, 'betrayed', { ordinal: 0, day: 1 }).betrayalN === 1);
 
 console.log('\nBanned inputs (F2 — no clock / no unseeded rng in the model):');
 // strip comments first — we care about CODE, not the doc-comment that literally names the banned inputs

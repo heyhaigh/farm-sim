@@ -44,6 +44,25 @@ console.log('#24-3 writeback endpoint guards');
     // a farmer without a numeric seed is SKIPPED (not written to a wildcard id)
     r = await run({}, { townSeed: 5, farmers: [{ name: 'no-seed' }, { seed: 9, name: 'ok' }] });
     ok(r.sent.length === 1 && r.sent[0].doc.customId === 'ry-farms:5:9', `farmer without numeric seed skipped (only the valid one written)`);
+
+    // #Codex25-7: null/boolean/empty/array/negative/float townSeed must NOT coerce to 0 (no shared ry-farms:0:0)
+    for (const bad of [null, false, true, '', ' ', [], {}, -1, 1.5, '01x']) {
+        r = await run({}, { townSeed: bad, farmers: [{ seed: 1 }] });
+        ok(r.status === 400 && r.sent.length === 0, `townSeed ${JSON.stringify(bad)} refused (no 0:0 write)`);
+    }
+    // a null farmer seed is skipped, not coerced to 0
+    r = await run({}, { townSeed: 5, farmers: [{ seed: null, name: 'x' }] });
+    ok(r.sent.length === 0, `null farmer seed skipped (no ry-farms:5:0 write)`);
+
+    // #Codex25-6: a stale (lower-or-equal) rev is refused SERVER-SIDE for the same customId within the process
+    r = await run({}, { townSeed: 77, rev: 8, farmers: [{ seed: 3, name: 'v8' }] });
+    ok(r.sent.length === 1, `rev 8 for ry-farms:77:3 accepted`);
+    r = await run({}, { townSeed: 77, rev: 7, farmers: [{ seed: 3, name: 'v7-stale' }] });
+    ok(r.sent.length === 0, `stale rev 7 rejected server-side (not written over rev 8)`);
+    r = await run({}, { townSeed: 77, rev: 8, farmers: [{ seed: 3, name: 'v8-dup' }] });
+    ok(r.sent.length === 0, `equal rev 8 rejected (already committed)`);
+    r = await run({}, { townSeed: 77, rev: 9, farmers: [{ seed: 3, name: 'v9' }] });
+    ok(r.sent.length === 1, `newer rev 9 accepted`);
 }
 
 console.log(pass ? '\nALL WRITEBACK-GUARD PROBES PASSED' : '\nSOME PROBES FAILED');

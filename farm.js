@@ -2454,7 +2454,7 @@ export class World {
             time: this.time, day: this.day, clock: this.clock,
             season: this.season, seasonDay: this.seasonDay, year: this.year,
             harvestTotal: this.harvestTotal, dayHarvestStart: this._dayHarvestStart,
-            weather: this.weather, weatherTimer: this.weatherTimer,
+            weather: this.weather, weatherTimer: this.weatherTimer, lightningTimer: this.lightningTimer,   // #Codex25-5 gates the storm strike + world.rand
             dmCooldown: this.dmCooldown, preyCooldown: this.preyCooldown,
             townCollab: this.townCollab, townCompete: this.townCompete, townVolatile: this.townVolatile,
             stormLosses: this.stormLosses,
@@ -2544,6 +2544,9 @@ export class World {
                 healSeekCd: f.healSeekCd, chatCooldown: f.chatCooldown, poachCooldown: f.poachCooldown,
                 teachCooldown: f.teachCooldown, sabotageCooldown: f.sabotageCooldown, barterCooldown: f.barterCooldown,
                 tradeCooldown: f.tradeCooldown, coopCooldown: f.coopCooldown,
+                // #Codex25-5: the rest of the rand()/action-gating farmer timers the first sweep missed
+                helpCooldown: f.helpCooldown, wellAskCooldown: f.wellAskCooldown, oreExpedCooldown: f.oreExpedCooldown,
+                annexCooldown: f.annexCooldown, thoughtBubbleTimer: f.thoughtBubbleTimer, wanderTimer: f.wanderTimer,
                 health: f.health, sickDays: f.sickDays, caution: f.caution, illnesses: f.illnesses,
                 nightsExposed: f.nightsExposed, reputation: f.reputation, mood: f.mood,
                 helpPostedDay: f.helpPostedDay, wood: f.wood, ore: f.ore, discovered: f.discovered,
@@ -2580,7 +2583,7 @@ export class World {
         this.time = d.time; this.day = d.day; this.clock = d.clock;
         this.season = d.season; this.seasonDay = d.seasonDay; this.year = d.year;
         this.harvestTotal = d.harvestTotal; this._dayHarvestStart = d.dayHarvestStart;
-        this.weather = d.weather; this.weatherTimer = d.weatherTimer;
+        this.weather = d.weather; this.weatherTimer = d.weatherTimer; this.lightningTimer = d.lightningTimer ?? 0;   // #Codex25-5
         this.dmCooldown = d.dmCooldown; this.preyCooldown = d.preyCooldown;
         this.townCollab = d.townCollab; this.townCompete = d.townCompete; this.townVolatile = d.townVolatile;
         this.stormLosses = d.stormLosses;
@@ -2667,6 +2670,10 @@ export class World {
             f.healSeekCd = fd.healSeekCd ?? 0; f.chatCooldown = fd.chatCooldown ?? 0; f.poachCooldown = fd.poachCooldown ?? 0;
             f.teachCooldown = fd.teachCooldown ?? 0; f.sabotageCooldown = fd.sabotageCooldown ?? 0; f.barterCooldown = fd.barterCooldown ?? 0;
             f.tradeCooldown = fd.tradeCooldown ?? 0; f.coopCooldown = fd.coopCooldown ?? 0;
+            // #Codex25-5: the timers the first sweep missed (default to the constructor value for old saves)
+            f.helpCooldown = fd.helpCooldown ?? f.helpCooldown; f.wellAskCooldown = fd.wellAskCooldown ?? f.wellAskCooldown;
+            f.oreExpedCooldown = fd.oreExpedCooldown ?? f.oreExpedCooldown; f.annexCooldown = fd.annexCooldown ?? f.annexCooldown;
+            f.thoughtBubbleTimer = fd.thoughtBubbleTimer ?? f.thoughtBubbleTimer; f.wanderTimer = fd.wanderTimer ?? f.wanderTimer;
             f.health = fd.health; f.sickDays = fd.sickDays; f.caution = fd.caution; f.illnesses = fd.illnesses;
             f.nightsExposed = fd.nightsExposed; f.reputation = fd.reputation; f.mood = fd.mood;
             f.helpPostedDay = fd.helpPostedDay; f.wood = fd.wood; f.ore = fd.ore; f.discovered = fd.discovered;
@@ -2706,7 +2713,7 @@ export class World {
         this.helpBoard = []; this.encounters = []; this.prey = [];
         this.treasure = null; this.merchant = null; this.dayRecap = null;
         this.rareNodes = []; this.rareCooldown = 0;   // #97 P2: transient, like treasure — respawn after load
-        this.lightningTimer = 0; this.lightningFlash = 0; this.struckTile = null; this.townLevelFlash = 0;
+        this.lightningFlash = 0; this.struckTile = null; this.townLevelFlash = 0;   // #Codex25-5 lightningTimer is authoritative now — restored above, NOT reset here (display flashes stay transient)
         this.birds = []; this.#spawnBirds(4 + Math.floor(this.rand() * 3));   // re-perch on the REAL current trees
         this.updateLeader();
         this.#recomputeTownTraits();

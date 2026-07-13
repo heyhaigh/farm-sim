@@ -3054,7 +3054,13 @@ async function openWorldMap() {
     worldMapOpen = true;
     rosterOpen = chronOpen = boardOpen = false;
     worldMapSel = world ? world.seed : null;
-    if (world) await registerWorld(world);        // make sure the active town is on the map + current
+    // #Codex25-1: opening the map must not publish UNCOMMITTED town state into the shared index. Persist first;
+    // register the committed summary only if the save actually landed. Otherwise just DISPLAY the existing index.
+    if (world) {
+        const w = world, summary = townSummary(w);
+        const d = await saveTown(w);
+        if (d != null) { summary.rev = w._rev; await registerWorld(w, summary); }
+    }
     worldMapIdx = await loadWorldIndex();
 }
 
@@ -4903,11 +4909,12 @@ function drawResumeCard() {
 function maybeAutosave() {
     if (!booted || !world || world.day === lastSavedDay) return;
     lastSavedDay = world.day;                       // claim synchronously so a slow write can't double-fire
-    // #Codex24-1: register the world summary ONLY after a SUCCESSFUL save. saveTown's CAS refuses a stale
-    // tab's write (returns null); if we still registered, that stale tab would push its out-of-date summary
-    // (day/harvest/envoy/doctrine) into the shared index — skewing reach detection and minting outcome-bearing
-    // inbox events off state that was never committed. Gate registration on the commit.
-    saveTown(world).then(d => { if (d != null) { saveFlashAt = performance.now(); registerWorld(world); } });
+    // #Codex24-1/#Codex25-1: register the world summary ONLY after a SUCCESSFUL save, and register an IMMUTABLE
+    // summary captured SYNCHRONOUSLY with the save (same world state — the sim can't interleave between these two
+    // synchronous calls), stamped with the COMMITTED rev afterward. This closes both a stale tab pushing
+    // uncommitted state AND the callback re-reading a world that the sim mutated after the snapshot.
+    const w = world, summary = townSummary(w);
+    saveTown(w).then(d => { if (d != null) { saveFlashAt = performance.now(); summary.rev = w._rev; registerWorld(w, summary); } });
 }
 
 // #2.1/#2.3/#2.4 — build this town's compact WORLD summary and merge it into the world index, then check
@@ -4944,15 +4951,18 @@ function townSummary(w) {
     };
 }
 let _worldBusy = false;
-async function registerWorld(w) {
+async function registerWorld(w, summary) {
     if (_worldBusy) return; _worldBusy = true;
     try {
         // Codex r20 P1: register THIS town + detect encounters + read its inbox in ONE atomic transaction, so a
         // second tab can't clobber the ledger/inbox. The mutator is synchronous (no awaits inside a live txn).
+        // #Codex25-1: `summary` is captured by the caller SYNCHRONOUSLY with the save (same world state) and
+        // stamped with the COMMITTED rev — so we never publish a summary built from state newer than what was
+        // actually persisted. Fall back to a live read only for direct callers that don't pass one.
+        const s = summary || townSummary(w);
         let fresh = [], mine = [];
         const idx = await updateWorldIndex(index => {
             index.towns = index.towns || {}; index.encounters = index.encounters || []; index.ledgers = index.ledgers || {};
-            const s = townSummary(w);
             const prev = index.towns[s.seed] || {};
             // #Codex24-1: never let an OLDER revision regress the shared summary (belt-and-suspenders with the
             // save-success gate in maybeAutosave). A stale upsert only refreshes liveness; the newest tab's

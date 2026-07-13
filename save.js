@@ -154,79 +154,100 @@ export function updateWorldIndex(mutator) {
 // NOT a hard delete — the save (and the wiped pointer) move to backup keys, so one accidental
 // "NEW -> SURE?" is always undoable (learned the hard way, day one). Each wipe overwrites the
 // previous backup: one-deep undo, zero ceremony.
+// #Codex25-2 — the whole wipe runs in ONE readwrite transaction (all keys live in the same 'towns' store): read
+// snapshot + latest + world index, then write the three backups, delete the town, and put the pruned index —
+// atomically. There is no crash window that could leave the slice unbacked or the town half-removed.
 export async function wipeTown(seed) {
     try {
-        const snap = await idbReq('readonly', s => s.get('town:' + seed));
-        const latest = await idbReq('readonly', s => s.get('latest'));
-        if (snap) await idbReq('readwrite', s => s.put(snap, 'backup:town'));
-        if (latest) await idbReq('readwrite', s => s.put(latest, 'backup:latest'));
-        await idbReq('readwrite', s => s.delete('town:' + seed));
-        if (latest && latest.seed === seed) await idbReq('readwrite', s => s.delete('latest'));
-        // Codex #22.3 — retire the town from the WORLD index too (atomically), else it lingers as a zombie:
-        // still on the map, still in encounter detection, its inbox/pair records growing forever. Summaries
-        // regenerate on next play; ledgers are lineage-keyed and intentionally persist. detectEncounters GCs
-        // any pair/news records orphaned by this removal.
+        const db = await openDb();
         const s = String(seed);
-        // #Codex24-2: CAPTURE the town's world-index slice before deleting it, so undo can atomically restore
-        // its inbox (incl. a future-dated traveler mid-journey), pair state, news, encounters, AND summary —
-        // not just the town snapshot. Without this, undo silently loses pending cross-town state, and the
-        // re-registered town is re-detected as "new", letting an old neighbor mint a fresh raid/reconciliation.
-        let slice = null;
-        await updateWorldIndex(index => {
-            const inPair = k => { const [a, b] = k.split(':'); return a === s || b === s; };
-            slice = {
-                town: index.towns ? index.towns[s] : undefined,
-                inbox: (index.inbox && index.inbox[s] !== undefined) ? index.inbox[s] : undefined,
-                pairs: index.pairs ? Object.fromEntries(Object.entries(index.pairs).filter(([k]) => inPair(k))) : {},
-                news: Array.isArray(index.news) ? index.news.filter(n => String(n.origin) === s || String(n.destination) === s) : [],
-                encounters: Array.isArray(index.encounters) ? index.encounters.filter(e => String(e.a) === s || String(e.b) === s) : [],
+        const inPair = k => { const [a, b] = k.split(':'); return a === s || b === s; };
+        await new Promise((resolve, reject) => {
+            const tx = db.transaction(STORE, 'readwrite');
+            const store = tx.objectStore(STORE);
+            let snap, latest;
+            const rSnap = store.get('town:' + seed); rSnap.onsuccess = () => { snap = rSnap.result; };
+            const rLatest = store.get('latest'); rLatest.onsuccess = () => { latest = rLatest.result; };
+            const rWorld = store.get(WORLD_KEY);
+            rWorld.onsuccess = () => {
+                const index = rWorld.result || { towns: {}, encounters: [] };
+                // CAPTURE the town's whole world-index slice — summary, inbox (incl. a future traveler mid-journey),
+                // pairs, news, encounters, AND #Codex25-3 the DURABLE metPairs dedup keys. Without metPairs, GC
+                // drops the wiped town's met-pairs while it's absent and undo lets every old pair re-detect.
+                const slice = {
+                    town: index.towns ? index.towns[s] : undefined,
+                    inbox: (index.inbox && index.inbox[s] !== undefined) ? index.inbox[s] : undefined,
+                    pairs: index.pairs ? Object.fromEntries(Object.entries(index.pairs).filter(([k]) => inPair(k))) : {},
+                    metPairs: index.metPairs ? Object.keys(index.metPairs).filter(inPair) : [],
+                    news: Array.isArray(index.news) ? index.news.filter(n => String(n.origin) === s || String(n.destination) === s) : [],
+                    encounters: Array.isArray(index.encounters) ? index.encounters.filter(e => String(e.a) === s || String(e.b) === s) : [],
+                };
+                if (index.towns) delete index.towns[s];
+                if (index.inbox) delete index.inbox[s];
+                if (index.pairs) for (const k of Object.keys(index.pairs)) if (inPair(k)) delete index.pairs[k];
+                if (index.metPairs) for (const k of Object.keys(index.metPairs)) if (inPair(k)) delete index.metPairs[k];
+                if (Array.isArray(index.news)) index.news = index.news.filter(n => String(n.origin) !== s && String(n.destination) !== s);
+                if (Array.isArray(index.encounters)) index.encounters = index.encounters.filter(e => String(e.a) !== s && String(e.b) !== s);
+                if (snap) store.put(snap, 'backup:town');
+                if (latest) store.put(latest, 'backup:latest');
+                store.put(slice, 'backup:worldslice');
+                store.delete('town:' + seed);
+                if (latest && latest.seed === seed) store.delete('latest');
+                store.put(index, WORLD_KEY);
             };
-            if (index.towns) delete index.towns[s];
-            if (index.inbox) delete index.inbox[s];
-            if (index.pairs) for (const k of Object.keys(index.pairs)) { if (inPair(k)) delete index.pairs[k]; }
-            if (Array.isArray(index.news)) index.news = index.news.filter(n => String(n.origin) !== s && String(n.destination) !== s);
-            if (Array.isArray(index.encounters)) index.encounters = index.encounters.filter(e => String(e.a) !== s && String(e.b) !== s);
-            return index;
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+            tx.onabort = () => reject(tx.error || new Error('wipe txn aborted'));
         });
-        await idbReq('readwrite', st => st.put(slice || null, 'backup:worldslice'));   // one-deep, alongside backup:town/latest
     } catch (err) {
         console.warn('ry-farms: wipe failed', err);
     }
 }
 
-// Undo the last wipe: put the backed-up town (and its latest-pointer) back. Returns the
-// restored seed, or null if there's nothing to restore. Reload after calling to resume it.
+// #Codex25-2 — undo runs in ONE readwrite transaction too: restore the town + latest + the full index slice
+// (incl. metPairs) AND consume all three one-deep backups atomically, so a crash can't half-restore and a
+// second undo can't re-apply a stale backup over newer state. Returns the restored seed (or null).
 export async function undoWipe() {
     try {
-        const snap = await idbReq('readonly', s => s.get('backup:town'));
-        if (!snap) return null;
-        await idbReq('readwrite', s => s.put(snap, 'town:' + snap.seed));
-        const latest = await idbReq('readonly', s => s.get('backup:latest'));
-        await idbReq('readwrite', s => s.put(latest && latest.seed === snap.seed ? latest
-            : { seed: snap.seed, day: snap.day, season: snap.season, year: snap.year, savedAt: Date.now() }, 'latest'));
-        // #Codex24-2: atomically restore the town's world-index slice (summary/inbox/pairs/news/encounters) the
-        // wipe backed up, so the resumed town keeps its pending traveler and isn't re-detected as a new neighbor.
-        const slice = await idbReq('readonly', s => s.get('backup:worldslice'));
-        if (slice) {
-            const sk = String(snap.seed);
-            await updateWorldIndex(index => {
-                index.towns = index.towns || {}; index.inbox = index.inbox || {}; index.pairs = index.pairs || {};
-                index.news = Array.isArray(index.news) ? index.news : []; index.encounters = Array.isArray(index.encounters) ? index.encounters : [];
-                if (slice.town !== undefined) index.towns[sk] = slice.town;
-                if (slice.inbox !== undefined) index.inbox[sk] = slice.inbox;
-                for (const [k, v] of Object.entries(slice.pairs || {})) index.pairs[k] = v;
-                const encKey = e => `${e.a}:${e.b}:${e.kind || ''}:${e.day ?? ''}:${e.ordinal ?? ''}`;
-                const haveEnc = new Set(index.encounters.map(encKey));
-                for (const e of (slice.encounters || [])) if (!haveEnc.has(encKey(e))) index.encounters.push(e);
-                const newsKey = nn => `${nn.origin}:${nn.destination}:${nn.ordinal ?? ''}`;
-                const haveNews = new Set(index.news.map(newsKey));
-                for (const nn of (slice.news || [])) if (!haveNews.has(newsKey(nn))) index.news.push(nn);
-                return index;
-            });
-        }
-        // #Codex24-2: consume the one-deep backup after a successful restore so a second undo can't re-restore
-        for (const key of ['backup:town', 'backup:latest', 'backup:worldslice']) await idbReq('readwrite', s => s.delete(key));
-        return snap.seed;
+        const db = await openDb();
+        return await new Promise((resolve, reject) => {
+            const tx = db.transaction(STORE, 'readwrite');
+            const store = tx.objectStore(STORE);
+            let snap, latest, slice, restoredSeed = null;
+            const rSnap = store.get('backup:town'); rSnap.onsuccess = () => { snap = rSnap.result; };
+            const rLatest = store.get('backup:latest'); rLatest.onsuccess = () => { latest = rLatest.result; };
+            const rSlice = store.get('backup:worldslice'); rSlice.onsuccess = () => { slice = rSlice.result; };
+            const rWorld = store.get(WORLD_KEY);
+            rWorld.onsuccess = () => {
+                if (!snap) return;   // nothing backed up — leave everything, oncomplete resolves null
+                restoredSeed = snap.seed;
+                const sk = String(snap.seed);
+                store.put(snap, 'town:' + snap.seed);
+                store.put(latest && latest.seed === snap.seed ? latest
+                    : { seed: snap.seed, day: snap.day, season: snap.season, year: snap.year, savedAt: Date.now() }, 'latest');
+                if (slice) {
+                    const index = rWorld.result || { towns: {}, encounters: [] };
+                    index.towns = index.towns || {}; index.inbox = index.inbox || {}; index.pairs = index.pairs || {};
+                    index.metPairs = index.metPairs || {};
+                    index.news = Array.isArray(index.news) ? index.news : []; index.encounters = Array.isArray(index.encounters) ? index.encounters : [];
+                    if (slice.town !== undefined) index.towns[sk] = slice.town;
+                    if (slice.inbox !== undefined) index.inbox[sk] = slice.inbox;
+                    for (const [k, v] of Object.entries(slice.pairs || {})) index.pairs[k] = v;
+                    for (const k of (slice.metPairs || [])) index.metPairs[k] = 1;   // #Codex25-3 restore the durable dedup keys
+                    const encKey = e => `${e.a}:${e.b}:${e.kind || ''}:${e.day ?? ''}:${e.ordinal ?? ''}`;
+                    const haveEnc = new Set(index.encounters.map(encKey));
+                    for (const e of (slice.encounters || [])) if (!haveEnc.has(encKey(e))) index.encounters.push(e);
+                    const newsKey = nn => `${nn.origin}:${nn.destination}:${nn.ordinal ?? ''}`;
+                    const haveNews = new Set(index.news.map(newsKey));
+                    for (const nn of (slice.news || [])) if (!haveNews.has(newsKey(nn))) index.news.push(nn);
+                    store.put(index, WORLD_KEY);
+                }
+                store.delete('backup:town'); store.delete('backup:latest'); store.delete('backup:worldslice');   // consume the one-deep backup
+            };
+            tx.oncomplete = () => resolve(restoredSeed);
+            tx.onerror = () => reject(tx.error);
+            tx.onabort = () => reject(tx.error || new Error('undo txn aborted'));
+        });
     } catch (err) {
         console.warn('ry-farms: undo failed', err);
         return null;

@@ -117,21 +117,27 @@ let rtFail = 0; const rt = (c, m) => { if (!c) { rtFail++; console.log(`  ROUND-
     for (let i = 0; i < 15 * 30 * 4; i++) w.tick(DT);   // ~15 days: elect officers, accrue state
     // stamp the rng-gating cooldowns + a wound so we can prove they survive (they gate seeded rand() draws)
     const f0 = w.farmers[0];
-    f0.healSeekCd = 4.25; f0.chatCooldown = 7.5; f0.poachCooldown = 3.1; f0.hp = Math.round(f0.maxHp * 0.4); f0._wasHurt = true;
+    // stamp EVERY rng-gating cooldown/timer the sweeps cover (#Codex24-5 + #Codex25-5), world + farmer
+    Object.assign(f0, { healSeekCd: 4.25, chatCooldown: 7.5, poachCooldown: 3.1, teachCooldown: 6.2, sabotageCooldown: 9.1,
+        barterCooldown: 2.7, tradeCooldown: 8.3, coopCooldown: 5.5, helpCooldown: 3.9, wellAskCooldown: 4.4,
+        oreExpedCooldown: 7.1, annexCooldown: 6.6, thoughtBubbleTimer: 2.2, wanderTimer: 1.3, hp: Math.round(f0.maxHp * 0.4), _wasHurt: true });
+    w.lightningTimer = 3.7;   // #Codex25-5 world-level storm-strike gate
     // an authoritative raid populates the inbox ledger + watermark + a monument + docks harvest (dormant path)
     w.harvestTotal = 100;
     w.applyInbox([{ id: 'rt-raid', kind: 'raided', day: w.day, pairKey: 'rt-raid', ordinal: 1, commit: 0.4, by: 'the Ashfang clan' }]);
+    const CDS = ['healSeekCd', 'chatCooldown', 'poachCooldown', 'teachCooldown', 'sabotageCooldown', 'barterCooldown',
+        'tradeCooldown', 'coopCooldown', 'helpCooldown', 'wellAskCooldown', 'oreExpedCooldown', 'annexCooldown', 'thoughtBubbleTimer', 'wanderTimer'];
     const before = {
-        healSeekCd: f0.healSeekCd, chatCooldown: f0.chatCooldown, poachCooldown: f0.poachCooldown,
+        cds: Object.fromEntries(CDS.map(k => [k, f0[k]])), lightningTimer: w.lightningTimer,
         hp: f0.hp, energy: f0.energy, sleepDebt: f0.sleepDebt,
         harvest: w.harvestTotal, ledger: (w._inboxApplied || []).length, wm: { ...(w._inboxWatermark || {}) },
         mons: w.monuments.length, roleManager: w.roles?.manager ?? null, seed: f0.sheet.seed,
     };
     const w2 = World.fromSave(structuredClone(w.serialize()));
     const g0 = w2.farmers.find(f => f.sheet.seed === before.seed);
-    rt(g0 && g0.healSeekCd === before.healSeekCd, `healSeekCd preserved (${g0 && g0.healSeekCd} == ${before.healSeekCd})`);
-    rt(g0 && g0.chatCooldown === before.chatCooldown, `chatCooldown preserved`);
-    rt(g0 && g0.poachCooldown === before.poachCooldown, `poachCooldown preserved`);
+    const cdMiss = CDS.filter(k => !(g0 && g0[k] === before.cds[k]));
+    rt(g0 && cdMiss.length === 0, `all ${CDS.length} rng-gating cooldowns preserved${cdMiss.length ? ' (missed: ' + cdMiss.join(',') + ')' : ''}`);
+    rt(w2.lightningTimer === before.lightningTimer, `world lightningTimer preserved (${w2.lightningTimer} == ${before.lightningTimer})`);
     rt(g0 && g0.hp === before.hp && g0.energy === before.energy && g0.sleepDebt === before.sleepDebt, `health (hp/energy/sleepDebt) preserved`);
     rt(w2.harvestTotal === before.harvest, `harvest preserved (${w2.harvestTotal} == ${before.harvest})`);
     rt((w2._inboxApplied || []).length === before.ledger && before.ledger >= 1, `inbox ledger preserved (${(w2._inboxApplied || []).length})`);

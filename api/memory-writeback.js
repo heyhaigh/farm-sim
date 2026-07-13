@@ -32,7 +32,34 @@ function isLoopbackOrigin(origin) {
     try { const h = new URL(origin).hostname; return h === 'localhost' || h === '127.0.0.1' || h === '::1'; }
     catch { return false; }
 }
-const numOrNull = v => (Number.isFinite(+v) ? Math.trunc(+v) : null);
+// #Codex25-7: a STRICT non-negative-integer parse. `+v` coerces null/''/[]/false all to 0 and true to 1, so
+// the old `Number.isFinite(+v)` accepted them and let a caller write the shared `ry-farms:0:0` doc. Accept only
+// a real non-negative safe integer, or a canonical non-negative integer string — nothing else.
+const numOrNull = v => {
+    if (typeof v === 'number') return Number.isSafeInteger(v) && v >= 0 ? v : null;
+    if (typeof v === 'string' && /^\d+$/.test(v)) { const n = Number(v); return Number.isSafeInteger(n) ? n : null; }
+    return null;
+};
+
+// #Codex25-6 — a server-side MONOTONIC-revision guard. SuperMemory exposes no get-by-customId / conditional
+// write, so a true durable CAS isn't possible here; this in-process registry is the achievable server-side
+// defense for the local self-host: it rejects any write whose rev is <= the highest rev ALREADY COMMITTED for
+// that customId, which blocks the two-visible-tabs stale-overwrite within a session (paired with the client's
+// stale/hidden-tab guard). It's recorded only on a SUCCESSFUL write (a failed fetch doesn't poison it), and it
+// is NOT durable across a server restart — a limitation inherent to the store's API.
+const revRegistry = new Map();   // customId -> highest committed rev (this process)
+async function upsertDoc(base, headers, doc, rev) {
+    const prev = revRegistry.get(doc.customId);
+    if (prev !== undefined && rev <= prev) return { stale: true };
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), DEADLINE_MS);
+    try {
+        const r = await fetch(`${base}/v3/documents`, { method: 'POST', headers, body: JSON.stringify(doc), signal: controller.signal });
+        if (r.ok) { revRegistry.set(doc.customId, rev); return { ok: true }; }
+        return { ok: false, status: r.status, text: (await r.text()).slice(0, 200) };
+    } catch (e) { return { err: e?.message || 'threw', cause: e?.cause?.message || '' }; }
+    finally { clearTimeout(timer); }
+}
 
 function readBody(req) {
     return new Promise((resolve, reject) => {
@@ -127,14 +154,10 @@ module.exports = async function handler(req, res) {
                 ...(body.town != null ? { town: String(body.town) } : {}),
             },
         };
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), DEADLINE_MS);
-        try {
-            const r = await fetch(`${base}/v3/documents`, { method: 'POST', headers, body: JSON.stringify(doc), signal: controller.signal });
-            if (r.ok) townHistoryWritten = true;
-            else console.error('[writeback] town-history non-ok', r.status, (await r.text()).slice(0, 200));
-        } catch (e) { console.error('[writeback] town-history threw:', e?.message, e?.cause?.message || ''); }
-        finally { clearTimeout(timer); }
+        const out = await upsertDoc(base, headers, doc, rev);
+        if (out.ok) townHistoryWritten = true;
+        else if (out.stale) console.warn('[writeback] town-history skipped (stale rev)');
+        else console.error('[writeback] town-history failed', out.status || '', out.text || out.err || '');
     }
     // #97 P5 — the town's book of inventions (one upserting doc per town)
     let townInventionsWritten = false;
@@ -146,14 +169,10 @@ module.exports = async function handler(req, res) {
             metadata: { app: 'ry-farms', kind: 'town-inventions', rev: String(rev), townSeed: String(townSeed),
                 ...(body.town != null ? { town: String(body.town) } : {}) },
         };
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), DEADLINE_MS);
-        try {
-            const r = await fetch(`${base}/v3/documents`, { method: 'POST', headers, body: JSON.stringify(doc), signal: controller.signal });
-            if (r.ok) townInventionsWritten = true;
-            else console.error('[writeback] town-inventions non-ok', r.status, (await r.text()).slice(0, 200));
-        } catch (e) { console.error('[writeback] town-inventions threw:', e?.message, e?.cause?.message || ''); }
-        finally { clearTimeout(timer); }
+        const out = await upsertDoc(base, headers, doc, rev);
+        if (out.ok) townInventionsWritten = true;
+        else if (out.stale) console.warn('[writeback] town-inventions skipped (stale rev)');
+        else console.error('[writeback] town-inventions failed', out.status || '', out.text || out.err || '');
     }
     if (!farmers.length) return send(res, 200, { ok: true, written: (townHistoryWritten ? 1 : 0) + (townInventionsWritten ? 1 : 0), townHistoryWritten, townInventionsWritten, source: base });
 
@@ -179,14 +198,10 @@ module.exports = async function handler(req, res) {
                 ...(f.name != null ? { name: String(f.name) } : {}),
             },
         };
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), DEADLINE_MS);
-        try {
-            const r = await fetch(`${base}/v3/documents`, { method: 'POST', headers, body: JSON.stringify(doc), signal: controller.signal });
-            if (r.ok) { written++; if (f.seed != null) persisted.push(f.seed); }
-            else console.error('[writeback] non-ok', r.status, (await r.text()).slice(0, 200));
-        } catch (e) { console.error('[writeback] threw:', e?.message, e?.cause?.message || ''); }
-        finally { clearTimeout(timer); }
+        const out = await upsertDoc(base, headers, doc, rev);
+        if (out.ok) { written++; persisted.push(fSeed); }
+        else if (out.stale) { /* a newer rev already landed for this farmer — skip silently */ }
+        else console.error('[writeback] farmer-life failed', out.status || '', out.text || out.err || '');
     }
     // report which seeds landed so the client stamps exactly those (a partial write is fine + resumable)
     return send(res, 200, { ok: true, written, of: farmers.length, persisted, townHistoryWritten, townInventionsWritten, source: base });

@@ -125,7 +125,10 @@ export function applyOutcome(ledger, outcome, meta) {
     }
     const recent = [...((ledger && ledger.recent) || [])];
     const l = { raidN, betrayalN, reconcileN, recent, tier: ledger && ledger.tier, firstTrustDone: ledger && ledger.firstTrustDone };
-    if (meta.ordinal < raidN + betrayalN + reconcileN) return l;   // stale replay of an already-recorded ordinal — no-op
+    // #Codex25-4 idempotency: accept ONLY the exact next ordinal. A repeat (ordinal < total) is a replay and a
+    // gap (ordinal > total) is out-of-order — both are no-ops. `< total` alone double-counted a repeated nonzero
+    // ordinal. The real caller always passes ledgerCount(led) (= total), so sequential appends still land.
+    if (meta.ordinal !== raidN + betrayalN + reconcileN) return l;
     if (outcome === 'raid') l.raidN++;
     else if (outcome === 'betrayed') l.betrayalN++;
     else if (outcome === 'honored') l.reconcileN++;
