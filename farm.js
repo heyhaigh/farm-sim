@@ -546,7 +546,7 @@ function shortName(farmer) {
 // #113 word-wrap a saying into lines of <= max chars, so the bubble can animate the FULL sentiment
 // line-by-line instead of truncating it. A single over-long word is hard-split so it never overflows.
 const SAY_LINE_CHARS = 22;   // bubble line width (in the 3px font) — reads comfortably over a head
-const SAY_LINE_SEC = 0.5;    // each line holds this long before advancing — snappy, natural reading pace
+const SAY_LINE_SEC = 0.75;   // each line holds this long before advancing (crossfade smooths the change)
 function wrapWords(text, max = SAY_LINE_CHARS) {
     const words = String(text).split(' ').filter(Boolean), lines = [];
     let cur = '';
@@ -659,6 +659,7 @@ export class World {
 
         this.helpBoard = [];
         this.encounters = [];      // active wilderness threats (see the Dungeon Master, #tickDM)
+        this.raidEvent = null;     // #Slice3 the in-progress WATCHED raid choreography (live-only, never serialized)
         this.dmCooldown = 90;      // a grace period before the first threat stalks the young town
         this._live = false;        // #108 true only while this town is the one being WATCHED (set by main.js on
                                    // boot). A cross-town raid landing on a live town STAGES a visible warband +
@@ -1635,12 +1636,13 @@ export class World {
                 // doctrine save has no e.commit -> falls back to the original flat 0.2, byte-identical.
                 const lost = Math.round((this.harvestTotal || 0) * (e.commit ?? 0.2));
                 this.harvestTotal = Math.max(0, (this.harvestTotal || 0) - lost);
+                const out = this.#resolveRaid(e, lost);   // #Slice3: the ONE authoritative outcome (same either way)
                 this.addChronicle('raid', `An orc warband raided ${this.name} in the night and carried off ${lost} of its stored harvest.`, null, null, '#e05840',
                     { tier: 'callout', tone: 'somber', why: `raided by ${e.by || 'a warband'}` });
-                // #108 — if this town is the one being WATCHED, don't let the raid be a mere line in the log:
-                // stage it. A warband appears at the fence, an alarm spotlight fires, and the Watch + the brave
-                // rally to drive them off (reusing the encounter combat + monuments). Dormant towns skip this.
-                if (this._live) this.#spawnRaid(e.by, e.commit ?? 0.2, lost);
+                // #108/#Slice3 — a WATCHED town stages the warband (a grand alarm, then the resolved outcome plays
+                // out as the skirmish ends); a dormant one applies the SAME resolved outcome silently, right now.
+                if (this._live) this.#spawnRaid(out, e);
+                else this.#applyRaidOutcome(out, e);
                 n++;
             } else if (e.kind === 'reconciled') {
                 // Slice C: the envoy EARNS a cross-faction belief that begins to overwrite their raid-creed.
@@ -5158,6 +5160,7 @@ export class World {
             // its (now day-spanning) timer runs out, so spells can persist across several days.
         }
         this.#tickFounding();   // #106 drive the day-10 gathering -> dusk ballot across the day
+        this.#tickRaidEvent(dt); // #Slice3 drive the watched raid choreography (no-op unless a raid is staged)
         this.weatherTimer -= dt;
         if (this.weatherTimer <= 0) this.#rollWeather();
         if (this.townLevelFlash > 0) this.townLevelFlash -= dt;   // UI-only level-up pulse
@@ -5315,40 +5318,125 @@ export class World {
         f.threatAlert = 2; f.say('!!', '#e05040');
     }
 
+    // #legibility Slice 3 — the AUTHORITATIVE raid resolver. A PURE, seeded outcome so a raid lands the SAME
+    // whether you WATCH it or it hits a dormant town (rendering is presentation only). Seeded on the raid's
+    // stable inbox id (reproducible given the inbox; NEVER world.rand — the headless digest is untouched).
+    // Weighs raider commitment against the town's able defenders (the Watch + hale hands) and its doctrine.
+    #resolveRaid(e, lost) {
+        const rid = e.id || `${e.pairKey}:${e.ordinal}`;
+        const r = mulberry32(hashString('raidres:' + rid + ':' + this.seed));
+        const n = Math.min(4, 2 + Math.round((e.commit ?? 0.2) * 4));   // raider party size
+        const defenders = this.farmers.filter(f => !f.downed && f.health !== 'sick');
+        const watch = this.watchFarmer();
+        let defPower = 0;
+        for (const f of defenders) defPower += 1 + Math.max(0, mod(f.sheet.stats.str)) * 0.5 + (f === watch ? 1.5 : 0);
+        const doc = this.doctrine();
+        const wallBonus = doc === 'palisade' ? 1.4 : doc === 'greatMuster' ? 1.2 : 1;
+        const FOE = ['Gruk', 'Morg', 'Tharg', 'Uzka', 'Drek', 'Snaga', 'Krul', 'Bolg'];
+        const EPI = ['of the Red Fen', 'the Fence-Breaker', 'of the Black Pines', 'the Crop-Burner', 'One-Tusk', 'the Howler'];
+        // felling a raider is HARD — a raid should usually carry off stores and get away; the Watch only
+        // sometimes avenges one (a rare stand → a meaningful monument). Capped so a crushing defence can't
+        // litter the map with stones. (Balance: raids are a threat, memorials stay rare.)
+        let felled = 0; const felledNames = [];
+        for (let k = 0; k < n && felled < 2; k++) {
+            const townRoll = (defPower / n) * wallBonus * (0.5 + r() * 0.8);
+            const raiderRoll = 3 + (e.commit ?? 0.2) * 3.5 * (0.5 + r() * 0.9);
+            if (townRoll > raiderRoll) { felled++; felledNames.push(`${FOE[Math.floor(r() * FOE.length)]} ${EPI[Math.floor(r() * EPI.length)]}`); }
+        }
+        // the clash costs the town — a few hale defenders (the Watch + strongest first) take wounds
+        const woundCount = Math.min(defenders.length, Math.round((e.commit ?? 0.2) * 3 * (0.5 + r())));
+        const ranked = [...defenders].sort((a, b) => ((b === watch ? 1 : 0) - (a === watch ? 1 : 0)) || (mod(b.sheet.stats.str) - mod(a.sheet.stats.str)) || (a.sheet.seed - b.sheet.seed));
+        const woundSeeds = ranked.slice(0, woundCount).map(f => f.sheet.seed);
+        const hero = felled > 0 ? (watch || ranked[0] || null) : null;
+        return { harvestLost: lost, n, felled, felledNames, woundSeeds, heroSeed: hero ? hero.sheet.seed : null, clan: e.by || 'a warband' };
+    }
+
+    // #legibility Slice 3 — apply a resolved raid outcome (monuments for felled raiders, wounds on defenders,
+    // the result line). Identical for a dormant town (called immediately) and a watched one (called when the
+    // visible skirmish resolves). `spots` (optional) = where the felled raiders actually stood, so a watched
+    // raid raises its stones where the fight happened; a dormant one drops them along the fence line.
+    #applyRaidOutcome(out, e, spots = null) {
+        const hero = out.heroSeed != null ? this.farmers.find(f => f.sheet.seed === out.heroSeed) : null;
+        for (let k = 0; k < out.felled; k++) {
+            let mi, mj;
+            if (spots && spots[k]) { mi = Math.round(spots[k].i); mj = Math.round(spots[k].j); }
+            else { const ang = (hashString('raidmon:' + (e.id || e.pairKey || '') + ':' + k) % 360) * Math.PI / 180, d = WILD_RADIUS - 4; mi = Math.round(CENTER + Math.cos(ang) * d); mj = Math.round(CENTER + Math.sin(ang) * d); }
+            const spot = this.nearestOpenTile({ i: mi, j: mj }) || { i: mi, j: mj };
+            this.monuments.push({ i: spot.i, j: spot.j, heroSeed: out.heroSeed, hero: hero ? shortName(hero) : 'the Watch', foe: out.felledNames[k] || 'a raider', day: this.day, party: 1, raid: true });
+        }
+        for (const seed of out.woundSeeds) { const f = this.farmers.find(x => x.sheet.seed === seed); if (f && !f.downed) { f.hp = Math.max(1, Math.round(f.maxHp * 0.45)); f._wasHurt = true; f.threatAlert = Math.max(f.threatAlert || 0, 2); } }
+        if (out.felled > 0) {
+            const tail = out.felled > 1 ? ` and ${out.felled - 1} more` : '';
+            this.addChronicle('legend', `${this.name}'s Watch drove off ${out.clan}, felling ${out.felledNames[0]}${tail} — a stand the town won't forget.`,
+                hero, null, '#f0d060', { tier: 'callout', tone: 'triumph', why: 'a raid repelled, at a cost' });
+        } else {
+            this.addChronicle('raid', `${out.clan} slipped away clean with ${this.name}'s stores — not a raider felled.`,
+                null, null, '#e05840', { tier: 'callout', tone: 'somber', why: 'a raid that got away' });
+        }
+    }
+
     // #108 THE RAID, made VISIBLE — a cross-town warband descends on the (watched) town. A party of orc
     // raiders appears together at the fence line and presses inward toward the townsfolk, reusing the
     // encounter combat + rally + monument machinery (so felling one still raises a stone). Fires a grand
     // "RAIDERS AT THE GATE" spotlight and rouses the whole town. `by` = the raiding clan, `commit` scales
     // the party size (a heavier raid brings more), `lost` = the harvest already carried off (for the beat).
-    #spawnRaid(by, commit, lost) {
-        const def = ENCOUNTER_DEFS.orc;
-        const n = Math.min(4, 2 + Math.round((commit || 0.2) * 4));   // 2..4 raiders, more for a heavier raid
-        const baseAng = this.rand() * Math.PI * 2;                     // the flank they came from
-        const d = WILD_RADIUS - 3;
-        const marks = this.farmers.filter(f => !f.downed && f.health !== 'sick' && f.state !== 'sleep' && f.state !== 'sleepwalk');
-        const FOE = ['Gruk', 'Morg', 'Tharg', 'Uzka', 'Drek', 'Snaga', 'Krul', 'Bolg'];
-        const EPI = ['of the Red Fen', 'the Fence-Breaker', 'of the Black Pines', 'the Crop-Burner', 'One-Tusk', 'the Howler'];
+    #spawnRaid(out, e) {
+        const def = ENCOUNTER_DEFS.orc, n = out.n;
+        const baseAng = this.rand() * Math.PI * 2, d = WILD_RADIUS - 3;   // the flank they came from (cosmetic)
+        const GEN = ['Gruk', 'Morg', 'Tharg', 'Uzka', 'Drek', 'Snaga', 'Krul', 'Bolg'];
+        const raiders = [];
         for (let k = 0; k < n; k++) {
             const ang = baseAng + (k - (n - 1) / 2) * 0.28;
             const ei = CENTER + Math.cos(ang) * d, ej = CENTER + Math.sin(ang) * d;
-            const tgt = marks.length ? marks[Math.floor(this.rand() * marks.length)] : (this.farmers[0] || null);
-            const e = { kind: 'orc', def, target: tgt, i: ei, j: ej, home: { i: ei, j: ej }, facing: 1,
-                        hp: def.hp, clashTimer: 1, life: 75, done: false, helpWanted: true, helpers: new Set(), raid: true };
-            e.foeName = `${FOE[Math.floor(this.rand() * FOE.length)]} ${EPI[Math.floor(this.rand() * EPI.length)]}`;
-            this.encounters.push(e);
-            this.reveal(Math.round(ei), Math.round(ej), 4);
-            if (tgt) { tgt.threatAlert = 2; }
+            // PRESENTATIONAL — the DM combat/rally/monument path skips these; the resolved outcome (#tickRaidEvent)
+            // is authoritative. The first out.felled raiders wear the resolver's felled names (they'll fall here).
+            const enc = { kind: 'orc', def, target: null, i: ei, j: ej, home: { i: ei, j: ej }, facing: 1,
+                          hp: def.hp, clashTimer: 1, life: 999, done: false, helpWanted: false, helpers: new Set(), raid: true, presentational: true };
+            enc.foeName = out.felledNames[k] || `${GEN[Math.floor(this.rand() * GEN.length)]} the Raider`;
+            this.encounters.push(enc); this.reveal(Math.round(ei), Math.round(ej), 4);
+            raiders.push(enc);
         }
-        // rouse the town — everyone feels the alarm; the Watch + brave rally through the normal path
-        for (const f of this.farmers) f.threatAlert = Math.max(f.threatAlert || 0, 1.5);
-        const clan = by || 'a warband';
-        this.addLog(`${clan} descends on ${this.name} — raiders at the fence!`, '#e05040');
-        this.addChronicle('raid', `${clan} fell upon ${this.name} — raiders at the fence, and the town rises to meet them.`,
+        for (const f of this.farmers) f.threatAlert = Math.max(f.threatAlert || 0, 1.5);   // rouse the town
+        this.addLog(`${out.clan} descends on ${this.name} — raiders at the fence!`, '#e05040');
+        this.addChronicle('raid', `${out.clan} fell upon ${this.name} — raiders at the fence, and the town rises to meet them.`,
             null, null, '#e05840', { tier: 'grand', tone: 'somber', label: 'RAIDERS AT THE GATE',
-                why: `${clan} carried off ${lost} of the stores - now the town must drive them off` });
+                why: `${out.clan} carried off ${out.harvestLost} of the stores - now the town must drive them off` });
+        this.raidEvent = { out, e, raiders, phase: 'march', timer: 9 };   // resolves after the press (see #tickRaidEvent)
+    }
+
+    // #Slice3 — the WATCHED raid choreography, converging on the resolver's outcome. The warband presses inward
+    // (~9s), then the resolved raiders FALL where they stand (monuments there) + defenders take the resolved
+    // wounds + the result line; survivors turn and flee. Live-only (raidEvent is set only on a watched raid),
+    // so the headless determinism harness never runs it.
+    #tickRaidEvent(dt) {
+        const re = this.raidEvent; if (!re) return;
+        const active = re.raiders.filter(x => !x.done && this.encounters.includes(x));
+        if (re.phase === 'march') {
+            for (const enc of active) {
+                const dx = CENTER - enc.i, dy = CENTER - enc.j, dist = Math.hypot(dx, dy);
+                if (dist > 11) { enc.i += dx / dist * 3.4 * dt; enc.j += dy / dist * 3.4 * dt; enc.facing = dx < 0 ? -1 : 1; }
+                this.reveal(Math.round(enc.i), Math.round(enc.j), 3);
+            }
+            re.timer -= dt;
+            if (re.timer <= 0) {
+                const spots = active.slice(0, re.out.felled).map(x => ({ i: x.i, j: x.j }));
+                this.#applyRaidOutcome(re.out, re.e, spots);
+                active.slice(0, re.out.felled).forEach(x => { x.done = true; });   // the doomed fall where they stood
+                this.encounters = this.encounters.filter(x => !x.done);
+                re.phase = 'flee'; re.timer = 2.8;
+            }
+        } else {   // flee — survivors run back out to the fog, then vanish
+            for (const enc of active) {
+                const dx = enc.i - CENTER, dy = enc.j - CENTER, dist = Math.hypot(dx, dy) || 1;
+                enc.i += dx / dist * 5.5 * dt; enc.j += dy / dist * 5.5 * dt; enc.facing = dx > 0 ? 1 : -1;
+            }
+            re.timer -= dt;
+            if (re.timer <= 0) { for (const enc of re.raiders) enc.done = true; this.encounters = this.encounters.filter(x => !x.done); this.raidEvent = null; }
+        }
     }
 
     #advanceEncounter(e, dt) {
+        if (e.presentational) return;   // #Slice3 a WATCHED-raid raider is driven wholly by #tickRaidEvent
         const f = e.target;
         if (!f || !this.farmers.includes(f) || f.health === 'sick') { this.#endEncounter(e, null); return; }
         e.life -= dt;
@@ -6172,6 +6260,29 @@ const IDLE_THOUGHTS_ORC = [
     'WHICH OF THEM IS RIPE FOR TAKING',
     'A STRONG WALL IS A FULL BELLY',
 ];
+// #117 context-aware idle muses — farmers react to the LAYER they're living in (weather/season/time/mood), so
+// "NICE DAY" can't fire in a storm. Each entry is [human[], orc[]] (same convention as the pools above, so the
+// orc mirror never leaks human phrasing). #museLine() picks the key from live sim state (deterministic). The
+// bland "clear" fallback is the ONLY place the old always-on lines live now.
+const MUSE_POOLS = {
+    storm:    [['THAT SKY COULD SPLIT A ROOF', 'HOLD, FENCE. HOLD.', 'THE CROPS HATE THIS AS MUCH AS I DO'],
+               ['THE SKY WANTS A FIGHT', 'STAND, PALISADE. STAND.', 'NO STORM TAKES WHAT IS MINE']],
+    blizzard: [["CAN'T SEE MY OWN FENCE OUT HERE", 'THE SNOW EATS EVERY SOUND', 'MY BONES SAY GO INSIDE'],
+               ['THE WHITE WIND BITES', 'THE SNOW SWALLOWS THE DRUMS', 'MY SCARS ACHE IN THIS']],
+    rain:     [['GOOD SOAKING RAIN', 'THE FIELDS ARE DRINKING WELL', 'NO HAULING WATER TODAY - THE SKY DOES IT'],
+               ['THE SKY DOES MY HAULING', 'THE MUD FATTENS THE SPOILS', 'RAIN SPARES MY BACK FOR TAKING']],
+    drought:  [['THE DIRT IS CRACKING UNDER MY BOOTS', 'EVERY DROP COUNTS NOW', 'I DREAM OF RAIN'],
+               ['THE GROUND IS DYING OF THIRST', 'HOARD EVERY DROP', 'THE SKY OWES US WATER']],
+    night:    [['QUIET OUT HERE AFTER DARK', 'STARS OVER THE FIELDS TONIGHT', 'ONE MORE ROW, THEN BED'],
+               ['THE DARK IS GOOD COVER', 'THE STARS WATCH THE CAMP', 'SLEEP IS FOR THE FED']],
+    winter:   [['THE GROUND SLEEPS. I SHOULD TOO', 'A FULL LARDER IS A WARM WINTER'],
+               ['THE GROUND IS DEAD. I AM NOT', 'A FULL HOARD IS A WARM DEN']],
+    tired:    [['MY ARMS ARE HEAVY TODAY', 'I COULD SLEEP WHERE I STAND'],
+               ['MY LIMBS DRAG', 'EVEN A WARRIOR TIRES']],
+    sour:     [['NOTHING GOES RIGHT TODAY', 'THE FENCE CAN WAIT. EVERYTHING CAN WAIT'],
+               ['TODAY DESERVES A FIGHT', 'LET THE FENCE ROT']],
+    clear:    [IDLE_THOUGHTS, IDLE_THOUGHTS_ORC],   // "NICE DAY OUT HERE" lives ONLY here
+};
 
 const FACILITY_YIELD_NAME = { pad: 'lily', fish: 'fish', chicken: 'egg', cow: 'milk', pig: 'truffle', goat: 'wool', sheep: 'wool' };
 
@@ -7859,7 +7970,7 @@ export class Farmer {
     #maybeRallyToThreat() {
         const w = this.world;
         for (const e of w.encounters) {
-            if (e.done || e.target === this || e.helpers.has(this)) continue;
+            if (e.done || e.presentational || e.target === this || e.helpers.has(this)) continue;   // #Slice3: raid raiders are spectacle, not a fight to join
             const d = Math.hypot(this.pos.i - e.i, this.pos.j - e.j);
             const inVillage = w.threatInVillage(e);
             if (!((e.helpWanted && d < 26) || (inVillage && d < 15))) continue;   // heard the call / saw it in town
@@ -8029,6 +8140,9 @@ export class Farmer {
         } else if (grudge && grudge.v < -0.3 && grudge.who !== other && this.rand() < 0.4) {
             speakerLine = orc ? `${shortName(grudge.who).toUpperCase()} IS WEAK. USE THEM.` : `DON'T TRUST ${shortName(grudge.who).toUpperCase()}...`;
             speakerColor = '#c9a45a';
+        } else if (w.weather === 'blizzard') {
+            speakerLine = pick(['THE COLD CUTS TO THE BONE.', "CAN'T FEEL MY ROWS."], ['THE FROST BITES DEEPER THAN STEEL.', 'WHITEOUT — HUDDLE THE BAND.']);
+            speakerColor = '#bcd8ff';
         } else if (w.weather === 'storm') {
             speakerLine = pick(['SKY SOUNDS ANGRY TODAY.', 'COUNT YOUR ROOF BEAMS.'], ['THE SKY WANTS A FIGHT.', 'BRACE THE WALLS.']);
             speakerColor = '#8a9ade';
@@ -8054,14 +8168,63 @@ export class Farmer {
         } else if (w.project && /NEEDS|DONE|BOARD|JOBS|FISTS|OURS|WAR-POST/.test(speakerLine)) {
             listenerLine = pick(['I CAN SPARE A HAND.', 'POST IT WHERE ALL CAN SEE.', 'THAT WOULD HELP US ALL.'], ['I CAN SPARE A FIST.', 'NAIL IT TO THE WAR-POST.', 'THAT FEEDS THE WHOLE BAND.']);
             listenerColor = '#e8c860';
-        } else if (w.weather === 'rain' || w.weather === 'storm') {
+        } else if (w.weather === 'rain' || w.weather === 'storm' || w.weather === 'blizzard') {
             listenerLine = pick(['WEATHER HAS A TEMPER.', 'THE ROOF WILL TELL.'], ['THE SKY HAS A TEMPER.', 'THE WALLS WILL TELL.']);
             listenerColor = '#8a9ade';
         } else {
             listenerLine = pick(['LIKEWISE.', "CAN'T COMPLAIN.", 'AYE.', 'WELL ENOUGH.', 'ONE ROW AT A TIME.'], ['LIKEWISE.', 'NO BLOOD LOST.', 'GRUH.', 'STRONG ENOUGH.', 'ONE SKULL AT A TIME.']);
         }
 
+        // #117 — a DISPLAY-ONLY overlay so a passing pair speak TO the world around them: severe weather
+        // gets HOISTED over idle smalltalk (no more "morning!" mid-blizzard), and a worn-out or low-spirited
+        // hand lets it show. It draws from a SEPARATE seeded stream (never this.rand()) and only rewrites the
+        // display line, so the sim's rng timeline — and the determinism baselines — stay byte-identical. It
+        // never stomps a RELATIONAL opener (a reunion, a threat, a rivalry) — those are the point of talking.
+        const relational = op >= 0.4 || op <= -0.35 || rop >= 0.4 || rop <= -0.35 ||
+            this === w.leader || (other === w.leader && this.p.competitiveness > 0.6);
+        if (!relational) {
+            const dr = mulberry32(hashString('chatwx:' + this.sheet.seed + ':' + other.sheet.seed + ':' + w.day + ':' + Math.round(w.clock)));
+            const dpick = a => a[Math.floor(dr() * a.length)];
+            let ov = null, oc = null;
+            if (w.weather === 'blizzard' && dr() < 0.75) {
+                ov = dpick(orc ? ['THE COLD TAKES THE WEAK. STAY SHARP.', 'WHITEOUT — I CAN BARELY SEE THE CAMP.'] : ['THIS WHITEOUT CHILLS THE BONES.', 'CAN WE EVEN WORK IN THIS?']); oc = '#bcd8ff';
+            } else if (w.weather === 'storm' && dr() < 0.6) {
+                ov = dpick(orc ? ['THE SKY WANTS A FIGHT TODAY.', 'THUNDER SUITS MY MOOD.'] : ['THAT THUNDER RATTLES THE ROOFS.', 'BEST STAY CLEAR OF THE OPEN FIELD.']); oc = '#8a9ade';
+            } else if (w.weather === 'drought' && dr() < 0.5) {
+                ov = dpick(orc ? ['THE LAND IS PARCHED — HOARD THE WATER.', 'DUST AND THIRST. A HARD SEASON.'] : ['NO RAIN IN AGES. THE FIELDS THIRST.', 'EVERY DROP IS PRECIOUS NOW.']); oc = '#e0a03c';
+            } else if (w.season === 3 && dr() < 0.35) {
+                ov = dpick(orc ? ['WINTER STARVES THE SOFT.', 'THE FROST KEEPS US HARD.'] : ["WINTER'S QUIET HAS ITS OWN WORK.", 'THE COLD MONTHS TEST US.']); oc = '#9fb8d8';
+            } else if ((this.mood ?? 0) < -0.5 && dr() < 0.5) {
+                ov = dpick(orc ? ['MY BLOOD IS SOUR TODAY.', 'LEAVE ME TO MY FOUL MOOD.'] : ["I'M NOT MYSELF TODAY.", 'FORGIVE ME — A GREY DAY.']); oc = '#9a8fae';
+            } else if (this.energy < 0.35 && dr() < 0.5) {
+                ov = dpick(orc ? ['DEAD ON MY FEET. STILL STANDING.', 'I NEED REST BEFORE I FALL.'] : ["I'M WORN CLEAN THROUGH.", 'ONE MORE ROW, THEN I MUST REST.']); oc = '#b0a890';
+            }
+            if (ov) { speakerLine = ov; speakerColor = oc; }
+        }
+
         return { speakerLine, listenerLine, speakerColor, listenerColor, weight };
+    }
+
+    // #117 — a weather/season-coloured line on WAKING. Display-only: say() draws no sim rng and the line
+    // is picked from a separate seeded stream, so the sim timeline is untouched (determinism-safe).
+    #wakeLine() {
+        const w = this.world, orc = w.culture === 'orc';
+        const dr = mulberry32(hashString('wake:' + this.sheet.seed + ':' + w.day));
+        const dpick = a => a[Math.floor(dr() * a.length)];
+        if (w.weather === 'blizzard') return dpick(orc ? ['A COLD DAWN. THE BAND STIRS.', 'FROST ON THE FURS ALREADY.'] : ['BRR — WOKE TO A WHITEOUT.', 'A COLD START TODAY.']);
+        if (w.weather === 'storm') return dpick(orc ? ['WOKE TO THUNDER. GOOD.', 'THE SKY IS ROARING ALREADY.'] : ['WHAT A STORM TO WAKE TO.', 'THUNDER FOR AN ALARM.']);
+        if (w.weather === 'rain') return dpick(orc ? ['RAIN AT DAWN. THE MUD FEEDS US.', 'GREY MORNING. STILL, WE TAKE.'] : ['RAINY MORNING — THE FIELDS DRINK.', 'A SOFT GREY START.']);
+        if (w.weather === 'drought') return dpick(orc ? ['ANOTHER DRY DAWN. HOARD WATER.', 'THE SUN IS ALREADY CRUEL.'] : ['DRY AGAIN. THE LAND NEEDS RAIN.', 'ANOTHER PARCHED MORNING.']);
+        if (w.season === 3) return dpick(orc ? ['A HARD WINTER MORNING.', 'THE FROST GREETS US FIRST.'] : ['A CRISP WINTER MORNING.', 'FROSTY START TODAY.']);
+        return dpick(orc ? ['ANOTHER DAY TO TAKE.', 'UP. THE WILDS WAIT.', 'DAWN. TO WORK.'] : ['GOOD MORNING!', 'UP WITH THE SUN.', 'A NEW DAY.']);
+    }
+
+    // #117 — a line of relief on stepping out once a storm/blizzard breaks. Display-only (see #wakeLine).
+    #shelterExitLine() {
+        const w = this.world, orc = w.culture === 'orc';
+        const dr = mulberry32(hashString('shelterout:' + this.sheet.seed + ':' + w.day + ':' + Math.round(w.clock)));
+        const dpick = a => a[Math.floor(dr() * a.length)];
+        return dpick(orc ? ['THE STORM BROKE. BACK TO THE TAKING.', 'THE SKY YIELDS. OUT WE GO.', 'IT PASSED. THE BAND MOVES.'] : ['THE STORM HAS PASSED.', 'CLEAR AGAIN — BACK TO WORK.', 'SAFE TO STEP OUT NOW.']);
     }
 
     // A neighbourly exchange whose tone is set by their standing with each other (and sometimes
@@ -8781,11 +8944,30 @@ export class Farmer {
             this.#goTo(best.i + 0.5, best.j + 0.5, 'wander');
             return;
         }
-        const musePool = this.world.culture === 'orc' ? IDLE_THOUGHTS_ORC : IDLE_THOUGHTS;
-        this.think(this.rand() < 0.4 ? `REMEMBERING: ${String(s.memory.title).slice(0, 26)}..` : musePool[Math.floor(this.rand() * musePool.length)]);
+        // #117 a context-aware muse (or a nod to their source memory) — never "nice day" in a storm. The
+        // memory nod shows the FULL title now (the bubble wraps + animates it) instead of clipping to "..".
+        const memT = String(s.memory && s.memory.title || '').replace(/\s+/g, ' ').trim();
+        const memNod = memT ? (memT.length > 72 ? memT.slice(0, 72).replace(/\s\S*$/, '') : memT) : '';
+        const useMemNod = this.rand() < 0.4 && memNod;   // this.rand() ALWAYS fires (preserves the rng stream)
+        this.think(useMemNod ? `REMEMBERING: ${memNod}` : this.#museLine());
         // wander to an owned interior field tile (works for L-shaped plots; never a hole/outside)
         if (spots.length) { const t = spots[Math.floor(this.rand() * spots.length)]; this.#goTo(t.i + 0.5, t.j + 0.5, 'wander'); }
         else { const d = this.world.houseDoor(this.plot); this.#goTo(d.i, d.j, 'wander'); }
+    }
+
+    // #117 pick an idle-muse pool from the LAYER the farmer is living in — severe weather first, then night,
+    // mood, tiredness, season, and only then the bland "clear" lines. One this.rand() draw (same as before),
+    // and the key comes from deterministic sim state, so the rng stream is unchanged.
+    #museLine() {
+        const w = this.world;
+        const key = MUSE_POOLS[w.weather] ? w.weather        // storm / blizzard / rain / drought dominate
+            : w.isNight() ? 'night'
+            : (this.mood ?? 0) < -0.45 ? 'sour'
+            : this.energy < 0.4 ? 'tired'
+            : w.season === 3 ? 'winter'
+            : 'clear';
+        const pair = MUSE_POOLS[key], pool = w.culture === 'orc' ? pair[1] : pair[0];
+        return pool[Math.floor(this.rand() * pool.length)];
     }
 
     #thinkTask(task) {
@@ -10156,10 +10338,10 @@ export class Farmer {
             }
 
             case 'idle': this.wanderTimer -= dt; if (this.wanderTimer <= 0) this.state = 'decide'; break;
-            case 'sleep': if (!this.world.isNight()) { this.state = 'decide'; this.say('good morning!'); this.visitedSick.clear(); } break;
+            case 'sleep': if (!this.world.isNight()) { this.state = 'decide'; this.say(this.#wakeLine(), '#e8d8a0'); this.visitedSick.clear(); } break;
             case 'rest': if (this.energy > 0.5) { this.state = 'decide'; this.say('back to it'); } break;
             case 'sick': if (this.health !== 'sick') this.state = 'decide'; break;
-            case 'shelter': if (this.world.weather !== 'storm' && this.world.weather !== 'blizzard') this.state = 'decide'; break;
+            case 'shelter': if (this.world.weather !== 'storm' && this.world.weather !== 'blizzard') { this.state = 'decide'; this.say(this.#shelterExitLine(), '#9fd0e0'); } break;
             // #106 hold at the square, deliberating, until the world reads the ballot at dusk (then -> decide)
             case 'assemble': {
                 if (!this.world.foundingGathering()) { this.state = 'decide'; break; }

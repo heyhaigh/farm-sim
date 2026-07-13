@@ -416,6 +416,50 @@ class FarmAudio {
         }
     }
 
+    // #raidfx — the audio takeover for the "UNDER RAID" battle-transition: a low war-horn that bends
+    // upward, a pair of deep drum thumps, and a tense minor cluster on top. Ominous, short, punchy.
+    raidSting() {
+        if (!this.ctx || !this.enabled) return;
+        this.ensure();
+        const t0 = this.ctx.currentTime + 0.02;
+        // war-horn: a fat detuned saw swelling up a minor third
+        for (const det of [-4, 0, 5]) {
+            const o = this.ctx.createOscillator(); o.type = 'sawtooth';
+            o.frequency.setValueAtTime(96 + det, t0);
+            o.frequency.exponentialRampToValueAtTime(150 + det, t0 + 0.5);
+            const lp = this.ctx.createBiquadFilter(); lp.type = 'lowpass';
+            lp.frequency.setValueAtTime(500, t0); lp.frequency.exponentialRampToValueAtTime(1400, t0 + 0.4);
+            const g = this.ctx.createGain();
+            g.gain.setValueAtTime(0.0001, t0);
+            g.gain.linearRampToValueAtTime(0.2, t0 + 0.12);
+            g.gain.exponentialRampToValueAtTime(0.0001, t0 + 1.3);
+            o.connect(lp); lp.connect(g); g.connect(this.sfxBus);
+            o.start(t0); o.stop(t0 + 1.4);
+        }
+        // two war-drum thumps
+        for (const off of [0, 0.34]) {
+            const t = t0 + off;
+            const src = this.ctx.createBufferSource(); src.buffer = this.#noiseBuffer(0.5);
+            const lp = this.ctx.createBiquadFilter(); lp.type = 'lowpass';
+            lp.frequency.setValueAtTime(220, t); lp.frequency.exponentialRampToValueAtTime(50, t + 0.3);
+            const g = this.ctx.createGain();
+            g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.5, t + 0.01);
+            g.gain.exponentialRampToValueAtTime(0.0001, t + 0.34);
+            src.connect(lp); lp.connect(g); g.connect(this.sfxBus);
+            src.start(t); src.stop(t + 0.4);
+        }
+        // tense minor cluster stab up top
+        for (const [f, off] of [[440, 0.06], [523.25, 0.06], [622.25, 0.2]]) {
+            const t = t0 + off;
+            const o = this.ctx.createOscillator(); o.type = 'square'; o.frequency.value = f;
+            const g = this.ctx.createGain();
+            g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.05, t + 0.02);
+            g.gain.exponentialRampToValueAtTime(0.0001, t + 0.5);
+            o.connect(g); g.connect(this.sfxBus);
+            o.start(t); o.stop(t + 0.6);
+        }
+    }
+
     #thunder() {
         const t = this.ctx.currentTime + 0.1 + Math.random() * 0.5;   // travel delay after the flash
         const src = this.ctx.createBufferSource();

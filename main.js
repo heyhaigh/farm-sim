@@ -91,6 +91,12 @@ const CHAT_CLOSE = { x: 0, y: 0, w: 0, h: 0 };  // the widget's minimize (_) hit
 const CHAT_PANEL = { x: 0, y: 0, w: 0, h: 0 };  // the expanded widget bounds (for pan-block + click-consume)
 let chatViewport = null;          // { x, y, w, h, bodyTop, bodyBot, maxScroll } of the history area
 let chronOpen = false;            // town chronicle panel (the settlement's saga)
+// #raidfx — the fullscreen "UNDER RAID" battle-transition (war-bands slam shut, a hit-flash + screen shake,
+// the camera snaps to the raiders). Fires when world.raidEvent is newly staged. Display-only.
+let raidFx = null;                // { t } while the transition plays
+let raidShake = 0;                // decaying screen-shake magnitude
+let raidFocus = null;             // { i, j } the camera eases to while a raid is on (the fence/well the warband hits)
+let _lastRaidEvent = null;        // dedupe the trigger (fire once per staged raid)
 let chronReadTotal = 0;           // world._chronTotal at last view — the badge shows only for UNREAD beats
 let chronScroll = 0;
 let followMode = false;           // camera tracks followTarget (F/crosshair toggles; drag/Esc cancels)
@@ -2462,15 +2468,30 @@ function drawFarmer(f, sx, sy) {
         const idx = Math.min(lines.length - 1, Math.max(0, Math.floor(elapsed / (b.lineSec || 1.5))));
         const line = lines[idx] || '';
         const multi = lines.length > 1;
-        const w = textWidth(line) + 4 + (multi ? 6 : 0);   // room for the line-count dots
+        // the plate holds the WIDEST line's width for the whole saying, so it never resizes/jumps as the
+        // animation advances (the jarring break the resize used to cause). Text stays left-aligned within it.
+        const w = Math.max(...lines.map(l => textWidth(l))) + 4 + (multi ? 6 : 0);
         const bx = Math.floor(sx - w / 2), by = py - 10;
         ctx.fillStyle = 'rgba(16,18,26,0.85)';
         ctx.fillRect(bx, by, w, 9);
-        drawText(ctx, line, bx + 2, by + 2, b.color);
+        // CROSSFADE between lines (no empty-plate "blink"): the outgoing line rises up-and-out as the incoming
+        // one rises in, both clipped to the plate, on a smooth easeInOutCubic. When held, ease=1 (steady, full).
+        const lineSec = b.lineSec || 1.5;
+        const p = Math.min(1, Math.max(0, (elapsed - idx * lineSec) / 0.22));
+        const ease = p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2;
+        ctx.save();
+        ctx.beginPath(); ctx.rect(bx, by, w, 9); ctx.clip();
+        if (idx > 0 && ease < 1) {   // the previous line fades out + slides up out of the plate
+            ctx.globalAlpha = 1 - ease;
+            drawText(ctx, lines[idx - 1], bx + 2, by + 2 - Math.round(ease * 5), b.color);
+        }
+        ctx.globalAlpha = ease;
+        drawText(ctx, line, bx + 2, by + 2 + Math.round((1 - ease) * 5), b.color);
+        ctx.restore();
         if (multi) {   // ••◦ dots at the right edge — filled up to the current line, so you know more follows
             for (let k = 0; k < lines.length; k++) {
                 ctx.fillStyle = k <= idx ? b.color : 'rgba(160,164,180,0.4)';
-                ctx.fillRect(bx + w - 4, by + 1 + k * 2, 1, 1);
+                ctx.fillRect(bx + w - 2, by + 1 + k * 2, 1, 1);   // half the previous right padding (was -4)
             }
         }
     }
@@ -3919,11 +3940,10 @@ function drawRoster() {
     // the window splits: the roster LIST is locked to the top, the CONSCIENCE CHAT to the bottom. The list gets
     // the lion's share so the whole cast is visible (was 0.46 — the chat's empty middle wasted rows + clipped
     // the last settler); the chat keeps a compact strip that still holds its prompt + recent lines.
-    const splitY = PY + Math.floor(PH * 0.66);
-
-    // scrollable body (clipped) — ends above the split, leaving a line for the hint + divider
+    // scrollable body (clipped) — the roster list now uses the WHOLE panel; the whisper chat moved out to the
+    // standalone bottom-left widget (drawChatWidget), so the roster is purely the cast list.
     const bodyTop = hy + 11;
-    const bodyBot = splitY - 12;
+    const bodyBot = PY + PH - 10;
     const rowH = 11;
     const rows = rosterSorted();
     const maxScroll = Math.max(0, rows.length * rowH - (bodyBot - bodyTop));
@@ -3964,12 +3984,7 @@ function drawRoster() {
         ctx.fillStyle = '#7dd069';
         ctx.fillRect(PX + PW - 3, Math.floor(thumbY), 2, Math.floor(thumbH));
     }
-
-    // the bottom half: the conscience chat
-    drawConscienceChat(PX, splitY, PW, PY + PH - splitY);
-
-    // if the farmer-switch dropdown is open, it draws LAST so it overlays the list above it
-    if (chatDropdownOpen) drawChatDropdown(PX, PW, splitY);
+    // (the conscience chat moved to the standalone bottom-left whisper widget — see drawChatWidget)
 }
 
 // ---------------------------------------------------------------------------
@@ -4703,6 +4718,72 @@ function drawGem(kind, cx, cy, r, tone) {
     ctx.restore();
 }
 
+// #raidfx — the "UNDER RAID" battle-transition. A hit-flash, then jagged war-bands slam shut from
+// alternating edges (staggered so they cascade), a big "UNDER RAID" callout while the screen is
+// covered, then the bands snap open to reveal the raid already underway. Display-only; drawn under
+// the CRT shader (so it gets the scanline/aberration treatment for free).
+const RAIDFX_DUR = 1.25;
+function drawRaidFx() {
+    const p = Math.min(1, raidFx.t / RAIDFX_DUR);
+
+    // A — impact flash: a red slam with a white core at the very first instant
+    if (p < 0.18) {
+        ctx.fillStyle = `rgba(196,32,24,${(1 - p / 0.18) * 0.72})`;
+        ctx.fillRect(0, 0, GW, GH);
+        if (p < 0.05) { ctx.fillStyle = `rgba(255,238,228,${(1 - p / 0.05) * 0.6})`; ctx.fillRect(0, 0, GW, GH); }
+    }
+
+    // B — war-bands close (0.10→0.44), hold (0.44→0.60), open (0.60→1.0), each band staggered + torn
+    const bands = 8, bandH = Math.ceil(GH / bands);
+    for (let k = 0; k < bands; k++) {
+        const fromLeft = (k % 2) === 0;
+        let c;   // 0 = fully open, 1 = fully covering
+        const cs = 0.10 + k * 0.012;
+        if (p < 0.44) c = Math.min(1, Math.max(0, (p - cs) / (0.44 - cs)));
+        else if (p < 0.60) c = 1;
+        else { const os = 0.60 + k * 0.010; c = 1 - Math.min(1, Math.max(0, (p - os) / (1.0 - os))); }
+        if (c <= 0) continue;
+        const e = c < 0.5 ? 4 * c * c * c : 1 - Math.pow(-2 * c + 2, 3) / 2;   // easeInOutCubic
+        const w = Math.round(GW * e);
+        const y = k * bandH;
+        const x = fromLeft ? 0 : GW - w;
+        ctx.fillStyle = (k % 2) ? '#35110d' : '#480f0a';
+        ctx.fillRect(x, y, w, bandH);
+        // torn bright leading edge, jagged per row
+        const edge = fromLeft ? w : GW - w;
+        ctx.fillStyle = '#b02218';
+        for (let r = 0; r < bandH; r += 2) {
+            const jag = ((k * 13 + r * 7) % 5) - 2;
+            ctx.fillRect(edge - 3 + (fromLeft ? jag : -jag), y + r, 3, 2);
+        }
+    }
+
+    // C — the "UNDER RAID" callout, held while the screen is covered, with a punch-in then fade
+    if (p > 0.30 && p < 0.94) {
+        const q = Math.min(1, (p - 0.30) / 0.10);                 // punch-in 0→1
+        const fade = p > 0.82 ? Math.max(0, 1 - (p - 0.82) / 0.12) : 1;
+        const scale = Math.round(3 + q);                          // 3 → 4
+        const big = (world.culture === 'orc') ? 'UNDER SIEGE' : 'UNDER RAID';
+        const bw = textWidth(big, scale);
+        const bx = Math.floor((GW - bw) / 2), by = Math.floor(GH / 2 - scale * 5);
+        ctx.save(); ctx.globalAlpha = fade;
+        drawText(ctx, big, bx + 1, by + 1, '#1a0605', scale);     // drop shadow
+        drawText(ctx, big, bx, by, q < 1 ? '#ffe6b0' : '#ff5a3c', scale);
+        const sub = `${(world.name || 'THE TOWN').toUpperCase()} — HOLD THE LINE`;
+        const sx = Math.floor((GW - textWidth(sub, 1)) / 2);
+        drawText(ctx, sub, sx, by + scale * 6 + 4, '#e8c9a0', 1);
+        ctx.restore();
+    }
+
+    // D — a lingering red vignette as the world comes back
+    if (p > 0.58) {
+        const g = ctx.createRadialGradient(GW / 2, GH / 2, GH * 0.3, GW / 2, GH / 2, GH * 0.75);
+        const a = Math.max(0, 1 - (p - 0.58) / 0.42) * 0.5;
+        g.addColorStop(0, 'rgba(120,10,6,0)'); g.addColorStop(1, `rgba(120,10,6,${a})`);
+        ctx.fillStyle = g; ctx.fillRect(0, 0, GW, GH);
+    }
+}
+
 function drawMoments() {
     if (rosterOpen || chronOpen || boardOpen || settingsOpen) { scanMoments(); return; }   // don't fight a full modal
     scanMoments();
@@ -4929,7 +5010,7 @@ out.addEventListener('pointermove', (e) => {
     }
     if (mouse.panStart) {
         const dx = p.x - mouse.panStart.x, dy = p.y - mouse.panStart.y;
-        if (Math.abs(dx) + Math.abs(dy) > 4) { mouse.dragging = true; followMode = false; followTarget = null; }   // panning breaks follow
+        if (Math.abs(dx) + Math.abs(dy) > 4) { mouse.dragging = true; followMode = false; followTarget = null; raidFocus = null; }   // panning breaks follow (incl. the raid lock)
         if (mouse.dragging) {
             cam.x = mouse.panStart.camX + dx;
             cam.y = mouse.panStart.camY + dy;
@@ -5053,38 +5134,18 @@ out.addEventListener('pointerup', (e) => {
     // roster overlay (modal) — handle before any world/minimap clicks
     if (rosterOpen) {
         const rv = rosterView;
-        // the farmer-switch dropdown, when open, eats clicks first
-        if (chatDropdownOpen) {
-            for (const row of chatDropRows) {
-                if (p.x >= row.x0 && p.x <= row.x1 && p.y >= row.y0 && p.y <= row.y1) {
-                    chatFarmer = row.farmer; chatScroll = 0; chatDropdownOpen = false; return;
-                }
-            }
-            chatDropdownOpen = false; return;   // clicking off the list just closes it
-        }
         if (rv) {
             // close X / click well outside the panel
             if ((p.x > rv.x + rv.w - 14 && p.y < rv.y + 12) ||
-                p.x < rv.x || p.x > rv.x + rv.w || p.y < rv.y || p.y > rv.y + rv.h) { rosterOpen = false; blurChatInput(); return; }
-            // chat: header name toggles the switcher
-            if (chatNameHit && p.x >= chatNameHit.x0 && p.x <= chatNameHit.x1 && p.y >= chatNameHit.y0 && p.y <= chatNameHit.y1) {
-                chatDropdownOpen = !chatDropdownOpen; return;
-            }
-            // chat: entry row focuses the hidden input
-            if (chatEntryRect && p.x >= chatEntryRect.x0 && p.x <= chatEntryRect.x1 && p.y >= chatEntryRect.y0 && p.y <= chatEntryRect.y1) {
-                focusChatInput(); return;
-            }
-            // list rows (top half): open that farmer's detail sheet AND follow them, so picking a
-            // name in the roster jumps the camera to that Ry (roster select + follow are one action)
+                p.x < rv.x || p.x > rv.x + rv.w || p.y < rv.y || p.y > rv.y + rv.h) { rosterOpen = false; return; }
+            // list rows: open that farmer's detail sheet AND follow them (roster select + follow are one action)
             for (const row of rosterRows) {
                 if (p.y >= row.y0 && p.y <= row.y1 && p.x > rv.x && p.x < rv.x + rv.w) {
-                    selected = row.farmer; sheetScroll = 0; sheetTab = 0; rosterOpen = false; blurChatInput();
+                    selected = row.farmer; sheetScroll = 0; sheetTab = 0; rosterOpen = false;
                     followMode = true; followTarget = row.farmer;
                     return;
                 }
             }
-            // a click elsewhere in the panel drops keyboard focus
-            blurChatInput();
         }
         return;
     }
@@ -5239,8 +5300,15 @@ window.addEventListener('keydown', (e) => {
     }
     // W — WATCH: jump to follow the current off-screen drama the cue is pointing at
     if ((e.key === 'w' || e.key === 'W') && world && booted) {
-        const target = spotlightFarmer();
-        if (target) { followMode = true; followTarget = target; selected = target; sheetScroll = 0; sheetTab = 0; rosterOpen = false; chronOpen = false; boardOpen = false; dramaSpotlight = null; }
+        // a live raid outranks the spotlight — W snaps (or re-snaps) the camera to the warband
+        if (world.raidEvent) {
+            const re = world.raidEvent.e || {};
+            const spot = (re.i != null && re.j != null) ? { i: re.i, j: re.j } : (world.well ? { i: world.well.i, j: world.well.j } : null);
+            if (spot) { raidFocus = spot; followMode = false; followTarget = null; rosterOpen = false; chronOpen = false; boardOpen = false; }
+        } else {
+            const target = spotlightFarmer();
+            if (target) { followMode = true; followTarget = target; selected = target; sheetScroll = 0; sheetTab = 0; rosterOpen = false; chronOpen = false; boardOpen = false; dramaSpotlight = null; }
+        }
     }
     // M — toggle the zoom-out WORLD map (the world of towns)
     if ((e.key === 'm' || e.key === 'M') && world && booted) {
@@ -5360,13 +5428,44 @@ function frame(now) {
     // all the leftover time, but cap it so we never spiral.
     if (steps >= 800) simAccumulator = Math.min(simAccumulator, 800 * FIXED_DT);
 
-    // camera: trail followTarget, easing toward centre (manual drag cancels — see pointermove)
-    if (followMode && followTarget && world.farmers.includes(followTarget) && !mouse.dragging) {
+    // #raidfx — a newly-staged raid takes over the screen: fire the "UNDER RAID" battle-transition,
+    // kick a screen-shake, and snap the camera to where the warband strikes. Display-only, so no
+    // determinism impact (world.raidEvent is produced by the sim; we only observe the null→set edge).
+    if (world.raidEvent && world.raidEvent !== _lastRaidEvent) {
+        _lastRaidEvent = world.raidEvent;
+        raidFx = { t: 0 };
+        raidShake = 7;
+        // aim the camera at the raid: prefer the felled/target spot, else the well the warband presses toward
+        const e = world.raidEvent.e || {};
+        const spot = (e.i != null && e.j != null) ? { i: e.i, j: e.j } : (world.well ? { i: world.well.i, j: world.well.j } : null);
+        raidFocus = spot;
+        followMode = false; followTarget = null;   // the raid outranks any farmer we were trailing
+        if (audio.raidSting) audio.raidSting();     // audio takeover (music shift groundwork)
+    }
+    if (!world.raidEvent) { _lastRaidEvent = null; raidFocus = null; }   // raid over — release the camera
+    if (raidShake > 0) raidShake = Math.max(0, raidShake - dt * 11);
+
+    // camera: while a raid is live, ride the raidFocus; otherwise trail followTarget
+    if (raidFocus) {
+        const tx = GW / 2 - isoX(raidFocus.i, raidFocus.j);
+        const ty = GH / 2 - isoY(raidFocus.i, raidFocus.j) - 12;
+        if (!mouse.dragging) { cam.x += (tx - cam.x) * 0.16; cam.y += (ty - cam.y) * 0.16; }
+    } else if (followMode && followTarget && world.farmers.includes(followTarget) && !mouse.dragging) {
         const tx = GW / 2 - isoX(followTarget.pos.i, followTarget.pos.j);
         const ty = GH / 2 - isoY(followTarget.pos.i, followTarget.pos.j) - 12;
         cam.x += (tx - cam.x) * 0.14; cam.y += (ty - cam.y) * 0.14;
     } else if (followMode && (!followTarget || !world.farmers.includes(followTarget))) {
         followMode = false; followTarget = null;   // nothing left to follow
+    }
+
+    // #raidfx — jolt the WORLD (not the UI) while the shake is hot. Layered sines give an organic
+    // rattle; we offset the camera for the world pass and restore it before drawUI so the HUD stays put.
+    let _shakeX = 0, _shakeY = 0;
+    if (raidShake > 0.1) {
+        const s = raidShake;
+        _shakeX = Math.round((Math.sin(t * 91) * 0.6 + Math.sin(t * 47) * 0.4) * s);
+        _shakeY = Math.round((Math.sin(t * 83) * 0.6 + Math.sin(t * 59) * 0.4) * s);
+        cam.x += _shakeX; cam.y += _shakeY;
     }
 
     // background
@@ -5392,11 +5491,13 @@ function frame(now) {
     for (const d of drawables) d.draw();
 
     drawWeather(dt, t);
+    if (_shakeX || _shakeY) { cam.x -= _shakeX; cam.y -= _shakeY; }   // restore before the HUD (UI never shakes)
     drawUI();
     maybeAutosave();
     // (end-of-day recap card removed — the Moments/callout banners + the chronicle carry the day's beats now;
     // the "PREVIOUSLY ON" catch-up card on RESUME is separate and stays, see drawResumeCard)
     drawMoments();   // #98: spotlight the profound beats on top of the HUD (still under the CRT shader)
+    if (raidFx) { drawRaidFx(); raidFx.t += dt; if (raidFx.t >= RAIDFX_DUR) raidFx = null; }   // #raidfx battle-transition, topmost in-game layer
     // a quiet indicator while the camera is trailing someone (F, or the sheet's crosshair, toggles it)
     FOLLOW_PREV.w = FOLLOW_NEXT.w = 0;   // no banner, no clickable arrows (cleared each frame)
     if (followMode && followTarget && world.farmers.includes(followTarget) && !rosterOpen && !chronOpen && !boardOpen) {
@@ -5419,7 +5520,7 @@ function frame(now) {
     // building hover tooltip — only when hovering the world (not over a panel, not dragging,
     // and not while an inventory-slot tooltip is already showing on the open sheet)
     let worldHover = false;
-    if (booted && mouse.x >= 0 && !mouse.dragging && !rosterOpen && !boardOpen && !chronOpen && !settingsOpen && !worldMapOpen && mouse.y > 18 &&
+    if (booted && !raidFx && mouse.x >= 0 && !mouse.dragging && !rosterOpen && !boardOpen && !chronOpen && !settingsOpen && !worldMapOpen && mouse.y > 18 &&
         !(selected && inRect(mouse, SHEET_RECT)) && !inRect(mouse, MINIMAP)) {
         const info = buildingUnder(mouse.x, mouse.y);
         if (info) { drawInfoBox(mouse.x, mouse.y, info); worldHover = true; }
@@ -5629,6 +5730,9 @@ function drawBootScreen(t) {
             `${f.sheet.name.split(' ')[0]} found a ${RARE_NAME[kind] || kind} in the deep wilds.`, f, null, '#8fd8ff',
             { tier: 'grand', tone: 'triumph', why: world.whyRareFind(f, kind), icon: 'rare:' + kind }); },
         animalRow: (n) => { ANIMAL_SIDE_ROW = n; },
+        // #raidfx QA: stage a live raid right now (drives the "UNDER RAID" battle-transition + shake + camera snap)
+        raid: (commit = 0.28) => { world._live = true; const k = (window.__raidDbg = (window.__raidDbg || 0) + 1);
+            world.applyInbox([{ id: 'dbg-raid-' + k, kind: 'raided', day: world.day, pairKey: 'dbg-raid-' + k, ordinal: k, commit, by: 'the Ashfang clan' }]); },
         // deterministic stepping for reproducibility tests: N uniform FIXED_DT sim ticks
         runSteps: (n) => { for (let k = 0; k < n; k++) world.tick(FIXED_DT); },
         FIXED_DT,
