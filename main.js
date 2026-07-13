@@ -5533,6 +5533,10 @@ function frame(now) {
     // motion it amplified the jitter, which is why it's paired with the interpolation, not used alone.
     const _camFx = cam.x, _camFy = cam.y;
     cam.x = Math.round(cam.x) + _shakeX; cam.y = Math.round(cam.y) + _shakeY;
+    // #interp/#camera-snap: the world pass runs with pos + cam in their TEMPORARY (interpolated + snapped) state.
+    // A try/finally guarantees BOTH are restored even if a draw throws — otherwise a fractional interpolated pos
+    // could be autosaved (save corruption) and the camera left rounded.
+    try {
 
     // background
     ctx.fillStyle = '#2a3438';
@@ -5556,10 +5560,12 @@ function frame(now) {
     drawables.sort((a, b) => (a.y - b.y) || ((a.layer || 0) - (b.layer || 0)) || ((a.x || 0) - (b.x || 0)));
     for (const d of drawables) d.draw();
 
-    restoreFarmerInterp();   // #interp put the TRUE sim pos back before weather/UI/autosave read or serialize it
-
     drawWeather(dt, t);
-    cam.x = _camFx; cam.y = _camFy;   // #camera-snap restore the float base (easing precision; UI/input read the true camera)
+    } finally {
+        // always-run restore: TRUE sim pos back before autosave serializes it, and the float cam base back
+        restoreFarmerInterp();
+        cam.x = _camFx; cam.y = _camFy;
+    }
     drawUI();
     maybeAutosave();
     // (end-of-day recap card removed — the Moments/callout banners + the chronicle carry the day's beats now;
