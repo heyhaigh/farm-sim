@@ -5475,6 +5475,12 @@ function frame(now) {
         followMode = false; followTarget = null;   // nothing left to follow
     }
 
+    // #whisper-preload: while TRAILING someone with the whisper widget COLLAPSED, quietly aim the (hidden) chat
+    // at them, so opening it drops you straight into their head — a seamless follow→whisper handoff. Never touch
+    // it while the widget is OPEN: an open chat means the player has deliberately chosen who they're talking to,
+    // and re-pointing it at the follow target would hijack that conversation.
+    if (!chatWidgetOpen && followMode && followTarget && world.farmers.includes(followTarget)) chatFarmer = followTarget;
+
     // #raidfx — jolt the WORLD (not the UI) while the shake is hot. Layered sines give an organic
     // rattle; we offset the camera for the world pass and restore it before drawUI so the HUD stays put.
     let _shakeX = 0, _shakeY = 0;
