@@ -4903,8 +4903,11 @@ function drawResumeCard() {
 function maybeAutosave() {
     if (!booted || !world || world.day === lastSavedDay) return;
     lastSavedDay = world.day;                       // claim synchronously so a slow write can't double-fire
-    saveTown(world).then(d => { if (d != null) saveFlashAt = performance.now(); });
-    registerWorld(world);                           // #2.1 keep this town's summary current in the world index
+    // #Codex24-1: register the world summary ONLY after a SUCCESSFUL save. saveTown's CAS refuses a stale
+    // tab's write (returns null); if we still registered, that stale tab would push its out-of-date summary
+    // (day/harvest/envoy/doctrine) into the shared index — skewing reach detection and minting outcome-bearing
+    // inbox events off state that was never committed. Gate registration on the commit.
+    saveTown(world).then(d => { if (d != null) { saveFlashAt = performance.now(); registerWorld(world); } });
 }
 
 // #2.1/#2.3/#2.4 — build this town's compact WORLD summary and merge it into the world index, then check
@@ -4937,6 +4940,7 @@ function townSummary(w) {
         harvestTotal: w.harvestTotal || 0, lineage: [...anc], motto, fingerprint: fp >>> 0,
         culture: w.culture || 'human', lineageRoot: w.lineageRoot || String(w.seed), envoy, lastSeen: Date.now(),   // #3.2
         doctrine: w.doctrine(),   // #doctrine (strategist v1) — the town's war/movement posture, read by detectEncounters
+        rev: w._rev || 0,   // #Codex24-1: the committed save revision — the index rejects an upsert older than the stored summary
     };
 }
 let _worldBusy = false;
@@ -4950,7 +4954,11 @@ async function registerWorld(w) {
             index.towns = index.towns || {}; index.encounters = index.encounters || []; index.ledgers = index.ledgers || {};
             const s = townSummary(w);
             const prev = index.towns[s.seed] || {};
-            index.towns[s.seed] = { ...prev, ...s, firstSeen: prev.firstSeen || s.lastSeen || Date.now() };
+            // #Codex24-1: never let an OLDER revision regress the shared summary (belt-and-suspenders with the
+            // save-success gate in maybeAutosave). A stale upsert only refreshes liveness; the newest tab's
+            // day/harvest/envoy/doctrine — the fields reach detection reads — always win.
+            if (prev.rev != null && (s.rev || 0) < prev.rev) index.towns[s.seed] = { ...prev, lastSeen: s.lastSeen };
+            else index.towns[s.seed] = { ...prev, ...s, firstSeen: prev.firstSeen || s.lastSeen || Date.now() };
             fresh = detectEncounters(index);                 // resolves raids/parleys, queues inbox
             mine = (index.inbox && index.inbox[String(w.seed)]) || [];
             return index;

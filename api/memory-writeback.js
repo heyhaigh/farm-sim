@@ -23,6 +23,17 @@ function send(res, status, payload) {
     res.end(JSON.stringify(payload));
 }
 
+// #Codex24-3: this endpoint writes to a LOCAL, single-user, self-hosted store off the sim loop. It can't do
+// user-account auth (there are no accounts) — but it CAN refuse the two realistic abuse vectors: a malicious
+// page in the user's browser POSTing across origins (CSRF / DNS-rebind), and a caller aiming a write at a
+// wildcard/guessed customId. So: same-origin (loopback) only, and every customId must be keyed to a REAL
+// numeric town+farmer identity (no `?? 'x'` catch-all doc anyone can clobber).
+function isLoopbackOrigin(origin) {
+    try { const h = new URL(origin).hostname; return h === 'localhost' || h === '127.0.0.1' || h === '::1'; }
+    catch { return false; }
+}
+const numOrNull = v => (Number.isFinite(+v) ? Math.trunc(+v) : null);
+
 function readBody(req) {
     return new Promise((resolve, reject) => {
         let raw = '';
@@ -79,10 +90,21 @@ function lifeDoc(f, town) {
 
 module.exports = async function handler(req, res) {
     if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'POST only' });
+    // #Codex24-3: reject cross-site callers (a same-origin game request has no Origin or a loopback one)
+    const origin = req.headers && req.headers.origin;
+    if (origin && !isLoopbackOrigin(origin)) return send(res, 403, { ok: false, error: 'cross-origin writes are not allowed' });
     if (typeof fetch !== 'function') return send(res, 200, { ok: false, written: 0, error: 'fetch unavailable' });
 
     let body;
     try { body = await readBody(req); } catch (e) { return send(res, 200, { ok: false, written: 0, error: e?.message || 'bad body' }); }
+    // #Codex24-3: every write must be keyed to a REAL numeric town identity — no `?? 'x'` catch-all customId
+    // that any caller could target to clobber a shared document.
+    const townSeed = numOrNull(body?.townSeed);
+    if (townSeed == null) return send(res, 400, { ok: false, written: 0, error: 'numeric townSeed required' });
+    // #Codex24-3: a monotonic revision the client stamps onto each doc (default 0). SuperMemory has no reliable
+    // get-by-customId to do a server-side compare-and-set, so this records the version for provenance + lets a
+    // consumer detect staleness; the client only ever posts its CURRENT state (and guards stale/hidden tabs).
+    const rev = numOrNull(body?.rev) ?? 0;
     const farmers = Array.isArray(body?.farmers) ? body.farmers.slice(0, MAX_FARMERS) : [];
     const townHistory = body?.townHistory && typeof body.townHistory === 'object' ? body.townHistory : null;
     const townInventions = body?.townInventions && typeof body.townInventions === 'object' ? body.townInventions : null;
@@ -98,11 +120,10 @@ module.exports = async function handler(req, res) {
     if (townHistory) {
         const doc = {
             content: townHistoryDoc(townHistory, body.town),
-            customId: `ry-farms:townhistory:${body.townSeed ?? 'x'}`,
+            customId: `ry-farms:townhistory:${townSeed}`,
             containerTags: ['ry-farms'],
             metadata: {
-                app: 'ry-farms', kind: 'town-history',
-                ...(body.townSeed != null ? { townSeed: String(body.townSeed) } : {}),
+                app: 'ry-farms', kind: 'town-history', rev: String(rev), townSeed: String(townSeed),
                 ...(body.town != null ? { town: String(body.town) } : {}),
             },
         };
@@ -120,10 +141,9 @@ module.exports = async function handler(req, res) {
     if (townInventions) {
         const doc = {
             content: townInventionsDoc(townInventions, body.town),
-            customId: `ry-farms:towninventions:${body.townSeed ?? 'x'}`,
+            customId: `ry-farms:towninventions:${townSeed}`,
             containerTags: ['ry-farms'],
-            metadata: { app: 'ry-farms', kind: 'town-inventions',
-                ...(body.townSeed != null ? { townSeed: String(body.townSeed) } : {}),
+            metadata: { app: 'ry-farms', kind: 'town-inventions', rev: String(rev), townSeed: String(townSeed),
                 ...(body.town != null ? { town: String(body.town) } : {}) },
         };
         const controller = new AbortController();
@@ -140,18 +160,21 @@ module.exports = async function handler(req, res) {
     let written = 0;
     const persisted = [];
     for (const f of farmers) {
+        // #Codex24-3: only ever write to a customId keyed by a REAL numeric (town, farmer) identity — skip a
+        // malformed entry rather than fall back to a wildcard doc a caller could aim at.
+        const fSeed = numOrNull(f?.seed);
+        if (fSeed == null) continue;
         const doc = {
             content: lifeDoc(f, body.town),
             // a STABLE id per (town, farmer) so re-posting the same life UPSERTS instead of piling up
             // duplicate docs across repeated fresh boots (if the store honours customId; harmless if not)
-            customId: `ry-farms:${body.townSeed ?? 'x'}:${f.seed ?? 'x'}`,
+            customId: `ry-farms:${townSeed}:${fSeed}`,
             // container + metadata tag every generated life so the READ side can exclude it (no feedback loop).
             // SuperMemory validates metadata values as STRINGS and rejects nulls — so stringify + drop empties.
             containerTags: ['ry-farms'],
             metadata: {
-                app: 'ry-farms', kind: 'farmer-life',
-                ...(body.townSeed != null ? { townSeed: String(body.townSeed) } : {}),
-                ...(f.seed != null ? { farmerSeed: String(f.seed) } : {}),
+                app: 'ry-farms', kind: 'farmer-life', rev: String(rev),
+                townSeed: String(townSeed), farmerSeed: String(fSeed),
                 ...(f.sourceDocId != null ? { sourceDocId: String(f.sourceDocId) } : {}),
                 ...(f.name != null ? { name: String(f.name) } : {}),
             },

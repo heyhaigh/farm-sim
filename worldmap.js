@@ -8,7 +8,7 @@
 // town's seeded sim; it's display/persistence only, the same boundary as the LLM/shader side-channels.
 
 import { hashString } from './dna.js';
-import { lineagePairKey, isCrossFaction, foldDisposition, dispositionTier, resolveEncounter, applyOutcome, seedTraveler, seedNews, newsLine, doctrineDef, TRAVELER } from './reconciliation.js';
+import { lineagePairKey, isCrossFaction, foldDisposition, dispositionTier, resolveEncounter, applyOutcome, ledgerCount, seedTraveler, seedNews, newsLine, doctrineDef, TRAVELER } from './reconciliation.js';
 
 const WORLD_W = 1000, WORLD_H = 640;   // abstract world-plane units (the map view scales these to the screen)
 
@@ -66,6 +66,7 @@ const pairKey = (a, b) => (a < b ? `${a}:${b}` : `${b}:${a}`);
 // encounter event (with a creed CARRIED from each town to the other — #2.4) to the index. Returns the list of
 // newly-created encounters so the caller can surface them. Idempotent: a met pair is never re-created.
 export const WORLD_INDEX_VERSION = 3;   // v3 adds pairs[] (traveler awareness state machine); v1/v2 still load
+const ENCOUNTER_HISTORY_CAP = 120;      // #Codex24-4 index.encounters is a capped presentation log; dedup lives in metPairs
 
 // Queue a structured event into a town's inbox (the world->sim crossing; the town consumes it deterministically
 // at load/dawn). Keyed by town seed so a dormant town gets its due when it's next played.
@@ -78,13 +79,22 @@ function queueInbox(index, townSeed, ev) {
 
 export function detectEncounters(index) {
     const nodes = computeLayout(index);
-    const met = new Set((index.encounters || []).map(e => pairKey(String(e.a), String(e.b))));
+    // #Codex24-4: the DURABLE, COMPACT met-set (a set of pair-key strings). Previously the met check was derived
+    // from index.encounters — which forced that array to be kept forever (a fat presentation record doubling as
+    // the dedup key). metPairs is the minimal durable state; index.encounters is now purely presentation and can
+    // be capped. Migrate legacy indexes (metPairs absent) by seeding it from the existing encounter history.
+    if (!index.metPairs) { index.metPairs = {}; for (const e of (index.encounters || [])) index.metPairs[pairKey(String(e.a), String(e.b))] = 1; }
+    const met = new Set(Object.keys(index.metPairs));
     index.ledgers = index.ledgers || {};       // #reconciliation: per faction-lineage-pair grievance/reconciliation record
     index.pairs = index.pairs || {};           // Slice B: per town-pair awareness state (unknown->rumored->aware->met)
     // Codex #22.3 — GC records orphaned by a wiped town (endpoints no longer in the index): bounds pair/news growth.
     const live = new Set(Object.keys(index.towns || {}));
     for (const k of Object.keys(index.pairs)) { const [a, b] = k.split(':'); if (!live.has(a) || !live.has(b)) delete index.pairs[k]; }
+    for (const k of Object.keys(index.metPairs)) { const [a, b] = k.split(':'); if (!live.has(a) || !live.has(b)) delete index.metPairs[k]; }   // #Codex24-4 GC met-set too
     if (Array.isArray(index.news)) index.news = index.news.filter(n => live.has(String(n.origin)) && live.has(String(n.destination)));
+    // #Codex24-4: drop inbox buckets that are empty (left behind after consumption) or belong to a wiped town —
+    // else they accumulate forever. A live town's PENDING events are kept (they're due work, not garbage).
+    if (index.inbox) for (const k of Object.keys(index.inbox)) { const b = index.inbox[k]; if (!live.has(k) || !Array.isArray(b) || b.length === 0) delete index.inbox[k]; }
     const fresh = [];
     for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) {
         const A = nodes[i], B = nodes[j];
@@ -114,7 +124,7 @@ export function detectEncounters(index) {
         }
 
         if (d2 > rr * rr) continue;              // not yet within reach of each other
-        met.add(key);
+        met.add(key); index.metPairs[key] = 1;   // #Codex24-4 record in the durable met-set (survives an encounter-history cap)
         (index.pairs[key] = index.pairs[key] || {}).state = 'met';   // Slice D: the traveler marker retires once they actually meet
         const day = Math.max(A.day, B.day);
 
@@ -128,10 +138,10 @@ export function detectEncounters(index) {
         // gen-1 raid and a gen-3 parley compound. raid | parley-honored | parley-betrayed.
         const human = A.culture === 'orc' ? B : A, orc = A.culture === 'orc' ? A : B;
         const lpk = lineagePairKey(A, B);
-        const led = index.ledgers[lpk] || { grievances: [], reconciliations: [], tier: 'hostile', firstTrustDone: false };
+        const led = index.ledgers[lpk] || { raidN: 0, betrayalN: 0, reconcileN: 0, recent: [], tier: 'hostile', firstTrustDone: false };   // #Codex24-4 compact counter form
         const disposition = foldDisposition(led);
         const tier = dispositionTier(disposition, led.tier || 'hostile');
-        const ordinal = led.grievances.length + led.reconciliations.length;
+        const ordinal = ledgerCount(led);   // #Codex24-4 monotonic ordinal from counters (was grievances+reconciliations length)
         const res = resolveEncounter({
             pairKey: lpk, ordinal, disposition, tier,
             humanEnvoy: human.envoy || { seed: human.seed }, orcEnvoy: orc.envoy || { seed: orc.seed },
@@ -186,7 +196,9 @@ export function detectEncounters(index) {
                 lostAt: news.lostAt, discoveryDay: day, arrivalDay: news.arrivalDay, of: ev.kind }]).slice(-40);
         }
     }
-    if (fresh.length) index.encounters = (index.encounters || []).concat(fresh);
+    // #Codex24-4: index.encounters is now PRESENTATION history only (the durable dedup lives in metPairs), so
+    // cap it to a recent window — the world-map log shows recent clashes, not an ever-growing archive.
+    if (fresh.length) index.encounters = (index.encounters || []).concat(fresh).slice(-ENCOUNTER_HISTORY_CAP);
     index.v = WORLD_INDEX_VERSION;
     return fresh;
 }

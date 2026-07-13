@@ -41,12 +41,24 @@ export const DISPOSITION = {
 // D in [-1,1] — a pure fold over integer event COUNTS in the pair ledger. Quantized so float order can't flip
 // a tier. `grievances` entries with kind:'betrayal' count as betrayals; the rest as raids.
 export function foldDisposition(ledger) {
-    const g = (ledger && ledger.grievances) || [];
-    const r = (ledger && ledger.reconciliations) || [];
-    const betrayals = g.reduce((n, x) => n + (x && x.kind === 'betrayal' ? 1 : 0), 0);
-    const raids = g.length - betrayals;
-    const d = DISPOSITION.fresh + raids * DISPOSITION.grievance + betrayals * DISPOSITION.betrayal + r.length * DISPOSITION.reconciliation;
+    // #Codex24-4: the fold is over integer COUNTS, so a compacted ledger (aggregate counters + a bounded recent
+    // tail) yields the SAME disposition as the old full-array ledger — determinism-preserving by construction.
+    // Support both shapes: counters when present, else fall back to counting legacy arrays.
+    let raids, betrayals, recon;
+    if (ledger && ledger.raidN != null) {
+        raids = ledger.raidN | 0; betrayals = ledger.betrayalN | 0; recon = ledger.reconcileN | 0;
+    } else {
+        const g = (ledger && ledger.grievances) || [], r = (ledger && ledger.reconciliations) || [];
+        betrayals = g.reduce((n, x) => n + (x && x.kind === 'betrayal' ? 1 : 0), 0);
+        raids = g.length - betrayals; recon = r.length;
+    }
+    const d = DISPOSITION.fresh + raids * DISPOSITION.grievance + betrayals * DISPOSITION.betrayal + recon * DISPOSITION.reconciliation;
     return +Math.max(-1, Math.min(1, d)).toFixed(3);
+}
+// #Codex24-4: total recorded events in a ledger (= the next encounter ordinal). Works for both shapes.
+export function ledgerCount(ledger) {
+    if (ledger && ledger.raidN != null) return (ledger.raidN | 0) + (ledger.betrayalN | 0) + (ledger.reconcileN | 0);
+    return (((ledger && ledger.grievances) || []).length) + (((ledger && ledger.reconciliations) || []).length);
 }
 // tier with hysteresis: to REACH 'open' you must clear +0.15; to LEAVE 'open' you must fall past -0.05
 // (and to fall all the way to 'hostile' from open, past -0.35). Prevents thrash at a boundary.
@@ -95,16 +107,31 @@ export function resolveEncounter({ pairKey, ordinal, humanEnvoy, orcEnvoy, dispo
     return { outcome: 'raid', attempted: true };   // an honest attempt that simply fizzled
 }
 
-// Pure ledger append (returns a NEW ledger) — grievance for raid/betrayal, reconciliation for honored. Idempotent
-// per (pairKey, ordinal): re-recording the same encounter ordinal is a no-op (mirrors the world layer's `met` set).
+// Pure ledger append (returns a NEW COMPACTED ledger) — grievance for raid/betrayal, reconciliation for honored.
+// #Codex24-4: the ledger is now aggregate COUNTERS (raidN/betrayalN/reconcileN — all foldDisposition needs) plus
+// a BOUNDED recent tail for display, instead of two ever-growing arrays. Idempotent per (pairKey, ordinal): the
+// ordinal is monotonic (= the ledger's total event count at detection time), so a replay whose ordinal is below
+// the current total is a no-op — same guarantee the old per-ordinal `has()` scan gave, without the unbounded array.
+const LEDGER_RECENT_CAP = 24;
 export function applyOutcome(ledger, outcome, meta) {
-    const l = { grievances: [...((ledger && ledger.grievances) || [])], reconciliations: [...((ledger && ledger.reconciliations) || [])] };
-    const has = (arr) => arr.some(x => x.ordinal === meta.ordinal);
-    if (outcome === 'raid' || outcome === 'betrayed') {
-        if (!has(l.grievances)) l.grievances.push({ ordinal: meta.ordinal, day: meta.day, kind: outcome === 'betrayed' ? 'betrayal' : 'raid', name: meta.name || null });
-    } else if (outcome === 'honored') {
-        if (!has(l.reconciliations)) l.reconciliations.push({ ordinal: meta.ordinal, day: meta.day, name: meta.name || null });
+    // migrate a legacy array-shaped ledger to counters (exact counts → identical disposition + ordinal)
+    let raidN, betrayalN, reconcileN;
+    if (ledger && ledger.raidN != null) {
+        raidN = ledger.raidN | 0; betrayalN = ledger.betrayalN | 0; reconcileN = ledger.reconcileN | 0;
+    } else {
+        const g = (ledger && ledger.grievances) || [];
+        betrayalN = g.reduce((n, x) => n + (x && x.kind === 'betrayal' ? 1 : 0), 0);
+        raidN = g.length - betrayalN; reconcileN = (((ledger && ledger.reconciliations) || [])).length;
     }
+    const recent = [...((ledger && ledger.recent) || [])];
+    const l = { raidN, betrayalN, reconcileN, recent, tier: ledger && ledger.tier, firstTrustDone: ledger && ledger.firstTrustDone };
+    if (meta.ordinal < raidN + betrayalN + reconcileN) return l;   // stale replay of an already-recorded ordinal — no-op
+    if (outcome === 'raid') l.raidN++;
+    else if (outcome === 'betrayed') l.betrayalN++;
+    else if (outcome === 'honored') l.reconcileN++;
+    else return l;   // 'raid'|'betrayed'|'honored' only — anything else records nothing
+    recent.push({ ordinal: meta.ordinal, day: meta.day, kind: outcome === 'honored' ? 'reconcile' : outcome === 'betrayed' ? 'betrayal' : 'raid', name: meta.name || null });
+    while (recent.length > LEDGER_RECENT_CAP) recent.shift();
     return l;
 }
 

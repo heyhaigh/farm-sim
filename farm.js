@@ -2538,6 +2538,12 @@ export class World {
                 sheet: f.sheet, plotIdx: plotIdx.get(f.plot),
                 pos: { ...f.pos }, facing: f.facing, moveDir: f.moveDir,
                 energy: f.energy, hp: f.hp, sleepDebt: f.sleepDebt, strain: f.strain,
+                // #Codex24-5: the family of action cooldowns that each GATE a seeded rand() draw. If they reset to
+                // 0 on reload, a restored town re-triggers the throttled action immediately and draws an extra
+                // rand() a non-reloaded town wouldn't — so a reload silently forks the rng trajectory. Persist all.
+                healSeekCd: f.healSeekCd, chatCooldown: f.chatCooldown, poachCooldown: f.poachCooldown,
+                teachCooldown: f.teachCooldown, sabotageCooldown: f.sabotageCooldown, barterCooldown: f.barterCooldown,
+                tradeCooldown: f.tradeCooldown, coopCooldown: f.coopCooldown,
                 health: f.health, sickDays: f.sickDays, caution: f.caution, illnesses: f.illnesses,
                 nightsExposed: f.nightsExposed, reputation: f.reputation, mood: f.mood,
                 helpPostedDay: f.helpPostedDay, wood: f.wood, ore: f.ore, discovered: f.discovered,
@@ -2657,6 +2663,10 @@ export class World {
             const f = new Farmer(fd.sheet, this.plots[fd.plotIdx], this);
             f.pos = { ...fd.pos }; f.facing = fd.facing; f.moveDir = fd.moveDir;
             f.energy = fd.energy; f.hp = fd.hp; f.sleepDebt = fd.sleepDebt; f.strain = fd.strain;
+            // #Codex24-5: restore the rng-gating cooldowns (default 0 only for genuinely old saves)
+            f.healSeekCd = fd.healSeekCd ?? 0; f.chatCooldown = fd.chatCooldown ?? 0; f.poachCooldown = fd.poachCooldown ?? 0;
+            f.teachCooldown = fd.teachCooldown ?? 0; f.sabotageCooldown = fd.sabotageCooldown ?? 0; f.barterCooldown = fd.barterCooldown ?? 0;
+            f.tradeCooldown = fd.tradeCooldown ?? 0; f.coopCooldown = fd.coopCooldown ?? 0;
             f.health = fd.health; f.sickDays = fd.sickDays; f.caution = fd.caution; f.illnesses = fd.illnesses;
             f.nightsExposed = fd.nightsExposed; f.reputation = fd.reputation; f.mood = fd.mood;
             f.helpPostedDay = fd.helpPostedDay; f.wood = fd.wood; f.ore = fd.ore; f.discovered = fd.discovered;
