@@ -99,7 +99,7 @@ export const ARCHETYPES = {
         crop: 'sunflower', hat: 'headset',
         shirt: '#5dc9a0', hair: '#7a4a28',
         names: ['Echo', 'Herald', 'Whisper', 'Signal', 'Chirp', 'Cadence', 'Timbre', 'Sonnet', 'Verse', 'Murmur', 'Lyric', 'Refrain', 'Aria', 'Peal', 'Chime', 'Vox', 'Reed', 'Carol'],
-        surnames: ['Bell', 'Vane', 'Waverly', 'Crier', 'Sonder', 'Ashwood', 'Clearwater', 'Vale', 'Marsh', 'Fenn', 'Reeves', 'Ry'],
+        surnames: ['Bell', 'Vane', 'Waverly', 'Crier', 'Sonder', 'Ashwood', 'Clearwater', 'Vale', 'Marsh', 'Fenn', 'Reeves'],
         facilities: ['pond', 'coop', 'pen'], penAnimal: 'goat',
     },
     athlete: {
@@ -109,7 +109,7 @@ export const ARCHETYPES = {
         crop: 'carrot', hat: 'headband',
         shirt: '#e86a5e', hair: '#2e2620',
         names: ['Turbo', 'Scout', 'Sprint', 'Striker', 'Dash', 'Volley', 'Rally', 'Blitz', 'Vault', 'Stride', 'Racer', 'Nimble', 'Dart', 'Comet', 'Fleet', 'Bolt', 'Pacer', 'Sprig'],
-        surnames: ['Swift', 'Fleetwood', 'Strider', 'Harrow', 'Quick', 'Runnels', 'Ashford', 'Bounder', 'Marsh', 'Steele', 'Vale', 'Ry'],
+        surnames: ['Swift', 'Fleetwood', 'Strider', 'Harrow', 'Quick', 'Runnels', 'Ashford', 'Bounder', 'Marsh', 'Steele', 'Vale'],
         facilities: ['coop', 'pen', 'pond'], penAnimal: 'goat',
     },
     designer: {
@@ -119,7 +119,7 @@ export const ARCHETYPES = {
         crop: 'grapes', hat: 'beret',
         shirt: '#c77dba', hair: '#503a2a',
         names: ['Pixel', 'Vector', 'Kerning', 'Bezier', 'Swatch', 'Serif', 'Gradient', 'Palette', 'Margin', 'Baseline', 'Glyph', 'Raster', 'Hue', 'Leading', 'Tint', 'Grid', 'Stipple', 'Ligature'],
-        surnames: ['Type', 'Weft', 'Loomis', 'Etching', 'Ashline', 'Quill', 'Vellum', 'Marsh', 'Frame', 'Draper', 'Vale', 'Ry'],
+        surnames: ['Type', 'Weft', 'Loomis', 'Etching', 'Ashline', 'Quill', 'Vellum', 'Marsh', 'Frame', 'Draper', 'Vale'],
         facilities: ['pond', 'coop', 'pen'], penAnimal: 'pig',
     },
     builder: {
@@ -129,7 +129,7 @@ export const ARCHETYPES = {
         crop: 'pumpkin', hat: 'hardhat',
         shirt: '#e0a03c', hair: '#3a2a1c',
         names: ['Rivet', 'Forge', 'Crane', 'Girder', 'Hex', 'Anvil', 'Mortar', 'Beam', 'Sawyer', 'Bolt', 'Truss', 'Ridge', 'Foundry', 'Keel', 'Piston', 'Wrench', 'Cobble', 'Gambit'],
-        surnames: ['Stone', 'Ironwood', 'Mason', 'Steele', 'Ashfell', 'Ridge', 'Kilnly', 'Braddock', 'Marsh', 'Hammer', 'Vale', 'Ry'],
+        surnames: ['Stone', 'Ironwood', 'Mason', 'Steele', 'Ashfell', 'Ridge', 'Kilnly', 'Braddock', 'Marsh', 'Hammer', 'Vale'],
         facilities: ['pen', 'coop', 'pond'], penAnimal: 'cow',
     },
     homebody: {
@@ -139,7 +139,7 @@ export const ARCHETYPES = {
         crop: 'pepper', hat: 'strawhat',
         shirt: '#8fb85e', hair: '#6a4a30',
         names: ['Biscuit', 'Clay', 'Mochi', 'Pudding', 'Bun', 'Cobbler', 'Marrow', 'Kettle', 'Butter', 'Crumb', 'Nutmeg', 'Tansy', 'Barley', 'Custard', 'Hearth', 'Poppy', 'Cricket', 'Bramble'],
-        surnames: ['Hearth', 'Meadowes', 'Thistle', 'Kettle', 'Ashby', 'Comfrey', 'Willowes', 'Downy', 'Marsh', 'Cozen', 'Vale', 'Ry'],
+        surnames: ['Hearth', 'Meadowes', 'Thistle', 'Kettle', 'Ashby', 'Comfrey', 'Willowes', 'Downy', 'Marsh', 'Cozen', 'Vale'],
         facilities: ['pond', 'pen', 'coop'], penAnimal: 'pig',
     },
     greeter: {
@@ -149,7 +149,7 @@ export const ARCHETYPES = {
         crop: 'wheat', hat: 'cap',
         shirt: '#6a9ade', hair: '#4a3624',
         names: ['Concierge', 'Beacon', 'Usher', 'Ping', 'Docent', 'Lantern', 'Warden', 'Marquee', 'Foyer', 'Bellhop', 'Hail', 'Sunny', 'Placard', 'Compass', 'Wicket', 'Almanac', 'Ledger', 'Guidepost'],
-        surnames: ['Gate', 'Doorley', 'Threshold', 'Welcomb', 'Ashgate', 'Porter', 'Lambert', 'Halloway', 'Marsh', 'Fairwind', 'Vale', 'Ry'],
+        surnames: ['Gate', 'Doorley', 'Threshold', 'Welcomb', 'Ashgate', 'Porter', 'Lambert', 'Halloway', 'Marsh', 'Fairwind', 'Vale'],
         facilities: ['coop', 'pond', 'pen'], penAnimal: 'cow',
     },
 };
@@ -591,7 +591,9 @@ export function growHeir(freshDoc, lineage, mutation = 0, culture = 'human', use
     // heir keeps its warband clan.) The first name was already de-duped in growFarmer above.
     if (culture !== 'orc' && lineage.name) {
         const foreSurname = String(lineage.name).split(' ').slice(1).join(' ');
-        if (foreSurname) f.name = `${f.name.split(' ')[0]} ${foreSurname}`;
+        // #names — never propagate the RETIRED 'Ry' surname down a lineage; the heir keeps its own themed
+        // surname (from the current pool) instead, so old towns' 'Ry' can't resurface through inheritance.
+        if (foreSurname && foreSurname !== 'Ry') f.name = `${f.name.split(' ')[0]} ${foreSurname}`;
     }
     const inheritedCreed = {
         theme: 'inherited', tags: ['lineage', 'inheritance'], weight: 1,

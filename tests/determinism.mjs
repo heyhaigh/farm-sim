@@ -21,11 +21,12 @@ const SEEDS = [20260706, 42, 7, 3];
 // Baseline digests at HEAD (LLM + SuperMemory off, 30-day run). Update deliberately when a sim change
 // legitimately re-baselines; a DRIFT here on an unrelated change is a determinism regression to investigate.
 const BASELINE = {
-    // re-baselined 2026-07-12 for the sleep-debt cap + halved illness DC weight (fixed the chronic overwork sick-out); same-twice held.
-    20260706: '2adc7767',
-    42: '40b05647',
-    7: '7796e11c',
-    3: 'acf8fe74',
+    // re-baselined 2026-07-12 for #106 founding ceremony + #111/#112 the WOUNDED SELF-CARE economy (rest cap
+    // 0.6->0.78 and a proactive hunt/barter-for-meat drive shift the rng stream); same-twice held all seeds.
+    20260706: '7d142951',
+    42: '8e2c2899',
+    7: '60e50036',
+    3: 'ea4bc356',
 };
 
 function boot(seed, culture) {

@@ -313,6 +313,9 @@ const CAND_SLATE = 3;
 // the whole town GATHERS to elect its first Manager + Watch (memory-driven ballot) with a celebratory beat —
 // instead of silently auto-seating the fittest on day one. (The yearly winter election handles turnover after.)
 export const FOUNDING_VOTE_DAY = 10;
+// #106 the founding ceremony spans the vote day: the town works its morning, then downs tools at this
+// fraction of the day (midday) to gather + deliberate, and the ballot is read at dusk (clock >= DAY_LENGTH).
+const FOUNDING_GATHER_START = 0.5;
 // Recall is the EMERGENCY removal between elections — deliberately rare so tenures are meaningful and the
 // yearly ballot does the ordinary turnover. A holder must sit below RECALL_FLOOR for RECALL_DWELL days
 // running (a sustained rejection, not statistical noise near the line), and a town can recall at most
@@ -444,7 +447,9 @@ const IDLE_REGAIN = 0.01;     // a SUPER-slow second wind while idling / walking
 const ENERGY_NEUTRAL = new Set(['work', 'build', 'coopbuild', 'housebuild', 'chop', 'break', 'forage', 'fish', 'mine', 'fencepost', 'scarecrow', 'fight', 'flee']);
 const FISH_COOLDOWN = 4;   // days a wild-water tile rests between catches (a renewable, not-spammable bounty)
 const HP_REST = 0.55;         // HP knit back per second of rest — but only up to HP_REST_CAP (see #tickBody)
-const HP_REST_CAP = 0.6;      // rest alone mends a wound to ~60%; the last stretch needs MEAT (or a revive)
+const HP_REST_CAP = 0.78;     // rest alone mends a wound to ~78% (so a scuffle doesn't strand them at 60% for
+                              // days); the last stretch still needs MEAT — which a wounded bot now proactively
+                              // hunts or barters for (#112), so the town trends back to FULL rather than plateauing.
 const HP_SICK_DRAIN = 0.05;   // HP an untreated illness gnaws away per second on your feet
 // MEAT — a prized barter good AND a HP restorative. Downing a beast (later, hunted prey) yields meat by
 // SIZE; a wounded farmer eats it to heal. Heal = fraction of maxHp restored per unit eaten. (The 25%-
@@ -473,7 +478,8 @@ const LABOR = {
 };
 const SCARECROW_WOOD = 3;   // timber cost of a scarecrow
 const SCARECROW_LOSSES = 2; // crow raids a farmer will tolerate before building one
-const CHAT_LINE_MAX = 34;   // speech bubbles do not wrap; keep generated lines tight
+const CHAT_LINE_MAX = 120;  // #113 bubbles now WRAP + animate line-by-line, so a spoken line no longer needs to
+                            // be clipped to ~2 lines — keep the FULL sentiment (this cap only stops a runaway).
 const CHAT_MEMORY_MAX = 110;
 const LLM_CHAT_ENDPOINT = '/api/ry-farms-chat';
 const LLM_CHAT_TIMEOUT_MS = 6500;
@@ -535,6 +541,41 @@ function cleanChatText(text, max = CHAT_LINE_MAX) {
 
 function shortName(farmer) {
     return farmer?.sheet?.name?.split(' ')[0] || 'Friend';
+}
+
+// #113 word-wrap a saying into lines of <= max chars, so the bubble can animate the FULL sentiment
+// line-by-line instead of truncating it. A single over-long word is hard-split so it never overflows.
+const SAY_LINE_CHARS = 22;   // bubble line width (in the 3px font) — reads comfortably over a head
+const SAY_LINE_SEC = 0.5;    // each line holds this long before advancing — snappy, natural reading pace
+function wrapWords(text, max = SAY_LINE_CHARS) {
+    const words = String(text).split(' ').filter(Boolean), lines = [];
+    let cur = '';
+    for (let word of words) {
+        while (word.length > max) { if (cur) { lines.push(cur); cur = ''; } lines.push(word.slice(0, max)); word = word.slice(max); }
+        if (!cur) cur = word;
+        else if (cur.length + 1 + word.length <= max) cur += ' ' + word;
+        else { lines.push(cur); cur = word; }
+    }
+    if (cur) lines.push(cur);
+    return lines.length ? lines : ['...'];
+}
+
+// #legibility Slice 1 — the SOURCE MEMORY made perceptible. At a charged moment a farmer speaks a short
+// first-person line woven from the doc's OWN salient words, so the watcher sees their real memory surface
+// (with a "grown from {title}" receipt on the render side). NEUTRAL by design: it celebrates/leans on the
+// memory, never indicts it — a doc that shaped a hard trait is never named as the cause. `r` is a PRIVATE
+// seeded stream (never the sim's rng), so surfacing is display-only and can't touch the determinism digest.
+const ECHO_TEMPLATES = {
+    triumph: [(a, b) => `THIS — THE ${a}, THE ${b}. IT NEVER LEFT ME.`, (a) => `ALL THE ${a}... IT LED HERE.`, (a, b) => `THE ${a} TAUGHT ME THIS. THE ${b} TOO.`],
+    hurt: [(a) => `EVEN NOW, THE ${a} STEADIES ME.`, (a, b) => `I'VE BEEN LOWER THAN THIS — THE ${a}, THE ${b}. I ROSE.`],
+    loss: [(a) => `THE ${a} STAYS WITH ME.`, (a, b) => `I THINK OF THE ${a}, THE ${b}. AND I GO ON.`],
+    wonder: [(a, b) => `REMINDS ME OF THE ${a} — THE ${b}.`, (a) => `THE ${a}... I'D ALMOST FORGOTTEN.`],
+    bond: [(a) => `LIKE THE ${a}, ONCE. GOOD NOT TO BE ALONE.`, (a, b) => `THE ${a}, THE ${b} — I KNEW FOLK LIKE THIS.`],
+    resolve: [(a) => `THE ${a} MADE ME. I'LL SEE THIS THROUGH.`, (a, b) => `THE ${a}, THE ${b} — I DON'T QUIT.`],
+};
+function weaveEcho(context, w1, w2, r) {
+    const bank = ECHO_TEMPLATES[context] || ECHO_TEMPLATES.wonder;
+    return bank[Math.floor(r() * bank.length)](String(w1).toUpperCase(), String(w2).toUpperCase());
 }
 
 function clamp(n, lo, hi) {
@@ -619,6 +660,10 @@ export class World {
         this.helpBoard = [];
         this.encounters = [];      // active wilderness threats (see the Dungeon Master, #tickDM)
         this.dmCooldown = 90;      // a grace period before the first threat stalks the young town
+        this._live = false;        // #108 true only while this town is the one being WATCHED (set by main.js on
+                                   // boot). A cross-town raid landing on a live town STAGES a visible warband +
+                                   // alarm; on a dormant town it stays the instant text-callout. Never serialized
+                                   // (a purely presentational flag; the headless determinism harness leaves it off).
         this.prey = [];            // roaming wild game — deer/rabbit/turkey hunted for meat (see #tickPrey)
         this.preyCooldown = 55;    // a grace period before the first game wanders into the charted wilds
         this.townCollab = 0.5;     // avg collaboration across the town — its CHARACTER (see #recomputeTownTraits, #84)
@@ -1592,6 +1637,10 @@ export class World {
                 this.harvestTotal = Math.max(0, (this.harvestTotal || 0) - lost);
                 this.addChronicle('raid', `An orc warband raided ${this.name} in the night and carried off ${lost} of its stored harvest.`, null, null, '#e05840',
                     { tier: 'callout', tone: 'somber', why: `raided by ${e.by || 'a warband'}` });
+                // #108 — if this town is the one being WATCHED, don't let the raid be a mere line in the log:
+                // stage it. A warband appears at the fence, an alarm spotlight fires, and the Watch + the brave
+                // rally to drive them off (reusing the encounter combat + monuments). Dormant towns skip this.
+                if (this._live) this.#spawnRaid(e.by, e.commit ?? 0.2, lost);
                 n++;
             } else if (e.kind === 'reconciled') {
                 // Slice C: the envoy EARNS a cross-faction belief that begins to overwrite their raid-creed.
@@ -2341,6 +2390,7 @@ export class World {
         if (v >= 4 && !this._chronBonds.has(key)) {
             this._chronBonds.add(key);
             this.addChronicle('bond', `${a.sheet.name.split(' ')[0]} and ${b.sheet.name.split(' ')[0]} ${this.culture === 'orc' ? 'swore a blood-bond' : 'have grown close'}.`, a, b, '#7dd069', { tier: 'callout', tone: 'triumph' });
+            a.surfaceMemory('bond'); b.surfaceMemory('bond');   // #legibility Slice 1 — a friendship stirs a memory of people once known
         }
     }
     bondCount(f) {
@@ -2421,6 +2471,7 @@ export class World {
                 election: this.roles.election ? { ...this.roles.election } : null,
                 history: this.roles.history.map(h => ({ ...h })),
                 founded: this.roles.founded,
+                foundingPhase: this.roles.foundingPhase ?? null,   // #106 mid-ceremony phase survives a reload
             },
             sabotage: this.sabotage.map(s => ({ ...s })),   // #97 Slice 4: pending harm + the Watch's trail
             suspicion: { ...this.suspicion },
@@ -2539,7 +2590,8 @@ export class World {
             election: d.roles.election ? { ...d.roles.election } : null,
             history: Array.isArray(d.roles.history) ? d.roles.history.map(h => ({ ...h })) : [],
             founded: d.roles.founded != null ? d.roles.founded : true,   // pre-#founding saves already hold offices -> treat as founded
-        } : { manager: null, approval: 0.6, lowDays: 0, watch: null, watchApproval: 0.6, watchLowDays: 0, healer: null, healerApproval: 0.6, healerLowDays: 0, directive: null, directiveSeq: 0, cooldown: 0, caseSeq: 0, managerTerms: 0, watchTerms: 0, managerSince: null, watchSince: null, managerRecalls: 0, watchRecalls: 0, election: null, history: [], founded: false };
+            foundingPhase: d.roles.foundingPhase ?? null,   // #106
+        } : { manager: null, approval: 0.6, lowDays: 0, watch: null, watchApproval: 0.6, watchLowDays: 0, healer: null, healerApproval: 0.6, healerLowDays: 0, directive: null, directiveSeq: 0, cooldown: 0, caseSeq: 0, managerTerms: 0, watchTerms: 0, managerSince: null, watchSince: null, managerRecalls: 0, watchRecalls: 0, election: null, history: [], founded: false, foundingPhase: null };
         this.sabotage = Array.isArray(d.sabotage) ? d.sabotage.map(s => ({ ...s })) : [];   // #97 Slice 4
         this.suspicion = d.suspicion ? { ...d.suspicion } : {};
         this.recipes = d.recipes ? Object.fromEntries(Object.entries(d.recipes).map(([k, v]) => [k, { ...v }])) : {};
@@ -2708,8 +2760,15 @@ export class World {
         // fittest silently taking the chair on day one. The yearly winter election handles turnover thereafter.
         if (!r.founded) {
             if (this.day < FOUNDING_VOTE_DAY) { r.directive = null; return; }   // ungoverned until the gathering
-            this.#foundingElection();
-            // fall through: with officers now seated, the day's approval/directive machinery runs as usual
+            // #106 — the vote day has come, but officers are NOT seated instantly. The CEREMONY unfolds across
+            // the day (see #tickFounding): tools down at midday, the town gathers to deliberate, and the ballot
+            // is read at dusk. Mark it pending here; stay ungoverned until it resolves tonight.
+            if (r.foundingPhase == null) {
+                r.foundingPhase = 'pre';
+                this.addChronicle('town', `Word passes through ${this.name}: today the town chooses its first officers.`,
+                    null, null, '#c8a860', { tier: 'callout', tone: 'triumph', why: 'the founding day has come' });
+            }
+            r.directive = null; return;   // still ungoverned until the vote resolves at dusk
         }
 
         // seat the MANAGER if empty (fitness fills a vacant chair between elections; elections handle
@@ -2857,10 +2916,37 @@ export class World {
         }
     }
 
+    // #106 the FOUNDING CEREMONY, driven per-tick across the vote day: tools down at midday, the town gathers
+    // at the square to deliberate (farmers walk there + hold in the 'assemble' state, see #decide), and the
+    // ballot is read at dusk. Pure clock gates (deterministic) — no wall time.
+    #tickFounding() {
+        const r = this.roles;
+        if (r.founded || r.foundingPhase == null) return;
+        if (r.foundingPhase === 'pre' && this.clock >= DAY_LENGTH * FOUNDING_GATHER_START) {
+            r.foundingPhase = 'gathering';
+            const where = this.culture === 'orc' ? 'the war-post' : 'the town well';
+            this.addChronicle('town', `${this.name} downs its tools and gathers at ${where} to weigh who should lead.`,
+                null, null, '#f0d060', { tier: 'callout', tone: 'triumph', why: 'the town assembles to deliberate' });
+        } else if (r.foundingPhase === 'gathering' && this.clock >= DAY_LENGTH) {   // dusk: the ballot is read
+            r.foundingPhase = 'done';
+            this.#resolveFounding();
+        }
+    }
+    // True while the town is assembled and deliberating (drives the farmers' walk-to-square behaviour).
+    foundingGathering() { return this.roles.foundingPhase === 'gathering'; }
+    // A deterministic slot on a loose ring around the well for a farmer to stand while the town deliberates.
+    assembleSpot(f) {
+        const well = this.well, h = hashString(f.sheet.seed + ':assemble');
+        const ang = (h % 360) * Math.PI / 180, rad = 3 + (h % 2);
+        const ti = Math.round(well.i + Math.cos(ang) * rad), tj = Math.round(well.j + Math.sin(ang) * rad);
+        const open = this.nearestOpenTile({ i: ti, j: tj }) || { i: ti, j: tj };
+        return { i: open.i + 0.5, j: open.j + 0.5 };
+    }
+
     // #founding — the town's FIRST officers, chosen by the whole town on FOUNDING_VOTE_DAY (not silently
     // auto-seated on day 1). Runs the SAME memory-driven ballot as the yearly vote (via holdElection), seats
     // the Healer by fitness (not an elected office), and crowns it with a grand celebratory gathering beat.
-    #foundingElection() {
+    #resolveFounding() {
         const r = this.roles;
         r.election = { year: this.year, founding: true, phase: 'campaign',
             mgrCands: this.#electionCandidates('manager'), watchCands: this.#electionCandidates('watch'), result: null };
@@ -5071,6 +5157,7 @@ export class World {
             // NB: weather is NOT force-rerolled at the day boundary any more — it changes only when
             // its (now day-spanning) timer runs out, so spells can persist across several days.
         }
+        this.#tickFounding();   // #106 drive the day-10 gathering -> dusk ballot across the day
         this.weatherTimer -= dt;
         if (this.weatherTimer <= 0) this.#rollWeather();
         if (this.townLevelFlash > 0) this.townLevelFlash -= dt;   // UI-only level-up pulse
@@ -5226,6 +5313,39 @@ export class World {
         this.reveal(Math.round(e.i), Math.round(e.j), 4);
         this.addLog(`${f.sheet.name} ran into ${e.foeName ? `${def.name} - ${e.foeName}` : def.name} out in the wilds!`, '#e08850');
         f.threatAlert = 2; f.say('!!', '#e05040');
+    }
+
+    // #108 THE RAID, made VISIBLE — a cross-town warband descends on the (watched) town. A party of orc
+    // raiders appears together at the fence line and presses inward toward the townsfolk, reusing the
+    // encounter combat + rally + monument machinery (so felling one still raises a stone). Fires a grand
+    // "RAIDERS AT THE GATE" spotlight and rouses the whole town. `by` = the raiding clan, `commit` scales
+    // the party size (a heavier raid brings more), `lost` = the harvest already carried off (for the beat).
+    #spawnRaid(by, commit, lost) {
+        const def = ENCOUNTER_DEFS.orc;
+        const n = Math.min(4, 2 + Math.round((commit || 0.2) * 4));   // 2..4 raiders, more for a heavier raid
+        const baseAng = this.rand() * Math.PI * 2;                     // the flank they came from
+        const d = WILD_RADIUS - 3;
+        const marks = this.farmers.filter(f => !f.downed && f.health !== 'sick' && f.state !== 'sleep' && f.state !== 'sleepwalk');
+        const FOE = ['Gruk', 'Morg', 'Tharg', 'Uzka', 'Drek', 'Snaga', 'Krul', 'Bolg'];
+        const EPI = ['of the Red Fen', 'the Fence-Breaker', 'of the Black Pines', 'the Crop-Burner', 'One-Tusk', 'the Howler'];
+        for (let k = 0; k < n; k++) {
+            const ang = baseAng + (k - (n - 1) / 2) * 0.28;
+            const ei = CENTER + Math.cos(ang) * d, ej = CENTER + Math.sin(ang) * d;
+            const tgt = marks.length ? marks[Math.floor(this.rand() * marks.length)] : (this.farmers[0] || null);
+            const e = { kind: 'orc', def, target: tgt, i: ei, j: ej, home: { i: ei, j: ej }, facing: 1,
+                        hp: def.hp, clashTimer: 1, life: 75, done: false, helpWanted: true, helpers: new Set(), raid: true };
+            e.foeName = `${FOE[Math.floor(this.rand() * FOE.length)]} ${EPI[Math.floor(this.rand() * EPI.length)]}`;
+            this.encounters.push(e);
+            this.reveal(Math.round(ei), Math.round(ej), 4);
+            if (tgt) { tgt.threatAlert = 2; }
+        }
+        // rouse the town — everyone feels the alarm; the Watch + brave rally through the normal path
+        for (const f of this.farmers) f.threatAlert = Math.max(f.threatAlert || 0, 1.5);
+        const clan = by || 'a warband';
+        this.addLog(`${clan} descends on ${this.name} — raiders at the fence!`, '#e05040');
+        this.addChronicle('raid', `${clan} fell upon ${this.name} — raiders at the fence, and the town rises to meet them.`,
+            null, null, '#e05840', { tier: 'grand', tone: 'somber', label: 'RAIDERS AT THE GATE',
+                why: `${clan} carried off ${lost} of the stores - now the town must drive them off` });
     }
 
     #advanceEncounter(e, dt) {
@@ -5890,6 +6010,15 @@ const URGE_MAX_PRESSURE = 5;        // asks of one kind before the well runs dry
 const URGE_DAILY_HEEDS = 2;         // new nudges a single farmer will take per day
 const URGE_TOWN_CAP = 4;            // active urges town-wide (anti "town manager")
 const CONSCIENCE_LOG_CAP = 40;      // transcript lines kept per farmer (FIFO)
+// #legibility Slice 2 — what a farmer SAYS (bubble) + how the chronicle PHRASES it when they act on a whisper.
+const URGE_HEEDED_LINE = {
+    rest: "YOU'RE RIGHT - I'LL REST.", hunt: 'MEAT IT IS - I HUNT.', build: 'A GOOD THOUGHT - I BUILD.',
+    chop: 'TIMBER, THEN. AS YOU SAY.', explore: "YOU'RE RIGHT - I'LL GO SEE.", trade: 'A FAIR NOTION - I TRADE.',
+};
+const URGE_HEEDED_VERB = {
+    rest: 'went to rest', hunt: 'set out to hunt', build: 'turned to building',
+    chop: 'went to fell timber', explore: 'struck out past the fog', trade: 'went to barter',
+};
 
 // a stable small integer per urge kind, folded into the check seed so different
 // kinds roll independently on the same day (re-asking "chop" can't move "rest").
@@ -6134,6 +6263,7 @@ export class Farmer {
         this.fishTarget = null;   // { i, j (shore), water:{i,j} } — a wild lake being walked to
         this.huntTarget = null;   // a world.prey animal this bot is running down (see the 'hunt' state)
         this.huntTimer = 0;       // how much longer they'll keep up a chase before giving up
+        this.healSeekCd = 0;      // #112 throttle the wounded meat-seek so it never re-pathfinds every tick
         this.barterDeal = null;   // a pending goods-for-goods swap being walked to (see #findBarter/#completeBarter)
         this.teachCooldown = 5 + (sheet.seed >>> 9) % 15;   // #97 Slice 3: paces recipe-teaching visits
         this.teachTarget = null;  // { student, id } — a recipe they're walking over to demonstrate
@@ -6217,6 +6347,21 @@ export class Farmer {
     urgeBias(kind) {
         const u = this.activeUrge();
         return (u && u.kind === kind) ? URGE_WEIGHT : 0;
+    }
+
+    // #legibility Slice 2 — the FOLLOW-THROUGH. The FIRST time a farmer acts on their active whispered urge,
+    // they acknowledge it aloud + a soft chronicle beat — so a whisper's consequence lands as a visible EVENT,
+    // not just the over-head gold-bubble indicator. Fires ONCE per urge (u.acted). Called at the decide branch
+    // that commits the whispered action; no-ops when there's no matching urge. Display-only + NO rng (never
+    // this.rand()), and c.urge isn't in the digest — so the determinism harness is byte-for-byte untouched.
+    #heededWhisper(kind) {
+        const u = this.activeUrge();
+        if (!u || u.kind !== kind || u.acted) return;
+        u.acted = true;
+        this.say(URGE_HEEDED_LINE[kind] || "YOU'RE RIGHT. I WILL.", '#f0d88a');
+        this.sparkle = Math.max(this.sparkle, 1);
+        this.world.addChronicle('whisper', `${shortName(this)} heeded a whisper and ${URGE_HEEDED_VERB[kind] || 'changed course'}.`,
+            this, null, '#f0d88a', { tier: 'callout', tone: 'triumph', why: 'a whisper heeded' });
     }
 
     // The deterministic heart of the feature. Given a classified whisper (kind + optional
@@ -6877,7 +7022,7 @@ export class Farmer {
         if (done) {
             s.dreamDone = w.day;
             const def = DREAM_DEFS.find(x => x.id === d.id);
-            this.say('MY DREAM - REAL!', '#f0d060'); this.sparkle = 3; this.gainXP(10);
+            this.say('MY DREAM - REAL!', '#f0d060'); this.sparkle = 3; this.gainXP(10); this.surfaceMemory('triumph');
             this.remember('event', `My dream came true - ${d.yearn.toLowerCase()}`, null, 1.2);
             const fulfilTxt = def ? ((w.culture === 'orc' && def.ofulfil) ? def.ofulfil : def.fulfil) : 'saw their dream fulfilled';
             w.addChronicle('dream', `${s.name.split(' ')[0]} ${fulfilTxt} - a lifelong want, answered.`, this, null, '#f0d060',
@@ -7060,14 +7205,52 @@ export class Farmer {
     // template bubbles (with ${}) can't be map-keyed — callsites pass both forms and pick by culture
     #tr(orc, human) { return this.world.culture === 'orc' ? orc : human; }
 
-    say(text, color = '#fff') { this.bubble = { text: this.#orcLine(text), color, t: 2.4 }; }
+    // #106 what a farmer mutters while the town deliberates at the founding gathering. Half the time they
+    // name the peer they most respect (their likely vote); otherwise a general line. Deterministic (seeded).
+    #deliberationThought() {
+        const orc = this.world.culture === 'orc';
+        if (this.rand() < 0.5) {
+            let best = null, bv = 0.15;
+            for (const o of this.world.farmers) { if (o === this || o.health === 'sick' || o.downed) continue; const v = this.opinionOf(o); if (v > bv) { bv = v; best = o; } }
+            if (best) return orc ? `${shortName(best).toUpperCase()} IS STRONG — THEY SHOULD LEAD` : `${shortName(best)} HAS A STEADY HAND`;
+        }
+        const pool = orc
+            ? ['WHO IS STRONGEST TO LEAD US?', 'THE WARBAND MUST CHOOSE WELL', "I'VE WEIGHED MY CHOICE", 'A CHIEF IS EARNED, NOT GIVEN']
+            : ['WHO SHOULD LEAD US?', 'THE TOWN MUST CHOOSE WELL', "I'VE MADE UP MY MIND", 'A FAIR HAND FOR THE CHAIR'];
+        return pool[hashString(this.sheet.seed + ':delib:' + Math.floor(this.world.clock / 4)) % pool.length];
+    }
+
+    // #113 a saying holds its FULL text, word-wrapped into lines. The bubble render (main.js) reveals them
+    // one at a time (~SAY_LINE_SEC each) so the whole sentiment is legible instead of being truncated with "..".
+    say(text, color = '#fff') {
+        const lines = wrapWords(this.#orcLine(text));
+        const t0 = lines.length * SAY_LINE_SEC + 0.9;   // stays up long enough to read every line, + a beat
+        this.bubble = { lines, text: lines[0], color, t: t0, t0, lineSec: SAY_LINE_SEC };
+    }
 
     think(text) {
         this.thought = this.#orcLine(text).toUpperCase();
         if (this.thoughtBubbleTimer <= 0) {
-            this.say(this.thought.length > 26 ? this.thought.slice(0, 26) + '..' : this.thought, '#c8ccd8');
+            this.say(this.thought, '#c8ccd8');   // full text — the bubble animates it line-by-line (no truncation)
             this.thoughtBubbleTimer = 9 + this.rand() * 10;
         }
+    }
+
+    // #legibility Slice 1 — surface the SOURCE MEMORY at a charged beat. context ∈ triumph|hurt|loss|wonder|
+    // bond|resolve. Sets a display-only `memoryEcho` (line + title + hold) the renderer shows as a distinct
+    // "memory" bubble. Uses its OWN seeded stream (mulberry32/hashString) + only display-only fields, so it
+    // NEVER advances the sim rng or a digest field — determinism is untouched. Rare by a soft cooldown.
+    surfaceMemory(context) {
+        if ((this.memEchoCd || 0) > 0) return false;
+        const mem = this.sheet.memory; if (!mem || !mem.title) return false;
+        this._echoWords = this._echoWords || (docLexicon(mem, this.sheet.seed) || []).filter(w => w && w.length > 3);
+        if (!this._echoWords.length) return false;
+        const r = mulberry32(hashString('echo:' + this.sheet.seed + ':' + context + ':' + (this.memEchoN = (this.memEchoN || 0) + 1)));
+        const pool = this._echoWords, w1 = pool[Math.floor(r() * pool.length)];
+        const rest = pool.filter(w => w !== w1), w2 = rest.length ? rest[Math.floor(r() * rest.length)] : w1;
+        this.memoryEcho = { line: weaveEcho(context, w1, w2, r), title: String(mem.title).replace(/\s+/g, ' ').trim().slice(0, 52), t: 5.5, t0: 5.5 };
+        this.memEchoCd = 50 + r() * 40;   // special, not spammy — a soft per-farmer cooldown (display seconds)
+        return true;
     }
 
     adjustReputation(d) {
@@ -8201,6 +8384,7 @@ export class Farmer {
                     this.say('I overdid it...', '#c05840'); this.#goHome('sick'); return;
                 }
             }
+            this.#heededWhisper('rest');   // #legibility Slice 2 — if a "rest" whisper is active, they name it
             this.think(this.strain >= 5 ? 'IM BURNT OUT. I HAVE TO STOP.' : 'IM SPENT. NEED TO REST.');
             this.#goHome('rest'); return;
         }
@@ -8228,6 +8412,21 @@ export class Farmer {
             // a whiteout is no place to work — all but the hardiest hunker down at home
             if (s.stats.con < 15) { this.think('WHITEOUT! GET INSIDE.'); this.#goHome('shelter'); return; }
         }
+
+        // #106 FOUNDING GATHERING — on the vote day the town downs tools at midday and converges on the
+        // square, holding there to deliberate until the ballot is read at dusk. A sick soul stays abed (they
+        // don't vote); everyone else drops chores and gathers.
+        if (w.foundingGathering()) {
+            const spot = w.assembleSpot(this);
+            if (Math.abs(this.pos.i - spot.i) + Math.abs(this.pos.j - spot.j) > 1.3) {
+                if (this.#goTo(spot.i, spot.j, 'assemble')) { this.think(this.#deliberationThought()); return; }
+            }
+            this.state = 'assemble'; return;
+        }
+
+        // #112 WOUNDED SELF-CARE — a notably hurt farmer makes getting MEAT (hunt or barter) their priority,
+        // over gardening/livestock, so they mend back toward full instead of relying only on the Town Healer.
+        if (this.#seekHealing()) return;
 
         // a rare treasure chest is worth dropping everything for — the nearest free farmer claims it
         if (w.treasure && !w.treasure.opened && !w.treasure.claimant && !w.isNight() && this.energy > 0.2) {
@@ -8336,7 +8535,7 @@ export class Farmer {
         // #93: a whispered urge to BUILD or CHOP tips a hand into growth work (gather wood ->
         //      clear land -> fence/build) even before a milestone would have set wantExpand. The
         //      urgeBias short-circuits to 0 with no active urge, so a headless run never enters here.
-        if (!w.isNight() && this.energy > 0.3 && (this.urgeBias('build') || this.urgeBias('chop')) && this.#pursueGrowth()) return;
+        if (!w.isNight() && this.energy > 0.3 && (this.urgeBias('build') || this.urgeBias('chop')) && this.#pursueGrowth()) { this.#heededWhisper(this.activeUrge()?.kind); return; }
 
         // 1c. grow the homestead: gather wood, clear land, fence/build. This is a FINITE goal
         //     (expand once, then wantExpand clears until the next harvest milestone), so it must
@@ -8440,7 +8639,7 @@ export class Farmer {
             if (tgt) {
                 this.exploreCooldown = 70 + this.rand() * 110;
                 this.think(this.rand() < 0.5 ? 'WHAT LIES PAST THE TREE LINE?' : 'THE MAP ENDS THERE. NOT FOR LONG.');
-                if (this.#goTo(tgt.i + 0.5, tgt.j + 0.5, 'explore')) return;
+                if (this.#goTo(tgt.i + 0.5, tgt.j + 0.5, 'explore')) { this.#heededWhisper('explore'); return; }
             }
             this.exploreCooldown = Math.max(this.exploreCooldown, 12);   // probes aren't free — don't spam them
         }
@@ -8504,7 +8703,7 @@ export class Farmer {
                 if (this.rand() < knack) {
                     this.think(this.#tr(`WILD ${a.kind.toUpperCase()} — MEAT IF I RUN IT DOWN`, `WILD ${a.kind.toUpperCase()} — MEAT IF I CAN CATCH IT`));
                     // proud/competitive hands overextend (chase long); the timid quit early (#86)
-                    this.huntTarget = a; a.hunter = this; this.huntTimer = 6 + this.p.competitiveness * 8; this.state = 'hunt'; return;
+                    this.huntTarget = a; a.hunter = this; this.huntTimer = 6 + this.p.competitiveness * 8; this.state = 'hunt'; this.#heededWhisper('hunt'); return;
                 }
             }
         }
@@ -8518,7 +8717,7 @@ export class Farmer {
             if (deal) {
                 this.think(this.#tr(`SWAP MY ${deal.give.toUpperCase()} FOR ${deal.partner.sheet.name.split(' ')[0].toUpperCase()}'S ${deal.get.toUpperCase()}`, `TRADE MY ${deal.give.toUpperCase()} FOR ${deal.partner.sheet.name.split(' ')[0].toUpperCase()}'S ${deal.get.toUpperCase()}`));
                 this.barterDeal = deal; this.barterCooldown = 45 + this.rand() * 45;
-                if (this.#goTo(deal.partner.pos.i + 0.5, deal.partner.pos.j + 0.5, 'barter')) return;
+                if (this.#goTo(deal.partner.pos.i + 0.5, deal.partner.pos.j + 0.5, 'barter')) { this.#heededWhisper('trade'); return; }
                 this.barterDeal = null;
             } else this.barterCooldown = 12;   // nothing worth trading right now — don't re-scan every tick
         }
@@ -8799,6 +8998,69 @@ export class Farmer {
         }
         if (best) best.unfair = this.#wantsLowball(best.partner);   // #91 Slice 2: some drive a hard bargain
         return best;
+    }
+
+    // #112 — a wounded farmer looking to BUY MEAT: find the nearest willing neighbour who has some to spare,
+    // offering a surplus good (or crops) for it. Mirrors #findBarter's trust/shun gates; meat is the target.
+    #findMeatBarter() {
+        const w = this.world, mine = this.sheet.goods || {};
+        const offers = [];
+        for (const g in mine) if ((mine[g] || 0) >= 3 && !MEAT_GOODS.includes(g) && this.goodValue(g) <= 1.0) offers.push(g);
+        if ((this.sheet.produce || 0) >= 6) offers.push('crops');
+        if (!offers.length) return null;
+        let best = null, bestD = 26;
+        for (const B of w.farmers) {
+            if (B === this || !B.plot || B.downed || B.health === 'sick' || B.plot.built.level < 1) continue;
+            if (this.opinionOf(B) <= -0.2 || B.opinionOf(this) <= -0.2 || w.isShunned(B) || w.isShunned(this)) continue;
+            const bg = B.sheet.goods || {};
+            const meat = MEAT_GOODS.find(m => (bg[m] || 0) >= 1);   // smallest-first: they part with lesser cuts
+            if (!meat) continue;
+            const d = Math.hypot(B.pos.i - this.pos.i, B.pos.j - this.pos.j);
+            if (d < bestD) { bestD = d; best = { partner: B, give: offers[0], get: meat, forMeat: true }; }
+        }
+        return best;
+    }
+
+    // #112 WOUNDED SELF-CARE — a notably hurt farmer doesn't just wait on the Town Healer. Getting MEAT
+    // becomes the priority over gardening/livestock: eat what they carry, barter a neighbour for a cut, or
+    // go hunt (sweeping wide, or striking out to the wild fringe to look). Returns true if it took the wheel.
+    #seekHealing() {
+        const w = this.world, s = this.sheet;
+        if (this.hp >= this.maxHp * 0.6 || this.health === 'sick' || w.isNight() || this.energy < 0.25) return false;
+        if (this.healSeekCd > 0) return false;   // throttle: never re-scan/re-path every tick (perf + no thrash)
+        this.healSeekCd = 2.5 + this.rand() * 2;
+        // 1) barter a neighbour for a cut of meat (a motivator to leave the plot — over gardening)
+        if (this.barterCooldown <= 0) {
+            const deal = this.#findMeatBarter();
+            if (deal) {
+                this.think(this.#tr(`HURT — I'LL SWAP ${deal.give.toUpperCase()} FOR ${shortName(deal.partner).toUpperCase()}'S MEAT`,
+                    `WOUNDED — I'LL TRADE ${deal.give.toUpperCase()} FOR ${shortName(deal.partner)}'S MEAT`));
+                this.barterDeal = deal; this.barterCooldown = 40 + this.rand() * 40;
+                if (this.#goTo(deal.partner.pos.i + 0.5, deal.partner.pos.j + 0.5, 'barter')) return true;
+                this.barterDeal = null;
+            }
+        }
+        // 2) hunt the nearest game in a moderate sweep (kept short — long-range pathing is expensive)
+        const a = w.nearestPrey(this.pos, 22);
+        if (a) {
+            this.think(this.#tr('WOUNDED — MEAT WILL MEND ME. HUNT.', 'HURT — I NEED MEAT. TIME TO HUNT.'));
+            this.huntTarget = a; a.hunter = this; this.huntTimer = 8 + this.p.competitiveness * 8; this.state = 'hunt'; return true;
+        }
+        // 3) no game in sight — drift OUTWARD toward the wild fringe a SHORT bounded step at a time (a cheap
+        //    ~10-tile path, not one long haul to an absolute far tile), so they progress toward game each seek.
+        const dc = Math.hypot(this.pos.i - CENTER, this.pos.j - CENTER);
+        let ang;
+        if (dc > 3) ang = Math.atan2(this.pos.j - CENTER, this.pos.i - CENTER);   // keep heading out the way they face
+        else { const h = hashString(s.seed + ':hunt:' + w.day); ang = (h % 360) * Math.PI / 180; }
+        if (dc < WILD_RADIUS + 2) {   // only push out while still short of the wilds
+            const step = 10;
+            const spot = w.nearestOpenTile({ i: Math.round(this.pos.i + Math.cos(ang) * step), j: Math.round(this.pos.j + Math.sin(ang) * step) });
+            if (spot && Math.abs(this.pos.i - (spot.i + 0.5)) + Math.abs(this.pos.j - (spot.j + 0.5)) > 2) {
+                this.think(this.#tr('NO GAME NEAR — OUT TO THE WILDS FOR MEAT', 'NO GAME HERE — OFF TO HUNT'));
+                if (this.#goTo(spot.i + 0.5, spot.j + 0.5, 'wander')) return true;
+            }
+        }
+        return false;
     }
 
     // #91 Slice 2 — does this farmer angle for a LOPSIDED trade (give one less than they take)? The
@@ -9298,7 +9560,7 @@ export class Farmer {
         // The d20 only swings variable-yield producers (cow/pig/goat/fish/pad).
         let yieldN = cfg.yieldLo;
         if (cfg.yieldHi > cfg.yieldLo) {
-            if (check.crit || check.total >= 18) { yieldN = cfg.yieldHi + 1; w.addLog(`CRIT! ${s.name} gathers a bounty of ${name} (d20:${check.roll})`, '#f0d060'); this.say('BUMPER!', '#f0d060'); this.sparkle = 1.5; }
+            if (check.crit || check.total >= 18) { yieldN = cfg.yieldHi + 1; w.addLog(`CRIT! ${s.name} gathers a bounty of ${name} (d20:${check.roll})`, '#f0d060'); this.say('BUMPER!', '#f0d060'); this.sparkle = 1.5; this.surfaceMemory('triumph'); }
             else if (check.fumble) { yieldN = 0; w.addLog(`${s.name} came up empty-handed... (d20:1)`, '#c05840'); this.say('nothing', '#c05840'); }
             else if (check.total >= 10) yieldN = cfg.yieldHi;
         }
@@ -9324,7 +9586,7 @@ export class Farmer {
         let bonusMod = mod(s.stats.int); if (this.tired) bonusMod -= 2;
         const check = d20(this.rand, bonusMod);
         let yieldN = 1;
-        if (check.crit || check.total >= 18) { yieldN = 3; w.addLog(`CRIT! ${s.name} harvests x3 ${c.type} (d20:${check.roll})`, '#f0d060'); this.say('CRITICAL!', '#f0d060'); this.sparkle = 1.5; }
+        if (check.crit || check.total >= 18) { yieldN = 3; w.addLog(`CRIT! ${s.name} harvests x3 ${c.type} (d20:${check.roll})`, '#f0d060'); this.say('CRITICAL!', '#f0d060'); this.sparkle = 1.5; this.surfaceMemory('triumph'); }
         else if (check.fumble) { yieldN = 0; w.addLog(`${s.name} fumbled the harvest... (d20:1)`, '#c05840'); this.say('oops', '#c05840'); }
         else if (check.total >= 10) yieldN = 2;
         const ownerSheet = (helping && owner) ? owner.sheet : s;
@@ -9602,6 +9864,7 @@ export class Farmer {
         this.teachCooldown = Math.max(0, this.teachCooldown - dt);
         this.sabotageCooldown = Math.max(0, this.sabotageCooldown - dt);
         this.annexCooldown = Math.max(0, this.annexCooldown - dt);
+        this.healSeekCd = Math.max(0, this.healSeekCd - dt);   // #112
         // every farmer lifts the fog around wherever they walk — the map grows with the town
         {
             const fi = Math.floor(this.pos.i), fj = Math.floor(this.pos.j);
@@ -9615,6 +9878,8 @@ export class Farmer {
         // opportunistic small talk as bots pass each other (doesn't interrupt what they're doing)
         else if (!this.world.isNight() && (this.state === 'walk' || this.state === 'idle')) this.#maybeChat();
         if (this.bubble) { this.bubble.t -= dt; if (this.bubble.t <= 0) this.bubble = null; }
+        this.memEchoCd = Math.max(0, (this.memEchoCd || 0) - dt);   // #legibility Slice 1 (display-only)
+        if (this.memoryEcho) { this.memoryEcho.t -= dt; if (this.memoryEcho.t <= 0) this.memoryEcho = null; }
         if (this.carryCrop) { this.carryCrop.t -= dt; if (this.carryCrop.t <= 0) this.carryCrop = null; }
         this.sparkle = Math.max(0, this.sparkle - dt);
         this.threatAlert = Math.max(0, this.threatAlert - dt);
@@ -9624,7 +9889,7 @@ export class Farmer {
         // recovery beat (B5): a badly-wounded farmer who mends back to full gives a visible perk-up
         if (this.maxHp) {
             if (this.hp <= this.maxHp * 0.4) this._wasHurt = true;
-            else if (this._wasHurt && this.hp >= this.maxHp) { this._wasHurt = false; this.sparkle = Math.max(this.sparkle, 1); this.say('good as new', '#7dd069'); }
+            else if (this._wasHurt && this.hp >= this.maxHp) { this._wasHurt = false; this.sparkle = Math.max(this.sparkle, 1); this.say('good as new', '#7dd069'); this.surfaceMemory('resolve'); }
         }
 
         if (this.state === 'sleep') this.energy = Math.min(1, this.energy + SLEEP_RESTORE * dt);
@@ -9895,6 +10160,13 @@ export class Farmer {
             case 'rest': if (this.energy > 0.5) { this.state = 'decide'; this.say('back to it'); } break;
             case 'sick': if (this.health !== 'sick') this.state = 'decide'; break;
             case 'shelter': if (this.world.weather !== 'storm' && this.world.weather !== 'blizzard') this.state = 'decide'; break;
+            // #106 hold at the square, deliberating, until the world reads the ballot at dusk (then -> decide)
+            case 'assemble': {
+                if (!this.world.foundingGathering()) { this.state = 'decide'; break; }
+                this.assembleT = (this.assembleT || 0) - dt;
+                if (this.assembleT <= 0) { this.assembleT = 3 + this.rand() * 5; this.think(this.#deliberationThought()); }
+                break;
+            }
         }
 
         // Storage clamp runs LAST, so mid-tick gains (a mined rock, a chopped tree, a collected

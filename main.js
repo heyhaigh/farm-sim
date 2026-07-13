@@ -85,6 +85,10 @@ let chatDropRows = [];            // { farmer, y0, y1 } hit regions for the open
 let chatEntryRect = null;         // screen-px rect of the entry row (for click-to-focus + input overlay)
 let chatFocused = false;          // is the hidden input focused (blocks world keyboard shortcuts)
 let chatInputEl = null;           // the hidden DOM <input> that actually captures keystrokes/IME/paste
+let chatWidgetOpen = false;       // #legibility Slice 2 — the whisper widget elevated to the primary screen
+const CHAT_BTN = { x: 0, y: 0, w: 0, h: 0 };    // minimized whisper button (bottom-left), set in drawChatWidget
+const CHAT_CLOSE = { x: 0, y: 0, w: 0, h: 0 };  // the widget's minimize (_) hit, set in drawChatWidget
+const CHAT_PANEL = { x: 0, y: 0, w: 0, h: 0 };  // the expanded widget bounds (for pan-block + click-consume)
 let chatViewport = null;          // { x, y, w, h, bodyTop, bodyBot, maxScroll } of the history area
 let chronOpen = false;            // town chronicle panel (the settlement's saga)
 let chronReadTotal = 0;           // world._chronTotal at last view — the badge shows only for UNREAD beats
@@ -206,6 +210,8 @@ const SHEET_FOLLOW = { x: 0, y: 0, w: 0, h: 0 };   // card follow/track toggle, 
 const RECAP_CARD = { x: 0, y: 0, w: 0, h: 0 };     // zeroed stub (daily recap removed); callouts/cursor read .w
 const MEM_PREV = { x: 0, y: 0, w: 0, h: 0 };       // memories pager arrows, set in drawSheet
 const MEM_NEXT = { x: 0, y: 0, w: 0, h: 0 };
+const FOLLOW_PREV = { x: 0, y: 0, w: 0, h: 0 };    // FOLLOWING-banner ◄ cycle arrow, set in drawUI's banner
+const FOLLOW_NEXT = { x: 0, y: 0, w: 0, h: 0 };    // FOLLOWING-banner ► cycle arrow, set in drawUI's banner
 let SHEET_TABS = [];                               // tab-bar hit-rects {x,y,w,h,tab}, rebuilt in drawSheet
 let sheetMemPage = 0;                              // current MEMORIES page (0 = newest)
 let sheetLastSel = null;                           // reset pager when the selection changes
@@ -544,11 +550,61 @@ function itemIcon(idx) {
 for (const it of Object.values(ITEMS)) itemIcon(it.icon);
 for (const r of CRAFTABLES) itemIcon(r.icon);
 
+// #107 recipe INGREDIENT icons. The RECIPES tab shows a recipe's contents as imagery + a quantity badge
+// instead of a wall of words. Goods that already have a PROCEDURAL icon (GOOD_ICON above: fish/lily/egg/milk/
+// wool/truffle/grain) reuse it for consistency with the inventory; the rest map to a hand-picked CraftPix icon
+// (star-crystal, ember, scroll-relic, etc.); anything left falls back to a 3-letter chip. Hover names the good.
+const RECIPE_GOOD_ICON = {
+    crops: 73, grass: 45, flower: 79, wood: 75, ore: 47,       // (match ITEMS)
+    herb: 95, mushroom: 83, root: 85, berry: 90,                // forage
+    crystal: 81, emberbloom: 111, relic: 119,                   // rare (star / ember / scroll)
+    fowl: 91, 'meat-s': 71, 'meat-m': 66, 'meat-l': 70, meat: 66,   // hunt / livestock
+};
+for (const n of Object.values(RECIPE_GOOD_ICON)) itemIcon(n);
+const GOOD_LABEL = {
+    crops: 'crops', grass: 'grass', flower: 'flower', herb: 'herb', mushroom: 'mushroom', root: 'root',
+    berry: 'berry', crystal: 'star-crystal', emberbloom: 'emberbloom', relic: "traveller's relic",
+    fish: 'fish', fowl: 'fowl', 'meat-s': 'small game', 'meat-m': 'red meat', 'meat-l': 'prime cut', meat: 'meat',
+    wool: 'wool', egg: 'egg', milk: 'milk', lily: 'lily', wood: 'wood', ore: 'ore', truffle: 'truffle', grain: 'grain',
+};
+// Draw one ingredient as a slot: the good's icon (procedural canvas, else CraftPix, else a 3-letter chip)
+// + a quantity badge. Returns the slot's screen rect so the caller can register it for a hover tooltip.
+function drawGoodSlot(x, y, sz, good, qty) {
+    const canv = GOOD_ICON[good];   // existing procedural canvases (fish/lily/egg/milk/wool/truffle/grain)
+    if (canv && canv.width) drawItemSlot(x, y, sz, null, qty, { canvas: canv });
+    else if (RECIPE_GOOD_ICON[good]) drawItemSlot(x, y, sz, itemIcon(RECIPE_GOOD_ICON[good]), qty);
+    else { drawItemSlot(x, y, sz, null, qty); drawText(ctx, String(good).slice(0, 3).toUpperCase(), x + 2, y + 2, '#c8ccd8'); }
+    return { x, y, w: sz, h: sz, label: (GOOD_LABEL[good] || good).toUpperCase() };
+}
+
 const boardSheet = new Image(); let boardReady = false; boardSheet.onload = () => { boardReady = true; }; boardSheet.onerror = () => {};
 boardSheet.src = './assets/craftpix-net-189780-free-top-down-pixel-art-guild-hall-asset-pack/PNG/Interior_objects.png';
 const BOARD_EMPTY_SRC = { x: 0, y: 156, w: 41, h: 62 };
 const BOARD_FULL_SRC = { x: 48, y: 156, w: 41, h: 62 };
 const CHEST_CLOSED_SRC = { x: 248, y: 357, w: 20, h: 20 };   // treasure chest (same guild-hall sheet)
+// #109 the 1-bit icon pack as a spritesheet (20x20 grid of 9x9), for the small over-head EMOTE tells so they
+// match the new UI icon style. packEmote(n) blits icon n (1-based) tinted to a colour, supersampled+downscaled
+// once per (n,size,colour) then cached — same clean-at-small pipeline as the top-bar icons. Returns null until
+// the sheet loads (callers fall back to the hand-drawn glyph).
+const packSheet = new Image(); let packReady = false;
+packSheet.onload = () => { packReady = true; }; packSheet.onerror = () => {};
+packSheet.src = './assets/icons/1bit-sheet.png';
+const _packTints = {};
+function packEmote(n, size, color) {
+    if (!packReady || !packSheet.naturalWidth) return null;
+    const key = n + ':' + size + ':' + color; let cv = _packTints[key];
+    if (!cv) {
+        const sx = ((n - 1) % 20) * 9, sy = Math.floor((n - 1) / 20) * 9, SS = size * 4;
+        const [big, bx] = makeCanvas(SS, SS);
+        bx.imageSmoothingEnabled = false; bx.drawImage(packSheet, sx, sy, 9, 9, 0, 0, SS, SS);
+        bx.globalCompositeOperation = 'source-in'; bx.fillStyle = color; bx.fillRect(0, 0, SS, SS);
+        const [c, cx] = makeCanvas(size, size);
+        cx.imageSmoothingEnabled = true; cx.imageSmoothingQuality = 'high'; cx.drawImage(big, 0, 0, size, size);
+        _packTints[key] = cv = c;
+    }
+    return cv;
+}
+
 const CHEST_OPEN_SRC = { x: 276, y: 358, w: 23, h: 20 };
 // the chest's glow is tinted by what's inside, so a keen eye can read the find from afar
 const TREASURE_GLOW = { cache: '245,220,110', timber: '198,150,86', goods: '230,182,86', lode: '176,196,224', relic: '250,214,96' };
@@ -2257,10 +2313,13 @@ function drawFarmer(f, sx, sy) {
     // HP economy (revive frail -> hunt/rest for meat -> mend) is legible at a glance. Hidden while
     // fighting/fleeing (the "!" + hurt-flash already carry the danger) and, of course, while asleep.
     if (hpFrac < 0.9 && f.state !== 'sleep' && f.state !== 'fight' && f.state !== 'flee') {
-        const bw = 10, bh = 2, bx = Math.floor(sx - bw / 2), byy = py - 6;
-        ctx.fillStyle = '#141010'; ctx.fillRect(bx - 1, byy - 1, bw + 2, bh + 2);   // black stroke (matches #68)
-        ctx.fillStyle = '#5a2424'; ctx.fillRect(bx, byy, bw, bh);                    // depleted track
-        ctx.fillStyle = hpFrac < 0.35 ? '#e83828' : '#d08a3c';                       // red when critical, amber otherwise
+        const bw = 11, bh = 2, bx = Math.floor(sx - bw / 2), byy = py - 6;
+        // a clearly-framed HEALTH bar: green (mending) -> amber (hurt) -> red (critical). The old gold-amber
+        // fill read as a stray yellow icon over the head and the thin stroke washed out under the CRT; a full
+        // dark frame + the green/red ramp make it unmistakably a health bar (fix: #110).
+        ctx.fillStyle = '#08080a'; ctx.fillRect(bx - 1, byy - 1, bw + 2, bh + 2);   // solid dark frame
+        ctx.fillStyle = '#3a1e1e'; ctx.fillRect(bx, byy, bw, bh);                    // depleted track
+        ctx.fillStyle = hpFrac < 0.35 ? '#e83828' : hpFrac < 0.6 ? '#e0a83c' : '#5cc850';
         ctx.fillRect(bx, byy, Math.max(1, Math.round(bw * hpFrac)), bh);
     }
     // INTENT badge: what's driving them right now, readable without the sheet (hunt / barter / help).
@@ -2269,20 +2328,36 @@ function drawFarmer(f, sx, sy) {
     else if (f.barterDeal || (f.path && f.path.then === 'barter')) intent = 'barter';
     else if (f.helpTask) intent = 'help';
     if (intent && f.state !== 'sleep') drawIntentIcon(intent, sx + 8, py + 1);
-    // EMOTE: a transient social tell over the head — a pink heart when a bond forms, a red scowl when
-    // recoiling from someone they can't stand. Grudges/bonds you can catch happening (B3). Fades out.
+    // #legibility Slice 2 — a farmer currently acting on YOUR whisper wears a small gold speech-bubble mark
+    // (the same glyph as the whisper widget), so the ripple is visible: whisper → HEED → this tell → watch
+    // them follow through. Gently pulses to read as "notice this". Only while up-and-about.
+    const urge = (f.activeUrge && f.activeUrge()) || null;
+    if (urge && urge.armed && f.state !== 'sleep' && f.state !== 'sleepwalk' && !f.downed) {
+        const ux = sx - 4, uy = py - 15, pulse = 0.72 + 0.28 * Math.sin(performance.now() / 320);
+        ctx.save(); ctx.globalAlpha = pulse;
+        ctx.fillStyle = 'rgba(240,208,120,0.18)'; ctx.fillRect(ux - 2, uy - 2, 11, 10);   // soft gold halo
+        ctx.fillStyle = 'rgba(12,14,22,0.7)'; ctx.fillRect(ux - 1, uy - 1, 9, 8);
+        drawChatIcon(ux, uy, true);   // gold speech bubble = "heeding a whisper"
+        ctx.restore();
+    }
+    // EMOTE: a transient social tell over the head — a pink heart when a bond forms, a red X when recoiling
+    // from someone they can't stand. #109: drawn from the 1-bit icon pack (heart=1, X=19) so the tells match
+    // the new UI icon style; falls back to the hand-drawn glyph until the sheet loads. Fades out.
     if (f.emote && f.emoteT > 0 && f.state !== 'sleep') {
         const ex = sx - 8, ey = py + 1;
         ctx.globalAlpha = Math.min(1, f.emoteT);
         ctx.fillStyle = 'rgba(14,12,10,0.6)'; ctx.fillRect(ex - 3, ey - 3, 8, 8);   // faint dark backing
-        if (f.emote === 'bond') {
+        const bond = f.emote === 'bond';
+        const ic = packEmote(bond ? 1 : 19, 8, bond ? '#e8688a' : '#e84438');
+        if (ic) { ctx.imageSmoothingEnabled = false; ctx.drawImage(ic, ex - 3, ey - 3); }
+        else if (bond) {   // fallback: the hand-drawn heart
             ctx.fillStyle = '#e8688a';
-            ctx.fillRect(ex - 2, ey - 2, 2, 2); ctx.fillRect(ex + 1, ey - 2, 2, 2);       // two bumps
-            ctx.fillRect(ex - 2, ey, 5, 2); ctx.fillRect(ex - 1, ey + 2, 3, 1); ctx.fillRect(ex, ey + 3, 1, 1);   // taper to a point
-        } else {                                                                          // 'grudge'
+            ctx.fillRect(ex - 2, ey - 2, 2, 2); ctx.fillRect(ex + 1, ey - 2, 2, 2);
+            ctx.fillRect(ex - 2, ey, 5, 2); ctx.fillRect(ex - 1, ey + 2, 3, 1); ctx.fillRect(ex, ey + 3, 1, 1);
+        } else {           // fallback: the hand-drawn scowl
             ctx.fillStyle = '#e84438';
-            ctx.fillRect(ex - 2, ey + 2, 1, 1); ctx.fillRect(ex + 2, ey + 2, 1, 1); ctx.fillRect(ex - 1, ey + 3, 3, 1);  // frown
-            ctx.fillStyle = '#c02820'; ctx.fillRect(ex - 2, ey - 1, 2, 1); ctx.fillRect(ex + 1, ey - 1, 2, 1);           // angry brows
+            ctx.fillRect(ex - 2, ey + 2, 1, 1); ctx.fillRect(ex + 2, ey + 2, 1, 1); ctx.fillRect(ex - 1, ey + 3, 3, 1);
+            ctx.fillStyle = '#c02820'; ctx.fillRect(ex - 2, ey - 1, 2, 1); ctx.fillRect(ex + 1, ey - 1, 2, 1);
         }
         ctx.globalAlpha = 1;
     }
@@ -2361,14 +2436,43 @@ function drawFarmer(f, sx, sy) {
         }
     }
 
-    // speech bubble
-    if (f.bubble) {
-        const w = textWidth(f.bubble.text) + 4;
-        const bx = Math.floor(sx - w / 2);
-        const by = py - 10;
+    // #legibility Slice 1 — the SOURCE MEMORY surfacing at a charged beat: a distinct GOLD "memory" bubble (the
+    // mid-tier register between an ambient saying and a screen-stopping grand modal) — the farmer's woven line
+    // + a "GROWN FROM {title}" receipt, so the watcher sees a real memory surface. Fades in/out; held ~5.5s.
+    if (f.memoryEcho && f.state !== 'sleep') {
+        const me = f.memoryEcho, lines = wrapText(me.line, 24), attr = `GROWN FROM "${me.title.toUpperCase()}"`;
+        const aw = textWidth(attr), lw = Math.max(aw, ...lines.map(l => textWidth(l)));
+        const w = lw + 8, h = lines.length * 6 + 11, bx = Math.floor(sx - w / 2), by = py - 9 - h;
+        const fade = Math.min(1, (me.t0 - me.t) / 0.4) * Math.min(1, me.t / 0.7);
+        ctx.save(); ctx.globalAlpha = fade;
+        ctx.fillStyle = 'rgba(240,208,120,0.15)'; ctx.fillRect(bx - 2, by - 2, w + 4, h + 4);   // soft gold glow
+        ctx.fillStyle = 'rgba(20,16,10,0.93)'; ctx.fillRect(bx, by, w, h);
+        ctx.fillStyle = '#c9a45a'; ctx.fillRect(bx, by, w, 1); ctx.fillRect(bx, by + h - 1, w, 1);   // gold rules
+        let ty = by + 3;
+        for (const ln of lines) { drawText(ctx, ln, bx + 4, ty, '#f0d88a'); ty += 6; }
+        drawText(ctx, attr, Math.floor(sx - aw / 2), ty + 1, '#9a835a');
+        ctx.restore();
+    }
+
+    // speech bubble — #113: the full saying is word-wrapped into lines; reveal them ONE AT A TIME (the whole
+    // sentiment is legible, no "..") advancing every b.lineSec. A tiny progress ticker shows more is coming.
+    if (f.bubble && !f.memoryEcho) {
+        const b = f.bubble, lines = b.lines || [b.text];
+        const elapsed = (b.t0 || 0) - b.t;
+        const idx = Math.min(lines.length - 1, Math.max(0, Math.floor(elapsed / (b.lineSec || 1.5))));
+        const line = lines[idx] || '';
+        const multi = lines.length > 1;
+        const w = textWidth(line) + 4 + (multi ? 6 : 0);   // room for the line-count dots
+        const bx = Math.floor(sx - w / 2), by = py - 10;
         ctx.fillStyle = 'rgba(16,18,26,0.85)';
         ctx.fillRect(bx, by, w, 9);
-        drawText(ctx, f.bubble.text, bx + 2, by + 2, f.bubble.color);
+        drawText(ctx, line, bx + 2, by + 2, b.color);
+        if (multi) {   // ••◦ dots at the right edge — filled up to the current line, so you know more follows
+            for (let k = 0; k < lines.length; k++) {
+                ctx.fillStyle = k <= idx ? b.color : 'rgba(160,164,180,0.4)';
+                ctx.fillRect(bx + w - 4, by + 1 + k * 2, 1, 1);
+            }
+        }
     }
 
     // sparkles (level up / crit)
@@ -2689,12 +2793,14 @@ function drawSpeakerIcon(x, y, on) {
     }
 }
 
-// Inline pixel-style SVG icons (cog-solid, globe-solid), each rasterized once to a small field and TINTED per
-// state by masking a colour rect through the SVG's alpha (source-in). Data-URI, no external fetch (CSP-safe).
-function makeSvgIcon(svg) {
-    const img = new Image(); let ready = false; const tints = {};
-    img.onload = () => { ready = true; }; img.onerror = () => {};
-    img.src = 'data:image/svg+xml,' + encodeURIComponent(svg);
+// Pixel icons rasterized once to a small field and TINTED per state by masking a colour rect through the
+// image's alpha (source-in). Source is either an inline SVG data-URI (CSP-safe, no fetch) or a 1-bit PNG from
+// the icon pack — the alpha shape is all that matters, so the PNG's own colour is irrelevant.
+function makeMaskIcon(img) {
+    let ready = false; const tints = {};
+    const mark = () => { ready = !!img.naturalWidth; };
+    img.onload = mark; img.onerror = () => {};
+    if (img.complete) mark();   // already-cached/synchronous decode: onload may have fired before we attached
     return (size, color) => {
         if (!ready || !img.naturalWidth) return null;
         const key = size + ':' + color; let c = tints[key];
@@ -2714,14 +2820,23 @@ function makeSvgIcon(svg) {
         return c;
     };
 }
+function makeSvgIcon(svg) { const img = new Image(); img.src = 'data:image/svg+xml,' + encodeURIComponent(svg); return makeMaskIcon(img); }
+function makePngIcon(src) { const img = new Image(); img.src = src; return makeMaskIcon(img); }
 const COG_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m21,10v-1h-1v-2h1v-2h-1v-1h-1v-1h-2v1h-2v-1h-1V1h-4v2h-1v1h-2v-1h-2v1h-1v1h-1v2h1v2h-1v1H1v4h2v1h1v2h-1v2h1v1h1v1h2v-1h2v1h1v2h4v-2h1v-1h2v1h2v-1h1v-1h1v-2h-1v-2h1v-1h2v-4h-2Zm-11,0v-1h4v1h1v4h-1v1h-4v-1h-1v-4h1Z"/></svg>';
 const GLOBE_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="9" y="1" width="1" height="1"/><polygon points="9 2 9 3 8 3 8 5 7 5 7 8 2 8 2 7 3 7 3 5 4 5 4 4 5 4 5 3 7 3 7 2 9 2"/><polygon points="13 2 14 2 14 4 15 4 15 6 16 6 16 8 8 8 8 6 9 6 9 4 10 4 10 2 11 2 11 1 13 1 13 2"/><rect x="14" y="1" width="1" height="1"/><polygon points="22 7 22 8 17 8 17 5 16 5 16 3 15 3 15 2 17 2 17 3 19 3 19 4 20 4 20 5 21 5 21 7 22 7"/><polygon points="17 10 17 14 16 14 16 15 8 15 8 14 7 14 7 10 8 10 8 9 16 9 16 10 17 10"/><polygon points="1 9 7 9 7 10 6 10 6 14 7 14 7 15 1 15 1 9"/><polygon points="23 9 23 15 17 15 17 14 18 14 18 10 17 10 17 9 23 9"/><polygon points="22 16 22 17 21 17 21 19 20 19 20 20 19 20 19 21 17 21 17 22 15 22 15 21 16 21 16 19 17 19 17 16 22 16"/><rect x="9" y="22" width="1" height="1"/><polygon points="9 21 9 22 7 22 7 21 5 21 5 20 4 20 4 19 3 19 3 17 2 17 2 16 7 16 7 19 8 19 8 21 9 21"/><rect x="14" y="22" width="1" height="1"/><polygon points="14 22 13 22 13 23 11 23 11 22 10 22 10 20 9 20 9 18 8 18 8 16 16 16 16 18 15 18 15 20 14 20 14 22"/></svg>';
 const BANK_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><polygon points="23 20 23 22 22 22 22 23 2 23 2 22 1 22 1 20 3 20 3 19 4 19 4 10 6 10 6 19 8 19 8 10 10 10 10 19 14 19 14 10 16 10 16 19 18 19 18 10 20 10 20 19 21 19 21 20 23 20"/><path d="m20,5v-1h-2v-1h-2v-1h-2v-1h-4v1h-2v1h-2v1h-2v1H1v2h1v1h1v1h18v-1h1v-1h1v-2h-3Zm-9,2v-1h-1v-2h1v-1h2v1h1v2h-1v1h-2Z"/></svg>';
 const USERS_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><polygon points="2 13 2 12 1 12 1 10 2 10 2 9 7 9 7 12 8 12 8 13 2 13"/><polygon points="5 7 4 7 4 5 5 5 5 4 7 4 7 5 8 5 8 6 7 6 7 8 5 8 5 7"/><polygon points="8 7 9 7 9 6 10 6 10 5 14 5 14 6 15 6 15 7 16 7 16 11 15 11 15 12 14 12 14 13 10 13 10 12 9 12 9 11 8 11 8 7"/><polygon points="19 18 20 18 20 21 19 21 19 22 5 22 5 21 4 21 4 18 5 18 5 17 6 17 6 16 8 16 8 15 16 15 16 16 18 16 18 17 19 17 19 18"/><polygon points="23 10 23 12 22 12 22 13 16 13 16 12 17 12 17 9 22 9 22 10 23 10"/><polygon points="17 6 16 6 16 5 17 5 17 4 19 4 19 5 20 5 20 7 19 7 19 8 17 8 17 6"/></svg>';
 const cogIconFn = makeSvgIcon(COG_SVG), globeIconFn = makeSvgIcon(GLOBE_SVG), bankIconFn = makeSvgIcon(BANK_SVG), usersIconFn = makeSvgIcon(USERS_SVG);
-function drawGearIcon(x, y, active) {
+// hand-picked from the 1-bit pack (component-library): 56=globe/world, 98=crowd/roster, 92=chronicle.
+// Tinted through the same source-in pipeline, so they wear the light/dark button colours like the SVG icons.
+const worldIconFn = makePngIcon('./assets/icons/ui-world.png');
+const rosterIconFn = makePngIcon('./assets/icons/ui-roster.png');
+const chronIconFn = makePngIcon('./assets/icons/ui-chronicle.png');
+const boardIconFn = makePngIcon('./assets/icons/ui-board.png');       // 214 = bulletin board
+const settingsIconFn = makePngIcon('./assets/icons/ui-settings.png'); // 137 = settings emblem
+function drawGearIcon(x, y, active) {   // SETTINGS button — icon 137 from the 1-bit pack (green when open)
     const col = active ? '#7dd069' : '#c8ccd8';
-    const icon = cogIconFn(8, col);
+    const icon = settingsIconFn(8, col) || cogIconFn(8, col);
     if (icon) { ctx.imageSmoothingEnabled = false; ctx.drawImage(icon, x, y); return; }
     // fallback (until the SVG rasterizes): the procedural gear on a 9x9 field
     ctx.fillStyle = col;
@@ -2732,40 +2847,25 @@ function drawGearIcon(x, y, active) {
         if ((body || tooth) && !hole) ctx.fillRect(x + gx, y + gy, 1, 1);
     }
 }
-// TEST: a hand-authored 12x12 pixel-art PNG for the globe, drawn 1:1 (no scaling = crispest at internal res).
-// Falls back to the supersampled SVG if the PNG isn't present. Tinted per state via a small source-in offscreen.
-const globePng = new Image(); let globePngReady = false;
-globePng.onload = () => { globePngReady = true; }; globePng.onerror = () => {};
-globePng.src = './assets/ui/globe12.png';
-const _globePngTint = {};
-function globePngTinted(color) {
-    const c = _globePngTint[color]; if (c) return c;
-    const s = globePng.naturalWidth || 12;
-    const [cv, cx] = makeCanvas(s, s); cx.imageSmoothingEnabled = false;
-    cx.drawImage(globePng, 0, 0);
-    cx.globalCompositeOperation = 'source-in'; cx.fillStyle = color; cx.fillRect(0, 0, s, s);
-    _globePngTint[color] = cv; return cv;
-}
-function drawGlobeIcon(x, y, active) {
-    if (globePngReady && globePng.naturalWidth) {   // pre-authored PNG, drawn 1:1
-        ctx.imageSmoothingEnabled = false;
-        ctx.drawImage(globePngTinted(active ? '#160f22' : '#c8ccd8'), x - 1, y - 1);
-        return;
-    }
-    // active = dark globe on the light-purple button fill (matches the text WORLD button's selected look)
-    const icon = globeIconFn(8, active ? '#160f22' : '#c8ccd8');
+function drawGlobeIcon(x, y, active) {   // the WORLD button — icon 56 from the 1-bit pack (globe/orb)
+    const icon = worldIconFn(8, active ? '#160f22' : '#c8ccd8') || globeIconFn(8, active ? '#160f22' : '#c8ccd8');
     if (icon) { ctx.imageSmoothingEnabled = false; ctx.drawImage(icon, x, y); return; }
     ctx.fillStyle = active ? '#160f22' : '#c8ccd8'; ctx.fillRect(x + 2, y + 2, 6, 6);   // tiny fallback blob
 }
-function drawBankIcon(x, y, active) {   // the CHRONICLE / THE SAGA button — the town's ledger of record
-    const icon = bankIconFn(8, active ? '#1a1024' : '#c8ccd8');
+function drawBankIcon(x, y, active) {   // the CHRONICLE / THE SAGA button — icon 92 (paired figures)
+    const icon = chronIconFn(8, active ? '#1a1024' : '#c8ccd8') || bankIconFn(8, active ? '#1a1024' : '#c8ccd8');
     if (icon) { ctx.imageSmoothingEnabled = false; ctx.drawImage(icon, x, y); return; }
     ctx.fillStyle = active ? '#1a1024' : '#c8ccd8'; ctx.fillRect(x + 2, y + 3, 6, 5);
 }
-function drawUsersIcon(x, y, active) {   // the ROSTER / WARBAND button — the town's people
-    const icon = usersIconFn(8, active ? '#10240c' : '#c8ccd8');
+function drawUsersIcon(x, y, active) {   // the ROSTER / WARBAND button — icon 98 (a crowd)
+    const icon = rosterIconFn(8, active ? '#10240c' : '#c8ccd8') || usersIconFn(8, active ? '#10240c' : '#c8ccd8');
     if (icon) { ctx.imageSmoothingEnabled = false; ctx.drawImage(icon, x, y); return; }
     ctx.fillStyle = active ? '#10240c' : '#c8ccd8'; ctx.fillRect(x + 2, y + 3, 6, 5);
+}
+function drawBoardIcon(x, y, active) {   // the BOARD / WAR-POST button — icon 214 (a bulletin board)
+    const icon = boardIconFn(8, active ? '#221a0e' : '#c8ccd8');
+    if (icon) { ctx.imageSmoothingEnabled = false; ctx.drawImage(icon, x, y); return; }
+    ctx.fillStyle = active ? '#221a0e' : '#c8ccd8'; ctx.fillRect(x + 2, y + 3, 6, 5);
 }
 
 function drawUI() {
@@ -2854,8 +2954,10 @@ function drawUI() {
     // look (not the red 'selected' fill), which is reserved for the >/>> that IS active.
     if (spd !== 1) barBtn(SPEED1_BTN, '1X', false);
 
-    barIconBtn(ROSTER_BTN, 12, (x, y, act) => drawUsersIcon(x + 2, y + 2, act), rosterOpen, '#7dd069');   // users icon (was ROSTER/WARBAND text)
+    // strip lays out right-to-left, so drawing WORLD before ROSTER places it to ROSTER's RIGHT (i.e. AFTER
+    // roster/warband in reading order — zoom out from "the town's people" to "the world of towns").
     barIconBtn(WORLD_BTN, 12, (x, y, act) => drawGlobeIcon(x + 2, y + 2, act), worldMapOpen, '#c8b0e0');   // globe icon (was 'WORLD' text)
+    barIconBtn(ROSTER_BTN, 12, (x, y, act) => drawUsersIcon(x + 2, y + 2, act), rosterOpen, '#7dd069');   // users icon (was ROSTER/WARBAND text)
     barIconBtn(CHRON_BTN, 12, (x, y, act) => drawBankIcon(x + 2, y + 2, act), chronOpen, '#c8a0e0');   // bank icon (was CHRONICLE/THE SAGA text)
     if ((world._chronTotal || 0) > chronReadTotal && !chronOpen) drawCoin(CHRON_BTN.x + CHRON_BTN.w - 3, CHRON_BTN.y - 2, 6);   // UNREAD only
 
@@ -2866,7 +2968,7 @@ function drawUI() {
     BOARD_BTN.hidden = !world.board;   // only exists once the town has built the board
     if (!BOARD_BTN.hidden) {
         const postCount = world.helpBoard.filter(r => r.genuine).length + (world.project ? 1 : 0);
-        barBtn(BOARD_BTN, cultureWord(world.culture, 'panel.board'), boardOpen, '#c9a45a', '#221a0e');
+        barIconBtn(BOARD_BTN, 12, (x, y, act) => drawBoardIcon(x + 2, y + 2, act), boardOpen, '#c9a45a');   // icon 214 (was BOARD/WAR-POST text)
         if (postCount > 0 && !boardOpen) drawCoin(BOARD_BTN.x + BOARD_BTN.w - 3, BOARD_BTN.y - 2, 6);
     }
 
@@ -2878,6 +2980,40 @@ function drawUI() {
     else if (worldMapOpen) drawWorldMap();
     else { drawMinimap(); if (boardOpen) drawBoard(); else if (selected) drawSheet(selected); }
     if (settingsOpen) drawSettings();
+
+    drawChatWidget();    // #legibility Slice 2 — the whisper button/panel, bottom-left (hidden under full panels)
+    drawBarTooltips();   // LAST — hover labels must sit above any open panel/modal (top of z-order)
+}
+
+// hover tooltips for the top-bar buttons — the icon-only ones (sound/settings/roster/world/chronicle) gave
+// players no way to tell what they do; a small name label under the hovered button fixes that. Drawn LAST in
+// drawUI so it renders on top of the chronicle/roster/world panels (which otherwise cover it). Culture-aware
+// where the panel has an orcish name (WARBAND / THE SAGA / WAR-POST).
+function drawBarTooltips() {
+    if (mouse.x < 0 || mouse.dragging || mouse.y > 16) return;
+    const cw = id => cultureWord(world.culture, id);
+    const tips = [
+        [SND_BTN, audio.enabled ? 'SOUND' : 'MUTED'],
+        [SETTINGS_BTN, 'SETTINGS'],
+        [FF_BTN, 'SPEED 20X'], [FWD_BTN, 'SPEED 5X'], [SPEED1_BTN, 'NORMAL SPEED'],
+        [ROSTER_BTN, cw('panel.roster')], [WORLD_BTN, 'WORLD'], [CHRON_BTN, cw('panel.chronicle')],
+    ];
+    if (!BOARD_BTN.hidden) tips.push([BOARD_BTN, cw('panel.board')]);
+    for (const [rect, label] of tips) {
+        if (!rect.w || !inRect(mouse, rect)) continue;
+        const tw = textWidth(label), pad = 3, w = tw + pad * 2, h = 11;
+        // anchor to the CURSOR, not the button: centered under the pointer and BELOW the 13px pixel-hand, so
+        // the hand never sits on top of the label (it did when the tooltip was pinned under the button).
+        let tx = Math.round(mouse.x - w / 2);
+        tx = Math.max(2, Math.min(GW - w - 2, tx));
+        const ty = Math.round(mouse.y) + 15;
+        ctx.fillStyle = 'rgba(12,10,20,0.92)';
+        ctx.fillRect(tx, ty, w, h);
+        ctx.fillStyle = 'rgba(255,255,255,0.12)';
+        ctx.fillRect(tx, ty, w, 1);
+        drawText(ctx, label, tx + pad, ty + 3, '#e8e4d8');
+        break;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3860,6 +3996,52 @@ function activeChatFarmer() {
     return chatFarmer;
 }
 
+// #legibility Slice 2 — an 8x8 speech-bubble glyph for the whisper widget (the 1-bit pack had no clean chat
+// icon at this size, so it's hand-drawn): a rounded bubble with two "text" lines and a little tail.
+function drawChatIcon(x, y, active) {
+    ctx.fillStyle = active ? '#7dd069' : '#c8ccd8';
+    const body = ['.#####.', '#######', '#######', '#######', '.#####.'];
+    for (let r = 0; r < body.length; r++) for (let c = 0; c < 7; c++) if (body[r][c] === '#') ctx.fillRect(x + c, y + r, 1, 1);
+    ctx.fillRect(x + 1, y + 5, 1, 1);   // tail dropping from the bottom-left
+    ctx.fillStyle = active ? '#12300d' : '#242833';   // two dark "text" lines inside the bubble
+    ctx.fillRect(x + 2, y + 1, 3, 1); ctx.fillRect(x + 2, y + 3, 3, 1);
+}
+
+// #legibility Slice 2 — the WHISPER, elevated to the primary screen: a minimized bottom-left button that
+// expands into the conscience chat (transcript + the [NAME v] character picker + input). Hidden while a full
+// panel owns the screen (the roster carries its own copy of the chat there). Reuses drawConscienceChat.
+function drawChatWidget() {
+    CHAT_BTN.w = CHAT_CLOSE.w = CHAT_PANEL.w = 0;
+    if (!booted || !world || rosterOpen || chronOpen || boardOpen || settingsOpen || worldMapOpen) return;
+    if (!chatWidgetOpen) {
+        // 15x14 (odd width) so the 7x6 glyph centers EXACTLY: 4px margin on every side (4+7+4=15, 4+6+4=14).
+        const bw = 15, bh = 14, bx = 6, by = GH - bh - 6;
+        CHAT_BTN.x = bx; CHAT_BTN.y = by; CHAT_BTN.w = bw; CHAT_BTN.h = bh;
+        ctx.fillStyle = 'rgba(12,14,22,0.85)'; ctx.fillRect(bx, by, bw, bh);
+        ctx.fillStyle = 'rgba(255,255,255,0.10)'; ctx.fillRect(bx, by, bw, 1);
+        drawChatIcon(bx + 4, by + 4, false);
+        // hover tooltip — ABOVE the cursor (the button hugs the bottom edge, so a below-cursor label would clip)
+        if (mouse.x >= 0 && !mouse.dragging && inRect(mouse, CHAT_BTN)) {
+            const lbl = 'WHISPER', w = textWidth(lbl) + 6;
+            const tx = Math.max(2, Math.min(GW - w - 2, Math.round(mouse.x - w / 2))), ty = Math.round(mouse.y) - 12;
+            ctx.fillStyle = 'rgba(12,10,20,0.95)'; ctx.fillRect(tx, ty, w, 10);
+            ctx.fillStyle = 'rgba(255,255,255,0.12)'; ctx.fillRect(tx, ty, w, 1);
+            drawText(ctx, lbl, tx + 3, ty + 2, '#e8e4d8');
+        }
+        return;
+    }
+    const w = 172, h = 140, x = 6, y = GH - h - 6;
+    CHAT_PANEL.x = x; CHAT_PANEL.y = y; CHAT_PANEL.w = w; CHAT_PANEL.h = h;
+    ctx.fillStyle = 'rgba(8,9,13,0.93)'; ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = '#3a3f4c'; ctx.lineWidth = 1; ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+    drawChatIcon(x + 5, y + 3, true);
+    drawText(ctx, 'WHISPER', x + 15, y + 4, '#9a7fc0');
+    drawText(ctx, '_', x + w - 9, y + 3, '#c8ccd8');   // minimize back to the button
+    CHAT_CLOSE.x = x + w - 12; CHAT_CLOSE.y = y; CHAT_CLOSE.w = 12; CHAT_CLOSE.h = 11;
+    drawConscienceChat(x, y + 12, w, h - 12);          // header([NAME v]) + transcript + input, sets the hit-rects
+    if (chatDropdownOpen) drawChatDropdown(x, w, y + 12);
+}
+
 // wrap `text` to `maxChars`-wide lines (the 3x5 font is fixed-width: ~4px/char)
 function wrapLine(text, maxChars) {
     const words = String(text).split(' ');
@@ -3946,9 +4128,16 @@ function drawConscienceChat(x, y, w, h) {
     ctx.lineWidth = 1;
     ctx.strokeRect(x + 4.5, ey + 0.5, w - 9, entryH - 3);
     const val = chatInputEl ? chatInputEl.value : '';
-    const shown = val || (chatFocused ? '' : 'WHISPER A THOUGHT...');
     const caret = (chatFocused && Math.floor(Date.now() / 500) % 2 === 0) ? '_' : '';
-    drawText(ctx, (val ? shown : (chatFocused ? caret : shown)) + (val ? caret : ''), x + 8, ey + 4, val ? '#e8ecf5' : '#5a5f6c');
+    // clip to the field: show only the TAIL that fits (so a long whisper scrolls with the caret instead of
+    // overflowing the box). ~4px per glyph in the 3x5 font; leave a char of room for the caret.
+    const maxInput = Math.max(4, Math.floor((w - 18) / 4));
+    if (val) {
+        const tail = val.length > maxInput ? val.slice(val.length - maxInput) : val;
+        drawText(ctx, tail + caret, x + 8, ey + 4, '#e8ecf5');
+    } else {
+        drawText(ctx, chatFocused ? caret : 'WHISPER A THOUGHT...', x + 8, ey + 4, '#5a5f6c');
+    }
     chatEntryRect = { x0: x + 4, y0: ey, x1: x + w - 4, y1: ey + entryH - 2 };
 }
 
@@ -4028,7 +4217,8 @@ async function submitWhisper() {
 // Town-wide by default; with a farmer selected it narrows to THEIR personal story.
 // ---------------------------------------------------------------------------
 let chronRows = [];               // { e, y0, y1, farmerSeed } visible hit regions
-let chronView = null;             // { x, y, w, h, bodyTop, bodyBot, maxScroll }
+let chronView = null;             // { x, y, w, h, bodyTop, bodyBot, maxScroll } — the SCROLL BODY (below tabs)
+let chronPanel = null;            // { x, y, w, h } — the WHOLE modal (title+tabs+body); used for click-outside close
 let chronTownWide = false;        // force the town-wide chronicle even when a farmer is in focus
 let chronScopeHits = null;        // { town, farmer } toggle-chip rects (game px)
 let chronTab = 0;                 // 0 NEWS (the event log/saga), 1 ROLES (civic band), 2 RECIPES (discoveries)
@@ -4175,8 +4365,9 @@ function recipeInputs(id) {
 // RECIPES tab (#97 P6): the town's inventions — each generative discovery shown with its LLM-given name +
 // lore, its ingredients, who first worked it out, and who knows it; plus the TALES the town tells of the
 // rare ingredients (grown from its memories) and whether they've been proven real.
+let recipeSlotRects = [];   // #107 hover-tooltip registry for the ingredient icon-slots (screen rects, per frame)
 function drawChronicleRecipes(PX, top, PW, bot) {
-    const IX = PX + 8, INGR = '#8ad0a0';
+    const IX = PX + 8;
     const maxChars = Math.max(24, Math.floor((PW - 24) / 4.2));
     const known = new Map(), heard = new Map();
     for (const f of world.farmers) {
@@ -4187,31 +4378,53 @@ function drawChronicleRecipes(PX, top, PW, bot) {
     const rows = [];
     const push = (h, draw) => rows.push({ h, draw: draw || (() => {}) });
     const wrapPush = (text, col, dx) => { for (const ln of wrapText(text, maxChars)) push(7, y => drawText(ctx, ln, IX + dx, y, col)); };
+    // #107 an INGREDIENT ROW — the recipe's contents as icon-slots (icon + quantity badge) instead of words.
+    // Each slot registers its rect for the hover tooltip that names the good.
+    const recipeInputList = (id) => { const r = world.recipeById ? world.recipeById(id) : RECIPE_BY_ID[id]; return (r && r.inputs) ? Object.entries(r.inputs) : []; };
+    const pushIngredients = (id) => {
+        const ings = recipeInputList(id);
+        if (!ings.length) return;
+        push(16, y => { let sx = IX + 8; for (const [g, q] of ings) { recipeSlotRects.push(drawGoodSlot(sx, y + 1, 13, g, q)); sx += 16; } });
+    };
+    recipeSlotRects = [];   // rebuilt from the rows that actually draw this frame (in-view only)
 
     push(8, y => drawText(ctx, 'EVERYONE KNOWS', IX, y, '#8a8f9c'));
     for (const id of ['soup', 'salve', 'tonic']) {
-        const nm = RECIPE_BY_ID[id].name, inp = recipeInputs(id);
-        push(7, y => { drawText(ctx, nm, IX + 4, y, '#7dd069'); drawText(ctx, inp, IX + 4 + 66, y, INGR); });
+        push(8, y => drawText(ctx, RECIPE_BY_ID[id].name, IX + 4, y, '#7dd069'));
+        pushIngredients(id);
     }
-    push(3);
+    push(4);
 
     // discovered recipes — rarest/most-potent first, ALL of them (scrollable)
     push(10, y => { drawText(ctx, 'INVENTED', IX, y, CHRON_ACCENT); const t = `${known.size}`; drawText(ctx, t, PX + PW - 8 - textWidth(t), y, '#9aa0b4'); });
     if (!known.size) push(7, y => drawText(ctx, 'The town has invented nothing yet — give it time.', IX, y, '#6a6f7c'));
     else for (const [id, names] of [...known.entries()].sort((a, b) => ((world.recipeById(b[0])?.tier || 0) - (world.recipeById(a[0])?.tier || 0)))) {
         const nm = world.recipeName ? world.recipeName(id) : ((RECIPE_BY_ID[id] || {}).name || id);
-        const inp = recipeInputs(id);
-        push(7, y => { drawText(ctx, nm, IX, y, '#ffd24a'); drawText(ctx, inp, IX + 108, y, INGR); });
+        push(8, y => drawText(ctx, nm, IX, y, '#ffd24a'));
+        pushIngredients(id);
         const lore = world.recipeLore ? world.recipeLore(id) : null;
         if (lore) wrapPush(lore, '#9a86c0', 4);
         const rec = world.recipes && world.recipes[id];
         const inv = rec && rec.discovererSeed != null ? (world.farmers.find(f => f.sheet.seed === rec.discovererSeed)?.sheet.name.split(' ')[0]) : null;
         const h = heard.get(id) || 0;
         wrapPush((inv ? `invented by ${inv} - ` : '') + 'known by ' + names.join(', ') + (h ? `  (${h} have heard)` : ''), '#8a8f9c', 4);
-        push(3);
+        push(4);
     }
 
     chronScrollBody(rows, PX, top, PW, bot);
+
+    // #107 hover tooltip: name the ingredient under the pointer (only within the scroll viewport)
+    for (const r of recipeSlotRects) {
+        if (mouse.x >= r.x && mouse.x < r.x + r.w && mouse.y >= r.y && mouse.y < r.y + r.h && mouse.y >= top && mouse.y < bot) {
+            const w = textWidth(r.label) + 6;
+            const tx = Math.max(2, Math.min(GW - w - 2, Math.round(r.x + r.w / 2 - w / 2)));
+            let ty = r.y - 10; if (ty < top) ty = r.y + r.h + 1;   // flip below when it'd clip the panel header
+            ctx.fillStyle = 'rgba(12,10,20,0.95)'; ctx.fillRect(tx, ty, w, 9);
+            ctx.fillStyle = 'rgba(255,255,255,0.12)'; ctx.fillRect(tx, ty, w, 1);
+            drawText(ctx, r.label, tx + 3, ty + 2, '#e8e4d8');
+            break;
+        }
+    }
 }
 
 // #99 TALES — its own Chronicle tab (was folded into RECIPES). The town's myths of rare ingredients,
@@ -4270,6 +4483,7 @@ function drawChronicle() {
     const PX = Math.floor((GW - PW) / 2);
     const PY = 22;
     chronRows = [];
+    chronPanel = { x: PX, y: PY, w: PW, h: PH };   // whole-modal bounds for click-outside close (title incl.)
 
     // dim behind, then the shared wood frame (matches the Board + character sheet)
     ctx.fillStyle = 'rgba(6,7,11,0.72)';
@@ -4697,8 +4911,9 @@ out.addEventListener('pointerdown', (e) => {
         if (inRect(p, settingsHits.musicSlider)) { settingsDrag = 'music'; audio.setMusicVolume((p.x - settingsHits.musicSlider.x) / settingsHits.musicSlider.w); mouse.panStart = null; return; }
         if (inRect(p, settingsHits.sfxSlider)) { settingsDrag = 'sfx'; audio.setSfxVolume((p.x - settingsHits.sfxSlider.x) / settingsHits.sfxSlider.w); mouse.panStart = null; return; }
     }
-    // don't world-pan when the gesture starts on the minimap, the detail card, or the board
-    const onUI = !rosterOpen && !chronOpen && (inRect(p, MINIMAP) || (selected && inRect(p, SHEET_RECT)) || (boardOpen && inRect(p, BOARD_RECT)));
+    // don't world-pan when the gesture starts on the minimap, the detail card, the board, or the whisper widget
+    const onChat = (CHAT_BTN.w && inRect(p, CHAT_BTN)) || (CHAT_PANEL.w && inRect(p, CHAT_PANEL));
+    const onUI = !rosterOpen && !chronOpen && (inRect(p, MINIMAP) || (selected && inRect(p, SHEET_RECT)) || (boardOpen && inRect(p, BOARD_RECT)) || onChat);
     mouse.panStart = (rosterOpen || chronOpen || settingsOpen || onUI) ? null : { x: p.x, y: p.y, camX: cam.x, camY: cam.y };
     mouse.dragging = false;
     try { out.setPointerCapture(e.pointerId); } catch { /* stale/synthetic pointer id — capture is best-effort */ }
@@ -4736,6 +4951,20 @@ out.addEventListener('pointerup', (e) => {
 
     // the "previously on" catch-up card swallows the first click (any click dismisses it)
     if (resumeCard) { resumeCard = null; return; }
+
+    // #legibility Slice 2 — the WHISPER widget (bottom-left): open from the minimized button, and while open
+    // handle its own chat interactions (minimize, [NAME v] picker, input focus) so it works off the roster.
+    if (CHAT_BTN.w && inRect(p, CHAT_BTN)) { chatWidgetOpen = true; audio.ensure(); return; }
+    if (chatWidgetOpen && CHAT_PANEL.w && inRect(p, CHAT_PANEL)) {
+        if (CHAT_CLOSE.w && inRect(p, CHAT_CLOSE)) { chatWidgetOpen = false; chatDropdownOpen = false; blurChatInput(); return; }
+        if (chatDropdownOpen) {
+            for (const row of chatDropRows) if (p.y >= row.y0 && p.y <= row.y1 && p.x >= row.x0 && p.x <= row.x1) { chatFarmer = row.farmer; chatScroll = 0; chatDropdownOpen = false; return; }
+            chatDropdownOpen = false; return;
+        }
+        if (chatNameHit && p.x >= chatNameHit.x0 && p.x <= chatNameHit.x1 && p.y >= chatNameHit.y0 && p.y <= chatNameHit.y1) { chatDropdownOpen = !chatDropdownOpen; return; }
+        if (chatEntryRect && p.x >= chatEntryRect.x0 && p.x <= chatEntryRect.x1 && p.y >= chatEntryRect.y0 && p.y <= chatEntryRect.y1) { focusChatInput(); return; }
+        blurChatInput(); return;   // a click elsewhere in the widget is consumed (never falls through to world)
+    }
 
     // sound quick-mute (stays on the top bar)
     if (inRect(p, SND_BTN)) { audio.ensure(); audio.toggle(); return; }
@@ -4784,12 +5013,19 @@ out.addEventListener('pointerup', (e) => {
                 if (inRect(p, chronScopeHits.town)) { chronTownWide = true; chronScroll = 0; return; }
                 if (inRect(p, chronScopeHits.farmer)) { chronTownWide = false; chronScroll = 0; return; }
             }
-            if ((p.x > cv.x + cv.w - 14 && p.y < cv.y + 12) ||
-                p.x < cv.x || p.x > cv.x + cv.w || p.y < cv.y || p.y > cv.y + cv.h) { chronOpen = false; return; }
+            // close ONLY on the top-right X or a click OUTSIDE the whole modal — test the FULL panel rect
+            // (chronPanel), not the scroll body (chronView), whose top sits BELOW the title/tabs. Using the body
+            // rect made a click on the title bar (above the body, e.g. "TALES OF THE WILDS") read as "outside".
+            const cp = chronPanel || cv;
+            if ((p.x > cp.x + cp.w - 14 && p.y < cp.y + 14) ||
+                p.x < cp.x || p.x > cp.x + cp.w || p.y < cp.y || p.y > cp.y + cp.h) { chronOpen = false; return; }
             for (const row of chronRows) {
                 if (p.y >= row.y0 && p.y <= row.y1 && p.x > cv.x && p.x < cv.x + cv.w) {
                     const f = row.farmerSeed != null ? world.farmers.find(x => x.sheet.seed === row.farmerSeed) : null;
-                    if (f) { selected = f; chronTownWide = false; sheetScroll = 0; chronScroll = 0; }   // narrow to that Ry's saga
+                    // "CLICK A BEAT TO FOLLOW THAT RY": narrow the saga to them AND trail them in the world, so
+                    // the camera moves, the FOLLOWING banner shows once the chronicle closes, and ←/→ (which only
+                    // move the camera while followMode is on) cycle both the sheet and the camera together.
+                    if (f) { selected = f; followMode = true; followTarget = f; chronTownWide = false; sheetScroll = 0; chronScroll = 0; }
                     return;
                 }
             }
@@ -4871,6 +5107,13 @@ out.addEventListener('pointerup', (e) => {
         const hit = sheetSlots.find(s => s.y >= sheetBodyY - 2 && s.y + s.h <= sheetBodyY + sheetBodyH + 2 && inRect(p, s));
         if (hit) selectedSlotKey = selectedSlotKey === hit.key ? null : hit.key;
         else selectedSlotKey = null;
+        return;
+    }
+
+    // FOLLOWING-banner ◄/► — cycle the trailed farmer; the camera AND the open sheet move together.
+    if (followMode && FOLLOW_PREV.w && (inRect(p, FOLLOW_PREV) || inRect(p, FOLLOW_NEXT))) {
+        const dir = inRect(p, FOLLOW_NEXT) ? 1 : -1, arr = world.farmers, idx = arr.indexOf(followTarget);
+        if (idx >= 0) { const next = arr[(idx + dir + arr.length) % arr.length]; followTarget = next; if (selected) { selected = next; sheetScroll = 0; selectedSlotKey = null; } }
         return;
     }
 
@@ -5155,6 +5398,7 @@ function frame(now) {
     // the "PREVIOUSLY ON" catch-up card on RESUME is separate and stays, see drawResumeCard)
     drawMoments();   // #98: spotlight the profound beats on top of the HUD (still under the CRT shader)
     // a quiet indicator while the camera is trailing someone (F, or the sheet's crosshair, toggles it)
+    FOLLOW_PREV.w = FOLLOW_NEXT.w = 0;   // no banner, no clickable arrows (cleared each frame)
     if (followMode && followTarget && world.farmers.includes(followTarget) && !rosterOpen && !chronOpen && !boardOpen) {
         const lbl = `FOLLOWING ${followTarget.sheet.name.split(' ')[0].toUpperCase()} - F TO STOP`;
         // sit the plate near the bottom edge (the log bar is gone) as a floating element
@@ -5167,6 +5411,9 @@ function frame(now) {
         ctx.fillStyle = '#7dd069';
         for (let c = 0; c < 3; c++) ctx.fillRect(bxL + 4 + c, cy - c, 1, c * 2 + 1);              // ◄ tip points left
         for (let c = 0; c < 3; c++) ctx.fillRect(bxL + bxW - 5 - c, cy - c, 1, c * 2 + 1);        // ► tip points right
+        // clickable hit zones over each arrow (padded a little so the 3px glyphs are easy to hit)
+        FOLLOW_PREV.x = bxL; FOLLOW_PREV.y = boxTop; FOLLOW_PREV.w = 11; FOLLOW_PREV.h = 11;
+        FOLLOW_NEXT.x = bxL + bxW - 11; FOLLOW_NEXT.y = boxTop; FOLLOW_NEXT.w = 11; FOLLOW_NEXT.h = 11;
     }
 
     // building hover tooltip — only when hovering the world (not over a panel, not dragging,
@@ -5280,6 +5527,11 @@ function drawBootScreen(t) {
         const pending = (widx.inbox && widx.inbox[String(world.seed)]) || [];
         if (pending.length) await consumeInbox(world, pending);   // exactly-once (Codex r20/r21)
     } catch (err) { console.warn('ry-farms: inbox consume failed', err); }
+
+    // #108 from here on this town is the WATCHED one: a cross-town raid that ARRIVES during live play stages a
+    // visible warband + alarm (see World.#spawnRaid). Set AFTER the on-load inbox consume, so a raid that landed
+    // while the town was dormant stays a "PREVIOUSLY ON" line rather than ambushing the player on resume.
+    world._live = true;
 
     if (resumed) {
         lastSavedDay = world.day;   // don't immediately re-save what we just loaded
