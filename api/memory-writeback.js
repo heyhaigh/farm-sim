@@ -56,14 +56,24 @@ const REV_CAP = 4096;
 const revRegistry = (globalThis.__ryFarmsRevReg ||= new Map());       // customId -> highest committed/reserved rev
 const writeChains = (globalThis.__ryFarmsWriteChains ||= new Map());  // customId -> tail promise (serialize same-id writes)
 
+// #Codex27-3/#Codex28-2: keep the registry at/under REV_CAP by evicting the OLDEST INACTIVE ids (Map iterates in
+// insertion order = LRU here, since a reserve re-inserts). NEVER evict an in-flight id (its reserved rev must
+// survive) — if ALL over-cap entries are active, overflow TEMPORARILY and prune again the moment a chain settles
+// (upsertDoc's finally calls this too), so a peak-concurrency overflow can't persist.
+function pruneRegistry() {
+    while (revRegistry.size > REV_CAP) {
+        let evicted = false;
+        for (const k of revRegistry.keys()) if (!writeChains.has(k)) { revRegistry.delete(k); evicted = true; break; }
+        if (!evicted) break;
+    }
+}
 async function doUpsert(base, headers, doc, rev) {
     const id = doc.customId, prev = revRegistry.get(id);
     if (prev !== undefined && rev <= prev) return { stale: true };
-    revRegistry.set(id, rev);                                          // RESERVE before the await (exclusive per id via the chain)
-    // #Codex27-3: bound the registry, but NEVER evict an id with an in-flight write (present in writeChains) — its
-    // reserved rev would vanish and a queued stale write for it could then land last. Evict the oldest INACTIVE
-    // id; if every entry is active, overflow temporarily (an entry is pruned once one settles).
-    if (revRegistry.size > REV_CAP) { for (const k of revRegistry.keys()) if (!writeChains.has(k)) { revRegistry.delete(k); break; } }
+    // #Codex28-1 RESERVE + REFRESH insertion order: delete then set re-inserts at the tail (most-recent), so a
+    // just-written id is NOT the oldest eviction target and can't lose its reservation to a stale write next.
+    revRegistry.delete(id); revRegistry.set(id, rev);
+    pruneRegistry();
     const rollback = () => { if (revRegistry.get(id) === rev) (prev === undefined ? revRegistry.delete(id) : revRegistry.set(id, prev)); };
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), DEADLINE_MS);
@@ -79,7 +89,7 @@ function upsertDoc(base, headers, doc, rev) {
     const id = doc.customId;
     const run = (writeChains.get(id) || Promise.resolve()).then(() => doUpsert(base, headers, doc, rev), () => doUpsert(base, headers, doc, rev));
     writeChains.set(id, run);
-    run.finally(() => { if (writeChains.get(id) === run) writeChains.delete(id); });
+    run.finally(() => { if (writeChains.get(id) === run) writeChains.delete(id); pruneRegistry(); });   // #Codex28-2 prune any overflow once this id goes inactive
     return run;
 }
 

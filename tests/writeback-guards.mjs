@@ -97,6 +97,31 @@ console.log('#24-3 writeback endpoint guards');
     sent = [];
     { const m = mockReqRes({}, { townSeed: 123, rev: 40, farmers: [{ seed: 9, name: 'stale-vs-survivor' }] }); await handler(m.req, m.res); }
     ok(sent.length === 0, `stale rev 40 rejected (the survivor's rev-50 reservation held through eviction)`);
+
+    // #Codex28-1: a RECENTLY-written (now-inactive) id must not be the oldest eviction target — a reserve refreshes
+    // insertion order. Write the target, then overflow: the truly-oldest id is evicted, the fresh target survives.
+    reg.clear(); chains.clear();
+    reg.set('ry-farms:oldest:1', 1);                       // the genuine oldest (inserted first)
+    for (let i = 0; i < 4094; i++) reg.set('ry-farms:pad:' + i, 1);
+    sent = [];
+    { const m = mockReqRes({}, { townSeed: 222, rev: 50, farmers: [{ seed: 2, name: 'target' }] }); await handler(m.req, m.res); }   // ry-farms:222:2 -> refreshed to NEWEST (size 4096)
+    { const m = mockReqRes({}, { townSeed: 999, rev: 1, farmers: [{ seed: 9, name: 'newid' }] }); await handler(m.req, m.res); }     // overflow -> evicts the OLDEST inactive
+    ok(reg.get('ry-farms:222:2') === 50 && !reg.has('ry-farms:oldest:1'), `recently-written id refreshed to newest (survives); the genuine oldest evicted`);
+    sent = [];
+    { const m = mockReqRes({}, { townSeed: 222, rev: 40, farmers: [{ seed: 2, name: 'stale' }] }); await handler(m.req, m.res); }
+    ok(sent.length === 0, `stale rev 40 for the refreshed target rejected (its rev-50 survived)`);
+
+    // #Codex28-2: a genuine overflow (peak concurrency left the registry over-cap) must SHRINK — the prune LOOPS
+    // to the cap, and runs both on reserve and after a chain settles, so retained size can't track the peak.
+    reg.clear(); chains.clear();
+    for (let i = 0; i < 4200; i++) reg.set('ry-farms:over:' + i, 1);   // 4200 INACTIVE entries (an outgrown peak)
+    { const m = mockReqRes({}, { townSeed: 888, rev: 1, farmers: [{ seed: 8, name: 'prune' }] }); await handler(m.req, m.res); }
+    ok(reg.size <= 4096, `overflow of 4200 pruned back to the cap by the next write (size ${reg.size})`);
+    // while entries are genuinely ACTIVE (in-flight), prune must NOT evict them — overflow is tolerated
+    reg.clear(); chains.clear();
+    for (let i = 0; i < 4200; i++) { reg.set('ry-farms:act:' + i, 1); chains.set('ry-farms:act:' + i, Promise.resolve()); }
+    { const m = mockReqRes({}, { townSeed: 890, rev: 1, farmers: [{ seed: 8, name: 'noprune' }] }); await handler(m.req, m.res); }
+    ok(reg.size >= 4200, `all-active entries are in-flight-protected, not evicted (size ${reg.size})`);
     reg.clear(); chains.clear();
 }
 
