@@ -21,13 +21,14 @@ const SEEDS = [20260706, 42, 7, 3];
 // Baseline digests at HEAD (LLM + SuperMemory off, 30-day run). Update deliberately when a sim change
 // legitimately re-baselines; a DRIFT here on an unrelated change is a determinism regression to investigate.
 const BASELINE = {
-    // re-baselined 2026-07-14 for #130 the NIGHT WATCH: the sentry (elected Watch, or the founders' rotation-
-    // holder) now paces a perimeter beat at night instead of bedding down, which shifts the night rng stream;
-    // same-twice held all seeds (fully reproducible, only the tree fingerprint moved).
-    20260706: 'cd71712e',
-    42: '7fc52ec1',
-    7: '1cf9821b',
-    3: 'd65c2dc1',
+    // re-baselined 2026-07-14 for #132b the CONGREGATION CONVERSATION: the day-1 founding exchange is now voiced
+    // by a world-level director (turn-taking, everyone speaks, no dead air) instead of a per-farmer assemble
+    // scramble — which removed that scramble's daily rand() draw, shifting the day-1 rng stream. The dialogue
+    // itself is pure display (say bubbles); same-twice held all seeds (fully reproducible, only the fingerprint moved).
+    20260706: 'd03d87d2',
+    42: 'ff2bf98d',
+    7: '13b1f0d8',
+    3: '5757e3b1',
 };
 
 function boot(seed, culture) {

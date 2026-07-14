@@ -319,7 +319,85 @@ const FOUNDING_GATHER_START = 0.5;
 // #congregation — a fresh town opens with a DAY-1 FOUNDING CONGREGATION: the founders gather at the center and
 // confer (a paced, authored exchange) to agree how they'll live — survive, settle, and share a rotating watch —
 // then disperse into that life. It runs for ~this many sim-seconds of day one, then the town scatters to work.
-const CONGREGATE_END = 32;
+const CONGREGATE_END = 38;
+// #132b — the DAY-1 CONGREGATION is a real conversation, sequenced by a world director (one voice at a time,
+// back-to-back, everyone gets a turn) so it flows with no dead air. The LLM writes it bespoke when reachable
+// (world._foundingScript); these authored pools are the offline fallback — deep + threaded so it never reads as
+// a two-line canned loop. OPENERS are proposals about how the town will live; REPLIES answer/build/counter and
+// can address the prior speaker by name. Voice (warm/wary/bold/curious) biases WHERE a founder reaches in the
+// pool; the turn index keeps a founder from repeating themselves. All seeded (hashes, no rng) — determinism-safe.
+const CONG_LINES = {
+    human: {
+        open: [
+            'NEW GROUND, AND NOT A WALL IN SIGHT. WHERE DO WE START?',
+            "FIRST THING - NO ONE KEEPS WATCH ALONE. WE TAKE TURNS.",
+            'STRANGE COUNTRY. WE SHOULD POST A LOOKOUT BY DUSK.',
+            'FORAGE FIRST, I SAY - WE EAT TONIGHT, WE PLANT TOMORROW.',
+            "LET'S STAKE OUR PLOTS BEFORE DARK AND DIG IN.",
+            'THE SOIL LOOKS GOOD HERE. THIS COULD BE A REAL HOME.',
+            "I'LL TAKE THE FIRST WATCH SO THE REST OF YOU CAN BUILD.",
+            'WE CAME A LONG WAY. LET IT BE WORTH THE WALKING.',
+            'WATER, WOOD, A ROOF - IN THAT ORDER, AGREED?',
+            "I DON'T KNOW WHAT'S PAST THAT TREELINE. BEST WE FIND OUT CAREFULLY.",
+            'WHATEVER COMES, WE FACE IT TOGETHER OR NOT AT ALL.',
+            'RAIDERS COULD COME. LET NONE OF US BE CAUGHT ASLEEP.',
+        ],
+        reply: [
+            'AYE - THAT SITS RIGHT WITH ME.',
+            "I'D ADD: KEEP THE WELL AT OUR BACKS, WHATEVER ELSE.",
+            'MAYBE. BUT I WORRY WE SPREAD TOO THIN TOO FAST.',
+            "AND WHO STANDS THE FIRST NIGHT, THEN?",
+            "THEN IT'S SETTLED. MY HANDS ARE YOURS FOR IT.",
+            "A GOOD WORD. I WAS THINKING THE SAME.",
+            "NOT SO FAST - LET'S SEE THE LAND BEFORE WE PROMISE IT.",
+            'IF YOU DIG THE FIELD, I WILL RAISE THE FENCE.',
+            'FAIR. THEN NONE OF US CARRIES IT ALONE.',
+            "I'LL HOLD YOU TO THAT WHEN THE COLD COMES.",
+            "COUNT ME IN - I DIDN'T COME HERE TO STAND IDLE.",
+            'LET THE ROTATION BE FAIR, AND I HAVE NO QUARREL.',
+            'SOMEONE SHOULD MAP THE FOG BEFORE WE TRUST IT.',
+            "MY PEOPLE ALWAYS SAID: BUILD SLOW, BUILD ONCE.",
+            "THAT'S THE FIRST SENSE ANYONE'S SPOKEN ALL DAY.",
+            'THEN WE START AT FIRST LIGHT. TOGETHER.',
+        ],
+        emote: ['aye.', 'mm.', 'well said.', 'agreed.', 'ha!', "let's do it.", '...', 'right.'],
+    },
+    orc: {
+        open: [
+            'NEW GROUND. NO WALLS YET. WHERE DO WE DRIVE THE FIRST STAKE?',
+            'NONE STANDS THE WATCH ALONE. WE ROTATE IT, BLOOD-KIN.',
+            'STRANGE LAND. POST A LOOKOUT BEFORE THE DARK COMES.',
+            'FORAGE FIRST - THE BAND EATS TONIGHT.',
+            'CARVE A CAMP FROM THIS WASTE AND HOLD IT.',
+            "TAKE WHAT WE NEED FROM THIS GROUND. IT'S OURS NOW.",
+            'MY BLADE GUARDS YOURS. SET THE FIRST WATCH ON ME.',
+            'WE MARCHED FAR. LET THE MARCHING MEAN SOMETHING.',
+            'WATER, TIMBER, A HOLD - IN THAT ORDER. AGREED?',
+            'SOMETHING MOVES PAST THAT TREELINE. WE GO SHARP.',
+            'WHAT COMES, WE MEET AS ONE HOST OR WE FALL APART.',
+            'RAIDERS BLEED RAIDERS. LET NONE OF US BE CAUGHT SLEEPING.',
+        ],
+        reply: [
+            'AYE. THAT IS STRONG TALK.',
+            'KEEP THE WAR-POST AT OUR BACKS, WHATEVER ELSE.',
+            'MAYBE. BUT WE SCATTER TOO WIDE, TOO FAST.',
+            'AND WHO HOLDS THE FIRST NIGHT, THEN?',
+            'SETTLED. MY AXE IS YOURS FOR IT.',
+            'GOOD. I HAD THE SAME IN MY TEETH.',
+            'NOT YET - WE TEST THIS GROUND BEFORE WE SWEAR TO IT.',
+            'YOU DIG THE PIT, I RAISE THE PALISADE.',
+            'FAIR. THEN NONE OF US BEARS IT ALONE.',
+            'I HOLD YOU TO THAT WHEN THE COLD BITES.',
+            "COUNT ME IN. I DIDN'T MARCH HERE TO STAND STILL.",
+            'LET THE TURN BE FAIR AND I HAVE NO QUARREL.',
+            'SOMEONE SCOUTS THE FOG BEFORE WE TRUST IT.',
+            'THE OLD HOLD SAID: RAISE IT ONCE, RAISE IT RIGHT.',
+            'FIRST SENSE SPOKEN ALL DAY, THAT.',
+            'THEN WE BREAK GROUND AT FIRST LIGHT. AS ONE.',
+        ],
+        emote: ['aye.', 'hrmph.', 'strong.', 'agreed.', 'HA!', 'so be it.', '...', 'good.'],
+    },
+};
 // #watch — the sentry keeps a NIGHT beat (the raid/beast window): a ring of perimeter posts they pace between,
 // pausing to scan at each. WATCH_POSTS posts around the town at the current perimeter; WATCH_SCAN sim-seconds
 // held at each before moving on. One sentry at a time (the elected Watch, or the founders' rotation-holder).
@@ -3021,7 +3099,8 @@ export class World {
         // #congregation the day-1 founding congregation: the town gathers + confers, then disperses; on the way
         // out it commits the founders' shared-watch order. Clock-gated (deterministic).
         if (r.foundingPhase === 'congregate') {
-            if (this.clock >= CONGREGATE_END) { r.foundingPhase = null; this.#seedFoundingWatch(); }
+            this.#tickCongregation();   // #132b drive the founders' opening conversation (display-only)
+            if (this.clock >= CONGREGATE_END) { r.foundingPhase = null; this._congState = null; this.#seedFoundingWatch(); }
             return;
         }
         if (r.foundingPhase === 'pre' && this.clock >= DAY_LENGTH * FOUNDING_GATHER_START) {
@@ -3063,6 +3142,59 @@ export class World {
         const ti = Math.round(well.i + Math.cos(ang) * rad), tj = Math.round(well.j + Math.sin(ang) * rad);
         const open = this.nearestOpenTile({ i: ti, j: tj }) || { i: ti, j: tj };
         return { i: open.i + 0.5, j: open.j + 0.5 };
+    }
+
+    // #132b — the CONVERSATION DIRECTOR for the day-1 congregation. Runs each tick while congregating: it seeds a
+    // fair speaking order once, then gives ARRIVED founders the floor one at a time on a readable, back-to-back
+    // cadence — so the exchange starts as soon as two have gathered (no dead air), flows as turn-taking, and every
+    // founder gets to speak (not a random floor-scramble where most stay silent). PURE DISPLAY: it only calls
+    // say() (transient bubbles, never serialized, never in the digest) and reads this.clock (monotonic on day 1);
+    // it draws NO rng and holds no digest state, so determinism is untouched. The LLM script, when present
+    // (world._foundingScript, Stage B), is what each turn actually says; else the authored CONG_LINES pools.
+    #tickCongregation() {
+        const cs = this._congState || (this._congState = {
+            order: this.farmers.map(f => f.sheet.seed).sort((a, b) => (hashString('cong:' + a) - hashString('cong:' + b)) || (a - b)),
+            idx: 0, nextAt: 1.0, spoken: 0, last: null,
+        });
+        if (this.clock < cs.nextAt) return;
+        const ready = f => f && f.state === 'assemble' && f.health !== 'sick' && !f.downed;
+        let picked = null, n = cs.order.length;
+        for (let k = 0; k < n; k++) {
+            const j = (cs.idx + k) % n;
+            const f = this.farmers.find(x => x.sheet.seed === cs.order[j]);
+            if (ready(f)) { picked = f; cs.idx = j + 1; break; }
+        }
+        if (!picked) { cs.nextAt = this.clock + 0.4; return; }   // nobody's arrived yet — re-check soon, never stall
+        const prev = cs.last ? this.farmers.find(x => x.sheet.seed === cs.last) : null;
+        const line = this.#congregationLine(picked, prev, cs.spoken, (cs.used || (cs.used = new Set())));
+        picked.say(line, '#f0e2b0');
+        if (prev && prev !== picked) picked.facing = (prev.pos.i - prev.pos.j) >= (picked.pos.i - picked.pos.j) ? 1 : -1;   // turn to address the last voice
+        cs.last = picked.sheet.seed; cs.spoken++;
+        const beat = picked.bubble ? picked.bubble.t0 : 2.4;
+        cs.nextAt = this.clock + Math.max(1.5, beat * 0.82);   // the next voice picks up as this line finishes
+    }
+
+    // #132b — the words a founder speaks on their congregation turn. The LLM's bespoke script wins when present;
+    // else a threaded pick from the authored pools: turn 0 (and any un-prompted opener) proposes, later turns
+    // reply/build/counter and may address the previous speaker by name. Personality biases WHERE in the pool they
+    // reach; the turn index keeps a founder from repeating themselves. Seeded (hashes, no rng) — determinism-safe.
+    #congregationLine(f, prev, turnIdx, used) {
+        const scr = this._foundingScript;
+        if (Array.isArray(scr) && scr.length) { const s = scr[turnIdx % scr.length]; if (s && s.text) return String(s.text); }
+        const orc = this.culture === 'orc', p = f.p || {}, T = CONG_LINES[orc ? 'orc' : 'human'];
+        const opener = turnIdx === 0 || !prev;
+        const pool = opener ? T.open : T.reply;
+        const voiceBias = (p.competitiveness ?? 0.5) > 0.6 ? 4 : (p.diligence ?? 0.5) > 0.6 ? 8
+                        : (p.collaboration ?? 0.5) > 0.6 ? 0 : (p.curiosity ?? 0.5) > 0.6 ? 12 : 2;
+        // seeded start, then probe forward to the next line not yet said this congregation — so the offline
+        // exchange NEVER echoes itself (each founder brings a fresh line) until a pool is exhausted.
+        let i = (hashString(f.sheet.seed + ':cong:' + turnIdx) + voiceBias) % pool.length;
+        if (used) { let tries = 0; while (used.has(pool[i]) && tries < pool.length) { i = (i + 1) % pool.length; tries++; } used.add(pool[i]); }
+        let line = pool[i];
+        if (prev && prev !== f && !opener && (hashString(f.sheet.seed + ':addr:' + turnIdx) % 5) < 2) {
+            line = `${shortName(prev).toUpperCase()} - ${line}`;
+        }
+        return line;
     }
 
     // #founding — the town's FIRST officers, chosen by the whole town on FOUNDING_VOTE_DAY (not silently
@@ -8798,7 +8930,8 @@ export class Farmer {
         if (w.congregating()) {
             const spot = w.assembleSpot(this);
             if (Math.abs(this.pos.i - spot.i) + Math.abs(this.pos.j - spot.j) > 1.3) {
-                if (this.#goTo(spot.i, spot.j, 'assemble')) { this.think(this.#foundingLine()); return; }
+                // #132b walking IN to the gathering — a neutral intent; the spoken exchange is the director's job.
+                if (this.#goTo(spot.i, spot.j, 'assemble')) { this.think(w.culture === 'orc' ? 'THE BAND GATHERS' : 'THE TOWN IS GATHERING'); return; }
             }
             this.state = 'assemble'; return;
         }
@@ -10658,6 +10791,9 @@ export class Farmer {
             case 'assemble': {
                 const w = this.world;
                 if (!w.foundingGathering() && !w.congregating()) { this.state = 'decide'; break; }
+                // #132b the DAY-1 congregation is voiced by the world director (#tickCongregation) — turn-taking,
+                // everyone speaks, no dead air. Founders just HOLD here (face the well); no per-farmer scramble.
+                if (w.congregating()) break;
                 this.assembleT = (this.assembleT || 0) - dt;
                 if (this.assembleT <= 0) {
                     this.assembleT = 3 + this.rand() * 5;              // unchanged rng draw
