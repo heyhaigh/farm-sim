@@ -18,7 +18,7 @@ const REPLY_MAX = 180;      // hard cap after trimming to a whole sentence
 const REPLY_SCHEMA_MAX = 260;   // looser schema bound so the model finishes its thought before we trim
 
 // the bounded urge vocabulary (must mirror URGE_KINDS in farm.js). 'visit' carries a target.
-const URGE_KINDS = ['chop', 'plant', 'water', 'rest', 'explore', 'build', 'visit', 'trade', 'hunt', 'none'];
+const URGE_KINDS = ['chop', 'plant', 'water', 'rest', 'explore', 'build', 'visit', 'trade', 'hunt', 'none', 'watch'];
 const TONES = ['suggest', 'observe', 'press', 'praise', 'meta'];
 
 // bitmap-font sanitize for the reply text (drawText uppercases at render): straight quotes,
@@ -95,6 +95,7 @@ async function classify(body) {
         '- chop = cut wood / clear trees. plant = sow crops. water = water the fields. rest = sleep / take a break.',
         '- explore = wander off / see past the map. build = expand or upgrade the homestead. hunt = hunt wild game. trade = barter goods with a neighbour.',
         '- visit = go see / talk to a specific named person; put that person in target.',
+        '- watch = stand guard / take the watch / post a lookout / defend against raiders. Use for "go take watch", "raise the watch", "man the wall", "raiders coming".',
         '- none = anything that is not one of the above (small talk, a question, an insult, praise with no action, gibberish).',
         `target = the short first name of the person referenced (only for visit, and only if it matches one of the town's people); otherwise "".`,
         names.length ? `Town people (match target case-insensitively to one of these first names): ${names.join(', ')}.` : '',

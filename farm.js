@@ -811,6 +811,7 @@ export class World {
                        managerTerms: 0, watchTerms: 0, managerSince: null, watchSince: null,
                        managerRecalls: 0, watchRecalls: 0, election: null, history: [],
                        watchRotation: null, watchTurn: 0,   // #congregation the founders' shared-watch order (seeded in #seedFoundingWatch)
+                       watchPost: null,   // #132 a one-day whisper-posted sentry {seed, day, via} — relieves the rotation/Watch
                        foundingPhase: 'congregate',   // #congregation a fresh town opens with the day-1 founding congregation
                        founded: false };   // #founding: no offices until the day-10 founding gathering
         this.sabotage = [];    // #97 Slice 4: planted-but-not-yet-sprung harm ({perp,victim,kind,effectDay})
@@ -2587,6 +2588,7 @@ export class World {
                 founded: this.roles.founded,
                 foundingPhase: this.roles.foundingPhase ?? null,   // #106 mid-ceremony phase survives a reload
                 watchRotation: this.roles.watchRotation ? [...this.roles.watchRotation] : null, watchTurn: this.roles.watchTurn ?? 0,   // #congregation shared-watch order
+                watchPost: this.roles.watchPost ? { ...this.roles.watchPost } : null,   // #132 whisper-posted sentry
             },
             sabotage: this.sabotage.map(s => ({ ...s })),   // #97 Slice 4: pending harm + the Watch's trail
             suspicion: { ...this.suspicion },
@@ -2718,6 +2720,7 @@ export class World {
             founded: d.roles.founded != null ? d.roles.founded : true,   // pre-#founding saves already hold offices -> treat as founded
             foundingPhase: d.roles.foundingPhase ?? null,   // #106
             watchRotation: Array.isArray(d.roles.watchRotation) ? d.roles.watchRotation : null, watchTurn: d.roles.watchTurn ?? 0,   // #congregation
+            watchPost: (d.roles.watchPost && d.roles.watchPost.seed != null) ? { ...d.roles.watchPost } : null,   // #132 whisper-posted sentry
         } : { manager: null, approval: 0.6, lowDays: 0, watch: null, watchApproval: 0.6, watchLowDays: 0, healer: null, healerApproval: 0.6, healerLowDays: 0, directive: null, directiveSeq: 0, cooldown: 0, caseSeq: 0, managerTerms: 0, watchTerms: 0, managerSince: null, watchSince: null, managerRecalls: 0, watchRecalls: 0, election: null, history: [], founded: false, foundingPhase: null };
         this.sabotage = Array.isArray(d.sabotage) ? d.sabotage.map(s => ({ ...s })) : [];   // #97 Slice 4
         this.suspicion = d.suspicion ? { ...d.suspicion } : {};
@@ -2866,7 +2869,28 @@ export class World {
     }
     // #watch — WHO stands the watch right now: the elected Watch once the town seats one, else the founders'
     // rotation-holder for today. The single sentry the night beat belongs to.
-    currentSentry() { return this.watchFarmer() || this.currentWatcher(); }
+    currentSentry() {
+        // #132 a whisper-posted watcher (via the confer-with-Manager loop, or straight up pre-election) stands
+        // TODAY, relieving the rotation/Watch — max one on the beat (the post REPLACES, never stacks). Day-stamped
+        // so it lapses at the next dawn (the standing arrangement resumes). Seeded state — rides the save.
+        const wp = this.roles.watchPost;
+        if (wp && wp.day === this.day) { const f = this.farmers.find(x => x.sheet.seed === wp.seed); if (f && f.health !== 'dead' && !f.downed) return f; }
+        return this.watchFarmer() || this.currentWatcher();
+    }
+    // #132 post a farmer to today's watch (a heeded "take watch" whisper — relieves whoever holds it; max one).
+    postWatch(f, via = 'whisper') { this.roles.watchPost = { seed: f.sheet.seed, day: this.day, via }; }
+    // #132 the Manager's call on a whispered volunteer: a warm/loyal Manager posts them readily; a cold
+    // utilitarian one often keeps the standing watch and sends them back. A sensed threat tips toward YES; an
+    // already-seated elected Watch makes a redundant post a touch less likely. Deterministic — a DEDICATED seeded
+    // stream (never world.rand, so headless is untouched), stable per (manager, volunteer, day).
+    managerApprovesWatch(f, mgr) {
+        const pr = this.pendingRaid;
+        const base = 0.35 + (mgr.p.collaboration - 0.5) * 0.7 + mgr.opinionOf(f) * 0.2
+                   + (pr && pr.detected ? 0.3 : pr ? 0.15 : 0)
+                   - (this.watchFarmer() && this.watchFarmer() !== f ? 0.15 : 0);
+        const roll = mulberry32((this.seed ^ mgr.sheet.seed ^ f.sheet.seed ^ (this.day * 0x2b2b)) >>> 0)();
+        return roll < Math.max(0.05, Math.min(0.92, base));
+    }
     // #watch — the PERIMETER the sentry paces: a ring of posts around the town, sized to how far the town has
     // spread (farthest sited homestead + a margin, clamped), snapped to open ground. Pure geometry — no rng, no
     // per-tick cost beyond a short nearestOpenTile snap — so it's deterministic and safe to call from the sim.
@@ -6429,7 +6453,9 @@ const STORY_ARRIVALS = {
 
 // the bounded urge vocabulary — the ONLY things the voice can be understood to want.
 // A visit urge carries a target name; everything else is target-free.
-export const URGE_KINDS = ['chop', 'plant', 'water', 'rest', 'explore', 'build', 'visit', 'trade', 'hunt', 'none'];
+// #132 'watch' appended LAST (after 'none') so existing kinds keep their index -> urgeKindSeed unchanged for them.
+// It's a DIRECTED urge (take the watch), not a plot-bias like the others — see #pursueWatchWhisper, not urgeBias.
+export const URGE_KINDS = ['chop', 'plant', 'water', 'rest', 'explore', 'build', 'visit', 'trade', 'hunt', 'none', 'watch'];
 
 // how strongly a HEEDED urge tilts a decision. Deliberately BELOW the dream bumps
 // (0.08-0.12 in the decide loop) so who they are always outweighs a passing thought.
@@ -6878,8 +6904,9 @@ export class Farmer {
 
         if (budgetLeft && roll < chance) {
             // BARGAIN — a diligent/collaborative mind that's busy defers the heed to when the
-            // current backlog clears, rather than dropping a ripe field to chase a whim.
-            const busy = this.#hasUrgentBacklog();
+            // current backlog clears, rather than dropping a ripe field to chase a whim. NOT for the
+            // watch (#132): standing guard against a coming raid is no time to finish the weeding first.
+            const busy = kind !== 'watch' && this.#hasUrgentBacklog();
             if (busy && (p.diligence > 0.6 || p.collaboration > 0.6) && priorPressure < 2) {
                 this.#plantUrge(kind, targetName, 'backlog');
                 record('BARGAIN'); return { verdict: 'BARGAIN', kind, reason: 'when the work is in' };
@@ -6916,6 +6943,7 @@ export class Farmer {
         if (kind === 'rest' && (this.tired || this.health === 'sick')) return true;
         if (kind === 'hunt' && this.huntTarget) return true;
         if ((kind === 'plant' || kind === 'water' || kind === 'chop') && this.#hasUrgentBacklog()) return true;
+        if (kind === 'watch' && (this.#onWatchDuty() || this.world.watchFarmer() === this)) return true;   // #132 already the sentry / the Watch
         if (kind === 'visit' && targetName) {
             const t = this.world.farmers.find(o => o !== this && shortName(o).toLowerCase() === String(targetName).toLowerCase());
             if (t && this.opinionOf(t) > 0.3) return true;   // already fond of them
@@ -6937,6 +6965,9 @@ export class Farmer {
             case 'chop':    x = (p.diligence - 0.5) * 0.5 + Math.max(0, mod(s.str)) * 0.04; break;
             case 'plant':
             case 'water':   x = (p.diligence - 0.5) * 0.5; break;
+            // #132 the watch: a fair, brave, hardy soul takes it up readily; a live threat sharpens the resolve.
+            case 'watch':   x = (p.honesty - 0.5) * 0.5 + (p.competitiveness - 0.5) * 0.3 + Math.max(0, mod(s.str) + mod(s.con)) * 0.03
+                              + (this.world.pendingRaid && this.world.pendingRaid.detected ? 0.3 : this.world.pendingRaid ? 0.15 : 0); break;
             default:        x = 0;
         }
         // a low-honesty mind is a touch more suggestible; a headstrong (volatile) one less so.
@@ -6958,7 +6989,7 @@ export class Farmer {
 
     #urgeVerb(kind) {
         return { chop: 'CHOP WOOD', plant: 'PLANT', water: 'WATER THE FIELDS', rest: 'REST', explore: 'WANDER OFF',
-                 build: 'BUILD', visit: 'CALL ON A NEIGHBOUR', trade: 'GO TRADING', hunt: 'HUNT' }[kind] || 'DO THAT';
+                 build: 'BUILD', visit: 'CALL ON A NEIGHBOUR', trade: 'GO TRADING', hunt: 'HUNT', watch: 'STAND WATCH' }[kind] || 'DO THAT';
     }
 
     // ---- CIVIC (#94 P1): heeding the Town Manager's directive ---------------
@@ -7721,6 +7752,51 @@ export class Farmer {
             ? ['ALL QUIET ON THE LINE.', 'NOTHING STIRS... GOOD.', 'THE WARBAND SLEEPS. I DO NOT.', 'EYES ON THE DARK.']
             : ['ALL QUIET TONIGHT.', 'NOTHING MOVING OUT THERE.', 'THE TOWN SLEEPS — I KEEP WATCH.', 'EYES ON THE TREELINE.'];
         return pool[hashString(this.sheet.seed + ':watch:' + Math.floor(this.world.clock / 4)) % pool.length];
+    }
+
+    // #132 THE WHISPER-LOBBY — act on a heeded "take watch" whisper. Returns true if it took the tick. Two paths,
+    // each with a VISIBLE tell so the whisper's outcome always shows: PRE-ELECTION (no Manager), when the farmer
+    // IS the Manager, or once the alarm is up (no time to confer) — they take the watch straight away, relieving
+    // whoever holds it (max one). POST-ELECTION in calm — they walk to the Manager and CONFER; the Manager either
+    // posts them ("aye, take the watch") or keeps the standing watch and sends them back. The Manager's
+    // personality gates how readily your whisper lands, so who the town elected finally has felt consequence.
+    #pursueWatchWhisper(u) {
+        const w = this.world, mgr = w.managerFarmer();
+        const alarm = w.pendingRaid && w.pendingRaid.detected;
+        if (!mgr || mgr === this || alarm) {
+            w.postWatch(this, 'whisper'); u.resolved = true; u.acted = true;
+            this.say(w.culture === 'orc' ? 'I STAND THE WATCH.' : "I'LL TAKE THE WATCH.", '#f0d88a');
+            this.sparkle = Math.max(this.sparkle, 1);
+            w.addChronicle('whisper', `${shortName(this)} took up the watch at a whisper.`, this, null, '#f0d88a',
+                { tier: 'callout', tone: 'triumph', why: 'a whisper put a watcher on the line' });
+            return true;
+        }
+        if (!u.conferred) {
+            const near = Math.hypot(this.pos.i - mgr.pos.i, this.pos.j - mgr.pos.j) < 2.6;
+            if (!near) {
+                this.think(w.culture === 'orc' ? 'A WORD WITH THE CHIEF ON THE WATCH' : 'A WORD WITH THE MANAGER ON THE WATCH');
+                if (this.#goTo(mgr.pos.i, mgr.pos.j, 'confer')) return true;   // still walking to them
+                // #goTo returned false (arrived, or can't reach) — confer where we stand
+            }
+            u.conferred = true;
+            this.facing = (mgr.pos.i - mgr.pos.j) >= (this.pos.i - this.pos.j) ? 1 : -1;
+            if (w.managerApprovesWatch(this, mgr)) {
+                w.postWatch(this, 'manager'); u.resolved = true; u.acted = true;
+                mgr.say(w.culture === 'orc' ? 'AYE. STAND THE WATCH.' : 'AYE - TAKE THE WATCH.', '#f0d88a');
+                this.sayAfter(mgr.speechReadTime('AYE') + 0.3, w.culture === 'orc' ? 'THE LINE IS MINE.' : "I'LL KEEP THE WATCH.", '#f0d88a');
+                this.sparkle = Math.max(this.sparkle, 1);
+                w.addChronicle('whisper', `${shortName(this)} went to ${shortName(mgr)}, who posted them to the watch.`, this, mgr, '#f0d88a',
+                    { tier: 'callout', tone: 'triumph', why: 'the Manager heeded the whisper and posted a watch' });
+            } else {
+                u.resolved = true;
+                mgr.say(w.culture === 'orc' ? 'WE HAVE A WATCH. BACK TO WORK.' : "WE'VE A WATCH ALREADY. BACK TO YOUR FIELD.", '#c8b088');
+                this.sayAfter(mgr.speechReadTime('WE') + 0.3, 'AS YOU SAY.', '#c8b088');
+                w.addChronicle('whisper', `${shortName(this)} asked to stand watch, but ${shortName(mgr)} kept the current watch and turned them back.`, this, mgr, '#c8b088',
+                    { tier: 'callout', tone: 'somber', why: 'the Manager judged the watch already kept' });
+            }
+            return true;
+        }
+        return false;   // conferred + resolved — nothing more to do
     }
 
     // #113 a saying holds its FULL text, word-wrapped into lines. The bubble render (main.js) reveals them
@@ -8969,6 +9045,11 @@ export class Farmer {
             this.think(this.strain >= 5 ? 'IM BURNT OUT. I HAVE TO STOP.' : 'IM SPENT. NEED TO REST.');
             this.#goHome('rest'); return;
         }
+
+        // #132 THE WHISPER-LOBBY — a heeded "take watch" whisper. Pre-election (or once the alarm's up) they go
+        // STRAIGHT to the watch; post-election they walk to the Manager and confer — the Manager decides (posts
+        // them, or keeps the current watch and sends them back). Every outcome speaks. Drives itself to done.
+        { const wu = this.activeUrge(); if (wu && wu.kind === 'watch' && !wu.resolved && this.plot.sited && this.#pursueWatchWhisper(wu)) return; }
 
         // #131 THE RALLY — once the sentry's alarm has sounded (pendingRaid.detected), every hale hand drops chores
         // and forms up on the well-side line FACING the incoming warband, holding there until the raid lands or
@@ -10632,6 +10713,7 @@ export class Farmer {
                     }
                     else if (then === 'patrol') { this.state = 'watch'; this.watchScanT = WATCH_SCAN; }   // #watch reached a post — scan
                     else if (then === 'muster') this.state = 'muster';   // #131 reached the line — hold it until the raid lands or passes
+                    else if (then === 'confer') this.state = 'decide';   // #132 reached the Manager — re-decide immediately (the confer resolves this tick)
                     else { this.state = 'idle'; this.wanderTimer = 1 + this.rand() * 2.5; }
                 } else {
                     const step = Math.min((this.speed * dt) / dist, 1);

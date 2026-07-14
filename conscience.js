@@ -15,6 +15,9 @@ const TIMEOUT_MS = 20000;
 // ---- offline fallbacks (used verbatim when the LLM channel is unavailable) --------------------
 
 const KW = [
+    // #132 the watch: "go take watch", "raise the watch — raiders to the north", "stand guard", "man the wall".
+    // First so a defence call wins over the incidental "see/find" that would otherwise read as a visit.
+    ['watch',  /\b(watch|guard|sentry|lookout|patrol|defend|sentinel|to arms|raise the alarm|stand guard|keep watch|man the (wall|fence|gate)|raiders?)\b/i],
     ['chop',   /\b(chop|wood|timber|tree|log|axe|firewood)\b/i],
     ['water',  /\b(water|irrigat|thirst|drought)\b/i],
     ['plant',  /\b(plant|sow|seed|crop|grow.*(bean|carrot|wheat))\b/i],
