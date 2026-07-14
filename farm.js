@@ -5569,16 +5569,25 @@ export class World {
         const def = ENCOUNTER_DEFS.orc, n = out.n;
         // #131 march the warband in from the SAME seeded flank the threat tell pointed at (so "gathers to the
         // north" and the muster line all agree); fall back to the private raidfx stream if a raid lands untelegraphed.
-        const baseAng = (dir != null ? dir : rr() * Math.PI * 2), d = WILD_RADIUS - 3;
+        const baseAng = (dir != null ? dir : rr() * Math.PI * 2);
         const raiders = [];
         for (let k = 0; k < n; k++) {
             const ang = baseAng + (k - (n - 1) / 2) * 0.28;
+            const co = Math.cos(ang), si = Math.sin(ang);
+            // #131b spawn out at the FOG/MAP edge along this bearing: the farthest the ray runs before leaving the
+            // grid (a margin in from the border), so the band walks in out of the unexplored dark, not a fixed ring.
+            const m = RAID_SPAWN_MARGIN;
+            const tx = co > 0 ? (GRID - m - CENTER) / co : co < 0 ? (m - CENTER) / co : Infinity;
+            const ty = si > 0 ? (GRID - m - CENTER) / si : si < 0 ? (m - CENTER) / si : Infinity;
+            const d = Math.max(WILD_RADIUS + 6, Math.min(tx, ty));   // out past the wilds, at the map edge
             const falls = k < out.felled;
             const target = falls && monSpots[k] ? { i: monSpots[k].i, j: monSpots[k].j } : { i: CENTER, j: CENTER };
-            raiders.push({ kind: 'orc', def, i: CENTER + Math.cos(ang) * d, j: CENTER + Math.sin(ang) * d, facing: 1,
+            raiders.push({ kind: 'orc', def, i: CENTER + co * d, j: CENTER + si * d, facing: 1,
                            hp: def.hp, foeName: out.felledNames[k] || null, falls, target });
         }
-        this.raidEvent = { out, e, raiders, phase: 'march', timer: 9 };   // display choreography (see #tickRaidEvent)
+        // #131b start in 'approach' (streaming in from the fog); #tickRaidEvent flips to 'march' + sets `struck`
+        // when the lead raider crosses into the town proper — the edge main.js watches to fire the UNDER RAID beat.
+        this.raidEvent = { out, e, raiders, phase: 'approach', struck: false, timer: 9 };
     }
 
     // #Slice3 / #Codex23 — the WATCHED raid CHOREOGRAPHY. PURE DISPLAY: it moves only `raidEvent.raiders`
@@ -5587,7 +5596,18 @@ export class World {
     // headless town has `raidEvent === null` here and this is a no-op — the sim/digest is untouched.
     #tickRaidEvent(dt) {
         const re = this.raidEvent; if (!re) return;
-        if (re.phase === 'march') {
+        if (re.phase === 'approach') {
+            // #131b the warband streams in from the fog toward town; no battle-transition yet — this is the
+            // "you see them coming" beat. When the lead raider crosses into the town proper the blow lands.
+            let nearest = Infinity;
+            for (const r of re.raiders) {
+                const dx = CENTER - r.i, dy = CENTER - r.j, dist = Math.hypot(dx, dy) || 1;
+                r.i += dx / dist * RAID_APPROACH_SPEED * dt; r.j += dy / dist * RAID_APPROACH_SPEED * dt;
+                r.facing = (dx - dy) >= 0 ? 1 : -1;
+                nearest = Math.min(nearest, dist);
+            }
+            if (nearest <= RAID_STRUCK_RADIUS) { re.struck = true; re.phase = 'march'; re.timer = 9; }   // crossed into town -> PRESS (main.js fires the UNDER RAID beat off `struck`)
+        } else if (re.phase === 'march') {
             for (const r of re.raiders) {
                 const dx = r.target.i - r.i, dy = r.target.j - r.j, dist = Math.hypot(dx, dy);
                 // face the SCREEN-x direction of travel: iso screen-x tracks (i - j), so a raider heading toward
@@ -5975,6 +5995,10 @@ const ENCOUNTER_DEFS = {
 };
 const ENCOUNTER_INTERVAL = 130, ENCOUNTER_JITTER = 130;   // game-seconds between spawn attempts (~1-2/day)
 const MAX_ENCOUNTERS = 3, WILD_RADIUS = 30;             // the wilds begin ~this far from the plaza
+// #131b the raid cinematic's APPROACH: raiders spawn out at the fog/map edge and stream in; the "UNDER RAID"
+// battle-transition fires only when the lead raider crosses RAID_STRUCK_RADIUS (the town proper), not at spawn —
+// so you SEE them come out of the fog, and the blow lands when they actually reach town.
+const RAID_SPAWN_MARGIN = 4, RAID_APPROACH_SPEED = 9.0, RAID_STRUCK_RADIUS = 16;
 const BEAST_TERRITORY = 17;   // a beast won't chase further than this from where it sprang (foes press on)
 
 // Roaming WILD PREY — the peaceful counterpart to the DM's threats. Deer/rabbit/turkey drift the

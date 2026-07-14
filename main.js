@@ -96,7 +96,8 @@ let chronOpen = false;            // town chronicle panel (the settlement's saga
 let raidFx = null;                // { t } while the transition plays
 let raidShake = 0;                // decaying screen-shake magnitude
 let raidFocus = null;             // { i, j } the camera eases to while a raid is on (the fence/well the warband hits)
-let _lastRaidEvent = null;        // dedupe the trigger (fire once per staged raid)
+let _lastRaidEvent = null;        // dedupe the camera snap (fire once per staged raid)
+let _raidStruck = false;          // #131b fire the UNDER RAID beat once, when the warband crosses into town
 let chronReadTotal = 0;           // world._chronTotal at last view — the badge shows only for UNREAD beats
 let chronScroll = 0;
 let followMode = false;           // camera tracks followTarget (F/crosshair toggles; drag/Esc cancels)
@@ -5558,21 +5559,34 @@ function frame(now) {
     // all the leftover time, but cap it so we never spiral.
     if (steps >= 800) simAccumulator = Math.min(simAccumulator, 800 * FIXED_DT);
 
-    // #raidfx — a newly-staged raid takes over the screen: fire the "UNDER RAID" battle-transition,
-    // kick a screen-shake, and snap the camera to where the warband strikes. Display-only, so no
-    // determinism impact (world.raidEvent is produced by the sim; we only observe the null→set edge).
+    // #raidfx / #131b — a raid now plays in two beats. On STAGE the warband is still out at the fog edge
+    // ('approach'): snap the camera to the well so the player watches them stream in out of the dark — but hold
+    // the battle-transition. Only when the lead raider CROSSES INTO TOWN (world.raidEvent.struck) does the
+    // "UNDER RAID" flash + screen-shake + sting fire. Display-only, so no determinism impact (we observe sim
+    // edges: null→set for the camera, struck false→true for the blow).
     if (world.raidEvent && world.raidEvent !== _lastRaidEvent) {
         _lastRaidEvent = world.raidEvent;
+        _raidStruck = false;
+        raidFocus = world.well ? { i: world.well.i, j: world.well.j } : { i: 55, j: 55 };   // frame the town; raiders walk in from off-screen
+        followMode = false; followTarget = null;   // the raid outranks any farmer we were trailing
+    }
+    if (world.raidEvent && world.raidEvent.struck && !_raidStruck) {
+        _raidStruck = true;
         raidFx = { t: 0 };
         raidShake = 7;
-        // aim the camera at the raid: prefer the felled/target spot, else the well the warband presses toward
         const e = world.raidEvent.e || {};
-        const spot = (e.i != null && e.j != null) ? { i: e.i, j: e.j } : (world.well ? { i: world.well.i, j: world.well.j } : null);
-        raidFocus = spot;
-        followMode = false; followTarget = null;   // the raid outranks any farmer we were trailing
+        raidFocus = (e.i != null && e.j != null) ? { i: e.i, j: e.j } : (world.well ? { i: world.well.i, j: world.well.j } : raidFocus);
         if (audio.raidSting) audio.raidSting();     // audio takeover (music shift groundwork)
     }
-    if (!world.raidEvent) { _lastRaidEvent = null; raidFocus = null; }   // raid over — release the camera
+    // #131b during the approach, keep the incoming band on-screen: ease the camera to a point between the town
+    // and the nearest raider (biased outward toward them) so the player watches them stream in out of the fog.
+    // On strike this is superseded by the well/target focus above.
+    if (world.raidEvent && world.raidEvent.phase === 'approach' && world.raidEvent.raiders.length && world.well) {
+        let lead = world.raidEvent.raiders[0], bd = Infinity;
+        for (const r of world.raidEvent.raiders) { const d = Math.hypot(r.i - world.well.i, r.j - world.well.j); if (d < bd) { bd = d; lead = r; } }
+        raidFocus = { i: world.well.i + (lead.i - world.well.i) * 0.62, j: world.well.j + (lead.j - world.well.j) * 0.62 };
+    }
+    if (!world.raidEvent) { _lastRaidEvent = null; _raidStruck = false; raidFocus = null; }   // raid over — release the camera
     if (raidShake > 0) raidShake = Math.max(0, raidShake - dt * 11);
 
     // camera: while a raid is live, ride the raidFocus; otherwise trail followTarget
