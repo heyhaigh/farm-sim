@@ -2510,38 +2510,36 @@ function drawFarmerBubble(f, sx) {
         ctx.restore();
     }
 
-    // speech bubble — #113: the full saying is word-wrapped into lines; reveal them ONE AT A TIME (the whole
-    // sentiment is legible, no "..") advancing every b.lineSec. A tiny progress ticker shows more is coming.
+    // speech bubble — #bubble-typewriter: the saying is word-wrapped into lines, shown ONE AT A TIME (advancing
+    // every b.lineSec), and each line TYPES OUT left-to-right character by character. Streaming the text this way
+    // reads cleaner than a crossfade and leads the eye along the line; a small caret marks the typing head.
     if (f.bubble && !f.memoryEcho) {
         const b = f.bubble, lines = b.lines || [b.text];
         const elapsed = (b.t0 || 0) - b.t;
-        const idx = Math.min(lines.length - 1, Math.max(0, Math.floor(elapsed / (b.lineSec || 1.5))));
+        const lineSec = b.lineSec || 0.75;
+        const idx = Math.min(lines.length - 1, Math.max(0, Math.floor(elapsed / lineSec)));
         const line = lines[idx] || '';
         const multi = lines.length > 1;
-        // the plate holds the WIDEST line's width for the whole saying, so it never resizes/jumps as the
-        // animation advances (the jarring break the resize used to cause). Text stays left-aligned within it.
+        // the plate holds the WIDEST line's width for the whole saying, so it never resizes/jumps as the text
+        // streams in (the jarring break a resize would cause). Text stays left-aligned within it.
         const w = Math.max(...lines.map(l => textWidth(l))) + 4 + (multi ? 6 : 0);
         const bx = Math.floor(sx - w / 2), by = py - 10;
         ctx.fillStyle = 'rgba(16,18,26,0.85)';
         ctx.fillRect(bx, by, w, 9);
-        // CROSSFADE between lines (no empty-plate "blink"): the outgoing line rises up-and-out as the incoming
-        // one rises in, both clipped to the plate, on a smooth easeInOutCubic. When held, ease=1 (steady, full).
-        const lineSec = b.lineSec || 1.5;
-        const p = Math.min(1, Math.max(0, (elapsed - idx * lineSec) / 0.22));
-        const ease = p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2;
-        ctx.save();
-        ctx.beginPath(); ctx.rect(bx, by, w, 9); ctx.clip();
-        if (idx > 0 && ease < 1) {   // the previous line fades out + slides up out of the plate
-            ctx.globalAlpha = 1 - ease;
-            drawText(ctx, lines[idx - 1], bx + 2, by + 2 - Math.round(ease * 5), b.color);
+        // TYPEWRITER: reveal characters of the current line over its first stretch, then hold it fully typed for
+        // the rest of the line's slot. ~34 chars/sec — brisk but followable; always shows at least one char.
+        const CHAR_SEC = 0.029;
+        const lineElapsed = elapsed - idx * lineSec;
+        const shown = Math.max(1, Math.min(line.length, Math.floor(lineElapsed / CHAR_SEC)));
+        const typed = line.slice(0, shown);
+        drawText(ctx, typed, bx + 2, by + 2, b.color);
+        if (shown < line.length && (Math.floor(elapsed * 8) % 2)) {   // blinking caret at the typing head
+            ctx.fillStyle = b.color; ctx.fillRect(bx + 2 + textWidth(typed), by + 2, 1, 5);
         }
-        ctx.globalAlpha = ease;
-        drawText(ctx, line, bx + 2, by + 2 + Math.round((1 - ease) * 5), b.color);
-        ctx.restore();
         if (multi) {   // ••◦ dots at the right edge — filled up to the current line, so you know more follows
             for (let k = 0; k < lines.length; k++) {
                 ctx.fillStyle = k <= idx ? b.color : 'rgba(160,164,180,0.4)';
-                ctx.fillRect(bx + w - 2, by + 1 + k * 2, 1, 1);   // half the previous right padding (was -4)
+                ctx.fillRect(bx + w - 2, by + 1 + k * 2, 1, 1);
             }
         }
     }

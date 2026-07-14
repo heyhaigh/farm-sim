@@ -21,14 +21,13 @@ const SEEDS = [20260706, 42, 7, 3];
 // Baseline digests at HEAD (LLM + SuperMemory off, 30-day run). Update deliberately when a sim change
 // legitimately re-baselines; a DRIFT here on an unrelated change is a determinism regression to investigate.
 const BASELINE = {
-    // re-baselined 2026-07-14 for #132b the CONGREGATION CONVERSATION: the day-1 founding exchange is now voiced
-    // by a world-level director (turn-taking, everyone speaks, no dead air) instead of a per-farmer assemble
-    // scramble — which removed that scramble's daily rand() draw, shifting the day-1 rng stream. The dialogue
-    // itself is pure display (say bubbles); same-twice held all seeds (fully reproducible, only the fingerprint moved).
-    20260706: 'd03d87d2',
-    42: 'ff2bf98d',
-    7: '13b1f0d8',
-    3: '5757e3b1',
+    // re-baselined 2026-07-14 for the DAY-1 GRACE PERIOD: the Dungeon Master no longer spawns wilderness threats
+    // on day 1 (the town founds + settles unharried), so day 1 draws no DM rng at all — shifting the stream from
+    // there on. Behavioural onboarding change; same-twice held all seeds (fully reproducible, only the fingerprint moved).
+    20260706: 'a665fee5',
+    42: '271a2e20',
+    7: '1b8ee52e',
+    3: '2f26a7fe',
 };
 
 function boot(seed, culture) {

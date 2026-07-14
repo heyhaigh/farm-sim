@@ -3208,8 +3208,8 @@ export class World {
         picked.say(text, '#f0e2b0');
         if (prev && prev !== picked) picked.facing = (prev.pos.i - prev.pos.j) >= (picked.pos.i - picked.pos.j) ? 1 : -1;   // turn to address the last voice
         cs.last = picked.sheet.seed; cs.spoken++;
-        const beat = picked.bubble ? picked.bubble.t0 : 2.4;
-        cs.nextAt = this.clock + Math.max(1.5, beat * 0.82);   // the next voice picks up as this line finishes
+        const beat = picked.bubble ? picked.bubble.t0 : 1.6;
+        cs.nextAt = this.clock + Math.max(1.2, beat + 0.15);   // next voice waits for this bubble to CLEAR (no overlap) + a small gap
     }
 
     // #132b — the words a founder speaks on their congregation turn. The LLM's bespoke script wins when present;
@@ -5570,6 +5570,11 @@ export class World {
     }
 
     #tickDM(dt) {
+        // #onboarding — DAY ONE IS A GRACE PERIOD: no wilderness threats while the town holds its founding
+        // congregation, scatters to stake plots, and settles in. The player gets a full first day to learn the
+        // world and watch the town organize before anything can down a founder. (Determinism: day 1 draws no DM
+        // rng at all now — re-baselined.) Cross-town raids can't reach a day-1 town either (the world hasn't ticked).
+        if (this.day < 2) return;
         for (const e of this.encounters) this.#advanceEncounter(e, dt);
         if (this.encounters.some(e => e.done)) this.encounters = this.encounters.filter(e => !e.done);
         this.dmCooldown -= dt;
@@ -7799,12 +7804,14 @@ export class Farmer {
         return false;   // conferred + resolved — nothing more to do
     }
 
-    // #113 a saying holds its FULL text, word-wrapped into lines. The bubble render (main.js) reveals them
-    // one at a time (~SAY_LINE_SEC each) so the whole sentiment is legible instead of being truncated with "..".
+    // #113 a saying holds its FULL text, word-wrapped into lines. The bubble render (main.js) TYPES each line out
+    // left-to-right (typewriter), one line at a time (~SAY_LINE_SEC each). #bubble-timing: the tail after the last
+    // line is short (0.4s, was 0.9) so a finished bubble clears promptly instead of lingering and overlapping the
+    // next speaker — the conversation reads as clean turn-taking, not a pile-up.
     say(text, color = '#fff') {
         this._pendingSay = null;   // a direct line supersedes any queued (deferred) reply
         const lines = wrapWords(this.#orcLine(text));
-        const t0 = lines.length * SAY_LINE_SEC + 0.9;   // stays up long enough to read every line, + a beat
+        const t0 = lines.length * SAY_LINE_SEC + 0.4;
         this.bubble = { lines, text: lines[0], color, t: t0, t0, lineSec: SAY_LINE_SEC };
     }
 
