@@ -2965,6 +2965,13 @@ export class World {
     }
     // True while the town is assembled and deliberating (drives the farmers' walk-to-square behaviour).
     foundingGathering() { return this.roles.foundingPhase === 'gathering'; }
+
+    // #speech-floor — a scene-scoped conversation mutex (the founding congregation + the day-10 vote): one voice
+    // at a time so an exchange reads as turn-taking, not a pile-up of simultaneous bubbles. DISPLAY-ONLY — a
+    // countdown ticked each frame in tick(), never serialized, never in the digest, draws no rng — so it can
+    // pace ceremony speech without perturbing determinism. NOT a global lock on ambient chatter (scene-scoped).
+    floorFree() { return (this._floorHold || 0) <= 0; }
+    holdFloor(sec) { this._floorHold = Math.max(this._floorHold || 0, sec); }
     // A deterministic slot on a loose ring around the well for a farmer to stand while the town deliberates.
     assembleSpot(f) {
         const well = this.well, h = hashString(f.sheet.seed + ':assemble');
@@ -5157,6 +5164,7 @@ export class World {
     tick(dt) {
         this.time += dt;
         this.clock += dt;
+        if (this._floorHold > 0) this._floorHold -= dt;   // #speech-floor countdown (display-only; see floorFree/holdFloor)
         if (this.clock >= DAY_LENGTH + NIGHT_LENGTH) {
             const endedDay = this.day, endedSeason = this.season;   // capture before the rollover mutates them
             this.clock = 0; this.day++;
@@ -10386,7 +10394,15 @@ export class Farmer {
             case 'assemble': {
                 if (!this.world.foundingGathering()) { this.state = 'decide'; break; }
                 this.assembleT = (this.assembleT || 0) - dt;
-                if (this.assembleT <= 0) { this.assembleT = 3 + this.rand() * 5; this.think(this.#deliberationThought()); }
+                if (this.assembleT <= 0) {
+                    this.assembleT = 3 + this.rand() * 5;              // unchanged rng draw
+                    const floorWasFree = this.world.floorFree();       // #speech-floor (display-only check)
+                    this.think(this.#deliberationThought());           // unchanged (draws its own rng internally)
+                    // if another voice holds the floor, keep this muttering SILENT this beat (display suppression
+                    // only — the rng above is untouched, so the digest stays byte-identical); else take the floor.
+                    if (!floorWasFree) this.bubble = null;
+                    else if (this.bubble) this.world.holdFloor(this.bubble.t0 + 0.3);
+                }
                 break;
             }
         }
