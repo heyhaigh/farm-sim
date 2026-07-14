@@ -3154,20 +3154,34 @@ export class World {
     #tickCongregation() {
         const cs = this._congState || (this._congState = {
             order: this.farmers.map(f => f.sheet.seed).sort((a, b) => (hashString('cong:' + a) - hashString('cong:' + b)) || (a - b)),
-            idx: 0, nextAt: 1.0, spoken: 0, last: null,
+            idx: 0, nextAt: 1.0, spoken: 0, last: null, ptr: 0, used: new Set(),
         });
         if (this.clock < cs.nextAt) return;
         const ready = f => f && f.state === 'assemble' && f.health !== 'sick' && !f.downed;
-        let picked = null, n = cs.order.length;
-        for (let k = 0; k < n; k++) {
-            const j = (cs.idx + k) % n;
-            const f = this.farmers.find(x => x.sheet.seed === cs.order[j]);
-            if (ready(f)) { picked = f; cs.idx = j + 1; break; }
+        let picked = null, text = null;
+        // #132b prefer the LLM's authored script (world._foundingScript): play it in order, voicing the founder it
+        // named. If that founder hasn't reached the well yet, wait a beat while the town is still gathering, else
+        // skip the line so the exchange keeps flowing. Falls through to the procedural pools once the script ends.
+        const scr = this._foundingScript;
+        if (Array.isArray(scr) && cs.ptr < scr.length) {
+            const s = scr[cs.ptr], f = this.farmers.find(x => x.sheet.seed === s.seed);
+            if (ready(f)) { picked = f; text = String(s.text); cs.ptr++; }
+            else if (this.farmers.filter(ready).length < 2) { cs.nextAt = this.clock + 0.4; return; }   // still gathering — hold for the speaker
+            else { cs.ptr++; cs.nextAt = this.clock + 0.1; return; }                                     // speaker never made it — skip, keep flowing
         }
-        if (!picked) { cs.nextAt = this.clock + 0.4; return; }   // nobody's arrived yet — re-check soon, never stall
+        if (!picked) {   // no script (yet), or it's spent — arrival-order round-robin over the authored pools
+            const n = cs.order.length;
+            for (let k = 0; k < n; k++) {
+                const j = (cs.idx + k) % n;
+                const f = this.farmers.find(x => x.sheet.seed === cs.order[j]);
+                if (ready(f)) { picked = f; cs.idx = j + 1; break; }
+            }
+            if (!picked) { cs.nextAt = this.clock + 0.4; return; }   // nobody's arrived yet — re-check soon, never stall
+            const prev = cs.last ? this.farmers.find(x => x.sheet.seed === cs.last) : null;
+            text = this.#congregationLine(picked, prev, cs.spoken, cs.used);
+        }
         const prev = cs.last ? this.farmers.find(x => x.sheet.seed === cs.last) : null;
-        const line = this.#congregationLine(picked, prev, cs.spoken, (cs.used || (cs.used = new Set())));
-        picked.say(line, '#f0e2b0');
+        picked.say(text, '#f0e2b0');
         if (prev && prev !== picked) picked.facing = (prev.pos.i - prev.pos.j) >= (picked.pos.i - picked.pos.j) ? 1 : -1;   // turn to address the last voice
         cs.last = picked.sheet.seed; cs.spoken++;
         const beat = picked.bubble ? picked.bubble.t0 : 2.4;
@@ -3179,8 +3193,6 @@ export class World {
     // reply/build/counter and may address the previous speaker by name. Personality biases WHERE in the pool they
     // reach; the turn index keeps a founder from repeating themselves. Seeded (hashes, no rng) — determinism-safe.
     #congregationLine(f, prev, turnIdx, used) {
-        const scr = this._foundingScript;
-        if (Array.isArray(scr) && scr.length) { const s = scr[turnIdx % scr.length]; if (s && s.text) return String(s.text); }
         const orc = this.culture === 'orc', p = f.p || {}, T = CONG_LINES[orc ? 'orc' : 'human'];
         const opener = turnIdx === 0 || !prev;
         const pool = opener ? T.open : T.reply;

@@ -37,6 +37,7 @@ const API_ROUTES = {
     '/api/ry-farms-chat': './api/ry-farms-chat.js',
     '/api/ry-farms-dm': './api/ry-farms-dm.js',
     '/api/ry-farms-conscience': './api/ry-farms-conscience.js',
+    '/api/ry-farms-congregation': './api/ry-farms-congregation.js',
     '/api/ry-farms-invent': './api/ry-farms-invent.js',
 };
 const API_DIR = path.join(ROOT, 'api');

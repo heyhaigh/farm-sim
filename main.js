@@ -15,6 +15,7 @@ import { CRT } from './crt.js';
 import { saveTown, loadTown, wipeTown, undoWipe, loadWorldIndex, registerTownInWorld, saveWorldIndex, updateWorldIndex } from './save.js';
 import { computeLayout, detectEncounters, encounterLine, townPos, townReach, townTint } from './worldmap.js';
 import { enrichStories } from './dm.js';
+import { requestCongregation } from './congregation.js';
 import { persistLives, persistTownHistory } from './memory-writeback.js';
 import { enrichInventions, persistTownInventions } from './memory-invent.js';
 import { whisper } from './conscience.js';
@@ -5860,6 +5861,11 @@ function drawBootScreen(t) {
     };
     setTimeout(tryEnrich, 5000);
     setInterval(tryEnrich, 5 * 60 * 1000);
+
+    // #132b the DAY-1 FOUNDING CONVERSATION: on a fresh town's opening congregation, ask the LLM to write the
+    // founders' opening exchange (bespoke, natural, per-founder). Kicked NOW so it can land while they gather;
+    // until it does (or if it never does) the sim director's authored pools carry the scene. Display-only.
+    if (!resumed && world.congregating && world.congregating()) requestCongregation(world);
 
     // #91 memory writeback: persist each farmer's compiled life (creeds + beliefs + episodic) back to
     // self-hosted SuperMemory. Off the sim loop, best-effort, save-carried stamp. Slower cadence than
