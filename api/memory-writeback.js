@@ -60,7 +60,10 @@ async function doUpsert(base, headers, doc, rev) {
     const id = doc.customId, prev = revRegistry.get(id);
     if (prev !== undefined && rev <= prev) return { stale: true };
     revRegistry.set(id, rev);                                          // RESERVE before the await (exclusive per id via the chain)
-    if (revRegistry.size > REV_CAP) revRegistry.delete(revRegistry.keys().next().value);   // bound: evict oldest
+    // #Codex27-3: bound the registry, but NEVER evict an id with an in-flight write (present in writeChains) — its
+    // reserved rev would vanish and a queued stale write for it could then land last. Evict the oldest INACTIVE
+    // id; if every entry is active, overflow temporarily (an entry is pruned once one settles).
+    if (revRegistry.size > REV_CAP) { for (const k of revRegistry.keys()) if (!writeChains.has(k)) { revRegistry.delete(k); break; } }
     const rollback = () => { if (revRegistry.get(id) === rev) (prev === undefined ? revRegistry.delete(id) : revRegistry.set(id, prev)); };
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), DEADLINE_MS);

@@ -195,7 +195,11 @@ export async function wipeTown(seed) {
                 // restore. An UNSAVED town (no snapshot) has nothing to undo — leave the PREVIOUS backup intact
                 // rather than half-overwrite it (the old 3-key scheme could keep an old backup:town while
                 // replacing backup:worldslice for a different seed, so undo combined unrelated generations).
-                if (snap) store.put({ seed, snap, latest, slice }, 'backup:wipe');
+                if (snap) {
+                    store.put({ seed, snap, latest, slice }, 'backup:wipe');
+                    // #Codex27-2: a new coherent backup supersedes any pre-upgrade 3-key backup — drop the legacy keys
+                    store.delete('backup:town'); store.delete('backup:latest'); store.delete('backup:worldslice');
+                }
             };
             tx.oncomplete = () => resolve();
             tx.onerror = () => reject(tx.error);
@@ -215,11 +219,17 @@ export async function undoWipe() {
         return await new Promise((resolve, reject) => {
             const tx = db.transaction(STORE, 'readwrite');
             const store = tx.objectStore(STORE);
-            let backup, restoredSeed = null;
+            let backup, lgTown, lgLatest, lgSlice, restoredSeed = null;
             const rBackup = store.get('backup:wipe'); rBackup.onsuccess = () => { backup = rBackup.result; };
+            // #Codex27-2 also read the pre-upgrade 3-key backup so a wipe done by the OLD build is still undoable
+            const rLgTown = store.get('backup:town'); rLgTown.onsuccess = () => { lgTown = rLgTown.result; };
+            const rLgLatest = store.get('backup:latest'); rLgLatest.onsuccess = () => { lgLatest = rLgLatest.result; };
+            const rLgSlice = store.get('backup:worldslice'); rLgSlice.onsuccess = () => { lgSlice = rLgSlice.result; };
             const rWorld = store.get(WORLD_KEY);
             rWorld.onsuccess = () => {
-                if (!backup || !backup.snap) return;   // nothing coherent backed up — leave everything, resolve null
+                // prefer the new coherent backup; else MIGRATE a pending legacy 3-key backup into the same shape
+                if (!backup || !backup.snap) backup = lgTown ? { seed: lgTown.seed, snap: lgTown, latest: lgLatest, slice: lgSlice } : null;
+                if (!backup || !backup.snap) return;   // nothing to restore — leave everything, resolve null
                 const { snap, latest, slice } = backup;   // #Codex26-2 one coherent generation: same seed's snap+latest+slice
                 restoredSeed = snap.seed;
                 const sk = String(snap.seed);
@@ -243,7 +253,8 @@ export async function undoWipe() {
                     for (const nn of (slice.news || [])) if (!haveNews.has(newsKey(nn))) index.news.push(nn);
                     store.put(index, WORLD_KEY);
                 }
-                store.delete('backup:wipe');   // consume the one-deep backup (a second undo finds nothing)
+                // #Codex27-2 consume the coherent backup AND any legacy keys (whichever we restored from)
+                store.delete('backup:wipe'); store.delete('backup:town'); store.delete('backup:latest'); store.delete('backup:worldslice');
             };
             tx.oncomplete = () => resolve(restoredSeed);
             tx.onerror = () => reject(tx.error);

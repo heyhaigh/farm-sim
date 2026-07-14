@@ -80,6 +80,24 @@ console.log('#24-3 writeback endpoint guards');
     sent = [];
     { const m = mockReqRes({}, { townSeed: 77, rev: 5, farmers: [{ seed: 3, name: 'stale-after-reload' }] }); await h2(m.req, m.res); }
     ok(sent.length === 0, `reloaded module still rejects a stale rev (globalThis registry survived)`);
+
+    // #Codex27-3: the cap eviction must NEVER evict an id with an IN-FLIGHT write — else its reservation vanishes
+    // and a queued stale write for it could land. Simulate a near-cap registry with the target as the OLDEST
+    // entry AND in-flight, then fire a new write that overflows the cap.
+    const reg = globalThis.__ryFarmsRevReg, chains = globalThis.__ryFarmsWriteChains;
+    reg.clear(); chains.clear();
+    const TARGET = 'ry-farms:123:9';
+    reg.set(TARGET, 50);                                   // target reserved high, inserted FIRST = oldest = eviction candidate
+    chains.set(TARGET, new Promise(() => {}));             // mark it in-flight (a never-settling pending write)
+    for (let i = 0; i < 4096; i++) reg.set('ry-farms:fill:' + i, 1);   // push past REV_CAP so the next write evicts
+    sent = [];
+    { const m = mockReqRes({}, { townSeed: 500, rev: 1, farmers: [{ seed: 1, name: 'trigger-eviction' }] }); await handler(m.req, m.res); }
+    ok(reg.get(TARGET) === 50, `in-flight target NOT evicted by the cap (rev ${reg.get(TARGET)} survives)`);
+    chains.delete(TARGET);                                 // release the in-flight guard
+    sent = [];
+    { const m = mockReqRes({}, { townSeed: 123, rev: 40, farmers: [{ seed: 9, name: 'stale-vs-survivor' }] }); await handler(m.req, m.res); }
+    ok(sent.length === 0, `stale rev 40 rejected (the survivor's rev-50 reservation held through eviction)`);
+    reg.clear(); chains.clear();
 }
 
 console.log(pass ? '\nALL WRITEBACK-GUARD PROBES PASSED' : '\nSOME PROBES FAILED');

@@ -5445,7 +5445,10 @@ function applyFarmerInterp(alpha) {
     }
 }
 function restoreFarmerInterp() {
-    for (const f of world.farmers) if (f._trueI !== undefined) { f.pos.i = f._trueI; f.pos.j = f._trueJ; }
+    // #Codex27-1 CLEAR the markers after restoring, so a farmer only carries `_trueI` while it is actually mutated
+    // THIS pass. Otherwise, if applyFarmerInterp throws part-way through the next frame, the finally would rewrite
+    // the newly-advanced sim positions of farmers it never touched this frame with LAST frame's stale coordinates.
+    for (const f of world.farmers) if (f._trueI !== undefined) { f.pos.i = f._trueI; f.pos.j = f._trueJ; f._trueI = f._trueJ = undefined; }
 }
 
 function frame(now) {
