@@ -10329,7 +10329,16 @@ export class Farmer {
 
     tick(dt) {
         this.animTime += dt;
-        if (this.downed) { this.hurtFlash = Math.max(0, this.hurtFlash - dt * 2.5); return; }   // out cold, recovering at home
+        if (this.downed) {
+            this.hurtFlash = Math.max(0, this.hurtFlash - dt * 2.5);
+            // #fix a downed farmer used to early-return BEFORE the bubble timer below, so a cry set as they went
+            // down ("...") froze at t===t0 forever — the plate renders but the crossfade leaves the text at alpha
+            // 0, i.e. a persistent BLACK BAR over the body (seen after a raider downs someone). Fade it out here
+            // and drop any deferred line — they're out cold, they don't speak. Display-only; no digest impact.
+            if (this.bubble) { this.bubble.t -= dt; if (this.bubble.t <= 0) this.bubble = null; }
+            this._pendingSay = null;
+            return;   // out cold, recovering at home
+        }
         this.helpCooldown = Math.max(0, this.helpCooldown - dt);
         this.poachCooldown = Math.max(0, this.poachCooldown - dt);
         this.coopCooldown = Math.max(0, this.coopCooldown - dt);
