@@ -324,6 +324,14 @@ const CONGREGATE_END = 32;
 // pausing to scan at each. WATCH_POSTS posts around the town at the current perimeter; WATCH_SCAN sim-seconds
 // held at each before moving on. One sentry at a time (the elected Watch, or the founders' rotation-holder).
 const WATCH_POSTS = 6, WATCH_SCAN = 3.2;
+// #131 THE THREAT TELL — a raid is TELEGRAPHED, never instant. RAID_LEAD sim-seconds pass between word reaching
+// town ("a warband gathers") and the blow; the sentry's beat detects the closing band and raises the alarm
+// RAID_RALLY seconds before it lands. RAID_RALLY is the lead time the town has to muster — set well above the
+// worst-case cross-town traverse so the marquee loop (tell -> whisper -> defenders posted) can't die to
+// pathfinding. Measured on this.time (MONOTONIC) — NOT this.clock, which resets to 0 every day at the rollover.
+const RAID_LEAD = 45, RAID_RALLY = 30;
+// #131 seeded bearing -> a plain-word compass label for the tell; index = round(dir / 45deg) % 8, dir 0 = +i.
+const COMPASS = ['east', 'south-east', 'south', 'south-west', 'west', 'north-west', 'north', 'north-east'];
 // Recall is the EMERGENCY removal between elections — deliberately rare so tenures are meaningful and the
 // yearly ballot does the ordinary turnover. A holder must sit below RECALL_FLOOR for RECALL_DWELL days
 // running (a sustained rejection, not statistical noise near the line), and a town can recall at most
@@ -668,6 +676,8 @@ export class World {
         this.helpBoard = [];
         this.encounters = [];      // active wilderness threats (see the Dungeon Master, #tickDM)
         this.raidEvent = null;     // #Slice3 the in-progress WATCHED raid choreography (live-only, never serialized)
+        this.pendingRaid = null;   // #131 a TELEGRAPHED incoming raid: seeded state (rides the save), lands on a
+                                   // this.time deadline identically watched or dormant. See applyInbox + #tickPendingRaid.
         this.dmCooldown = 90;      // a grace period before the first threat stalks the young town
         this._live = false;        // #108 true only while this town is the one being WATCHED (set by main.js on
                                    // boot). A cross-town raid landing on a live town STAGES a visible warband +
@@ -1641,25 +1651,28 @@ export class World {
             if (this._inboxApplied.length > 200) this._inboxApplied.splice(0, this._inboxApplied.length - 200);
             const envoy = e.envoy != null ? this.farmers.find(f => f.sheet.seed === e.envoy) : null;
             if (e.kind === 'raided') {
-                // STAKES: the season's labor taken in a night — dock the stores (drives reach + roster yield).
-                // #doctrine: the raider's commitment (x the defender's wall reduction) sets the bite; a pre-
-                // doctrine save has no e.commit -> falls back to the original flat 0.2, byte-identical.
-                const lost = Math.round((this.harvestTotal || 0) * (e.commit ?? 0.2));
-                this.harvestTotal = Math.max(0, (this.harvestTotal || 0) - lost);
-                // #Codex23 P0(1,2,3): the authoritative outcome is applied SYNCHRONOUSLY for BOTH a watched and a
-                // dormant town — the grand alarm, the wounds, the deterministic monuments, and the result line all
-                // land NOW, before any autosave and regardless of whether anyone is watching. This closes: (1)
-                // save-mid-raid state-loss — the outcome can no longer be deferred past a save that has already
-                // marked the event applied; (2) back-to-back clobber — each raid resolves in full immediately, so
-                // there is no single in-flight slot for a second raid to overwrite; (3) watched≠dormant divergence
-                // — the live path no longer draws sim rng, mutates `encounters`, or reveals fog. The cinematic
-                // (live-only) is now PURE DISPLAY over this already-resolved snapshot.
-                const out = this.#resolveRaid(e, lost);
-                this.addChronicle('raid', `${out.clan} fell upon ${this.name}, carrying off ${lost} of its stored harvest — and the town rose to meet them.`,
-                    null, null, '#e05840', { tier: 'grand', tone: 'somber', label: 'RAIDERS AT THE GATE', why: `raided by ${out.clan}` });
-                this.addLog(`${out.clan} descends on ${this.name} — raiders at the fence!`, '#e05040');
-                const monSpots = this.#applyRaidOutcome(out, e);
-                if (this._live) this.#stageRaidCinematic(out, e, monSpots);
+                // #131 THE THREAT TELL — a raid no longer LANDS the instant word arrives; it is TELEGRAPHED. Word
+                // reaches town that "a warband is massing", and the raid resolves RAID_LEAD sim-seconds later,
+                // giving the sentry's beat time to detect it, raise the alarm, and rally the town (see
+                // #tickPendingRaid). This is the player's intel edge made real: you (who see the world map) know
+                // it's coming. The telegraph is DETERMINISTIC seeded state — the same pending raid rides the save
+                // and lands on the same this.time deadline whether the town is watched or dormant, so the
+                // authoritative outcome is byte-identical to the old instant path, just RAID_LEAD later.
+                // Back-to-back: if a raid is already in flight, settle it NOW before telegraphing the new one, so
+                // no raid is ever dropped (the #Codex23 no-clobber guarantee holds — only one pending slot).
+                if (this.pendingRaid) { const p = this.pendingRaid; this.pendingRaid = null; this.#landRaid(p.e, p.dir, p.dirName); }
+                const rid = e.id || `${e.pairKey}:${e.ordinal}`;
+                const dir = (hashString('raiddir:' + rid) % 360) * Math.PI / 180;   // seeded flank they come from (cosmetic, but consistent across tell/muster/cinematic)
+                const dirName = COMPASS[Math.round(dir / (Math.PI / 4)) % 8];
+                this.pendingRaid = {
+                    // keep ONLY what #resolveRaid + the chronicle need, so the pending raid clones plain into the save
+                    e: { id: e.id, pairKey: e.pairKey, ordinal: e.ordinal, commit: e.commit, by: e.by },
+                    landsAt: this.time + RAID_LEAD, detectAt: this.time + RAID_LEAD - RAID_RALLY,
+                    dir, dirName, detected: false,
+                };
+                this.addChronicle('raid', `Word reached ${this.name}: a warband is massing to the ${dirName}, bound for the town — the watch has a little time.`,
+                    null, null, '#e0a040', { tier: 'callout', tone: 'tense', label: 'A WARBAND GATHERS', why: 'raiders on the move' });
+                this.addLog(`A warband masses to the ${dirName} — ${this.name} has a little time.`, '#e0a040');
                 n++;
             } else if (e.kind === 'reconciled') {
                 // Slice C: the envoy EARNS a cross-faction belief that begins to overwrite their raid-creed.
@@ -2461,6 +2474,7 @@ export class World {
             _rev: this._rev || 0,   // Codex #22.1 monotonic save revision (CAS in saveTown rejects a stale overwrite)
             inboxApplied: (this._inboxApplied || []).slice(-200),   // #reconciliation exactly-once inbox ledger
             inboxWatermark: { ...(this._inboxWatermark || {}) },    // Codex #22.2 durable per-pairKey ordinal watermark
+            pendingRaid: this.pendingRaid ? { ...this.pendingRaid, e: { ...this.pendingRaid.e } } : null,   // #131 a telegraphed raid survives a reload (seeded, plain)
             // continue the RNG from a save-derived seed WITHOUT consuming the live stream
             // (saving must never be observable to the sim)
             randSeed: (this.seed ^ Math.imul(this.day, 2654435761) ^ ((this.time * 997) | 0)) >>> 0,
@@ -2592,6 +2606,7 @@ export class World {
         this._rev = d._rev || 0;   // Codex #22.1 save revision (loaded snapshot's rev; saveTown advances it)
         this._inboxApplied = Array.isArray(d.inboxApplied) ? d.inboxApplied : [];   // #reconciliation exactly-once
         this._inboxWatermark = (d.inboxWatermark && typeof d.inboxWatermark === 'object') ? { ...d.inboxWatermark } : {};
+        this.pendingRaid = (d.pendingRaid && d.pendingRaid.e) ? { ...d.pendingRaid, e: { ...d.pendingRaid.e } } : null;   // #131 restore a telegraphed raid mid-flight
         this.lineageRoot = d.lineageRoot != null ? String(d.lineageRoot) : String(this.seed);   // #reconciliation lineage root
         this.name = d.name || generateTownName(this.seed, this.culture);   // (pre-name saves regenerate deterministically)
         this.rand = mulberry32(d.randSeed >>> 0);
@@ -5266,6 +5281,7 @@ export class World {
             // its (now day-spanning) timer runs out, so spells can persist across several days.
         }
         this.#tickFounding();   // #106 drive the day-10 gathering -> dusk ballot across the day
+        this.#tickPendingRaid(); // #131 drive a telegraphed raid across its lead window (no-op unless one is pending)
         this.#tickRaidEvent(dt); // #Slice3 drive the watched raid choreography (no-op unless a raid is staged)
         this.weatherTimer -= dt;
         if (this.weatherTimer <= 0) this.#rollWeather();
@@ -5494,16 +5510,66 @@ export class World {
         return monSpots;
     }
 
+    // #131 — LAND a telegraphed raid: the authoritative resolution, unchanged from the old instant path (dock the
+    // stores, resolve the seeded outcome, place monuments/wounds, rouse the town, chronicle it), just fired when
+    // the warband actually ARRIVES (this.time >= landsAt) instead of the moment word reached town. Stores are
+    // docked from the harvest AS IT STANDS NOW — the raiders take what's there when they hit, not what was stored
+    // when the alarm first went up. Runs in BOTH the watched and dormant path; the cinematic (live-only) is pure
+    // display over the resolved snapshot, marched in from the same seeded `dir` the tell pointed at.
+    #landRaid(e, dir, dirName) {
+        const lost = Math.round((this.harvestTotal || 0) * (e.commit ?? 0.2));
+        this.harvestTotal = Math.max(0, (this.harvestTotal || 0) - lost);
+        const out = this.#resolveRaid(e, lost);
+        this.addChronicle('raid', `${out.clan} fell upon ${this.name}, carrying off ${lost} of its stored harvest — and the town rose to meet them.`,
+            null, null, '#e05840', { tier: 'grand', tone: 'somber', label: 'RAIDERS AT THE GATE', why: `raided by ${out.clan}` });
+        this.addLog(`${out.clan} descends on ${this.name} — raiders at the fence!`, '#e05040');
+        const monSpots = this.#applyRaidOutcome(out, e);
+        if (this._live) this.#stageRaidCinematic(out, e, monSpots, dir);
+    }
+
+    // #131 — drive a telegraphed raid across its lead window (both watched and dormant, so the timing is
+    // authoritative). Two deterministic edges on the monotonic clock: at detectAt the sentry's beat SPOTS the
+    // closing band and raises the alarm (rousing the town to muster — see the #decide muster branch); at landsAt
+    // the warband arrives and #landRaid resolves it. No rng, no wall-clock — pure state + this.time comparisons.
+    #tickPendingRaid() {
+        const pr = this.pendingRaid; if (!pr) return;
+        if (!pr.detected && this.time >= pr.detectAt) {
+            pr.detected = true;
+            const sentry = this.currentSentry();
+            for (const f of this.farmers) f.threatAlert = Math.max(f.threatAlert || 0, 1.5);   // the whole town is roused (both paths)
+            if (sentry) sentry.say(this.culture === 'orc' ? 'RAIDERS! ROUSE THE BAND!' : 'RAIDERS! TO ARMS!', '#e05040');
+            this.addLog(`${sentry ? shortName(sentry) : 'The watch'} sounds the alarm — raiders closing from the ${pr.dirName}!`, '#e05040');
+            this.addChronicle('raid', `The watch caught a warband closing on ${this.name} from the ${pr.dirName} — the alarm went up and the town rallied to meet it.`,
+                sentry, null, '#e0a040', { tier: 'callout', tone: 'tense', why: 'a raid seen coming — the tripwire earned its keep' });
+        }
+        if (this.time >= pr.landsAt) { const { e, dir, dirName } = pr; this.pendingRaid = null; this.#landRaid(e, dir, dirName); }
+    }
+
+    // #131 — where a roused farmer forms up when the alarm sounds: on the well-side arc FACING the incoming
+    // warband (pendingRaid.dir), fanned out by a seeded per-farmer offset so they hold a loose line, not a stack.
+    // Pure geometry + seeded spread (no rng) — determinism-safe, called only while a raid is detected.
+    musterSpot(f) {
+        const well = this.well, pr = this.pendingRaid;
+        const base = pr ? pr.dir : 0, h = hashString(f.sheet.seed + ':muster');
+        const spread = (((h % 100) / 100) - 0.5) * 1.5;   // fan across the threat-facing arc
+        const ang = base + spread, rad = 4 + (h % 3);
+        const ti = Math.round(well.i + Math.cos(ang) * rad), tj = Math.round(well.j + Math.sin(ang) * rad);
+        const open = this.nearestOpenTile({ i: ti, j: tj }) || { i: ti, j: tj };
+        return { i: open.i + 0.5, j: open.j + 0.5 };
+    }
+
     // #108 / #Codex23 — THE RAID, made VISIBLE, as a PURE DISPLAY layer over the already-resolved outcome. The
     // warband here is cosmetic: these raider objects live ONLY in `this.raidEvent.raiders` (NEVER in
     // `this.encounters`), they never call `reveal()` (fog is persisted — mutating it live would diverge from a
     // dormant town), and their spread uses a PRIVATE `raidfx:` seeded stream (NOT `this.rand()`), so staging a
     // watched raid draws zero sim rng and touches zero authoritative state. The felled raiders (first
     // `out.felled`) march to their monument spots and drop there; survivors press the centre, then flee.
-    #stageRaidCinematic(out, e, monSpots) {
+    #stageRaidCinematic(out, e, monSpots, dir) {
         const rr = mulberry32(hashString('raidfx:' + (e.id || `${e.pairKey}:${e.ordinal}`) + ':' + this.seed));
         const def = ENCOUNTER_DEFS.orc, n = out.n;
-        const baseAng = rr() * Math.PI * 2, d = WILD_RADIUS - 3;   // the flank they came from (cosmetic)
+        // #131 march the warband in from the SAME seeded flank the threat tell pointed at (so "gathers to the
+        // north" and the muster line all agree); fall back to the private raidfx stream if a raid lands untelegraphed.
+        const baseAng = (dir != null ? dir : rr() * Math.PI * 2), d = WILD_RADIUS - 3;
         const raiders = [];
         for (let k = 0; k < n; k++) {
             const ang = baseAng + (k - (n - 1) / 2) * 0.28;
@@ -8731,6 +8797,23 @@ export class Farmer {
             this.think(this.strain >= 5 ? 'IM BURNT OUT. I HAVE TO STOP.' : 'IM SPENT. NEED TO REST.');
             this.#goHome('rest'); return;
         }
+
+        // #131 THE RALLY — once the sentry's alarm has sounded (pendingRaid.detected), every hale hand drops chores
+        // and forms up on the well-side line FACING the incoming warband, holding there until the raid lands or
+        // passes. This is the tripwire paying off: the lookout's lead time converts a surprise into a raid the town
+        // MEETS together. The sentry on the beat is excluded (they keep the perimeter — the line's held where the
+        // raiders come). Above the sleep branch, so a night alarm rouses sleepers to the muster — one clean
+        // transition each way (when the raid clears they resume normal #decide and bed down again). Deterministic:
+        // the trigger is a seeded this.time edge in #tickPendingRaid, so it fires alike in a watched or dormant town.
+        if (w.pendingRaid && w.pendingRaid.detected && !this.#onWatchDuty() && this.plot.sited) {
+            const spot = w.musterSpot(this);
+            if (Math.abs(this.pos.i - spot.i) + Math.abs(this.pos.j - spot.j) > 1.3) {
+                this.think(this.p.competitiveness > 0.5 ? 'RAIDERS?! FORM UP!' : 'TO THE LINE — WE HOLD TOGETHER!');
+                if (this.#goTo(spot.i, spot.j, 'muster')) return;
+            }
+            this.state = 'muster'; this.threatAlert = Math.max(this.threatAlert || 0, 1.2); return;
+        }
+
         if (w.isNight()) {
             if (this.#shouldSleepNow() && !this.#onWatchDuty()) {   // #watch the night's sentry doesn't turn in — they keep the beat
                 // NO ROOF, NO SLEEPING OUT IN THE OPEN: a settler without even a tipi doesn't bed down —
@@ -10367,6 +10450,7 @@ export class Farmer {
                         this.state = 'decide';
                     }
                     else if (then === 'patrol') { this.state = 'watch'; this.watchScanT = WATCH_SCAN; }   // #watch reached a post — scan
+                    else if (then === 'muster') this.state = 'muster';   // #131 reached the line — hold it until the raid lands or passes
                     else { this.state = 'idle'; this.wanderTimer = 1 + this.rand() * 2.5; }
                 } else {
                     const step = Math.min((this.speed * dt) / dist, 1);
@@ -10528,6 +10612,8 @@ export class Farmer {
             case 'idle': this.wanderTimer -= dt; if (this.wanderTimer <= 0) this.state = 'decide'; break;
             // #watch the sentry holds a perimeter post to scan, then paces on to the next (re-decide advances it)
             case 'watch': this.watchScanT -= dt; if (this.watchScanT <= 0) { this.watchPost = (this.watchPost || 0) + 1; this.state = 'decide'; } break;
+            // #131 hold the muster line until the raid lands or the alarm passes (pendingRaid cleared/undetected), then resume
+            case 'muster': if (!this.world.pendingRaid || !this.world.pendingRaid.detected) this.state = 'decide'; break;
             case 'sleep': if (!this.world.isNight()) { this.state = 'decide'; this.say(this.#wakeLine(), '#e8d8a0'); this.visitedSick.clear(); } break;
             case 'rest': if (this.energy > 0.5) { this.state = 'decide'; this.say('back to it'); } break;
             case 'sick': if (this.health !== 'sick') this.state = 'decide'; break;

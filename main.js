@@ -5327,6 +5327,36 @@ function drawDramaCue() {
     ctx.fillStyle = 'rgba(16,14,10,0.8)'; ctx.fillRect(Math.round(lx) - 2, Math.round(ly) - 1, tw + 4, 8);
     drawText(ctx, label, Math.round(lx), Math.round(ly), '#f0d060');
 }
+// #131 THE THREAT TELL — a top-center marquee while a raid is telegraphed (world.pendingRaid), plus a pulsing
+// arrow at the screen edge pointing to the flank the warband comes from. Two beats: "A WARBAND GATHERS" while
+// the town still has slack (the player's intel edge — you saw it coming), then a hotter "RAIDERS CLOSING —
+// RALLY!" once the sentry's alarm has sounded. Pure display over sim-produced state (null→set edge only).
+function drawThreatTell() {
+    const pr = world.pendingRaid; if (!pr) return;
+    const hot = pr.detected;
+    const pulse = 0.6 + 0.4 * Math.sin(performance.now() / (hot ? 120 : 260));
+    const label = hot ? `RAIDERS CLOSING FROM THE ${pr.dirName.toUpperCase()} - RALLY` : `A WARBAND GATHERS TO THE ${pr.dirName.toUpperCase()}`;
+    const tw = textWidth(label), bx = Math.round(GW / 2 - tw / 2), by = 22;
+    ctx.fillStyle = `rgba(20,10,8,${0.7 + 0.15 * pulse})`;
+    ctx.fillRect(bx - 5, by - 2, tw + 10, 11);
+    ctx.fillStyle = hot ? `rgba(224,80,64,${0.5 + 0.5 * pulse})` : `rgba(224,160,64,${0.5 + 0.5 * pulse})`;
+    ctx.fillRect(bx - 5, by - 2, tw + 10, 1);
+    ctx.fillRect(bx - 5, by + 8, tw + 10, 1);
+    drawText(ctx, label, bx, by, hot ? '#ffb0a0' : '#f0c060');
+
+    // an arrow at the screen edge in the warband's bearing (world.pendingRaid.dir), so the eye knows where to look
+    const cx = GW / 2, cy = GH / 2 + 6;
+    const dx = Math.cos(pr.dir), dy = Math.sin(pr.dir) * 0.5;   // halved-y for the iso feel
+    const m = 20, sc = Math.min((GW / 2 - m) / (Math.abs(dx) || 1e-6), (GH / 2 - m) / (Math.abs(dy) || 1e-6));
+    const ax = Math.round(cx + dx * sc), ay = Math.round(cy + dy * sc);
+    const ang = Math.atan2(dy, dx), s = 7;
+    ctx.fillStyle = hot ? `rgba(224,80,64,${pulse})` : `rgba(224,160,64,${pulse})`;
+    ctx.beginPath();
+    ctx.moveTo(ax + Math.cos(ang) * s, ay + Math.sin(ang) * s);
+    ctx.lineTo(ax + Math.cos(ang + 2.5) * s, ay + Math.sin(ang + 2.5) * s);
+    ctx.lineTo(ax + Math.cos(ang - 2.5) * s, ay + Math.sin(ang - 2.5) * s);
+    ctx.closePath(); ctx.fill();
+}
 function mostInterestingFarmer() {
     if (!world) return null;
     const pri = { downed: 8, fight: 7, flee: 7, help: 5, care: 5, housebuild: 3, build: 3, coopbuild: 3, fencepost: 2, scarecrow: 2 };
@@ -5652,6 +5682,7 @@ function frame(now) {
     // B4: nudge the player toward a fresh off-screen story beat (drawn above the world, below the cursor)
     updateDramaSpotlight();
     if (booted && !rosterOpen && !chronOpen && !boardOpen) drawDramaCue();
+    if (booted && !rosterOpen && !chronOpen && !boardOpen && !worldMapOpen && !settingsOpen) drawThreatTell();   // #131
 
     drawResumeCard();   // the "previously on" catch-up card sits above every panel (only the cursor tops it)
 
@@ -5849,9 +5880,13 @@ function drawBootScreen(t) {
             `${f.sheet.name.split(' ')[0]} found a ${RARE_NAME[kind] || kind} in the deep wilds.`, f, null, '#8fd8ff',
             { tier: 'grand', tone: 'triumph', why: world.whyRareFind(f, kind), icon: 'rare:' + kind }); },
         animalRow: (n) => { ANIMAL_SIDE_ROW = n; },
-        // #raidfx QA: stage a live raid right now (drives the "UNDER RAID" battle-transition + shake + camera snap)
+        // #raidfx QA: TELEGRAPH a raid now (#131 — word arrives, the warband masses; the alarm + muster + blow
+        // follow across the lead window). Advance with runSteps, or fast-forward with raidDetect()/raidLand().
         raid: (commit = 0.28) => { world._live = true; const k = (window.__raidDbg = (window.__raidDbg || 0) + 1);
             world.applyInbox([{ id: 'dbg-raid-' + k, kind: 'raided', day: world.day, pairKey: 'dbg-raid-' + k, ordinal: k, commit, by: 'the Ashfang clan' }]); },
+        get pendingRaid() { return world.pendingRaid; },                                   // #131 inspect a telegraphed raid
+        raidDetect: () => { const pr = world.pendingRaid; if (pr) world.time = pr.detectAt; return world.pendingRaid; },  // #131 jump to the sentry's alarm
+        raidLand: () => { const pr = world.pendingRaid; if (pr) world.time = pr.landsAt; return world.pendingRaid; },     // #131 fast-forward to the blow
         // deterministic stepping for reproducibility tests: N uniform FIXED_DT sim ticks
         runSteps: (n) => { for (let k = 0; k < n; k++) world.tick(FIXED_DT); },
         FIXED_DT,
