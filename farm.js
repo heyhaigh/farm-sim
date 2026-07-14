@@ -2351,8 +2351,11 @@ export class World {
         const listenerLine = cleanChatText(chat.listenerLine || chat.reply || chat.listener || '...');
         const speakerColor = chat.speakerColor || chat.color || '#c8ccd8';
         const listenerColor = chat.listenerColor || chat.replyColor || '#c8ccd8';
+        // #dialogue-pacing: the speaker speaks NOW; the listener's reply lands AFTER the speaker's line is
+        // readable, so the exchange reads as turn-taking instead of both bubbles popping at once. Display-only —
+        // the authoritative outcome (opinions/bonds/journal below) is applied immediately, unaffected by timing.
         speaker.say(speakerLine, speakerColor);
-        listener.say(listenerLine, listenerColor);
+        listener.sayAfter(speaker.speechReadTime(speakerLine), listenerLine, listenerColor);
         speaker.facing = (listener.pos.i - listener.pos.j) >= (speaker.pos.i - speaker.pos.j) ? 1 : -1;
         listener.facing = (speaker.pos.i - speaker.pos.j) >= (listener.pos.i - listener.pos.j) ? 1 : -1;
 
@@ -7357,10 +7360,22 @@ export class Farmer {
     // #113 a saying holds its FULL text, word-wrapped into lines. The bubble render (main.js) reveals them
     // one at a time (~SAY_LINE_SEC each) so the whole sentiment is legible instead of being truncated with "..".
     say(text, color = '#fff') {
+        this._pendingSay = null;   // a direct line supersedes any queued (deferred) reply
         const lines = wrapWords(this.#orcLine(text));
         const t0 = lines.length * SAY_LINE_SEC + 0.9;   // stays up long enough to read every line, + a beat
         this.bubble = { lines, text: lines[0], color, t: t0, t0, lineSec: SAY_LINE_SEC };
     }
+
+    // #dialogue-pacing — speak after a delay, so a reply doesn't stack on top of the line it answers and a
+    // conversation reads as turn-taking, not a simultaneous dump. Pure display (bubbles never touch the digest);
+    // the pending line is ticked alongside the bubble timer and is transient (not serialized, like the bubble).
+    sayAfter(delay, text, color = '#fff') {
+        if (!(delay > 0)) return this.say(text, color);
+        this._pendingSay = { delay, text, color };
+    }
+
+    // how long a spoken line wants to be readable before the next speaker replies (scales with length, capped)
+    speechReadTime(text) { return Math.min(2.2, 1.05 + wrapWords(this.#orcLine(text)).length * SAY_LINE_SEC * 0.6); }
 
     think(text) {
         this.thought = this.#orcLine(text).toUpperCase();
@@ -10083,6 +10098,8 @@ export class Farmer {
         // opportunistic small talk as bots pass each other (doesn't interrupt what they're doing)
         else if (!this.world.isNight() && (this.state === 'walk' || this.state === 'idle')) this.#maybeChat();
         if (this.bubble) { this.bubble.t -= dt; if (this.bubble.t <= 0) this.bubble = null; }
+        // #dialogue-pacing: promote a deferred line once its delay elapses (display-only)
+        if (this._pendingSay) { this._pendingSay.delay -= dt; if (this._pendingSay.delay <= 0) { const p = this._pendingSay; this.say(p.text, p.color); } }
         this.memEchoCd = Math.max(0, (this.memEchoCd || 0) - dt);   // #legibility Slice 1 (display-only)
         if (this.memoryEcho) { this.memoryEcho.t -= dt; if (this.memoryEcho.t <= 0) this.memoryEcho = null; }
         if (this.carryCrop) { this.carryCrop.t -= dt; if (this.carryCrop.t <= 0) this.carryCrop = null; }
