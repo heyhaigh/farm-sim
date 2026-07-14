@@ -320,6 +320,10 @@ const FOUNDING_GATHER_START = 0.5;
 // confer (a paced, authored exchange) to agree how they'll live — survive, settle, and share a rotating watch —
 // then disperse into that life. It runs for ~this many sim-seconds of day one, then the town scatters to work.
 const CONGREGATE_END = 32;
+// #watch — the sentry keeps a NIGHT beat (the raid/beast window): a ring of perimeter posts they pace between,
+// pausing to scan at each. WATCH_POSTS posts around the town at the current perimeter; WATCH_SCAN sim-seconds
+// held at each before moving on. One sentry at a time (the elected Watch, or the founders' rotation-holder).
+const WATCH_POSTS = 6, WATCH_SCAN = 3.2;
 // Recall is the EMERGENCY removal between elections — deliberately rare so tenures are meaningful and the
 // yearly ballot does the ordinary turnover. A holder must sit below RECALL_FLOOR for RECALL_DWELL days
 // running (a sustained rejection, not statistical noise near the line), and a town can recall at most
@@ -2766,6 +2770,27 @@ export class World {
             if (f && f.health !== 'dead' && !f.downed) return f;
         }
         return null;
+    }
+    // #watch — WHO stands the watch right now: the elected Watch once the town seats one, else the founders'
+    // rotation-holder for today. The single sentry the night beat belongs to.
+    currentSentry() { return this.watchFarmer() || this.currentWatcher(); }
+    // #watch — the PERIMETER the sentry paces: a ring of posts around the town, sized to how far the town has
+    // spread (farthest sited homestead + a margin, clamped), snapped to open ground. Pure geometry — no rng, no
+    // per-tick cost beyond a short nearestOpenTile snap — so it's deterministic and safe to call from the sim.
+    watchRadius() {
+        let r = 12;
+        for (const p of this.plots) if (p.sited) r = Math.max(r, Math.hypot(p.x + (p.w >> 1) - CENTER, p.y + (p.h >> 1) - CENTER));
+        return Math.min(30, Math.round(r) + 4);
+    }
+    watchPosts() {
+        const R = this.watchRadius(), out = [];
+        for (let k = 0; k < WATCH_POSTS; k++) {
+            const a = (k / WATCH_POSTS) * Math.PI * 2;
+            const ti = Math.round(CENTER + Math.cos(a) * R), tj = Math.round(CENTER + Math.sin(a) * R);
+            const open = this.nearestOpenTile({ i: ti, j: tj }) || { i: ti, j: tj };
+            out.push({ i: open.i, j: open.j });
+        }
+        return out;
     }
     roleOf(f) {   // the civic role a farmer holds (or null) — for the card/roster label
         if (!f) return null;
@@ -6402,6 +6427,7 @@ export class Farmer {
         this.claim = null;        // the ground a founder is travelling out to stake (until their plot is sited)
         this.scoutList = null;    // itinerary of candidate spots to survey before settling (visible deliberation)
         this.scoutIdx = 0; this.scoutTimer = 0;
+        this.watchPost = 0; this.watchScanT = 0;   // #watch perimeter-beat post index + scan hold (transient; not serialized)
         this.combatStance = null; // 'fight' | 'flee' while facing a wilderness threat (see #handleCombat)
         this.threatAlert = 0;     // render pulse when a threat appears / while in danger
         this.hurtFlash = 0;       // render pulse when struck
@@ -7425,6 +7451,39 @@ export class Farmer {
             ? ['WHO IS STRONGEST TO LEAD US?', 'THE WARBAND MUST CHOOSE WELL', "I'VE WEIGHED MY CHOICE", 'A CHIEF IS EARNED, NOT GIVEN']
             : ['WHO SHOULD LEAD US?', 'THE TOWN MUST CHOOSE WELL', "I'VE MADE UP MY MIND", 'A FAIR HAND FOR THE CHAIR'];
         return pool[hashString(this.sheet.seed + ':delib:' + Math.floor(this.world.clock / 4)) % pool.length];
+    }
+
+    // #watch — am I the one who should be pacing the night beat right now? The single sentry (the elected Watch,
+    // or the founders' rotation-holder before there is one) stands ONLY at night — the raid/beast window — and
+    // only if hale. Survival (sick/exhausted) is handled by the branches ABOVE this in #decide, so a spent
+    // watcher rests and the night simply goes unwatched (the rotation moves on tomorrow), never collapsing on
+    // the beat.
+    #onWatchDuty() {
+        const w = this.world;
+        if (!w.isNight()) return false;
+        if (this.health === 'sick' || this.downed) return false;
+        return w.currentSentry() === this;
+    }
+    // #watch — stand the beat: pace to the next perimeter post, hold there to scan, then move to the next (the
+    // 'watch' case advances the post index). The lantern they already get for being up at night reads as the
+    // sentry's lamp. Draws NO rng — posts are geometry, the muttered line is seeded — so it's determinism-safe.
+    #takeWatch() {
+        const w = this.world, posts = w.watchPosts();
+        if (!posts.length) { this.state = 'idle'; this.wanderTimer = 1; return; }
+        const p = posts[(this.watchPost || 0) % posts.length];
+        this.think(this.#watchLine());
+        if (Math.abs(this.pos.i - (p.i + 0.5)) + Math.abs(this.pos.j - (p.j + 0.5)) > 1.0) {
+            if (this.#goTo(p.i + 0.5, p.j + 0.5, 'patrol')) return;
+        }
+        this.state = 'watch'; this.watchScanT = WATCH_SCAN;   // already at the post — scan, then advance
+    }
+    // #watch — what the sentry mutters on the beat: seeded + culture-cast (no rng, no LLM in the loop).
+    #watchLine() {
+        const orc = this.world.culture === 'orc';
+        const pool = orc
+            ? ['ALL QUIET ON THE LINE.', 'NOTHING STIRS... GOOD.', 'THE WARBAND SLEEPS. I DO NOT.', 'EYES ON THE DARK.']
+            : ['ALL QUIET TONIGHT.', 'NOTHING MOVING OUT THERE.', 'THE TOWN SLEEPS — I KEEP WATCH.', 'EYES ON THE TREELINE.'];
+        return pool[hashString(this.sheet.seed + ':watch:' + Math.floor(this.world.clock / 4)) % pool.length];
     }
 
     // #113 a saying holds its FULL text, word-wrapped into lines. The bubble render (main.js) reveals them
@@ -8673,7 +8732,7 @@ export class Farmer {
             this.#goHome('rest'); return;
         }
         if (w.isNight()) {
-            if (this.#shouldSleepNow()) {
+            if (this.#shouldSleepNow() && !this.#onWatchDuty()) {   // #watch the night's sentry doesn't turn in — they keep the beat
                 // NO ROOF, NO SLEEPING OUT IN THE OPEN: a settler without even a tipi doesn't bed down —
                 // they catch their breath (rest, energy trickling back) and keep at it. Sleep is earned
                 // with a roof.
@@ -8686,6 +8745,11 @@ export class Farmer {
 
         // a neighbour's cry for help against a wilderness threat pulls the brave away from their chores
         if (this.#maybeRallyToThreat()) return;
+
+        // #watch — the night sentry paces the perimeter beat while the town sleeps. Placed AFTER rally (a real
+        // danger still pulls them to answer it — the tripwire) and after survival, but before ordinary chores:
+        // on watch, keeping the beat IS the job. Pre-election it's the rotation-holder; once elected, the Watch.
+        if (this.#onWatchDuty()) { this.#takeWatch(); return; }
 
         if (w.weather === 'storm') {
             const ripe = this.#findCrop(c => c.stage === 3 && !c.withered);
@@ -10302,6 +10366,7 @@ export class Farmer {
                         if (node) this.world.harvestRareNode(this, node);
                         this.state = 'decide';
                     }
+                    else if (then === 'patrol') { this.state = 'watch'; this.watchScanT = WATCH_SCAN; }   // #watch reached a post — scan
                     else { this.state = 'idle'; this.wanderTimer = 1 + this.rand() * 2.5; }
                 } else {
                     const step = Math.min((this.speed * dt) / dist, 1);
@@ -10461,6 +10526,8 @@ export class Farmer {
             }
 
             case 'idle': this.wanderTimer -= dt; if (this.wanderTimer <= 0) this.state = 'decide'; break;
+            // #watch the sentry holds a perimeter post to scan, then paces on to the next (re-decide advances it)
+            case 'watch': this.watchScanT -= dt; if (this.watchScanT <= 0) { this.watchPost = (this.watchPost || 0) + 1; this.state = 'decide'; } break;
             case 'sleep': if (!this.world.isNight()) { this.state = 'decide'; this.say(this.#wakeLine(), '#e8d8a0'); this.visitedSick.clear(); } break;
             case 'rest': if (this.energy > 0.5) { this.state = 'decide'; this.say('back to it'); } break;
             case 'sick': if (this.health !== 'sick') this.state = 'decide'; break;

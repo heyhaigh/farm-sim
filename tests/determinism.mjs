@@ -21,13 +21,13 @@ const SEEDS = [20260706, 42, 7, 3];
 // Baseline digests at HEAD (LLM + SuperMemory off, 30-day run). Update deliberately when a sim change
 // legitimately re-baselines; a DRIFT here on an unrelated change is a determinism regression to investigate.
 const BASELINE = {
-    // re-baselined 2026-07-14 for #129 the DAY-1 FOUNDING CONGREGATION: founders now MUSTER at the well and
-    // confer before scouting homesteads (the congregate gather sits above #seekHomestead), which shifts the
-    // day-1 rng stream; same-twice held all seeds (fully reproducible, only the tree fingerprint moved).
-    20260706: 'c6212f5e',
-    42: '3b32ed16',
-    7: '6a17c41b',
-    3: 'b3362025',
+    // re-baselined 2026-07-14 for #130 the NIGHT WATCH: the sentry (elected Watch, or the founders' rotation-
+    // holder) now paces a perimeter beat at night instead of bedding down, which shifts the night rng stream;
+    // same-twice held all seeds (fully reproducible, only the tree fingerprint moved).
+    20260706: 'cd71712e',
+    42: '7fc52ec1',
+    7: '1cf9821b',
+    3: 'd65c2dc1',
 };
 
 function boot(seed, culture) {
