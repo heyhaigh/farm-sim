@@ -2228,6 +2228,38 @@ function isIndoors(f) {
     return f.state === 'sleep' || f.state === 'rest' || f.state === 'sick' || f.state === 'shelter';
 }
 
+// #hud a small filling DIAL for action progress (tilling/planting/watering/harvesting) — deliberately a RADIAL
+// wheel, NOT a horizontal bar, so it can never be mistaken for the (now rare, red) health bar. Fills clockwise
+// from the top; a dark hub reads it as a dial. Display-only.
+function drawProgressWheel(cx, cy, p, r = 4, color = '#e0c24a') {
+    cx = Math.round(cx); cy = Math.round(cy); p = Math.max(0, Math.min(1, p));
+    ctx.save();
+    ctx.fillStyle = 'rgba(10,12,18,0.82)';
+    ctx.beginPath(); ctx.arc(cx, cy, r + 1, 0, Math.PI * 2); ctx.fill();         // dark disc backing
+    ctx.fillStyle = 'rgba(74,80,96,0.55)';
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();             // depleted track
+    if (p > 0) {                                                                 // filled pie slice, from 12 o'clock clockwise
+        ctx.fillStyle = color;
+        ctx.beginPath(); ctx.moveTo(cx, cy);
+        ctx.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * p); ctx.closePath(); ctx.fill();
+    }
+    ctx.fillStyle = 'rgba(10,12,18,0.95)';
+    ctx.beginPath(); ctx.arc(cx, cy, 1.4, 0, Math.PI * 2); ctx.fill();           // hub → reads as a dial
+    ctx.restore();
+}
+
+// #watch a small EYE over the current sentry's head — signifies "keeping watch today" at a glance (matches the
+// ROLES panel), so you can spot who's on the beat without opening a sheet. A dark pill, an almond white, and a
+// pupil that drifts slowly side to side so it reads as actively watching. Display-only.
+function drawWatchEye(cx, cy) {
+    cx = Math.round(cx); cy = Math.round(cy);
+    ctx.fillStyle = 'rgba(10,14,20,0.72)'; ctx.fillRect(cx - 5, cy - 3, 11, 6);          // dark backing pill
+    ctx.fillStyle = '#e8e4cc';                                                            // eye white (almond)
+    ctx.fillRect(cx - 3, cy - 1, 7, 3); ctx.fillRect(cx - 2, cy - 2, 5, 1); ctx.fillRect(cx - 2, cy + 2, 5, 1);
+    const look = Math.round(Math.sin(performance.now() / 900) * 2);                       // pupil drifts (watching)
+    ctx.fillStyle = '#33507a'; ctx.fillRect(cx - 1 + look, cy - 1, 2, 2);
+}
+
 // A compact intent badge above-right of a farmer's head — reads their current DRIVER at a glance
 // (hunting / bartering / helping a neighbour) without opening the sheet. Icon-first + colour-coded on a
 // dark pill so it's language-free and legible over any terrain.
@@ -2329,10 +2361,11 @@ function drawFarmer(f, sx, sy) {
         ctx.fillStyle = '#e83828'; ctx.font = 'bold 11px monospace'; ctx.textAlign = 'center';
         ctx.fillText('!', sx, py - 3); ctx.textAlign = 'left';
     }
-    // WOUND bar: a small red health bar over the head whenever a farmer is hurt + up-and-about, so the
-    // HP economy (revive frail -> hunt/rest for meat -> mend) is legible at a glance. Hidden while
-    // fighting/fleeing (the "!" + hurt-flash already carry the danger) and, of course, while asleep.
-    if (hpFrac < 0.9 && f.state !== 'sleep' && f.state !== 'fight' && f.state !== 'flee') {
+    // WOUND bar: a small red health bar over the head ONLY when a farmer is genuinely IN THE RED (hurt enough to
+    // matter) — not the constant 90%-and-below noise it used to be. Full/lightly-scuffed farmers show nothing;
+    // you read exact HP on the sheet when you follow one. Hidden while fighting/fleeing (the "!" + hurt-flash
+    // carry the danger) and while asleep. (#hud legibility — reduce always-on visual clutter over every head.)
+    if (hpFrac < 0.5 && f.state !== 'sleep' && f.state !== 'fight' && f.state !== 'flee') {
         const bw = 11, bh = 2, bx = Math.floor(sx - bw / 2), byy = py - 6;
         // a clearly-framed HEALTH bar: green (mending) -> amber (hurt) -> red (critical). The old gold-amber
         // fill read as a stray yellow icon over the head and the thin stroke washed out under the CRT; a full
@@ -2341,6 +2374,11 @@ function drawFarmer(f, sx, sy) {
         ctx.fillStyle = '#3a1e1e'; ctx.fillRect(bx, byy, bw, bh);                    // depleted track
         ctx.fillStyle = hpFrac < 0.35 ? '#e83828' : hpFrac < 0.6 ? '#e0a83c' : '#5cc850';
         ctx.fillRect(bx, byy, Math.max(1, Math.round(bw * hpFrac)), bh);
+    }
+    // #watch the current sentry wears an eye while up-and-about (all day on their watch day) — who's on the beat
+    // is legible at a glance, matching "keeps watch today" in ROLES. Not while asleep/felled (they're not watching).
+    if (world.currentSentry && world.currentSentry() === f && !f.downed && f.state !== 'sleep' && f.state !== 'sleepwalk') {
+        drawWatchEye(sx, py - 15);
     }
     // INTENT badge: what's driving them right now, readable without the sheet (hunt / barter / help).
     let intent = null;
@@ -2430,13 +2468,10 @@ function drawFarmer(f, sx, sy) {
         ctx.drawImage(fantasyIcons, ix, iy, iw, ih, Math.floor(px + fw / 2 - dw / 2), Math.floor(py - dh - 3 + bob), dw, dh);
     }
 
-    // work progress pips
+    // work progress DIAL — a filling wheel (not a bar) beside the head, so tilling/planting/watering reads
+    // instantly as "an action in progress" and never as a health bar.
     if (f.state === 'work' && f.action) {
-        const p = 1 - f.action.timer / f.action.total;
-        ctx.fillStyle = '#20222c';
-        ctx.fillRect(px + 2, py - 4, 12, 2);
-        ctx.fillStyle = '#7dd069';
-        ctx.fillRect(px + 2, py - 4, Math.floor(12 * p), 2);
+        drawProgressWheel(sx + 8, py - 4, 1 - f.action.timer / f.action.total);
     }
 
     // status icon: sleeping outside (animated Z), sick (+) or worn out / catching breath (~). A

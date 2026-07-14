@@ -7745,22 +7745,33 @@ export class Farmer {
         return pool[hashString(this.sheet.seed + ':delib:' + Math.floor(this.world.clock / 4)) % pool.length];
     }
 
-    // #watch — am I the one who should be pacing the night beat right now? The single sentry (the elected Watch,
-    // or the founders' rotation-holder before there is one) stands ONLY at night — the raid/beast window — and
-    // only if hale. Survival (sick/exhausted) is handled by the branches ABOVE this in #decide, so a spent
-    // watcher rests and the night simply goes unwatched (the rotation moves on tomorrow), never collapsing on
-    // the beat.
+    // #watch — am I the one keeping watch right now? The single sentry (the elected Watch, or the founders'
+    // rotation-holder before there is one) stands the beat ALL DAY on their watch day — not just at night — so
+    // "keeps watch today" in the ROLES panel matches what you see them doing. Only if hale AND housed: survival
+    // (sick/exhausted) is handled ABOVE this in #decide, and an un-roofed founder BUILDS/SHELTERS first (they take
+    // up the full watch once they've a roof) — so the early days don't strand a homeless founder on the perimeter.
     #onWatchDuty() {
-        const w = this.world;
-        if (!w.isNight()) return false;
         if (this.health === 'sick' || this.downed) return false;
-        return w.currentSentry() === this;
+        if (this.plot.built.level < 1) return false;
+        return this.world.currentSentry() === this;
     }
     // #watch — stand the beat: pace to the next perimeter post, hold there to scan, then move to the next (the
-    // 'watch' case advances the post index). The lantern they already get for being up at night reads as the
-    // sentry's lamp. Draws NO rng — posts are geometry, the muttered line is seeded — so it's determinism-safe.
+    // 'watch' case advances the post index). But the sentry is a TRIPWIRE first — if they spot a wilderness foe
+    // from the beat they SOUND THE ALARM (rouse the town so the brave rally) and fall back toward the rally point,
+    // rather than fleeing to hide as an ordinary farmer would. Draws NO rng — geometry + seeded lines — but the
+    // alarm rouses farmers (a real, deterministic sim effect), so the day-2+ digest re-baselines with this.
     #takeWatch() {
-        const w = this.world, posts = w.watchPosts();
+        const w = this.world;
+        const threat = this.#spotThreat();
+        if (threat) {
+            this.#soundWatchAlarm(threat);
+            this.think(w.culture === 'orc' ? 'HOLD! THE BAND IS ROUSED' : 'STAND FAST - HELP IS COMING');
+            // fall back toward the town rally point (keeping eyes on it), NOT to a private fence to hide
+            const bi = CENTER + (this.pos.i - CENTER) * 0.45, bj = CENTER + (this.pos.j - CENTER) * 0.45;
+            if (this.#goTo(bi, bj, 'patrol')) return;
+            this.state = 'watch'; this.watchScanT = WATCH_SCAN; return;
+        }
+        const posts = w.watchPosts();
         if (!posts.length) { this.state = 'idle'; this.wanderTimer = 1; return; }
         const p = posts[(this.watchPost || 0) % posts.length];
         this.think(this.#watchLine());
@@ -7768,6 +7779,28 @@ export class Farmer {
             if (this.#goTo(p.i + 0.5, p.j + 0.5, 'patrol')) return;
         }
         this.state = 'watch'; this.watchScanT = WATCH_SCAN;   // already at the post — scan, then advance
+    }
+    // #watch — the sentry's eyes: the nearest ACTIVE foe (orc/assassin — beasts are weather, not a town alarm)
+    // within scan range of the beat, or any foe that's pressed into the village. Pure geometry, no rng.
+    #spotThreat() {
+        const w = this.world;
+        for (const e of w.encounters) {
+            if (e.done || e.presentational || !e.def || e.def.kind !== 'foe') continue;
+            if (Math.hypot(this.pos.i - e.i, this.pos.j - e.j) < 24 || w.threatInVillage(e)) return e;
+        }
+        return null;
+    }
+    // #watch — RAISE THE ALARM from the beat: rouse the whole town (so #maybeRallyToThreat pulls the brave) and
+    // flag the foe as help-wanted. Rate-limited so a lingering threat isn't a siren every tick. Display + a
+    // deterministic threatAlert bump; no rng.
+    #soundWatchAlarm(e) {
+        if (this._watchAlarmT != null && this.world.clock - this._watchAlarmT < 6 && this.world.clock >= this._watchAlarmT) return;
+        this._watchAlarmT = this.world.clock;
+        e.helpWanted = true;
+        for (const f of this.world.farmers) if (f !== this) f.threatAlert = Math.max(f.threatAlert || 0, 1.5);
+        this.threatAlert = Math.max(this.threatAlert || 0, 1.5);
+        this.say(this.world.culture === 'orc' ? 'FOE ON THE LINE! ROUSE THE BAND!' : 'ALARM! FOE ON THE LINE!', '#e05040');
+        this.world.addLog(`${shortName(this)} sounds the alarm from the watch — a foe on the line!`, '#e05040');
     }
     // #watch — what the sentry mutters on the beat: seeded + culture-cast (no rng, no LLM in the loop).
     #watchLine() {
@@ -8441,6 +8474,11 @@ export class Farmer {
     // the timid or outmatched FLEE for the plaza and cry for help. Beasts are less terrifying than foes.
     #faceThreat(e) {
         const w = this.world, def = e.def;
+        // #watch THE TRIPWIRE — the sentry's FIRST duty on meeting a foe is to RAISE THE ALARM (rouse the town so
+        // the brave rally), not to slip off to their own fence and hide. A lone sentry may still fall back (they
+        // can't turn a raider alone), but now the town is warned and answers. Foes only (orc/assassin — beasts are
+        // weather); rate-limited in #soundWatchAlarm. Fires whether the sentry then stands or flees.
+        if (def.kind === 'foe' && !this.downed && this.health !== 'sick' && w.currentSentry() === this) this.#soundWatchAlarm(e);
         if (this.combatStance == null) {
             // LEVEL is the biggest factor in whether they'll stand: a green level-1 hand has no
             // business trading blows with an orc, whatever their raw STR — they flee and fetch help.
@@ -9108,9 +9146,10 @@ export class Farmer {
         // a neighbour's cry for help against a wilderness threat pulls the brave away from their chores
         if (this.#maybeRallyToThreat()) return;
 
-        // #watch — the night sentry paces the perimeter beat while the town sleeps. Placed AFTER rally (a real
-        // danger still pulls them to answer it — the tripwire) and after survival, but before ordinary chores:
-        // on watch, keeping the beat IS the job. Pre-election it's the rotation-holder; once elected, the Watch.
+        // #watch — the day's sentry paces the perimeter beat (ALL DAY on their watch day, not just at night).
+        // Placed AFTER rally + survival but before ordinary chores: on watch, keeping the beat IS the job (the
+        // farming-day cost is the point of a shared rotation). Pre-election it's the rotation-holder; once elected,
+        // the Watch; a whisper-posted volunteer (#132) relieves either. Spotting a foe, they sound the alarm.
         if (this.#onWatchDuty()) { this.#takeWatch(); return; }
 
         if (w.weather === 'storm') {
