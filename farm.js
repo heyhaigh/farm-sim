@@ -5590,14 +5590,17 @@ export class World {
         if (re.phase === 'march') {
             for (const r of re.raiders) {
                 const dx = r.target.i - r.i, dy = r.target.j - r.j, dist = Math.hypot(dx, dy);
-                if (dist > 0.5) { r.i += dx / dist * 3.4 * dt; r.j += dy / dist * 3.4 * dt; r.facing = dx < 0 ? -1 : 1; }
+                // face the SCREEN-x direction of travel: iso screen-x tracks (i - j), so a raider heading toward
+                // greater (i - j) is moving RIGHT (facing = 1). Using world-dx alone faced them wrong on diagonals.
+                if (dist > 0.5) { r.i += dx / dist * 3.4 * dt; r.j += dy / dist * 3.4 * dt; r.facing = (dx - dy) >= 0 ? 1 : -1; }
             }
             re.timer -= dt;
             if (re.timer <= 0) { re.raiders = re.raiders.filter(r => !r.falls); re.phase = 'flee'; re.timer = 2.8; }   // the doomed drop; survivors turn to flee
         } else {   // flee — survivors run back out to the fog, then vanish
             for (const r of re.raiders) {
                 const dx = r.i - CENTER, dy = r.j - CENTER, dist = Math.hypot(dx, dy) || 1;
-                r.i += dx / dist * 5.5 * dt; r.j += dy / dist * 5.5 * dt; r.facing = dx > 0 ? 1 : -1;
+                // same screen-x rule fleeing outward: moving toward greater (i - j) reads as running RIGHT.
+                r.i += dx / dist * 5.5 * dt; r.j += dy / dist * 5.5 * dt; r.facing = (dx - dy) >= 0 ? 1 : -1;
             }
             re.timer -= dt;
             if (re.timer <= 0) this.raidEvent = null;
