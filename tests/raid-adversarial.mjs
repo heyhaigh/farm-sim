@@ -1,4 +1,12 @@
-// Adversarial repro of Codex #23 raid P0s (findings 1-3). Run: node raid-adversarial.mjs
+// Adversarial repro of the raid P0s. Run: node raid-adversarial.mjs
+//
+// Updated for #131 THE TELEGRAPH (+ #Codex29 P1): a raid arriving during LIVE play no longer lands instantly —
+// it stages a `pendingRaid` and resolves RAID_LEAD later (the sentry's lead time). A raid CONSUMED WHILE DORMANT
+// (on load, world._live false) still lands SYNCHRONOUSLY — a "came while you were away" recap. These probes
+// verify: (1) a telegraph SURVIVES a mid-flight save/reload and lands EXACTLY once; (2) back-to-back raids both
+// dock, none dropped; (3) the AUTHORITATIVE OUTCOME (stores lost, monuments, wounds) is the same whether the
+// raid was telegraphed-while-watched or landed-instantly-while-dormant — the timing/positions legitimately differ
+// now (the watched town musters + lands later), so full byte-identity is NOT asserted; (4) the monument cap holds.
 import { World } from '../farm.js';
 import { generateCrew, hashString } from '../dna.js';
 
@@ -16,64 +24,79 @@ function boot(seed, culture) {
 const raidEvt = (w, k = 1, commit = 0.3) => ({ id: 'radv-' + k, kind: 'raided', day: w.day, pairKey: 'radv-' + k, ordinal: k, commit, by: 'the Ashfang clan' });
 const monCount = w => (w.monuments || []).filter(m => m.raid).length;
 const woundCount = w => w.farmers.filter(f => f._wasHurt || (f.hp != null && f.maxHp != null && f.hp < f.maxHp)).length;
+// land a telegraphed raid WITHOUT 45s of intervening farming (so the harvest-at-landing is stable): jump the
+// monotonic clock to the deadline and tick once, exactly as the RYFARMS.raidLand() debug hook does.
+const landPending = w => { if (w.pendingRaid) { w.time = w.pendingRaid.landsAt; w.tick(DT); } };
 let pass = true; const ok = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ FAIL ') + m); if (!c) pass = false; };
 
-// ---------- P0 #1: save mid-raid must NOT lose the outcome ----------
-console.log('P0#1 — save mid-raid → reload keeps the authoritative outcome');
+// ---------- P0 #1: a telegraph must SURVIVE a mid-flight save/reload and land exactly once ----------
+console.log('P0#1 — save mid-telegraph → reload lands the raid exactly once, no double-dock');
 {
     const w = boot(20260706);
     for (let i = 0; i < 300; i++) w.tick(DT);
     w.harvestTotal = 100;                        // ensure there are stores to carry off
-    w._live = true;                              // watched town — stages the cinematic
+    w._live = true;                              // watched town — telegraphs (stages pendingRaid), does NOT land yet
     w.applyInbox([raidEvt(w)]);
-    const harvestAfter = w.harvestTotal, monAfter = monCount(w), woundAfter = woundCount(w);
-    for (let i = 0; i < 90; i++) w.tick(DT);      // ~3s into the march, THEN save
+    ok(w.pendingRaid != null, 'live raid telegraphs (pendingRaid staged)');
+    ok(w.harvestTotal === 100, 'stores NOT yet docked mid-telegraph (100)');
+    for (let i = 0; i < 90; i++) w.tick(DT);      // ~3s into the lead window (well before landsAt), THEN save
     const snap = structuredClone(w.serialize());  // mimic the IndexedDB structured-clone round-trip
-    const w2 = World.fromSave(structuredClone(snap));
-    ok(w2.harvestTotal === harvestAfter && harvestAfter < 100, `harvest docked + survived reload (${harvestAfter})`);
-    ok(monCount(w2) === monAfter, `raid monuments survived reload (${monCount(w2)})`);
-    ok(woundCount(w2) >= woundAfter && woundAfter > 0, `wounds applied + survived reload (${woundCount(w2)})`);
+    ok(snap.pendingRaid != null, 'pendingRaid IS serialized (survives reload)');
     ok(!snap.raidEvent, 'raidEvent (display cinematic) is NOT serialized');
+    const w2 = World.fromSave(structuredClone(snap));
+    landPending(w2);                              // resume: reach the deadline, land it
+    ok(w2.pendingRaid == null, 'pendingRaid resolved after landing');
+    ok(w2.harvestTotal < 100, `harvest docked after reload+land (${w2.harvestTotal})`);
+    ok(monCount(w2) >= 0 && woundCount(w2) > 0, `outcome applied (monuments ${monCount(w2)}, wounds ${woundCount(w2)})`);
     const applied = (snap.inboxApplied || []).length;
-    ok(applied === 1, `event marked applied exactly once (applied=${applied})`);
+    ok(applied === 1, `event marked applied exactly once — no re-land on replay (applied=${applied})`);
 }
 
-// ---------- P0 #2: back-to-back raids in one batch both resolve ----------
+// ---------- P0 #2: back-to-back raids in one batch both resolve, none dropped ----------
 console.log('P0#2 — two raids in one inbox batch both apply, no orphaned encounters');
 {
     const w = boot(42);
     for (let i = 0; i < 300; i++) w.tick(DT);
     w.harvestTotal = 100; w._live = true;
     const h0 = w.harvestTotal, enc0 = w.encounters.length;
+    // batch of two: the second's arrival lands the first in-flight telegraph immediately, then telegraphs itself
     w.applyInbox([raidEvt(w, 1, 0.3), raidEvt(w, 2, 0.3)]);
     const h1 = w.harvestTotal;
-    ok(h1 < h0, `both raids docked harvest (100 → ${h1})`);
-    // two dock passes: 0.3 then 0.3 of the remainder → strictly less than a single dock (70)
-    ok(h1 < 70, `second raid's dock was NOT lost (${h1} < 70)`);
-    for (let i = 0; i < 400; i++) w.tick(DT);      // let both cinematics fully play out
+    ok(h1 < h0, `first raid docked on the second's arrival (100 → ${h1})`);
+    ok(w.pendingRaid != null, 'second raid is telegraphing');
+    landPending(w);                                // land the second
+    const h2 = w.harvestTotal;
+    ok(h2 < h1, `second raid also docked, none dropped (${h1} → ${h2})`);
+    for (let i = 0; i < 800; i++) w.tick(DT);      // let the cinematic fully play out (approach + march + flee, ~16s)
     ok(w.encounters.length === enc0, `no orphaned raider encounters (${w.encounters.length} == ${enc0})`);
     ok(w.raidEvent === null, 'cinematic cleaned up (raidEvent null)');
 }
 
-// ---------- P0 #3: watching a raid must NOT change authoritative state/rng ----------
-console.log('P0#3 — watched town == dormant town, byte-identically');
+// ---------- P0 #3: same AUTHORITATIVE outcome whether telegraphed-watched or landed-instantly-dormant ----------
+console.log('P0#3 — telegraphed(watched) and instant(dormant) raids resolve the SAME authoritative outcome');
 {
-    const mk = live => { const w = boot(7); for (let i = 0; i < 300; i++) w.tick(DT); w.harvestTotal = 100; w._live = live; w.applyInbox([raidEvt(w)]); for (let i = 0; i < 400; i++) w.tick(DT); return w; };
-    const watched = mk(true), dormant = mk(false);
-    // canonical stringify that CAPTURES fog chunks (Map<key,Uint8Array>) + typed arrays — the exact fog-reveal
-    // divergence Codex flagged. raidEvent/_rev/_live are display/persistence-meta, excluded.
-    const canon = s => { const o = structuredClone(s); delete o.raidEvent; delete o._rev; delete o._live;
-        return JSON.stringify(o, (k, v) => v instanceof Map ? { __map: [...v.entries()].sort((a, b) => String(a[0]) < String(b[0]) ? -1 : 1) }
-            : ArrayBuffer.isView(v) ? { __ta: Array.from(v) } : v); };
-    const scrub = canon;
-    const sameState = scrub(watched.serialize()) === scrub(dormant.serialize());
-    ok(sameState, 'serialized state identical (harvest/monuments/wounds/positions/rng)');
-    ok(watched.harvestTotal === dormant.harvestTotal, `same harvest (${watched.harvestTotal} == ${dormant.harvestTotal})`);
+    // dormant: consumed while !_live -> lands SYNCHRONOUSLY at consume (the on-load recap path)
+    const dormant = boot(7); for (let i = 0; i < 300; i++) dormant.tick(DT); dormant.harvestTotal = 100; dormant._live = false;
+    dormant.applyInbox([raidEvt(dormant)]);
+    ok(dormant.pendingRaid == null, 'dormant raid landed synchronously (no telegraph)');
+    // watched: consumed while _live -> telegraphs, then lands at the deadline (harvest held stable via landPending)
+    const watched = boot(7); for (let i = 0; i < 300; i++) watched.tick(DT); watched.harvestTotal = 100; watched._live = true;
+    watched.applyInbox([raidEvt(watched)]);
+    ok(watched.pendingRaid != null, 'watched raid telegraphed');
+    landPending(watched);
+    // the AUTHORITATIVE outcome is seeded on the raid id + harvest-at-landing (NOT time), so it must match; the
+    // full serialized state (positions/chronicle/timing) legitimately differs (the watched town mustered + landed later).
+    ok(watched.harvestTotal === dormant.harvestTotal, `same stores lost (${watched.harvestTotal} == ${dormant.harvestTotal})`);
     ok(monCount(watched) === monCount(dormant), `same monuments (${monCount(watched)} == ${monCount(dormant)})`);
-    if (!sameState) {
-        const a = JSON.parse(scrub(watched.serialize())), b = JSON.parse(scrub(dormant.serialize()));
-        for (const k of Object.keys(a)) if (JSON.stringify(a[k]) !== JSON.stringify(b[k])) console.log('     DIFF at key:', k);
-    }
+    ok(woundCount(watched) === woundCount(dormant), `same wounds (${woundCount(watched)} == ${woundCount(dormant)})`);
+}
+
+// ---------- P0 #4: a dormant raid must NOT be silently lost (docks stores without a live tick) ----------
+console.log('P0#4 — a raid consumed while dormant docks stores immediately (never left un-resolved)');
+{
+    const w = boot(3); for (let i = 0; i < 200; i++) w.tick(DT); w.harvestTotal = 100; w._live = false;
+    w.applyInbox([raidEvt(w, 77, 0.3)]);           // NO ticks after consume — a synced-but-never-reopened town
+    ok(w.harvestTotal < 100 && w.pendingRaid == null, `dormant consume docked stores with zero live ticks (${w.harvestTotal})`);
 }
 
 // ---------- P1: monument cap holds across many raids ----------

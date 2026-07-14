@@ -1743,16 +1743,21 @@ export class World {
                 const rid = e.id || `${e.pairKey}:${e.ordinal}`;
                 const dir = (hashString('raiddir:' + rid) % 360) * Math.PI / 180;   // seeded flank they come from (cosmetic, but consistent across tell/muster/cinematic)
                 const dirName = COMPASS[Math.round(dir / (Math.PI / 4)) % 8];
-                this.pendingRaid = {
+                const evt = { id: e.id, pairKey: e.pairKey, ordinal: e.ordinal, commit: e.commit, by: e.by };
+                // #Codex29 P1 — a raid CONSUMED WHILE DORMANT (on load, before world._live is set) already HAPPENED
+                // while the town was away: it lands SYNCHRONOUSLY here, becoming a "raiders came while you were
+                // gone" recap (as it did pre-#131), NOT a fresh alarm+ambush RAID_LEAD into the resumed session.
+                // Docking the stores now also means a town that's synced-but-never-reopened can't be left with an
+                // un-resolved raid. Only a raid arriving during LIVE play telegraphs (the intel-edge loop).
+                if (!this._live) { this.#landRaid(evt, dir, dirName); n++; }
+                else {
                     // keep ONLY what #resolveRaid + the chronicle need, so the pending raid clones plain into the save
-                    e: { id: e.id, pairKey: e.pairKey, ordinal: e.ordinal, commit: e.commit, by: e.by },
-                    landsAt: this.time + RAID_LEAD, detectAt: this.time + RAID_LEAD - RAID_RALLY,
-                    dir, dirName, detected: false,
-                };
-                this.addChronicle('raid', `Word reached ${this.name}: a warband is massing to the ${dirName}, bound for the town — the watch has a little time.`,
-                    null, null, '#e0a040', { tier: 'callout', tone: 'tense', label: 'A WARBAND GATHERS', why: 'raiders on the move' });
-                this.addLog(`A warband masses to the ${dirName} — ${this.name} has a little time.`, '#e0a040');
-                n++;
+                    this.pendingRaid = { e: evt, landsAt: this.time + RAID_LEAD, detectAt: this.time + RAID_LEAD - RAID_RALLY, dir, dirName, detected: false };
+                    this.addChronicle('raid', `Word reached ${this.name}: a warband is massing to the ${dirName}, bound for the town — the watch has a little time.`,
+                        null, null, '#e0a040', { tier: 'callout', tone: 'tense', label: 'A WARBAND GATHERS', why: 'raiders on the move' });
+                    this.addLog(`A warband masses to the ${dirName} — ${this.name} has a little time.`, '#e0a040');
+                    n++;
+                }
             } else if (e.kind === 'reconciled') {
                 // Slice C: the envoy EARNS a cross-faction belief that begins to overwrite their raid-creed.
                 if (envoy) envoy.earnCrossFaction(e.withName, e.pairKey, +1);
@@ -3178,36 +3183,50 @@ export class World {
     #tickCongregation() {
         const cs = this._congState || (this._congState = {
             order: this.farmers.map(f => f.sheet.seed).sort((a, b) => (hashString('cong:' + a) - hashString('cong:' + b)) || (a - b)),
-            idx: 0, nextAt: 1.0, spoken: 0, last: null, ptr: 0, used: new Set(),
+            rr: 0, nextAt: 1.0, turns: 0, last: null, used: new Set(), spokenSet: new Set(), scriptUsed: new Set(),
         });
         if (this.clock < cs.nextAt) return;
         const ready = f => f && f.state === 'assemble' && f.health !== 'sick' && !f.downed;
-        let picked = null, text = null;
-        // #132b prefer the LLM's authored script (world._foundingScript): play it in order, voicing the founder it
-        // named. If that founder hasn't reached the well yet, wait a beat while the town is still gathering, else
-        // skip the line so the exchange keeps flowing. Falls through to the procedural pools once the script ends.
+        const readyFounders = this.farmers.filter(ready);
+        if (!readyFounders.length) { cs.nextAt = this.clock + 0.4; return; }   // nobody's arrived yet — re-check soon, never stall
         const scr = this._foundingScript;
-        if (Array.isArray(scr) && cs.ptr < scr.length) {
-            const s = scr[cs.ptr], f = this.farmers.find(x => x.sheet.seed === s.seed);
-            if (ready(f)) { picked = f; text = String(s.text); cs.ptr++; }
-            else if (this.farmers.filter(ready).length < 2) { cs.nextAt = this.clock + 0.4; return; }   // still gathering — hold for the speaker
-            else { cs.ptr++; cs.nextAt = this.clock + 0.1; return; }                                     // speaker never made it — skip, keep flowing
-        }
-        if (!picked) {   // no script (yet), or it's spent — arrival-order round-robin over the authored pools
-            const n = cs.order.length;
-            for (let k = 0; k < n; k++) {
-                const j = (cs.idx + k) % n;
-                const f = this.farmers.find(x => x.sheet.seed === cs.order[j]);
-                if (ready(f)) { picked = f; cs.idx = j + 1; break; }
+        // pull the earliest UNUSED script turn whose named speaker is ready AND passes `want` — keeps the LLM's
+        // authored words + rough order, and lets coverage prefer a script line for an as-yet-unspoken founder.
+        const takeScript = want => {
+            if (!Array.isArray(scr)) return null;
+            for (let k = 0; k < scr.length; k++) {
+                if (cs.scriptUsed.has(k)) continue;
+                const f = this.farmers.find(x => x.sheet.seed === scr[k].seed);
+                if (f && ready(f) && want(f)) { cs.scriptUsed.add(k); return { f, text: String(scr[k].text) }; }
             }
-            if (!picked) { cs.nextAt = this.clock + 0.4; return; }   // nobody's arrived yet — re-check soon, never stall
-            const prev = cs.last ? this.farmers.find(x => x.sheet.seed === cs.last) : null;
-            text = this.#congregationLine(picked, prev, cs.spoken, cs.used);
+            return null;
+        };
+        const proceduralFor = f => this.#congregationLine(f, cs.last ? this.farmers.find(x => x.sheet.seed === cs.last) : null, cs.turns, cs.used);
+
+        let picked = null, text = null;
+        // #Codex29 P1 — COVERAGE-FIRST. While any READY founder hasn't spoken, the next voice MUST be one of them,
+        // so every founder is guaranteed a turn WITHIN the fixed congregation window regardless of the script's
+        // length or ordering (fixes: a long LLM script that ran the clock out before its later-named founders ever
+        // spoke). Prefer a script line for an unspoken founder (authored words, rough order); else a procedural one.
+        const unspoken = readyFounders.filter(f => !cs.spokenSet.has(f.sheet.seed));
+        if (unspoken.length) {
+            const s = takeScript(f => !cs.spokenSet.has(f.sheet.seed));
+            if (s) { picked = s.f; text = s.text; }
+            else { for (const seed of cs.order) { const f = readyFounders.find(x => x.sheet.seed === seed && !cs.spokenSet.has(seed)); if (f) { picked = f; text = proceduralFor(f); break; } } }
+        } else {
+            // everyone's spoken once — CONTINUE the authored script in order (repeats welcome), else a procedural round-robin
+            const s = takeScript(() => true);
+            if (s) { picked = s.f; text = s.text; }
+            else {
+                const n = cs.order.length;
+                for (let k = 0; k < n; k++) { const seed = cs.order[(cs.rr + k) % n]; const f = readyFounders.find(x => x.sheet.seed === seed); if (f) { picked = f; cs.rr = (cs.order.indexOf(seed) + 1) % n; text = proceduralFor(f); break; } }
+            }
         }
+        if (!picked) { cs.nextAt = this.clock + 0.4; return; }
         const prev = cs.last ? this.farmers.find(x => x.sheet.seed === cs.last) : null;
         picked.say(text, '#f0e2b0');
         if (prev && prev !== picked) picked.facing = (prev.pos.i - prev.pos.j) >= (picked.pos.i - picked.pos.j) ? 1 : -1;   // turn to address the last voice
-        cs.last = picked.sheet.seed; cs.spoken++;
+        cs.spokenSet.add(picked.sheet.seed); cs.last = picked.sheet.seed; cs.turns++;
         const beat = picked.bubble ? picked.bubble.t0 : 1.6;
         cs.nextAt = this.clock + Math.max(1.2, beat + 0.15);   // next voice waits for this bubble to CLEAR (no overlap) + a small gap
     }

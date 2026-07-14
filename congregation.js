@@ -53,8 +53,13 @@ export async function requestCongregation(world) {
             const text = String(t.line || '').trim();
             if (seed != null && text) script.push({ seed, text });
         }
-        // only adopt it if the town is STILL congregating (a slow answer that lands after the scene is useless)
-        if (script.length >= 4 && world.congregating()) world._foundingScript = script;
+        // #Codex29 P1 — mirror the endpoint's coverage gate client-side (defense-in-depth): a script that names
+        // only a couple of the founders is dropped, so the director's authored pools (which cover everyone) stand
+        // in rather than a mostly-procedural hybrid. only adopt it if the town is STILL congregating (a slow
+        // answer that lands after the scene is useless).
+        const distinct = new Set(script.map(s => s.seed)).size;
+        const need = Math.min(founders.length, Math.max(4, Math.ceil(founders.length * 0.6)));
+        if (script.length >= 4 && distinct >= need && world.congregating()) world._foundingScript = script;
     } catch {
         /* any failure: the director's authored offline pools stand in — nothing to do */
     } finally {

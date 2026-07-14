@@ -110,6 +110,13 @@ function normalize(raw, names) {
         if (script.length >= 16) break;
     }
     if (script.length < 4) throw new Error('script too short');
+    // #Codex29 P1 — COVERAGE: a script that only voices a couple of the founders isn't an ensemble conversation.
+    // Require it to name a healthy fraction of the cast, else reject so the client falls back to the sim director's
+    // authored pools (which cover every founder). The director ALSO guarantees coverage at runtime, so this is
+    // defense-in-depth against a lopsided model answer, not the sole safeguard.
+    const distinct = new Set(script.map(t => t.speaker)).size;
+    const need = Math.min(names.length, Math.max(4, Math.ceil(names.length * 0.6)));
+    if (distinct < need) throw new Error(`script covers only ${distinct}/${names.length} founders (need ${need})`);
     return { script };
 }
 
