@@ -1601,8 +1601,10 @@ function plotOutline(plot) {
     return plot._outline;
 }
 
+let farmerBubbles = [];   // #bubble-overlay: {f, sx} per on-screen farmer this frame, drawn on top post-sort
 function collectDrawables() {
     const list = [];
+    farmerBubbles = [];   // rebuilt each frame alongside the y-sorted list
 
     // Wild foliage has height, so it participates in the same footline sort as
     // farmers and buildings instead of being baked flat into the terrain.
@@ -1964,6 +1966,7 @@ function collectDrawables() {
         const sy = cam.y + isoY(f.pos.i, f.pos.j);
         maybeWorkSfx(f, sx, sy);
         list.push({ y: sy + TILE_H * 0.5 + 0.1, draw: () => drawFarmer(f, sx, sy) });
+        farmerBubbles.push({ f, sx });   // #bubble-overlay: drawn on top after the sort loop (never occluded)
     }
 
     // wandering merchant + their market stall (both y-sorted into the scene)
@@ -2451,6 +2454,42 @@ function drawFarmer(f, sx, sy) {
         }
     }
 
+    // #bubble-overlay — the memory + speech bubbles are NOT drawn here in the y-sorted sprite pass: a building,
+    // silo or war-post the farmer stands behind would draw OVER the words (worst during the day-1 congregation,
+    // when the whole town clusters at the well). We stash the anchor and draw ALL bubbles in a dedicated overlay
+    // pass after every sprite + structure, so speech is never occluded. See drawFarmerBubble (called post-sort).
+    f._by = py;
+
+    // sparkles (level up / crit)
+    if (f.sparkle > 0) {
+        ctx.fillStyle = '#f0d060';
+        for (let i = 0; i < 5; i++) {
+            const a = f.animTime * 6 + i * 1.3;
+            ctx.fillRect(
+                Math.floor(sx + Math.cos(a) * 9),
+                Math.floor(py + 6 + Math.sin(a * 1.4) * 8),
+                1, 1);
+        }
+    }
+
+    // selection marker
+    if (selected === f) {
+        const bounce = Math.floor(Math.abs(Math.sin(performance.now() / 250)) * 3);
+        ctx.fillStyle = '#7dd069';
+        const ax = Math.floor(sx - 1);
+        const ay = py - 8 - bounce;
+        ctx.fillRect(ax - 1, ay, 4, 2);
+        ctx.fillRect(ax, ay + 2, 2, 2);
+    }
+}
+
+// #bubble-overlay — draw a farmer's memory + speech bubbles ON TOP of the whole y-sorted scene (every sprite +
+// structure), so words are never occluded by a building/silo the farmer stands behind. Runs in its own pass
+// after the sort loop; `sx` is the farmer's screen-x from that pass and `f._by` the sprite-top anchor it stashed.
+function drawFarmerBubble(f, sx) {
+    const py = f._by;
+    if (py == null) return;
+
     // #legibility Slice 1 — the SOURCE MEMORY surfacing at a charged beat: a distinct GOLD "memory" bubble (the
     // mid-tier register between an ambient saying and a screen-stopping grand modal) — the farmer's woven line
     // + a "GROWN FROM {title}" receipt, so the watcher sees a real memory surface. Fades in/out; held ~5.5s.
@@ -2503,28 +2542,6 @@ function drawFarmer(f, sx, sy) {
                 ctx.fillRect(bx + w - 2, by + 1 + k * 2, 1, 1);   // half the previous right padding (was -4)
             }
         }
-    }
-
-    // sparkles (level up / crit)
-    if (f.sparkle > 0) {
-        ctx.fillStyle = '#f0d060';
-        for (let i = 0; i < 5; i++) {
-            const a = f.animTime * 6 + i * 1.3;
-            ctx.fillRect(
-                Math.floor(sx + Math.cos(a) * 9),
-                Math.floor(py + 6 + Math.sin(a * 1.4) * 8),
-                1, 1);
-        }
-    }
-
-    // selection marker
-    if (selected === f) {
-        const bounce = Math.floor(Math.abs(Math.sin(performance.now() / 250)) * 3);
-        ctx.fillStyle = '#7dd069';
-        const ax = Math.floor(sx - 1);
-        const ay = py - 8 - bounce;
-        ctx.fillRect(ax - 1, ay, 4, 2);
-        ctx.fillRect(ax, ay + 2, 2, 2);
     }
 }
 
@@ -4346,10 +4363,29 @@ const END_REASON_LABEL = {
 };
 function drawChronicleRoles(PX, top, PW, bot) {
     const IX = PX + 8;
-    const h = drawCivicBand(PX, top + 2, PW);
-    if (!h) { drawText(ctx, 'No offices seated yet — the town is still finding its feet.', IX, top + 4, '#6a6f7c'); return; }
-    let y = top + 2 + h + 2;
     const roles = world.roles;
+    const h = drawCivicBand(PX, top + 2, PW);
+    let y;
+    if (!h) {
+        // No ELECTED chairs yet — but a fresh town self-organizes a fair ROTATING WATCH at its founding
+        // congregation, so surface whose watch it is today (it turns as the rotation cycles) before the
+        // empty state. Once the town elects its first officers the civic band above takes over.
+        const wr = world.currentWatcher && world.currentWatcher();
+        if (wr) {
+            drawText(ctx, cultureWord(world.culture, 'role.watch').toUpperCase() + ' — ROTATING', IX, top + 4, '#c8a860');
+            const nm = wr.sheet.name.split(' ')[0].toUpperCase();
+            drawText(ctx, nm, IX + 4, top + 14, '#e8c860');
+            drawText(ctx, 'keeps watch today', IX + 4 + textWidth(nm + ' '), top + 14, '#8a8f9c');
+            let yy = top + 23;
+            for (const ln of wrapText('The founders share the watch on a fair rotation until the town elects its first officers.', Math.floor((PW - 24) / 4.2))) { drawText(ctx, ln, IX + 4, yy, '#6a6f7c'); yy += 7; }
+            y = yy + 3;
+        } else {
+            drawText(ctx, 'No offices seated yet — the town is still finding its feet.', IX, top + 4, '#6a6f7c');
+            return;
+        }
+    } else {
+        y = top + 2 + h + 2;
+    }
 
     // #94 P3: this winter's vote, while it's live (nominations -> campaign -> tally)
     const el = roles.election;
@@ -5565,6 +5601,9 @@ function frame(now) {
     const drawables = collectDrawables();
     drawables.sort((a, b) => (a.y - b.y) || ((a.layer || 0) - (b.layer || 0)) || ((a.x || 0) - (b.x || 0)));
     for (const d of drawables) d.draw();
+    // #bubble-overlay — words on top of the whole scene, so a farmer standing behind the silo/war-post/house
+    // (or clustered at the well during the day-1 congregation) is never speaking from behind the building.
+    for (const fb of farmerBubbles) drawFarmerBubble(fb.f, fb.sx);
 
     drawWeather(dt, t);
     } finally {
@@ -5816,6 +5855,8 @@ function drawBootScreen(t) {
         // deterministic stepping for reproducibility tests: N uniform FIXED_DT sim ticks
         runSteps: (n) => { for (let k = 0; k < n; k++) world.tick(FIXED_DT); },
         FIXED_DT,
+        // QA: open the town chronicle straight to a tab (0 NEWS / 1 ROLES / 2 RECIPES / 3 TALES)
+        openChron: (tab = 1) => { rosterOpen = boardOpen = worldMapOpen = settingsOpen = false; chronOpen = true; chronTab = tab; chronScroll = 0; },
         // center the camera on a tile (uses the REAL internal resolution — external camera
         // math can only guess GW/GH from the window aspect and lands wide of the mark)
         goTo: (i, j) => { cam.x = GW / 2 - isoX(i, j); cam.y = GH / 2 - isoY(i, j); },

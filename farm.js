@@ -316,6 +316,10 @@ export const FOUNDING_VOTE_DAY = 10;
 // #106 the founding ceremony spans the vote day: the town works its morning, then downs tools at this
 // fraction of the day (midday) to gather + deliberate, and the ballot is read at dusk (clock >= DAY_LENGTH).
 const FOUNDING_GATHER_START = 0.5;
+// #congregation — a fresh town opens with a DAY-1 FOUNDING CONGREGATION: the founders gather at the center and
+// confer (a paced, authored exchange) to agree how they'll live — survive, settle, and share a rotating watch —
+// then disperse into that life. It runs for ~this many sim-seconds of day one, then the town scatters to work.
+const CONGREGATE_END = 32;
 // Recall is the EMERGENCY removal between elections — deliberately rare so tenures are meaningful and the
 // yearly ballot does the ordinary turnover. A holder must sit below RECALL_FLOOR for RECALL_DWELL days
 // running (a sustained rejection, not statistical noise near the line), and a town can recall at most
@@ -714,6 +718,8 @@ export class World {
                        // roll of past office-holders (who, how long, how it ended, and why).
                        managerTerms: 0, watchTerms: 0, managerSince: null, watchSince: null,
                        managerRecalls: 0, watchRecalls: 0, election: null, history: [],
+                       watchRotation: null, watchTurn: 0,   // #congregation the founders' shared-watch order (seeded in #seedFoundingWatch)
+                       foundingPhase: 'congregate',   // #congregation a fresh town opens with the day-1 founding congregation
                        founded: false };   // #founding: no offices until the day-10 founding gathering
         this.sabotage = [];    // #97 Slice 4: planted-but-not-yet-sprung harm ({perp,victim,kind,effectDay})
         this.suspicion = {};   // #97 Slice 4: the Watch's slow-building trail on unsolved crimes (seed -> score)
@@ -2484,6 +2490,7 @@ export class World {
                 history: this.roles.history.map(h => ({ ...h })),
                 founded: this.roles.founded,
                 foundingPhase: this.roles.foundingPhase ?? null,   // #106 mid-ceremony phase survives a reload
+                watchRotation: this.roles.watchRotation ? [...this.roles.watchRotation] : null, watchTurn: this.roles.watchTurn ?? 0,   // #congregation shared-watch order
             },
             sabotage: this.sabotage.map(s => ({ ...s })),   // #97 Slice 4: pending harm + the Watch's trail
             suspicion: { ...this.suspicion },
@@ -2613,6 +2620,7 @@ export class World {
             history: Array.isArray(d.roles.history) ? d.roles.history.map(h => ({ ...h })) : [],
             founded: d.roles.founded != null ? d.roles.founded : true,   // pre-#founding saves already hold offices -> treat as founded
             foundingPhase: d.roles.foundingPhase ?? null,   // #106
+            watchRotation: Array.isArray(d.roles.watchRotation) ? d.roles.watchRotation : null, watchTurn: d.roles.watchTurn ?? 0,   // #congregation
         } : { manager: null, approval: 0.6, lowDays: 0, watch: null, watchApproval: 0.6, watchLowDays: 0, healer: null, healerApproval: 0.6, healerLowDays: 0, directive: null, directiveSeq: 0, cooldown: 0, caseSeq: 0, managerTerms: 0, watchTerms: 0, managerSince: null, watchSince: null, managerRecalls: 0, watchRecalls: 0, election: null, history: [], founded: false, foundingPhase: null };
         this.sabotage = Array.isArray(d.sabotage) ? d.sabotage.map(s => ({ ...s })) : [];   // #97 Slice 4
         this.suspicion = d.suspicion ? { ...d.suspicion } : {};
@@ -2742,6 +2750,23 @@ export class World {
     managerFarmer() { return this.roles.manager != null ? this.farmers.find(f => f.sheet.seed === this.roles.manager) : null; }
     watchFarmer() { return this.roles.watch != null ? this.farmers.find(f => f.sheet.seed === this.roles.watch) : null; }
     healerFarmer() { return this.roles.healer != null ? this.farmers.find(f => f.sheet.seed === this.roles.healer) : null; }
+    // #congregation — WHOSE WATCH IT IS today, on the founders' shared rotation (the fair order agreed at the
+    // day-1 congregation and seeded in #seedFoundingWatch). PRE-ELECTION only: once the town elects a standing
+    // Watch, that office takes over (watchFarmer). Derived from the day so it turns as the rotation cycles —
+    // display only, drawing no rng and holding no digest state, so it can't touch determinism. Skips any founder
+    // no longer present (died/left) to the next on the roster.
+    currentWatcher() {
+        const r = this.roles;
+        if (r.watch != null) return null;                 // an elected Watch stands — the rotation is retired
+        const rot = r.watchRotation;
+        if (!Array.isArray(rot) || !rot.length) return null;
+        const n = rot.length, start = ((this.day - 1) % n + n) % n;
+        for (let k = 0; k < n; k++) {
+            const f = this.farmers.find(x => x.sheet.seed === rot[(start + k) % n]);
+            if (f && f.health !== 'dead' && !f.downed) return f;
+        }
+        return null;
+    }
     roleOf(f) {   // the civic role a farmer holds (or null) — for the card/roster label
         if (!f) return null;
         if (this.roles.manager === f.sheet.seed) return cultureWord(this.culture, 'role.manager');
@@ -2953,6 +2978,12 @@ export class World {
     #tickFounding() {
         const r = this.roles;
         if (r.founded || r.foundingPhase == null) return;
+        // #congregation the day-1 founding congregation: the town gathers + confers, then disperses; on the way
+        // out it commits the founders' shared-watch order. Clock-gated (deterministic).
+        if (r.foundingPhase === 'congregate') {
+            if (this.clock >= CONGREGATE_END) { r.foundingPhase = null; this.#seedFoundingWatch(); }
+            return;
+        }
         if (r.foundingPhase === 'pre' && this.clock >= DAY_LENGTH * FOUNDING_GATHER_START) {
             r.foundingPhase = 'gathering';
             const where = this.culture === 'orc' ? 'the war-post' : 'the town well';
@@ -2965,6 +2996,19 @@ export class World {
     }
     // True while the town is assembled and deliberating (drives the farmers' walk-to-square behaviour).
     foundingGathering() { return this.roles.foundingPhase === 'gathering'; }
+    // #congregation True during the DAY-1 founding congregation (the town gathers to self-organize, then disperses).
+    congregating() { return this.roles.foundingPhase === 'congregate'; }
+
+    // #congregation — commit the founders' SHARED-WATCH order: a fair, seeded rotation in which they'll each take
+    // the first watches (consumed by the pre-election watch, Move 3). Deterministic (a hash of each founder's seed,
+    // stable sorted) — identical live or headless, drawing no rng. Fires once, as the congregation disperses.
+    #seedFoundingWatch() {
+        this.roles.watchRotation = this.farmers.map(f => f.sheet.seed)
+            .sort((a, b) => (hashString('watchrot:' + a) - hashString('watchrot:' + b)) || (a - b));
+        this.roles.watchTurn = 0;
+        this.addChronicle('town', `${this.name} agreed to keep a shared watch — each taking a turn, so none bears it alone.`,
+            null, null, '#c8a860', { tier: 'callout', tone: 'triumph', why: 'the founders agreed to share the watch' });
+    }
 
     // #speech-floor — a scene-scoped conversation mutex (the founding congregation + the day-10 vote): one voice
     // at a time so an exchange reads as turn-taking, not a pile-up of simultaneous bubbles. DISPLAY-ONLY — a
@@ -7350,6 +7394,24 @@ export class Farmer {
     // template bubbles (with ${}) can't be map-keyed — callsites pass both forms and pick by culture
     #tr(orc, human) { return this.world.culture === 'orc' ? orc : human; }
 
+    // #congregation — what a founder says on DAY ONE while the town gathers to agree how they'll live: survive,
+    // settle, and share a watch so none stands alone. Authored + seeded (no LLM in the day-1 path); personality
+    // casts the lean — the collaborative bind them, the diligent warn of the wilds, the bold press to dig in.
+    #foundingLine() {
+        const orc = this.world.culture === 'orc', p = this.p || {};
+        const warm = (p.collaboration ?? 0.5) > 0.55, wary = (p.diligence ?? 0.5) > 0.6, bold = (p.competitiveness ?? 0.5) > 0.6;
+        const pool = orc
+            ? (warm ? ['NONE STANDS ALONE — WE ROTATE THE WATCH.', 'MY BLADE GUARDS YOURS, BLOOD-KIN.']
+                : wary ? ['STRANGE LAND. POST A LOOKOUT BY NIGHTFALL.', 'RAIDERS COULD COME. WE STAY SHARP.']
+                : bold ? ['CARVE A CAMP FROM THIS WASTE.', 'STAKE OUR GROUND — TAKE WHAT WE NEED.']
+                : ['NEW LAND. NO WALLS YET.', 'FORAGE FIRST — WE EAT TONIGHT.'])
+            : (warm ? ['NO ONE KEEPS WATCH ALONE — WE TAKE TURNS.', "I'LL WATCH SO YOU CAN BUILD."]
+                : wary ? ['A STRANGE LAND — WE SHOULD KEEP A LOOKOUT.', "LET'S BE SMART: A WATCH BY DUSK."]
+                : bold ? ['STAKE OUR PLOTS AND DIG IN.', "WE'LL MAKE A HOME OF THIS PLACE."]
+                : ['NEW LAND, AND NO WALLS.', 'FORAGE FIRST — THEN WE PLANT.']);
+        return pool[hashString(this.sheet.seed + ':found:' + Math.floor(this.world.clock / 5)) % pool.length];
+    }
+
     // #106 what a farmer mutters while the town deliberates at the founding gathering. Half the time they
     // name the peer they most respect (their likely vote); otherwise a general line. Deterministic (seeded).
     #deliberationThought() {
@@ -8576,6 +8638,19 @@ export class Farmer {
             this.say((this.threatWary.foe || 0) >= (this.threatWary.beast || 0) ? 'watch for raiders out this far...' : 'beasts prowl these wilds...', '#c8a060');
         }
 
+        // #congregation — the DAY-1 founding congregation fires BEFORE anyone scouts a plot: the founders
+        // muster at the square, confer, and agree their shared watch, THEN disperse to stake homesteads.
+        // (Must sit above #seekHomestead — on day 1 NO plot is sited yet, so the scout branch below would
+        // scatter every founder alone and the town would never gather. On day 10 plots ARE sited, which is
+        // why the vote-gathering already works through the branch further down.)
+        if (w.congregating()) {
+            const spot = w.assembleSpot(this);
+            if (Math.abs(this.pos.i - spot.i) + Math.abs(this.pos.j - spot.j) > 1.3) {
+                if (this.#goTo(spot.i, spot.j, 'assemble')) { this.think(this.#foundingLine()); return; }
+            }
+            this.state = 'assemble'; return;
+        }
+
         // a founder who hasn't STAKED their claim yet: travel out from the plaza, scout the ground
         // they were drawn to, and stake it on arrival (then normal homesteading begins).
         if (!this.plot.sited) { this.#seekHomestead(); return; }
@@ -8625,10 +8700,10 @@ export class Farmer {
         // #106 FOUNDING GATHERING — on the vote day the town downs tools at midday and converges on the
         // square, holding there to deliberate until the ballot is read at dusk. A sick soul stays abed (they
         // don't vote); everyone else drops chores and gathers.
-        if (w.foundingGathering()) {
+        if (w.foundingGathering() || w.congregating()) {
             const spot = w.assembleSpot(this);
             if (Math.abs(this.pos.i - spot.i) + Math.abs(this.pos.j - spot.j) > 1.3) {
-                if (this.#goTo(spot.i, spot.j, 'assemble')) { this.think(this.#deliberationThought()); return; }
+                if (this.#goTo(spot.i, spot.j, 'assemble')) { this.think(w.congregating() ? this.#foundingLine() : this.#deliberationThought()); return; }
             }
             this.state = 'assemble'; return;
         }
@@ -10392,12 +10467,13 @@ export class Farmer {
             case 'shelter': if (this.world.weather !== 'storm' && this.world.weather !== 'blizzard') { this.state = 'decide'; this.say(this.#shelterExitLine(), '#9fd0e0'); } break;
             // #106 hold at the square, deliberating, until the world reads the ballot at dusk (then -> decide)
             case 'assemble': {
-                if (!this.world.foundingGathering()) { this.state = 'decide'; break; }
+                const w = this.world;
+                if (!w.foundingGathering() && !w.congregating()) { this.state = 'decide'; break; }
                 this.assembleT = (this.assembleT || 0) - dt;
                 if (this.assembleT <= 0) {
                     this.assembleT = 3 + this.rand() * 5;              // unchanged rng draw
-                    const floorWasFree = this.world.floorFree();       // #speech-floor (display-only check)
-                    this.think(this.#deliberationThought());           // unchanged (draws its own rng internally)
+                    const floorWasFree = w.floorFree();                // #speech-floor (display-only check)
+                    this.think(w.congregating() ? this.#foundingLine() : this.#deliberationThought());   // day-1 congregation vs day-10 vote
                     // if another voice holds the floor, keep this muttering SILENT this beat (display suppression
                     // only — the rng above is untouched, so the digest stays byte-identical); else take the floor.
                     if (!floorWasFree) this.bubble = null;
