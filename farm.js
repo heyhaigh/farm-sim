@@ -639,11 +639,10 @@ function shortName(farmer) {
 
 // #113 word-wrap a saying into lines of <= max chars, so the bubble can animate the FULL sentiment
 // line-by-line instead of truncating it. A single over-long word is hard-split so it never overflows.
-const SAY_LINE_CHARS = 22;   // bubble line width (in the 3px font) — reads comfortably over a head
-const SAY_LINE_SEC = 0.75;   // each line holds this long before advancing (crossfade smooths the change)
-function wrapWords(text, max = SAY_LINE_CHARS) {
-    const words = String(text).split(' ').filter(Boolean), lines = [];
-    let cur = '';
+const SAY_LINE_CHARS = 18;   // MAX bubble line width (3px font). Narrower than before → a tighter, faster-read box.
+const SAY_LINE_SEC = 0.85;   // each line holds this long before advancing (typewriter reveals within it)
+function wrapGreedy(words, max) {
+    const lines = []; let cur = '';
     for (let word of words) {
         while (word.length > max) { if (cur) { lines.push(cur); cur = ''; } lines.push(word.slice(0, max)); word = word.slice(max); }
         if (!cur) cur = word;
@@ -651,7 +650,22 @@ function wrapWords(text, max = SAY_LINE_CHARS) {
         else { lines.push(cur); cur = word; }
     }
     if (cur) lines.push(cur);
-    return lines.length ? lines : ['...'];
+    return lines;
+}
+function wrapWords(text, max = SAY_LINE_CHARS) {
+    const words = String(text).split(' ').filter(Boolean);
+    if (!words.length) return ['...'];
+    const base = wrapGreedy(words, max);
+    // #bubble BALANCE: shrink the wrap to the NARROWEST width that still yields the same line count. The black
+    // container ends up only as wide as the content needs (shorter lines read faster, less visual weight), and
+    // the words even out across the lines — no lone orphan dangling on the last line.
+    const longest = Math.min(max, Math.max(...words.map(w => w.length)));   // can't wrap narrower than the longest word
+    let best = base;
+    for (let w = max - 1; w >= longest; w--) {
+        const cand = wrapGreedy(words, w);
+        if (cand.length === base.length) best = cand; else break;
+    }
+    return best.length ? best : ['...'];
 }
 
 // #legibility Slice 1 — the SOURCE MEMORY made perceptible. At a charged moment a farmer speaks a short
@@ -2667,7 +2681,7 @@ export class World {
                 wantExpand: f.wantExpand, wantFacility: f.wantFacility, wantUpgrade: f.wantUpgrade,
                 birdLosses: f.birdLosses, stormLosses: f.stormLosses, donateCooldown: f.donateCooldown,
                 nextExpand: f.nextExpand, nextFacility: f.nextFacility, exploreCooldown: f.exploreCooldown,
-                goal: f.goal, downed: f.downed, reviveDay: f.reviveDay,
+                goal: f.goal, downed: f.downed, reviveDay: f.reviveDay, downFrom: f.downFrom,
                 threatWary: { ...f.threatWary }, dangerZones: f.dangerZones.map(z => ({ ...z })),
                 jobStats: { ...f.jobStats },
                 journal: f.journal.map(e => ({ ...e })), gossip: f.gossip.map(g => ({ ...g })),
@@ -2798,7 +2812,7 @@ export class World {
             f.wantExpand = fd.wantExpand; f.wantFacility = fd.wantFacility; f.wantUpgrade = fd.wantUpgrade;
             f.birdLosses = fd.birdLosses; f.stormLosses = fd.stormLosses; f.donateCooldown = fd.donateCooldown;
             f.nextExpand = fd.nextExpand; f.nextFacility = fd.nextFacility; f.exploreCooldown = fd.exploreCooldown;
-            f.goal = fd.goal; f.downed = fd.downed; f.reviveDay = fd.reviveDay;
+            f.goal = fd.goal; f.downed = fd.downed; f.reviveDay = fd.reviveDay; f.downFrom = fd.downFrom;
             f.threatWary = { ...fd.threatWary }; f.dangerZones = fd.dangerZones.map(z => ({ ...z }));
             f.jobStats = { ...fd.jobStats };
             f.journal = fd.journal.map(e => ({ ...e })); f.gossip = fd.gossip.map(g => ({ ...g }));
@@ -5730,7 +5744,7 @@ export class World {
         if (out.guardDowned && out.guardSeed != null) {
             const gu = this.farmers.find(f => f.sheet.seed === out.guardSeed);
             if (gu && !gu.downed) {
-                gu.downed = true; gu.reviveDay = this.day + 3; gu.state = 'downed'; gu.hp = 0; gu.combatStance = null; gu._wasHurt = true;
+                gu.downed = true; gu.downFrom = this.day; gu.reviveDay = this.day + 3; gu.state = 'downed'; gu.hp = 0; gu.combatStance = null; gu._wasHurt = true;
                 const home = gu.plot && gu.plot.sited ? this.houseDoor(gu.plot) : { i: gu.pos.i, j: gu.pos.j };
                 gu.pos = { i: home.i, j: home.j };
                 this.recordEncounter(gu, { kind: 'foe', name: 'raiders' }, 'downed');
@@ -6016,7 +6030,7 @@ export class World {
         if (f.dangerZones.length > 4) f.dangerZones.shift();
 
         // --- the reset ---
-        f.downed = true; f.reviveDay = this.day + 3; f.state = 'downed';
+        f.downed = true; f.downFrom = this.day; f.reviveDay = this.day + 3; f.state = 'downed';   // #recovery downFrom -> "day X of Y" in the sheet
         const home = f.plot && f.plot.sited ? this.houseDoor(f.plot) : { i: downI, j: downJ };
         f.pos = { i: home.i, j: home.j };
         this.recordEncounter(f, e.def, 'downed');
@@ -6029,7 +6043,7 @@ export class World {
     // downed reset (recover at home), but no crop is stolen and no combat lesson is learned.
     collapse(f) {
         if (f.downed) return;
-        f.downed = true; f.reviveDay = this.day + 2; f.state = 'downed'; f.hp = 0; f.combatStance = null;
+        f.downed = true; f.downFrom = this.day; f.reviveDay = this.day + 2; f.state = 'downed'; f.hp = 0; f.combatStance = null;
         const home = f.plot && f.plot.sited ? this.houseDoor(f.plot) : { i: f.pos.i, j: f.pos.j };
         f.pos = { i: home.i, j: home.j };
         f.remember('lesson', `I pushed on through sickness till I dropped — I must rest when I'm ill.`, null, 1.2);
@@ -6790,6 +6804,7 @@ export class Farmer {
         this.fightTimer = 0; this.fleeTimer = 0;
         this.downed = false;      // felled by a FOE — reviving at home over a few days (NOT sickness)
         this.reviveDay = 0;       // world.day this bot gets back on their feet
+        this.downFrom = 0;        // #recovery world.day they were felled (-> "day X of Y" recovery countdown)
         this.threatWary = {};     // foe-kind -> how many times it's bested me (raises my urge to flee/rally)
         this.dangerZones = [];    // spots where a foe once cut me down — ground I now shun and speak of
         this.scarecrowTarget = null;

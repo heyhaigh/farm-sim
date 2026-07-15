@@ -3553,6 +3553,41 @@ function farmerRole(f) {
     return (f && f.world && f.world.roleOf) ? f.world.roleOf(f) : null;
 }
 
+// #hover — the farmer or foe directly under the cursor, for a quick NAME tooltip. Farmers only when OUT IN THE
+// OPEN (not tucked inside a home) — you hover to ID someone moving around, or a felled soul lying out with no
+// roof yet; a housed recovering farmer is inside and out of sight. Foes always name themselves (the raid warband
+// + wilderness orcs/assassins/beasts). Returns drawInfoBox lines, or null.
+function entityUnder(mx, my) {
+    const tile = screenToTile(mx, my);
+    let best = null, bd = 1.4;
+    for (const f of world.farmers) {
+        if (isIndoors(f)) continue;
+        const d = Math.hypot(f.pos.i - tile.i, f.pos.j - tile.j);
+        if (d < bd) { bd = d; best = { kind: 'farmer', f }; }
+    }
+    for (const e of world.encounters) {
+        if (e.done || e.presentational || !e.def) continue;
+        const d = Math.hypot(e.i - tile.i, e.j - tile.j);
+        if (d < bd) { bd = d; best = { kind: 'foe', e }; }
+    }
+    if (world.raidEvent && world.raidEvent.raiders) for (const r of world.raidEvent.raiders) {
+        const d = Math.hypot(r.i - tile.i, r.j - tile.j);
+        if (d < bd) { bd = d; best = { kind: 'raider', r }; }
+    }
+    if (!best) return null;
+    if (best.kind === 'farmer') {
+        const f = best.f, nm = f.sheet.name.split(' ')[0].toUpperCase();
+        if (f.downed) return [{ t: nm, c: '#e0703c' }, { t: 'recovering', c: '#c8a090' }];
+        const role = farmerRole(f), lines = [{ t: nm, c: '#e8ecf5' }];
+        if (role) lines.push({ t: role, c: '#e8c860' });
+        return lines;
+    }
+    const foe = best.kind === 'foe' ? best.e : best.r;
+    const isBeast = foe.def && foe.def.kind === 'beast';
+    const nm = (foe.foeName || (foe.def && foe.def.name) || 'orc raider').toUpperCase();
+    return isBeast ? [{ t: nm, c: '#c8a060' }] : [{ t: nm, c: '#e08850' }, { t: 'raider', c: '#c8a090' }];
+}
+
 function currentStatus(f) {
     const orc = !!(f.world && f.world.culture === 'orc');   // #3.1 orc warband status flavour
     if (f.downed) return orc ? 'LICKING WOUNDS IN THE DEN' : 'RECOVERING AT HOME';
@@ -3614,7 +3649,14 @@ function drawSheet(f) {
     const role = farmerRole(f);
     if (role) drawText(ctx, role, IX + IW - textWidth(role), PY + 19, '#e8c860');
     drawText(ctx, `${s.archetype.toUpperCase()} LV${s.level}`, IX, PY + 28, SHEET_GOLD);
-    const hStr = f.downed ? 'RECOVERING' : f.health === 'sick' ? 'SICK' : f.tired ? 'TIRED' : 'WELL';
+    // #recovery a felled farmer shows how far along their mend is — "RECOVERING 1/3" (day X of Y) — so you can
+    // see, at a glance, when they'll be back on their feet. Y = reviveDay - downFrom; X = today's day within it.
+    let hStr = f.downed ? 'RECOVERING' : f.health === 'sick' ? 'SICK' : f.tired ? 'TIRED' : 'WELL';
+    if (f.downed && f.reviveDay) {
+        const total = (f.downFrom ? f.reviveDay - f.downFrom : 3) || 3;
+        const dayOf = Math.max(1, Math.min(total, f.downFrom ? (world.day - f.downFrom + 1) : total - (f.reviveDay - world.day) + 1));
+        hStr = `RECOVERING ${dayOf}/${total}`;
+    }
     drawText(ctx, hStr, IX + IW - textWidth(hStr), PY + 28, eCol);
 
     // --- tab bar (fixed, below the title band) — the long scroll is now split into four
@@ -5719,11 +5761,16 @@ function frame(now) {
     let worldHover = false;
     if (booted && !raidFx && mouse.x >= 0 && !mouse.dragging && !rosterOpen && !boardOpen && !chronOpen && !settingsOpen && !worldMapOpen && mouse.y > 18 &&
         !(selected && inRect(mouse, SHEET_RECT)) && !inRect(mouse, MINIMAP)) {
-        const info = buildingUnder(mouse.x, mouse.y);
-        if (info) { drawInfoBox(mouse.x, mouse.y, info); worldHover = true; }
-        else {   // a walking farmer under the cursor is clickable even without a tooltip
-            const tile = screenToTile(mouse.x, mouse.y);
-            worldHover = world.farmers.some(f => Math.hypot(f.pos.i - tile.i, f.pos.j - tile.j) < 1.6);
+        // #hover a farmer/foe under the cursor takes priority (it's the moving thing you're tracking), then buildings
+        const ent = entityUnder(mouse.x, mouse.y);
+        if (ent) { drawInfoBox(mouse.x, mouse.y, ent); worldHover = true; }
+        else {
+            const info = buildingUnder(mouse.x, mouse.y);
+            if (info) { drawInfoBox(mouse.x, mouse.y, info); worldHover = true; }
+            else {   // a walking farmer under the cursor is clickable even without a tooltip
+                const tile = screenToTile(mouse.x, mouse.y);
+                worldHover = world.farmers.some(f => Math.hypot(f.pos.i - tile.i, f.pos.j - tile.j) < 1.6);
+            }
         }
     }
 
