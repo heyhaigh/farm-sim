@@ -117,6 +117,13 @@ function townHistoryDoc(th, town) {
             lines.push(` - ${office} ${String(h.name || '?').split(' ')[0]}: ${span}, ${h.endReason}${h.why ? ` (${h.why})` : ''}.`);
         }
     }
+    // #134 THE LEARNING ARC — the town's raid memory + the response it learned, persisted so its hard-won wisdom
+    // outlives the save (and can seed a later town / be surfaced in the memory portal).
+    if (th.raidsSuffered > 0) {
+        lines.push(`Raids weathered: ${th.raidsSuffered}.`);
+        if (th.learned === 'defense') lines.push('What the town learned from being raided: to make itself too costly to raid — it holds the wall and keeps a hard watch.');
+        else if (th.learned === 'truce') lines.push('What the town learned from being raided: it grew weary of the bloodshed and resolved to seek a truce at the frontier, not another fight.');
+    }
     return lines.join('\n');
 }
 

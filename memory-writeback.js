@@ -35,13 +35,15 @@ let lastHistorySig = null;
 let lastHistoryFailAt = -Infinity;
 function historySignature(world) {
     const r = world.roles || {};
-    return `${(r.history || []).length}:${r.manager}:${r.watch}:${r.managerTerms}:${world.year}`;
+    // #134 raid-learnings fold into the signature so the town's SuperMemory record re-writes when it learns
+    return `${(r.history || []).length}:${r.manager}:${r.watch}:${r.managerTerms}:${world.year}:${world.raidsSuffered || 0}:${world.learned || ''}`;
 }
 export async function persistTownHistory(world, isCurrent = () => true) {
     if (typeof fetch !== 'function' || historyInflight) return false;
     if (Date.now() - lastHistoryFailAt < RETRY_COOLDOWN_MS) return false;
     const r = world.roles;
-    if (!r || (!r.history?.length && r.manager == null)) return false;   // nothing civic to remember yet
+    // #134 also worth remembering once the town has weathered a raid / learned a response — even pre-election
+    if (!r || (!r.history?.length && r.manager == null && !world.learned && !(world.raidsSuffered > 0))) return false;   // nothing to remember yet
     const sig = historySignature(world);
     if (sig === lastHistorySig) return false;                            // unchanged since last successful write
 
@@ -55,6 +57,7 @@ export async function persistTownHistory(world, isCurrent = () => true) {
             body: JSON.stringify({ town: world.name || 'RY FARMS', townSeed: world.seed, rev: world._rev || world.day || 0, townHistory: {
                 manager: nameOf(r.manager), managerTerms: r.managerTerms, watch: nameOf(r.watch), year: world.year,
                 history: (r.history || []).map(h => ({ office: h.office, name: h.name, fromYear: h.fromYear, toYear: h.toYear, endReason: h.endReason, why: h.why })),
+                raidsSuffered: world.raidsSuffered || 0, learned: world.learned || null,   // #134 the town's raid memory + what it learned
             } }),
         });
         if (!res.ok) throw new Error(`town-history ${res.status}`);
