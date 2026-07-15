@@ -4004,6 +4004,31 @@ function rosterSorted() {
     return [...world.farmers].sort((a, b) => (b.sheet.cropsHarvested || 0) - (a.sheet.cropsHarvested || 0));
 }
 
+// ── Shared tab bar ───────────────────────────────────────────────────────────
+// The roster's tab style — a filled active chip topped by an underline accent — reads better than the old flat
+// chronicle chips, so it's now the ONE tab component every modal uses. Draws chips left→right from (x,y) and RETURNS
+// the [{ x, y, w, h, tab }] hit rects (assign them to the panel's *TabHits for click routing). `accent` is the active
+// color — green in the roster, purple in the chronicle — so each modal keeps its identity while sharing the shape.
+const TABBAR_H = 10;
+function hexA(hex, a) {   // '#rrggbb' -> 'rgba(r,g,b,a)' — a low-alpha wash for the active chip fill
+    const n = parseInt(hex.slice(1), 16);
+    return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
+function drawTabBar(x, y, labels, activeIndex, accent) {
+    const hits = [];
+    let tx = x;
+    for (let i = 0; i < labels.length; i++) {
+        const label = labels[i], tw = textWidth(label) + 8, active = i === activeIndex;
+        ctx.fillStyle = active ? hexA(accent, 0.18) : 'rgba(255,255,255,0.05)';
+        ctx.fillRect(tx, y, tw, TABBAR_H);
+        if (active) { ctx.fillStyle = accent; ctx.fillRect(tx, y + TABBAR_H - 1, tw, 1); }   // the underline accent
+        drawText(ctx, label, tx + 4, y + 2, active ? accent : '#8a8f9c');
+        hits.push({ x: tx, y, w: tw, h: TABBAR_H, tab: i });
+        tx += tw + 3;
+    }
+    return hits;
+}
+
 function drawRoster() {
     const PW = Math.min(GW - 12, 372);
     const PH = GH - 40;
@@ -4027,16 +4052,8 @@ function drawRoster() {
     // TAB BAR — PLAYER STATS / ROLES. Roles moved here from the Chronicle (it's about the individuals, so it lives
     // with the roster). The stat list and the civic offices are two views of the same cast, swapped by these chips.
     const RT_LABELS = ['PLAYER STATS', cultureWord(world.culture, 'panel.rolesTitle')];
-    let tabX = PX + 6; const tabY = PY + 15;
-    for (let i = 0; i < RT_LABELS.length; i++) {
-        const label = RT_LABELS[i], tw = textWidth(label) + 8, active = rosterTab === i;
-        ctx.fillStyle = active ? 'rgba(125,208,105,0.18)' : 'rgba(255,255,255,0.05)';
-        ctx.fillRect(tabX, tabY, tw, 10);
-        if (active) { ctx.fillStyle = '#7dd069'; ctx.fillRect(tabX, tabY + 9, tw, 1); }
-        drawText(ctx, label, tabX + 4, tabY + 2, active ? '#7dd069' : '#8a8f9c');
-        rosterTabHits.push({ x: tabX, y: tabY, w: tw, h: 10, tab: i });
-        tabX += tw + 3;
-    }
+    const tabY = PY + 15;
+    rosterTabHits = drawTabBar(PX + 6, tabY, RT_LABELS, rosterTab, '#7dd069');
 
     // ROLES view — the civic offices, hosted here (drawChronicleRoles is self-contained, no external scroll).
     if (rosterTab === 1) {
@@ -4678,18 +4695,9 @@ function drawChronicle() {
     ctx.fillStyle = '#20242f';
     ctx.fillRect(PX + 4, PY + 15, PW - 8, 1);
 
-    // TAB BAR — NEWS / RECIPES / TALES. Splitting the (growing) town view into swappable tabs keeps
-    // each readable: the story log, what the town has invented, and its tales. (ROLES lives in the Roster now.)
-    chronTabHits = [];
-    let tabX = PX + 8;
-    for (let i = 0; i < CHRON_TABS.length; i++) {
-        const label = CHRON_TABS[i], tw = textWidth(label) + 8, active = chronTab === i;
-        ctx.fillStyle = active ? 'rgba(200,160,224,0.22)' : 'rgba(255,255,255,0.05)';
-        ctx.fillRect(tabX, PY + 18, tw, 10);
-        drawText(ctx, label, tabX + 4, PY + 20, active ? CHRON_ACCENT : '#8a8f9c');
-        chronTabHits.push({ x: tabX, y: PY + 18, w: tw, h: 10, tab: i });
-        tabX += tw + 4;
-    }
+    // TAB BAR — NEWS / RECIPES / TALES. Now uses the shared drawTabBar (the roster's underline-accent style), in the
+    // chronicle's purple. (ROLES lives in the Roster now.)
+    chronTabHits = drawTabBar(PX + 8, PY + 18, CHRON_TABS, chronTab, CHRON_ACCENT);
     ctx.fillStyle = '#20242f';
     ctx.fillRect(PX + 4, PY + 30, PW - 8, 1);
 
