@@ -21,13 +21,15 @@ const SEEDS = [20260706, 42, 7, 3];
 // Baseline digests at HEAD (LLM + SuperMemory off, 30-day run). Update deliberately when a sim change
 // legitimately re-baselines; a DRIFT here on an unrelated change is a determinism regression to investigate.
 const BASELINE = {
-    // re-baselined 2026-07-14 for the ALL-DAY WATCH: the day's sentry now paces the perimeter beat all day (not
-    // just at night) on their rotation day, and sounds the alarm (rousing the town) when they spot a wilderness
-    // foe — both real behavioural changes to the day-2+ trajectory. same-twice held all seeds (fully reproducible).
-    20260706: '561b162c',
-    42: 'ba3a26d1',
-    7: '2073ee27',
-    3: '24c4c943',
+    // re-baselined 2026-07-14 for two behavioural fixes: (1) a fleeing farmer now bolts for the PLAZA when their
+    // own fence isn't up (an open plot is no refuge — the threat just follows them in) instead of a false-safe
+    // homestead; (2) the ACTION_ENERGY falsy-0 bug fixed (`?? 0.05`, not `|| 0.05`) so plant/harvest/clear are
+    // truly FREE and tilling is a light 0.017 (was silently 0.05) — which shifts every farming day's energy curve.
+    // same-twice held all seeds (fully reproducible; only the fingerprint moved).
+    20260706: 'cc596997',
+    42: '4b2c6cac',
+    7: 'a71885da',
+    3: 'c897836c',
 };
 
 function boot(seed, culture) {

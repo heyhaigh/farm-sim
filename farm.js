@@ -552,9 +552,13 @@ const MEAT_HEAL = { 'meat-s': 0.35, 'meat-m': 0.55, 'meat-l': 0.8, fowl: 0.45 };
 const MEAT_NAME = { 'meat-s': 'small game', 'meat-m': 'red meat', 'meat-l': 'prime cut', fowl: 'fowl' };
 const MEAT_GOODS = ['meat-s', 'meat-m', 'meat-l', 'fowl'];   // eaten smallest-first when healing
 // Tending crops and animals is free — tilling a patch, sowing, watering, harvesting, collecting
-// eggs/milk, feeding. Only heavy construction (build) drains here; the rest is 0. Chopping,
+// eggs/milk, feeding. Only heavy construction (build) + a light till drains here; the rest is 0. Chopping,
 // mining, breaking stumps, fencing and raising scarecrows drain via the LABOR table below.
-const ACTION_ENERGY = { till: 0, plant: 0, water: 0.006, harvest: 0, clear: 0, build: 0.04, collect: 0, tend: 0, mill: 0.05, hatch: 0.01 };
+// NB: read with `?? 0.05`, NOT `|| 0.05` — a defined 0 must stay 0 (else the falsy-0 fallback silently charged
+// till/plant/harvest 0.05 each, which is the "breaking new ground costs energy" the player caught).
+// #energy tilling ("breaking new ground") keeps a LIGHT cost — real effort — at ~1/3 of that old accidental 0.05;
+// sowing seeds, harvesting, clearing and gathering are FREE (they're deft, not heavy graft).
+const ACTION_ENERGY = { till: 0.017, plant: 0, water: 0.006, harvest: 0, clear: 0, build: 0.04, collect: 0, tend: 0, mill: 0.05, hatch: 0.01 };
 // Clearing/building labor by effort: a shrub is quick and light, a tree is a long hard fell,
 // a stump is grubbing work (roots and all — just as heavy as the fell), a rock is the heaviest,
 // a fence post is medium. { time, energy }.
@@ -10354,7 +10358,7 @@ export class Farmer {
         const w = this.world;
         const { task, plot, helping } = this.action;
         this.action = null;
-        this.#spendEnergy(ACTION_ENERGY[task.act] || 0.05);
+        this.#spendEnergy(ACTION_ENERGY[task.act] ?? 0.05);   // #energy ?? not || — a defined 0 (plant/harvest/clear) must stay FREE
         const owner = helping ? this.helpTask?.requester : this;
         if (this.targetProd) { this.targetProd.busy = false; }
 
@@ -10936,8 +10940,12 @@ export class Farmer {
                 this.fightTimer -= dt;
                 if (this.fightTimer <= 0) this.state = 'decide';
                 break;
-            case 'flee': {   // bolt for their OWN homestead (their refuge), sidestepping obstacles as they run
-                const home = this.plot && this.plot.sited ? { i: this.plot.x + 6, j: this.plot.y + 6 } : { i: CENTER, j: CENTER };
+            case 'flee': {   // bolt for a REAL refuge, sidestepping obstacles as they run
+                // #flee-foresight the homestead is only a refuge if its FENCE IS ACTUALLY UP — an open, half-fenced
+                // plot is no safe spot (the threat just follows them in, as it should). With no complete fence to
+                // duck behind, they run for the PLAZA instead — the settled heart, where the town can lend a hand.
+                const fenced = this.plot && this.plot.sited && this.plot.built.fence;
+                const home = fenced ? { i: this.plot.x + 6, j: this.plot.y + 6 } : { i: CENTER, j: CENTER };
                 const dx = home.i - this.pos.i, dy = home.j - this.pos.j, d = Math.hypot(dx, dy) || 1;
                 const sp = this.speed * 1.2 * dt;
                 const ni = this.pos.i + dx / d * sp, nj = this.pos.j + dy / d * sp;

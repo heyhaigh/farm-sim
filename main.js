@@ -2828,12 +2828,11 @@ function drawBoard() {
     }
 }
 
-// The ONE progress bar used everywhere (build sites, foundations, co-ops): a near-black outer stroke
-// with the fill inset 1px inside it — so every bar in the game reads the same.
+// #hud all build/foundation/co-op PROGRESS now reads as a radial DIAL (matching the planting dial) — the
+// horizontal bar shape is reserved for HEALTH, so nothing in the world uses a bar to mean "progress" any more.
+// Same call signature (build sites, foundations, co-ops), so every construction site reads the same.
 function drawProgressBar(cx, y, w, prog, fill = '#c9a45a') {
-    const x = Math.floor(cx - w / 2), p = Math.max(0, Math.min(1, prog));
-    ctx.fillStyle = '#0d0f15'; ctx.fillRect(x, y, w, 4);                              // outer black stroke + track
-    ctx.fillStyle = fill; ctx.fillRect(x + 1, y + 1, Math.round((w - 2) * p), 2);     // inset fill
+    drawProgressWheel(cx, y + 2, prog, 5, fill);
 }
 
 // A dwelling under construction: a gray foundation pad staked over the 5x5 footprint, with the
