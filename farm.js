@@ -6003,7 +6003,13 @@ export class World {
         }
         const dx = f.pos.i - e.i, dy = f.pos.j - e.j, dist = Math.hypot(dx, dy) || 1;
         if (Math.abs(dx) > 0.08) e.facing = dx < 0 ? -1 : 1;   // face the way it moves
-        if (dist > 1.2) {
+        // #watch-P1 (Codex #32) a standing DEFENDER (sentry/rallier) who reaches the foe brings it to BAY — the clash
+        // fires against whoever's adjacent, so a guard body-blocking a FLEEING farmer actually trades blows and can
+        // drive the foe off. Before, the clash only fired when the foe caught the fleeing TARGET (which, at matched
+        // speed, it rarely did), so an intercepting guard was inert and the foe just ran out its 45s clock.
+        const guarded = [...e.helpers].some(h => this.farmers.includes(h) && !h.downed && h.combatStance === 'fight'
+            && Math.hypot(h.pos.i - e.i, h.pos.j - e.j) < 2.2);   // <2.2 == #resolveClash's swing radius: the foe halts exactly when a defender can strike
+        if (dist > 1.2 && !guarded) {
             let sp = e.def.speed * 2.6 * dt;               // ~as fast as a bustling farmer, so chases are real
             const ni = e.i + dx / dist * sp, nj = e.j + dy / dist * sp;
             const onFence = this.tileInFencedPlot(Math.floor(ni), Math.floor(nj));
@@ -6057,21 +6063,26 @@ export class World {
 
     #resolveClash(e) {
         const f = e.target, def = e.def;
-        if (f.combatStance !== 'fight') {                  // caught while fleeing: a DEX save to slip the blow
+        // #watch-P1 (Codex #32): adjacent HELPERS stand and swing even while the quarry FLEES — a sentry/rallier who
+        // charged in to defend someone is the WHOLE POINT of the office. (Before, a fleeing target short-circuited the
+        // clash with a lone DEX save and returned, so the guard reached 'fight' but NEVER landed a blow — the foe just
+        // ran out its 45s clock.) The target joins the fighters only when THEY are standing to fight.
+        const helpers = [...e.helpers].filter(h => this.farmers.includes(h) && Math.hypot(h.pos.i - e.i, h.pos.j - e.j) < 2.2);
+        const fighters = f.combatStance === 'fight' ? [f, ...helpers] : helpers;
+        if (!fighters.length) {                            // no one in reach stands: the fleeing target slips or eats the blow
             const dodge = d20(this.rand, mod(f.sheet.stats.dex));
             if (dodge.total >= def.diff || dodge.crit) f.say('dodged!', '#c8d060'); else this.#threatHits(e, f);
             return;
         }
-        // standing to fight: the target + any adjacent helpers swing at the threat
-        const fighters = [f, ...[...e.helpers].filter(h => this.farmers.includes(h) && Math.hypot(h.pos.i - e.i, h.pos.j - e.j) < 2.2)];
+        // someone stands to fight: they + any adjacent helpers swing at the threat
         let landed = false;
         for (const ff of fighters) {
             const atk = d20(this.rand, ff.combatMod());
             if (atk.total >= def.diff || atk.crit) { e.hp -= atk.crit ? 2 : 1; ff.gainXP(2); landed = true; if (e.hp <= 0) break; }
         }
         if (e.hp <= 0) { this.#defeatThreat(e, fighters); return; }
-        if (landed) f.say('hah!', '#e0d060');
-        const victim = fighters[Math.floor(this.rand() * fighters.length)];   // the threat swings back
+        if (landed) fighters[0].say('hah!', '#e0d060');
+        const victim = fighters[Math.floor(this.rand() * fighters.length)];   // the threat swings back at a FIGHTER (a fleeing quarry the guard shields is out of reach)
         const dodge = d20(this.rand, mod(victim.sheet.stats.dex));
         if (dodge.total < def.diff && !dodge.crit) this.#threatHits(e, victim);
     }

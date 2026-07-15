@@ -43,10 +43,17 @@ const BASELINE = {
     // resented bystanders (changes adjustOpinion/remember). All five touch day-2+ sim state → the fingerprint moves.
     // (foe kind-roll rebalanced same batch: assassin is now the RARE stalker (r<0.20, standout only), orc the usual
     // raider (r<0.65) — the fingerprint moved again; same-twice held.)
-    20260706: 'd124375d',
-    42: '1bbd99f8',
-    7: 'af6ef44f',
-    3: 'c3368191',
+    // re-baselined 2026-07-15 for Codex #32 P1 (the sentry could not actually FIGHT while the quarry fled) — TWO
+    // coupled fixes: (a) #resolveClash lets adjacent HELPERS swing even when the target flees (was a lone dodge +
+    // early return); (b) the encounter now brings the foe to BAY — a standing defender within the <2.2 swing radius
+    // HALTS the foe's chase and forces the clash (before, the foe only clashed when it caught the fleeing TARGET,
+    // which at matched speed it rarely did, so an intercepting guard was inert). Together: a defended fleeing farmer's
+    // foe now takes damage / is driven off. Verified: foe HP 4→1 while the quarry fled + the sentry fought. same-twice
+    // held; the day-2+ trajectory shifts wherever a guard engages a foe in the run.
+    20260706: 'cc2b11e5',
+    42: '9485255c',
+    7: '359ecd18',
+    3: '1c8440c8',
 };
 
 function boot(seed, culture) {
