@@ -5910,14 +5910,16 @@ export class World {
         if (this.time >= pr.landsAt) { const { e, dir, dirName } = pr; this.pendingRaid = null; this.#landRaid(e, dir, dirName); }
     }
 
-    // #131 — where a roused farmer forms up when the alarm sounds: on the well-side arc FACING the incoming
-    // warband (pendingRaid.dir), fanned out by a seeded per-farmer offset so they hold a loose line, not a stack.
-    // Pure geometry + seeded spread (no rng) — determinism-safe, called only while a raid is detected.
+    // #131 — where a roused farmer forms up when the alarm sounds: NOT huddled at the town square, but out on the
+    // town's FRONTIER in the threat direction (pendingRaid.dir) — a forward defensive line that MEETS the warband
+    // where it's coming from, rather than letting it reach the well while the hands out there are cut off alone.
+    // Fanned by a seeded per-farmer offset (a loose line, not a stack). If it turns against them they still fall
+    // back (the flee/regroup path), but the muster is a stand at the gate. Pure geometry + seeded spread, no rng.
     musterSpot(f) {
         const well = this.well, pr = this.pendingRaid;
         const base = pr ? pr.dir : 0, h = hashString(f.sheet.seed + ':muster');
-        const spread = (((h % 100) / 100) - 0.5) * 1.5;   // fan across the threat-facing arc
-        const ang = base + spread, rad = 4 + (h % 3);
+        const spread = (((h % 100) / 100) - 0.5) * 1.4;   // fan across the threat-facing arc (a line abreast)
+        const ang = base + spread, rad = 16 + (h % 6);     // a forward line at the frontier, out toward the threat (was 4-6 = the square)
         const ti = Math.round(well.i + Math.cos(ang) * rad), tj = Math.round(well.j + Math.sin(ang) * rad);
         const open = this.nearestOpenTile({ i: ti, j: tj }) || { i: ti, j: tj };
         return { i: open.i + 0.5, j: open.j + 0.5 };

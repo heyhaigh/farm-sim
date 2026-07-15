@@ -1464,6 +1464,24 @@ function drawTerrainChunks() {
 // and draws no world.rand — so the sim + determinism are untouched. It gives "a warband gathers to the north" a
 // place to actually look: the unexplored dark in that bearing becomes their scorched land, and the raiders (which
 // already spawn at the map edge along the same bearing) march out of it.
+// #P1 cosmetic MUSTER figures — the orc warband ASSEMBLING on the red approach zone during the raid telegraph,
+// before it crosses. PURE DISPLAY: they exist nowhere in the sim (not encounters, not raidEvent), draw through the
+// same drawThreat as the real raiders, and hand straight off to raidEvent.raiders the instant the raid lands. The
+// positions are a pure fn of the seeded bearing + a wall-clock idle sway (display only) — no world.rand touched.
+function raidMusterFigures(pr) {
+    const dir = pr.dir, n = 6, t = performance.now(), out = [];
+    for (let k = 0; k < n; k++) {
+        const ang = dir + (k - (n - 1) / 2) * 0.26;
+        const co = Math.cos(ang), si = Math.sin(ang), m = 4;
+        const tx = co > 0 ? (GRID - m - CENTER) / co : co < 0 ? (m - CENTER) / co : Infinity;
+        const ty = si > 0 ? (GRID - m - CENTER) / si : si < 0 ? (m - CENTER) / si : Infinity;
+        const d = Math.max(40, Math.min(tx, ty)) - 3 + 0.6 * Math.sin(t / 640 + k * 1.7);   // just inside the edge, restless
+        const i = CENTER + co * d, j = CENTER + si * d;
+        out.push({ kind: 'orc', def: { color: '#6f8f3f' }, i, j, facing: (i - j) > 0 ? -1 : 1 });   // face in toward the town
+    }
+    return out;
+}
+
 const RAID_TINT = { A: '224,72,56', B: '196,56,44' };   // a danger RED, keyed to the "RAIDERS CLOSING" toast
 function drawRaidSeam() {
     const pr = world.pendingRaid, re = world.raidEvent;
@@ -2044,6 +2062,13 @@ function collectDrawables() {
     // world.encounters), so they're y-sorted in here alongside the real threats
     if (world.raidEvent && world.raidEvent.raiders) {
         for (const r of world.raidEvent.raiders) {
+            const sx = cam.x + isoX(r.i, r.j), sy = cam.y + isoY(r.i, r.j);
+            list.push({ y: sy + TILE_H * 0.5 + 0.11, draw: () => drawThreat(r, sx, sy) });
+        }
+    } else if (world.pendingRaid) {
+        // #P1 the warband MUSTERING on the red approach during the telegraph — before it crosses. Cosmetic
+        // (nowhere in the sim), y-sorted in, and it hands straight off to raidEvent.raiders the instant it lands.
+        for (const r of raidMusterFigures(world.pendingRaid)) {
             const sx = cam.x + isoX(r.i, r.j), sy = cam.y + isoY(r.i, r.j);
             list.push({ y: sy + TILE_H * 0.5 + 0.11, draw: () => drawThreat(r, sx, sy) });
         }
