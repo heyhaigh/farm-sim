@@ -3114,51 +3114,35 @@ function drawWorldMap() {
     ctx.fillStyle = 'rgba(6,7,11,0.80)'; ctx.fillRect(0, 18, GW, GH - 18);
     const PW = Math.min(GW - 12, 380), PH = GH - 40, PX = Math.floor((GW - PW) / 2), PY = 22;
     uiPanel(PX, PY, PW, PH);
-    drawText(ctx, 'THE WORLD', PX + 7, PY + 5, '#c8b0e0', 1);
-    drawText(ctx, 'X', PX + PW - 10, PY + 5, '#c8ccd8');
 
     const idx = worldMapIdx || { towns: {}, encounters: [] };
     const nodes = computeLayout(idx);
     const enc = idx.encounters || [];
+    worldMapHits = []; worldMapVisit = null; worldMapTravHits = []; worldMapUiHits = {};
 
-    // header buttons UNDER the title, left-aligned (where the town/encounter counts used to be): KEY (legend) +
-    // CREATE TOWN (birth a colony). The counts line was removed — the map itself shows what's out there.
-    worldMapUiHits = {};
-    {
-        let bx = PX + 7; const by = PY + 13;
-        const chip = (label, active, accent) => {
-            const w = textWidth(label) + 8, b = { x: bx, y: by, w, h: 9 };
-            ctx.fillStyle = active ? hexA(accent, 0.20) : 'rgba(255,255,255,0.05)';
-            ctx.fillRect(b.x, b.y, w, 9);
-            if (active) { ctx.fillStyle = accent; ctx.fillRect(b.x, b.y + 8, w, 1); }
-            drawText(ctx, label, b.x + 4, b.y + 2, active ? accent : '#9aa0b4');
-            bx += w + 4;
-            return b;
-        };
-        worldMapUiHits.key = chip('KEY', worldMapKeyOpen, '#c8b0e0');
-        worldMapUiHits.found = chip('CREATE TOWN', worldMapFoundOpen, '#7dd069');
-    }
-
-    // RESERVE the footer's height (+padding) out of the map region, so the town nodes are always laid out
-    // ABOVE the bottom info bar and none is drawn behind it (e.g. Dunton getting clipped).
+    // The map CANVAS fills the modal to its gold frame — content clips to the FRAME INTERIOR (uiPanel's inner
+    // #191410 fill is x+4..w-8), NOT an inset box — so halos/rings bleed to the stroke with no "collapsed" padding.
+    // The header (top) + footer info bar (bottom) are OVERLAYS drawn ON TOP of the canvas below.
+    const inX = PX + 4, inY = PY + 4, inW = PW - 8, inH = PH - 8;
+    // town LAYOUT still reserves the header + footer bands so dots/labels never sit under the overlays.
     const CARD_H = 44, CARD_RESERVE = CARD_H + 12;
     const mapX = PX + 10, mapY = PY + 24, mapW = PW - 20, mapH = PH - 24 - CARD_RESERVE;
-    worldMapHits = []; worldMapVisit = null; worldMapTravHits = [];
-    if (!nodes.length) { drawText(ctx, 'The world holds no towns yet - grow one.', mapX + 6, mapY + 20, '#9aa0b4'); return; }
 
-    // fit the town bounding box into the map region (few towns still fill the view)
-    let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
-    for (const n of nodes) { minX = Math.min(minX, n.x); minY = Math.min(minY, n.y); maxX = Math.max(maxX, n.x); maxY = Math.max(maxY, n.y); }
-    const bw = Math.max(1, maxX - minX), bh = Math.max(1, maxY - minY), pad = 26;
-    const S = nodes.length === 1 ? 0 : Math.min((mapW - 2 * pad) / bw, (mapH - 2 * pad) / bh);
-    const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
-    const toX = n => mapX + mapW / 2 + (n.x - cx) * S;
-    const toY = n => mapY + mapH / 2 + (n.y - cy) * S;
-    const bySeed = new Map(nodes.map(n => [String(n.seed), n]));
+    let toX = null, toY = null, S = 0, bySeed = new Map();
+    let hovT = null, hovTrav = null;
+    if (nodes.length) {
+        // fit the town bounding box into the reserved map region (few towns still fill the view)
+        let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+        for (const n of nodes) { minX = Math.min(minX, n.x); minY = Math.min(minY, n.y); maxX = Math.max(maxX, n.x); maxY = Math.max(maxY, n.y); }
+        const bw = Math.max(1, maxX - minX), bh = Math.max(1, maxY - minY), pad = 26;
+        S = nodes.length === 1 ? 0 : Math.min((mapW - 2 * pad) / bw, (mapH - 2 * pad) / bh);
+        const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+        toX = n => mapX + mapW / 2 + (n.x - cx) * S;
+        toY = n => mapY + mapH / 2 + (n.y - cy) * S;
+        bySeed = new Map(nodes.map(n => [String(n.seed), n]));
 
-    // CLIP all map content (halos, reach/rumor rings, lines, travelers, dots) to the map viewport so nothing —
-    // especially a big reach halo or a hover ring — spills past the panel frame into the world behind it.
-    ctx.save(); ctx.beginPath(); ctx.rect(mapX, mapY, mapW, mapH); ctx.clip();
+    // === MAP CONTENT — clipped to the frame interior (fills the modal to the gold stroke). ===
+    ctx.save(); ctx.beginPath(); ctx.rect(inX, inY, inW, inH); ctx.clip();
 
     // faint memory-tinted reach halos
     for (const n of nodes) { ctx.beginPath(); ctx.arc(toX(n), toY(n), Math.max(4, n.reach * S), 0, Math.PI * 2); ctx.fillStyle = `hsla(${n.tint.h} ${n.tint.s}% 55% / 0.06)`; ctx.fill(); }
@@ -3237,8 +3221,45 @@ function drawWorldMap() {
         drawText(ctx, n.name.split(' ')[0], x + r + 2, y - 3, active ? '#f0e0a0' : '#c8ccd8');
         worldMapHits.push({ seed: n.seed, x, y, r: r + 3 });
     }
-    ctx.restore();   // end map-viewport clip (the footer card + overlays below draw unclipped)
-    // selected-town info bar (fixed footer). The map region above reserves its height, so it never clips a town.
+    // hover detection (uses the worldMapHits/TravHits just populated) + REACH/RUMOR rings — drawn INSIDE the map
+    // canvas's interior clip, so the rings mask to the gold frame like everything else.
+    const overlayUp = worldMapKeyOpen || worldMapFoundOpen;
+    if (!overlayUp && mouse.x >= 0 && !mouse.dragging) {
+        for (const h of worldMapHits) { const dx = mouse.x - h.x, dy = mouse.y - h.y; if (dx * dx + dy * dy <= (h.r + 2) * (h.r + 2)) { hovT = bySeed.get(String(h.seed)); break; } }
+        if (!hovT) for (const h of worldMapTravHits) { const dx = mouse.x - h.x, dy = mouse.y - h.y; if (dx * dx + dy * dy <= h.r * h.r) { hovTrav = h; break; } }
+    }
+    if (hovT) {
+        const RUMOR = 1.9;   // == reconciliation.js TRAVELER.rumorMult — a scout sets out when reaches drift within reach-sum*this
+        const hx = toX(hovT), hy = toY(hovT);
+        ctx.strokeStyle = `hsla(${hovT.tint.h} ${hovT.tint.s}% 62% / 0.55)`; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.arc(hx, hy, Math.max(4, hovT.reach * S), 0, Math.PI * 2); ctx.stroke();     // REACH (influence)
+        ctx.strokeStyle = `hsla(${hovT.tint.h} ${hovT.tint.s}% 62% / 0.26)`; ctx.setLineDash([2, 3]);
+        ctx.beginPath(); ctx.arc(hx, hy, Math.max(6, hovT.reach * S * RUMOR), 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);   // RUMOR
+    }
+    ctx.restore();   // end the map-canvas interior clip
+    }   // end if (nodes.length)
+
+    // === OVERLAYS drawn ON TOP of the map canvas (so halos/rings never obscure them) ===
+    // header: title + X + KEY / CREATE TOWN chips
+    drawText(ctx, 'THE WORLD', PX + 7, PY + 5, '#c8b0e0', 1);
+    drawText(ctx, 'X', PX + PW - 10, PY + 5, '#c8ccd8');
+    {
+        let bx = PX + 7; const by = PY + 13;
+        const chip = (label, active, accent) => {
+            const w = textWidth(label) + 8, b = { x: bx, y: by, w, h: 9 };
+            ctx.fillStyle = active ? hexA(accent, 0.20) : 'rgba(255,255,255,0.05)';
+            ctx.fillRect(b.x, b.y, w, 9);
+            if (active) { ctx.fillStyle = accent; ctx.fillRect(b.x, b.y + 8, w, 1); }
+            drawText(ctx, label, b.x + 4, b.y + 2, active ? accent : '#9aa0b4');
+            bx += w + 4;
+            return b;
+        };
+        worldMapUiHits.key = chip('KEY', worldMapKeyOpen, '#c8b0e0');
+        worldMapUiHits.found = chip('CREATE TOWN', worldMapFoundOpen, '#7dd069');
+    }
+    if (!nodes.length) { drawText(ctx, 'The world holds no towns yet - grow one.', mapX + 6, mapY + 20, '#9aa0b4'); return; }
+
+    // selected-town info bar (fixed footer) — an overlay at the bottom edge (map layout reserved its band).
     if (worldMapSel != null) {
         const n = bySeed.get(String(worldMapSel));
         if (n) {
@@ -3266,24 +3287,6 @@ function drawWorldMap() {
         seg('LINEAGE', '#c8a0e0'); seg('RAID', '#e6503c'); seg('PEACE', '#7dd069'); seg('MEETING', '#e6c878'); seg('- KEY explains the map', '#7a8090');
     }
 
-    // ── HOVER: light up the hovered town's REACH + RUMOR rings and show a data tooltip (town or traveler), so
-    // 'reach' and 'rumor' are legible values, not shapes to guess at. Suppressed while an overlay is up.
-    const overlayUp = worldMapKeyOpen || worldMapFoundOpen;
-    let hovT = null, hovTrav = null;
-    if (!overlayUp && mouse.x >= 0 && !mouse.dragging) {
-        for (const h of worldMapHits) { const dx = mouse.x - h.x, dy = mouse.y - h.y; if (dx * dx + dy * dy <= (h.r + 2) * (h.r + 2)) { hovT = bySeed.get(String(h.seed)); break; } }
-        if (!hovT) for (const h of worldMapTravHits) { const dx = mouse.x - h.x, dy = mouse.y - h.y; if (dx * dx + dy * dy <= h.r * h.r) { hovTrav = h; break; } }
-    }
-    if (hovT) {
-        const RUMOR = 1.9;   // == reconciliation.js TRAVELER.rumorMult — a scout sets out when reaches drift within reach-sum*this
-        const hx = toX(hovT), hy = toY(hovT);
-        ctx.save(); ctx.beginPath(); ctx.rect(mapX, mapY, mapW, mapH); ctx.clip();   // mask the rings to the map viewport
-        ctx.strokeStyle = `hsla(${hovT.tint.h} ${hovT.tint.s}% 62% / 0.55)`; ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.arc(hx, hy, Math.max(4, hovT.reach * S), 0, Math.PI * 2); ctx.stroke();     // REACH (influence)
-        ctx.strokeStyle = `hsla(${hovT.tint.h} ${hovT.tint.s}% 62% / 0.26)`; ctx.setLineDash([2, 3]);
-        ctx.beginPath(); ctx.arc(hx, hy, Math.max(6, hovT.reach * S * RUMOR), 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);   // RUMOR
-        ctx.restore();
-    }
     // a boxed multi-line tooltip near the cursor, clamped inside the panel
     const worldTip = (lines, accent) => {
         const w = Math.max(...lines.map(l => textWidth(l))) + 8, h = lines.length * 8 + 4;
@@ -4975,6 +4978,9 @@ function drawCallouts() {
         try { audio.moment('neutral'); } catch { /* not ready */ }
     }
     if (!activeCallout) { CALLOUT_CLOSE.w = 0; return; }
+    // a full-screen modal panel is ON TOP — don't draw the toast over it (the timer above still advances, so it
+    // expires behind the modal instead of popping stale when it closes).
+    if (worldMapOpen || rosterOpen || chronOpen || boardOpen || settingsOpen) { CALLOUT_CLOSE.w = 0; return; }
     const y = (RECAP_CARD.w ? RECAP_CARD.y + RECAP_CARD.h + 4 : 22);
     {
         const c = activeCallout;
@@ -5079,7 +5085,15 @@ function drawRaidFx() {
 }
 
 function drawMoments() {
-    if (rosterOpen || chronOpen || boardOpen || settingsOpen) { scanMoments(); return; }   // don't fight a full modal
+    // A full-screen modal is ON TOP: don't draw the spotlight/toasts over it — but FREEZE the active ones (bump
+    // their shownAt each frame) so they don't expire behind the modal; they resume, viewable, once it's dismissed.
+    if (rosterOpen || chronOpen || boardOpen || settingsOpen || worldMapOpen) {
+        scanMoments();
+        const now = performance.now();
+        if (activeMoment) activeMoment.shownAt = now;
+        if (activeCallout) activeCallout.shownAt = now;
+        return;
+    }
     scanMoments();
     const nowMs = performance.now();
     if (!activeMoment && momentQueue.length) {
