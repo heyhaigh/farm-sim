@@ -1464,7 +1464,7 @@ function drawTerrainChunks() {
 // and draws no world.rand — so the sim + determinism are untouched. It gives "a warband gathers to the north" a
 // place to actually look: the unexplored dark in that bearing becomes their scorched land, and the raiders (which
 // already spawn at the map edge along the same bearing) march out of it.
-const RAID_DESERT = { A: '#9d7448', B: '#8f6a40' };   // the neighbour's sun-baked earth (the SPRING desert palette)
+const RAID_TINT = { A: '224,72,56', B: '196,56,44' };   // a danger RED, keyed to the "RAIDERS CLOSING" toast
 function drawRaidSeam() {
     const pr = world.pendingRaid, re = world.raidEvent;
     if (!pr && !re) return;
@@ -1472,8 +1472,9 @@ function drawRaidSeam() {
     if (pr) dir = pr.dir;
     else { const r0 = re.raiders && re.raiders[0]; if (!r0) return; dir = Math.atan2(r0.j - CENTER, r0.i - CENTER); }
     // a low ember while a warband merely GATHERS; brighter once the alarm has sounded (detected) or it has landed.
+    // kept SEMI-TRANSPARENT (the terrain reads through) so it's a danger overlay, like the toast — not a repaint.
     const hot = (pr && pr.detected) || !!re;
-    const base = hot ? 1.0 : 0.55;
+    const base = hot ? 0.5 : 0.3;
     const pulse = 0.05 * Math.sin(performance.now() / 500);
     const half = 0.85;   // fan half-angle (raiders fan ~±0.5; a touch wider so it reads as "their land", not a beam)
     const rIn = 26, rFull = 46;   // the seam ramps grass→desert from the town's edge (rIn, faint) out to the horizon (rFull, full)
@@ -1490,19 +1491,12 @@ function drawRaidSeam() {
             if (Math.abs(da) > half) continue;
             // gradient: faint at the town's edge (grass shows through), full desert toward the horizon; softer at the fan sides.
             const edge = 1 - Math.abs(da) / half, ramp = Math.min(1, (r - rIn) / (rFull - rIn));
-            const fog = !world.isRevealed(i, j);                      // the unknown dark takes full desert; revealed grass keeps a wash (the transition)
-            const a = Math.max(0, Math.min(1, (base + pulse) * edge * ramp * (fog ? 1 : 0.72)));
+            const fog = !world.isRevealed(i, j);                      // strongest over the unknown dark; a lighter wash over revealed ground
+            const a = Math.max(0, Math.min(1, (base + pulse) * edge * ramp * (fog ? 1 : 0.8)));
             if (a < 0.03) continue;
             const sx = cam.x + isoX(i, j) - TILE_W / 2, sy = cam.y + isoY(i, j);
             ctx.save(); ctx.globalAlpha = a;
-            fillDiamond(ctx, sx, sy, (i + j) % 2 ? RAID_DESERT.A : RAID_DESERT.B);
-            // sparse orc-desert scatter (dead brush / pebbles) so it reads as their scorched land, not flat sand
-            if (grassDetailsReady && rand2(i, j, 71) < 0.13) {
-                const d = pickTile(ORC_GROUND_DECALS, i, j, 72);
-                const scale = 0.44 + rand2(i, j, 73) * 0.22, dw = Math.round(d.w * scale), dh = Math.round(d.h * scale);
-                const ox = Math.round((rand2(i, j, 74) - 0.5) * 8), oy = Math.round((rand2(i, j, 75) - 0.5) * 4);
-                ctx.drawImage(grassDetailsImg, d.x, d.y, d.w, d.h, sx + Math.floor(TILE_W / 2 - dw / 2) + ox, sy + Math.floor(TILE_H / 2 - dh / 2) + oy, dw, dh);
-            }
+            fillDiamond(ctx, sx, sy, `rgb(${(i + j) % 2 ? RAID_TINT.A : RAID_TINT.B})`);
             ctx.restore();
         }
     }
@@ -5730,6 +5724,18 @@ function drawThreatTell() {
     ctx.fillRect(bx - 5, by - 2, tw + 10, 1);
     ctx.fillRect(bx - 5, by + 8, tw + 10, 1);
     drawText(ctx, label, bx, by, hot ? '#ffb0a0' : '#f0c060');
+
+    // POSITIONING AWARENESS: the edge arrow only makes sense while the approach is OFF-screen. Compute the raiders'
+    // edge-spawn point in the bearing (the same geometry #stageRaidCinematic uses) and, once the player has panned
+    // so that ground is in view, skip the arrow — it has nothing to point at anymore.
+    {
+        const co = Math.cos(pr.dir), si = Math.sin(pr.dir), m = 4;   // RAID_SPAWN_MARGIN
+        const tx = co > 0 ? (GRID - m - CENTER) / co : co < 0 ? (m - CENTER) / co : Infinity;
+        const ty = si > 0 ? (GRID - m - CENTER) / si : si < 0 ? (m - CENTER) / si : Infinity;
+        const d = Math.max(36, Math.min(tx, ty));
+        const px = cam.x + isoX(CENTER + co * d, CENTER + si * d), py = cam.y + isoY(CENTER + co * d, CENTER + si * d);
+        if (px > -24 && px < GW + 24 && py > 18 && py < GH + 24) return;   // the approach is on-screen — the arrow retires
+    }
 
     // an arrow at the screen edge in the warband's bearing (world.pendingRaid.dir), so the eye knows where to look
     const cx = GW / 2, cy = GH / 2 + 6;
