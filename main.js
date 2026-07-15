@@ -4819,6 +4819,19 @@ function scanMoments() {
         else if (e.tier === 'callout') calloutQueue.push(e);   // shown one-at-a-time by drawCallouts
     }
     if (calloutQueue.length > 6) calloutQueue.splice(0, calloutQueue.length - 6);   // drop the stale backlog
+    // #catchup a BACKLOG of grand spotlights means the player looked away (or ran fast-forward, which spawns beats
+    // far faster than the 4.6s-each spotlights can drain) — and would otherwise face a gauntlet of pop-ups to click
+    // through on return. Once more than 3 have piled up, FOLD the lot — plus any active spotlight + queued callouts —
+    // into ONE "WHILE YOU WERE AWAY" summary card (the resume-card format) and clear the queues, so coming back is a
+    // single calm read. Skips if a resume card is already up (don't clobber the on-load "PREVIOUSLY ON").
+    if (!resumeCard && momentQueue.length > 3) {
+        const src = [...(activeMoment ? [activeMoment.e] : []), ...momentQueue, ...calloutQueue];
+        resumeCard = {
+            title: 'WHILE YOU WERE AWAY', day: world.day, season: world.season, year: world.year, shownAt: 0,
+            beats: src.slice(-8).map(e => ({ text: e.text, color: e.color || '#c8ccd8', day: e.day })),
+        };
+        momentQueue.length = 0; calloutQueue.length = 0; activeMoment = null;
+    }
 }
 
 // callout tier — a SINGLE lighter toast at a time (never a stack): show the front of the queue briefly,
@@ -5029,7 +5042,7 @@ function drawResumeCard() {
     ctx.fillStyle = '#e8c860'; ctx.fillRect(PX, PY, PW, 1); ctx.fillRect(PX, PY + PH - 1, PW, 1);
     ctx.fillRect(PX, PY, 1, PH); ctx.fillRect(PX + PW - 1, PY, 1, PH);
 
-    drawText(ctx, `PREVIOUSLY ON ${(world.name || 'RY FARMS').toUpperCase()}`, PX + 6, PY + 6, '#f0d060', 1);
+    drawText(ctx, rc.title || `PREVIOUSLY ON ${(world.name || 'RY FARMS').toUpperCase()}`, PX + 6, PY + 6, '#f0d060', 1);
     const sd = SEASONS[rc.season];
     const sub = `DAY ${rc.day} - ${sd ? sd.name : ''} OF YEAR ${rc.year}`;
     drawText(ctx, sub, PX + 6, PY + 15, '#9ad0e0');
