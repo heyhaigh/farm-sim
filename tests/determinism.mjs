@@ -178,6 +178,19 @@ let rtFail = 0; const rt = (c, m) => { if (!c) { rtFail++; console.log(`  ROUND-
     rt(w2.monuments.length <= 40, `monuments bounded (<=40)`);
     rt(!!w2.roles && ('manager' in w2.roles), `civic roles structure preserved`);
     rt((w2._inboxApplied || []).length <= 200, `inbox ledger bounded (<=200)`);
+
+    // #Codex33 P1 — OLD-SAVE fidelity for the health fields added this batch. A save written before roughStreak/
+    // nightsExposed existed must restore them to 0 (NOT undefined): undefined+1 → NaN would PERMANENTLY disable the
+    // homelessness-exposure + shelter-pressure comparisons for that farmer. Simulate an old save by DELETING both
+    // fields from a serialized farmer, restore, run one dawn, and assert the fields are finite (0), not NaN.
+    const legacy = structuredClone(w.serialize());
+    for (const fd of legacy.farmers) { delete fd.roughStreak; delete fd.nightsExposed; }
+    const w3 = World.fromSave(legacy);
+    const h0 = w3.farmers[0];
+    rt(h0 && h0.nightsExposed === 0 && h0.roughStreak === 0, `old save (no roughStreak/nightsExposed) restores to 0, not undefined`);
+    const day0 = w3.day; while (w3.day < day0 + 1) w3.tick(DT);   // advance one dawn — the health check runs nightsExposed+1
+    const allFinite = w3.farmers.every(f => Number.isFinite(f.nightsExposed) && Number.isFinite(f.roughStreak));
+    rt(allFinite, `after one dawn on an old save, nightsExposed/roughStreak stay FINITE (no undefined+1 → NaN)`);
 }
 if (rtFail) { console.error(`\n${rtFail} save round-trip failure(s) — reload does not preserve lived state.`); process.exit(1); }
 console.log('Save round-trip preserves health, cooldowns, civic roles, inbox ledger, and bounded collections.');

@@ -2827,7 +2827,7 @@ export class World {
         this.farmers = d.farmers.map(fd => {
             const f = new Farmer(fd.sheet, this.plots[fd.plotIdx], this);
             f.pos = { ...fd.pos }; f.facing = fd.facing; f.moveDir = fd.moveDir;
-            f.energy = fd.energy; f.hp = fd.hp; f.sleepDebt = fd.sleepDebt; f.strain = fd.strain; f.roughStreak = fd.roughStreak || 0; f.nightsExposed = fd.nightsExposed || 0;
+            f.energy = fd.energy; f.hp = fd.hp; f.sleepDebt = fd.sleepDebt; f.strain = fd.strain; f.roughStreak = fd.roughStreak || 0;   // nightsExposed restored below (line ~2841) with its own ?? 0 default
             // #Codex24-5: restore the rng-gating cooldowns (default 0 only for genuinely old saves)
             f.healSeekCd = fd.healSeekCd ?? 0; f.chatCooldown = fd.chatCooldown ?? 0; f.poachCooldown = fd.poachCooldown ?? 0;
             f.teachCooldown = fd.teachCooldown ?? 0; f.sabotageCooldown = fd.sabotageCooldown ?? 0; f.barterCooldown = fd.barterCooldown ?? 0;
@@ -2838,7 +2838,7 @@ export class World {
             f.thoughtBubbleTimer = fd.thoughtBubbleTimer ?? f.thoughtBubbleTimer; f.wanderTimer = fd.wanderTimer ?? f.wanderTimer;
             f.assembleT = fd.assembleT ?? f.assembleT;   // #Codex26-5
             f.health = fd.health; f.sickDays = fd.sickDays; f.caution = fd.caution; f.illnesses = fd.illnesses;
-            f.nightsExposed = fd.nightsExposed; f.reputation = fd.reputation; f.mood = fd.mood;
+            f.nightsExposed = fd.nightsExposed ?? 0; f.reputation = fd.reputation; f.mood = fd.mood;   // #Codex33 P1: legacy saves lack it — default to 0, not undefined (undefined+1 → NaN permanently disables exposure)
             f.helpPostedDay = fd.helpPostedDay; f.wood = fd.wood; f.ore = fd.ore; f.discovered = fd.discovered;
             f.wantExpand = fd.wantExpand; f.wantFacility = fd.wantFacility; f.wantUpgrade = fd.wantUpgrade;
             f.birdLosses = fd.birdLosses; f.stormLosses = fd.stormLosses; f.donateCooldown = fd.donateCooldown;
@@ -5429,6 +5429,10 @@ export class World {
 
     #dailyHealthCheck() {
         for (const f of this.farmers) {
+            // #Codex33 P1: CAPTURE + CLEAR the nightly watch-exemption flag FIRST, before any early `continue` — a
+            // farmer downed overnight or made sick at dawn skips the rest of this body, so clearing it only down in
+            // the healthy path would leave a stale `true` that wrongly exempts their FIRST later illness roll.
+            const stoodWatch = f.stoodWatch; f.stoodWatch = false;
             if (f.downed) {   // felled by a foe — back on their feet at home after 3 days (NOT sickness)
                 if (this.day >= f.reviveDay) {
                     f.downed = false; f.health = 'healthy'; f.energy = 0.6; f.hp = Math.max(1, Math.round(f.maxHp * 0.25)); f.state = 'decide';   // back on their feet but FRAIL — rest + meat to mend
@@ -5472,7 +5476,7 @@ export class World {
             const inclement = this.weather === 'blizzard' ? 4 : this.weather === 'storm' ? 3 : (this.weather === 'rain' || this.weather === 'drought') ? 1 : 0;
             // at risk ONLY when it stacks: 2+ rough nights in a row, real roofless exposure, or a rough night in foul
             // weather. An isolated calm rough night never even rolls — you just look worn and carry on to morning.
-            const atRisk = !f.stoodWatch && (f.roughStreak >= 2 || exposure > 0 || (roughNight && inclement >= 3));
+            const atRisk = !stoodWatch && (f.roughStreak >= 2 || exposure > 0 || (roughNight && inclement >= 3));
             if (atRisk) {
                 // DC climbs with the ROUGH-NIGHT STREAK (not one night's debt), roofless exposure, and the weather —
                 // so the first qualifying night is a modest chance for an average CON and it bites harder the longer
@@ -5489,7 +5493,7 @@ export class World {
                 } else if (exposed) this.addLog(`${f.sheet.name} shivered through another roofless night (CON ${save.total} vs ${dc})`, '#e0a03c');
                 else this.addLog(`${f.sheet.name} looks worn from a hard run of nights but powers through (CON ${save.total} vs ${dc})`, '#e0a03c');
             }
-            f.stoodWatch = false;   // clear the nightly watch-exemption flag (set while on the beat at night)
+            // (stoodWatch already cleared at the top of the loop — see #Codex33 P1)
             f.strain = Math.max(0, f.strain - 4);   // a night's rest works off most of the strain
             // a personal run of storm losses fades if the sky stops singling them out (the town's
             // collective tally persists until the guardian actually goes up)
