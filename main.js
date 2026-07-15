@@ -5104,12 +5104,21 @@ async function consumeInbox(w, events) {
     w.applyInbox(events);                          // idempotent: re-delivered events are skipped by applied-id
     const saved = await saveTown(w);               // persist applied effects + applied-ids BEFORE clearing
     if (saved == null) return;                     // save failed -> do NOT clear; the inbox replays next time
+    // #Codex30 P1 — applyInbox may have changed this town's DOCTRINE/ENVOY (a raid it LEARNED from: #134 defence
+    // -> palisade, or truce -> envoy.suePeace). Capture a fresh summary NOW (synchronous with the just-saved
+    // state) so we can republish it in the SAME transaction that clears the inbox — else the index keeps the
+    // stale pre-raid posture until the next daily register, and another tab could resolve an encounter against it.
+    const summary = townSummary(w); summary.rev = w._rev;
     // clear everything we processed — EXCEPT a traveler still en route (arrivalDay in the future): it must
     // linger in the inbox until the sim reaches its day, when Slice C consumes it. (applyInbox leaves it too.)
     const done = new Set(events.filter(e => !(e.kind === 'traveler' && (e.day || 0) > w.day)).map(inboxEventId));
     await updateWorldIndex(index => {              // remove ONLY the ids we processed, keeping concurrent appends
         const box = index.inbox && index.inbox[String(w.seed)];
         if (box) index.inbox[String(w.seed)] = box.filter(e => !done.has(inboxEventId(e)));
+        // rev-guarded summary refresh (same guard as registerWorld — never regress a newer tab's summary)
+        index.towns = index.towns || {};
+        const prev = index.towns[summary.seed] || {};
+        if (!(prev.rev != null && (summary.rev || 0) < prev.rev)) index.towns[summary.seed] = { ...prev, ...summary, firstSeen: prev.firstSeen || summary.lastSeen || Date.now() };
         return index;
     });
 }

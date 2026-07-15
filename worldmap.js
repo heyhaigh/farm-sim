@@ -147,6 +147,16 @@ export function detectEncounters(index) {
             humanEnvoy: human.envoy || { seed: human.seed }, orcEnvoy: orc.envoy || { seed: orc.seed },
         });
         const shortH = String(human.name).split(' ')[0], shortO = String(orc.name).split(' ')[0];
+        // #Codex30 P1 — a PALISADE raider (commit 0) never actually marches. The seeded model may resolve 'raid',
+        // but a town that learned to hold the wall (#134) doesn't attack — so a zero-commit "raid" is a bloodless
+        // STANDOFF, not a phantom raid. Leave the ledger/tier EXACTLY as they were (no grievance), queue NO inbox
+        // (the victim used to get a raid that stole 0 stores yet still counted a raid + chronicle + monuments, and
+        // two of them could teach a false lesson), and skip news propagation. The pair is already marked met above.
+        if (res.outcome === 'raid' && doctrineDef(orc.doctrine).commit <= 0) {
+            fresh.push({ a: orc.seed, b: human.seed, day, at: Date.now(), aName: orc.name, bName: human.name, kind: 'standoff',
+                         aCarried: `${shortO} held their ground and did not march`, bCarried: `${shortH} was left in peace` });
+            continue;
+        }
         const nextLed = applyOutcome(led, res.outcome, { ordinal, day });   // idempotent record
         nextLed.tier = dispositionTier(foldDisposition(nextLed), tier);     // hysteretic tier for next time
         nextLed.firstTrustDone = led.firstTrustDone;
@@ -210,6 +220,7 @@ export function encounterLine(ev) {
     if (ev.kind === 'raid') return `The ${a} orc warband raided ${b} and took its harvest. ${b} won't forget.`;
     if (ev.kind === 'reconciled') return `${b} and the ${a} orc warband met at the frontier and made peace instead of war.`;
     if (ev.kind === 'betrayed') return `${b} and the ${a} orc warband tried to make peace, but the truce was broken in an ambush.`;
+    if (ev.kind === 'standoff') return `${b} braced for the ${a} orc warband — but they held the wall and never marched. No blood this time.`;   // #Codex30 a palisade raider stands down
     // same-culture meeting
     let s = `${a} and ${b} have grown close enough to reach one another.`;
     if (ev.aCarried) s += ` ${a} carries word that "${ev.aCarried}".`;

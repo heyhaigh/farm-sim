@@ -2580,6 +2580,14 @@ export class World {
             inboxWatermark: { ...(this._inboxWatermark || {}) },    // Codex #22.2 durable per-pairKey ordinal watermark
             pendingRaid: this.pendingRaid ? { ...this.pendingRaid, e: { ...this.pendingRaid.e } } : null,   // #131 a telegraphed raid survives a reload (seeded, plain)
             raidsSuffered: this.raidsSuffered || 0, learned: this.learned || null,   // #134 the learning arc rides the save
+            // #Codex30 P1 — the DAY-1 congregation director's coverage state survives a reload (Sets flattened to
+            // arrays), so a town reloaded mid-congregation doesn't restart the exchange and re-strand its later
+            // founders (only foundingPhase used to persist; spokenSet/turns/last did not).
+            congState: this._congState ? {
+                order: this._congState.order, rr: this._congState.rr || 0, nextAt: this._congState.nextAt || 0,
+                turns: this._congState.turns || 0, last: this._congState.last ?? null,
+                used: [...(this._congState.used || [])], spokenSet: [...(this._congState.spokenSet || [])], scriptUsed: [...(this._congState.scriptUsed || [])],
+            } : null,
             // continue the RNG from a save-derived seed WITHOUT consuming the live stream
             // (saving must never be observable to the sim)
             randSeed: (this.seed ^ Math.imul(this.day, 2654435761) ^ ((this.time * 997) | 0)) >>> 0,
@@ -2714,6 +2722,12 @@ export class World {
         this._inboxWatermark = (d.inboxWatermark && typeof d.inboxWatermark === 'object') ? { ...d.inboxWatermark } : {};
         this.pendingRaid = (d.pendingRaid && d.pendingRaid.e) ? { ...d.pendingRaid, e: { ...d.pendingRaid.e } } : null;   // #131 restore a telegraphed raid mid-flight
         this.raidsSuffered = d.raidsSuffered || 0; this.learned = d.learned || null;   // #134 the learning arc
+        // #Codex30 P1 restore the congregation director's coverage state (rebuild the Sets), so a reload mid-scene
+        // continues covering the AS-YET-UNSPOKEN founders instead of replaying the ones who already spoke.
+        this._congState = (d.congState && Array.isArray(d.congState.order)) ? {
+            order: d.congState.order, rr: d.congState.rr || 0, nextAt: d.congState.nextAt || 0, turns: d.congState.turns || 0, last: d.congState.last ?? null,
+            used: new Set(d.congState.used || []), spokenSet: new Set(d.congState.spokenSet || []), scriptUsed: new Set(d.congState.scriptUsed || []),
+        } : null;
         this.lineageRoot = d.lineageRoot != null ? String(d.lineageRoot) : String(this.seed);   // #reconciliation lineage root
         this.name = d.name || generateTownName(this.seed, this.culture);   // (pre-name saves regenerate deterministically)
         this.rand = mulberry32(d.randSeed >>> 0);
