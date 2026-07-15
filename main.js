@@ -245,6 +245,10 @@ let worldMapNodes = [];                            // computed layout for the cu
 let worldMapSel = null;                            // seed of the town whose info card is open
 let worldMapHits = [];                             // { seed, x, y, r } node hit-discs, rebuilt each draw
 let worldMapVisit = null;                          // VISIT button rect (switch active town)
+let worldMapTravHits = [];                         // traveler/courier hover discs { x, y, r, ...meta }, rebuilt each draw
+let worldMapKeyOpen = false;                        // legend overlay toggle (the map's visual language, explained)
+let worldMapFoundOpen = false;                      // "found a town" culture picker toggle (human / orc)
+let worldMapUiHits = null;                          // { key, found, human, orc } world-map button rects
 const WORLD_BTN = { x: 0, y: 3, w: 0, h: 12 };     // top-bar toggle, positioned in drawUI
 let settingsHits = null;                           // { music, sfx, musicSlider, sfxSlider, newBtn, close } rects (game px)
 let settingsDrag = null;                           // 'music' | 'sfx' while dragging a volume slider
@@ -3120,11 +3124,28 @@ function drawWorldMap() {
     const hdr = `${nodes.length} town${nodes.length !== 1 ? 's' : ''} - ${enc.length} encounter${enc.length !== 1 ? 's' : ''}${travCount ? ` - ${travCount} traveling` : ''}`;
     drawText(ctx, hdr, PX + 7, PY + 14, '#9aa0b4');
 
+    // header buttons (top-right, left of the X): KEY (legend overlay) + FOUND (birth a town). Small chips.
+    worldMapUiHits = {};
+    {
+        const chip = (label, rx, active, accent) => {
+            const w = textWidth(label) + 8;
+            const b = { x: rx - w, y: PY + 3, w, h: 9 };
+            ctx.fillStyle = active ? hexA(accent, 0.20) : 'rgba(255,255,255,0.05)';
+            ctx.fillRect(b.x, b.y, w, 9);
+            if (active) { ctx.fillStyle = accent; ctx.fillRect(b.x, b.y + 8, w, 1); }
+            drawText(ctx, label, b.x + 4, b.y + 2, active ? accent : '#9aa0b4');
+            return b;
+        };
+        const foundB = chip('+ FOUND', PX + PW - 16, worldMapFoundOpen, '#7dd069');
+        const keyB = chip('KEY', foundB.x - 4, worldMapKeyOpen, '#c8b0e0');
+        worldMapUiHits.found = foundB; worldMapUiHits.key = keyB;
+    }
+
     // RESERVE the footer's height (+padding) out of the map region, so the town nodes are always laid out
     // ABOVE the bottom info bar and none is drawn behind it (e.g. Dunton getting clipped).
     const CARD_H = 44, CARD_RESERVE = CARD_H + 12;
     const mapX = PX + 10, mapY = PY + 24, mapW = PW - 20, mapH = PH - 24 - CARD_RESERVE;
-    worldMapHits = []; worldMapVisit = null;
+    worldMapHits = []; worldMapVisit = null; worldMapTravHits = [];
     if (!nodes.length) { drawText(ctx, 'The world holds no towns yet - grow one.', mapX + 6, mapY + 20, '#9aa0b4'); return; }
 
     // fit the town bounding box into the map region (few towns still fill the view)
@@ -3179,6 +3200,8 @@ function drawWorldMap() {
             const pulse = 1.5 + Math.sin(performance.now() / 300) * 0.5;
             ctx.fillStyle = col; ctx.beginPath(); ctx.arc(mx, my, pulse, 0, Math.PI * 2); ctx.fill();
             ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.lineWidth = 0.5; ctx.stroke();
+            worldMapTravHits.push({ x: mx, y: my, r: 4, kind: 'scout', fromCulture: p.fromCulture,
+                origin: O.name, destination: D.name, arrivalDay: p.arrivalDay });
         }
     }
     // Slice D — NEWS couriers: amber markers carrying word of a distant clash to a third town (memory across the
@@ -3199,6 +3222,7 @@ function drawWorldMap() {
             ctx.beginPath(); ctx.moveTo(mx - 1.6, my - 1.6); ctx.lineTo(mx + 1.6, my + 1.6); ctx.moveTo(mx + 1.6, my - 1.6); ctx.lineTo(mx - 1.6, my + 1.6); ctx.stroke();
         } else {
             ctx.fillStyle = '#e0c060'; ctx.beginPath(); ctx.arc(mx, my, 1.4, 0, Math.PI * 2); ctx.fill();
+            worldMapTravHits.push({ x: mx, y: my, r: 4, kind: 'news', origin: O.name, destination: D.name, arrivalDay: nw.arrivalDay });
         }
     }
     // town dots + labels
@@ -3236,8 +3260,106 @@ function drawWorldMap() {
         // colour-keyed legend so the lines explain themselves (each word in its own line colour)
         let lx = PX + 8; const ly = PY + PH - 11;
         const seg = (t, c) => { drawText(ctx, t, lx, ly, c); lx += textWidth(t + ' '); };
-        seg('LINEAGE', '#c8a0e0'); seg('RAID', '#e6503c'); seg('PEACE', '#7dd069'); seg('MEETING', '#e6c878'); seg('- click a town', '#7a8090');
+        seg('LINEAGE', '#c8a0e0'); seg('RAID', '#e6503c'); seg('PEACE', '#7dd069'); seg('MEETING', '#e6c878'); seg('- KEY explains the map', '#7a8090');
     }
+
+    // ── HOVER: light up the hovered town's REACH + RUMOR rings and show a data tooltip (town or traveler), so
+    // 'reach' and 'rumor' are legible values, not shapes to guess at. Suppressed while an overlay is up.
+    const overlayUp = worldMapKeyOpen || worldMapFoundOpen;
+    let hovT = null, hovTrav = null;
+    if (!overlayUp && mouse.x >= 0 && !mouse.dragging) {
+        for (const h of worldMapHits) { const dx = mouse.x - h.x, dy = mouse.y - h.y; if (dx * dx + dy * dy <= (h.r + 2) * (h.r + 2)) { hovT = bySeed.get(String(h.seed)); break; } }
+        if (!hovT) for (const h of worldMapTravHits) { const dx = mouse.x - h.x, dy = mouse.y - h.y; if (dx * dx + dy * dy <= h.r * h.r) { hovTrav = h; break; } }
+    }
+    if (hovT) {
+        const RUMOR = 1.9;   // == reconciliation.js TRAVELER.rumorMult — a scout sets out when reaches drift within reach-sum*this
+        const hx = toX(hovT), hy = toY(hovT);
+        ctx.strokeStyle = `hsla(${hovT.tint.h} ${hovT.tint.s}% 62% / 0.55)`; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.arc(hx, hy, Math.max(4, hovT.reach * S), 0, Math.PI * 2); ctx.stroke();     // REACH (influence)
+        ctx.strokeStyle = `hsla(${hovT.tint.h} ${hovT.tint.s}% 62% / 0.26)`; ctx.setLineDash([2, 3]);
+        ctx.beginPath(); ctx.arc(hx, hy, Math.max(6, hovT.reach * S * RUMOR), 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);   // RUMOR
+    }
+    // a boxed multi-line tooltip near the cursor, clamped inside the panel
+    const worldTip = (lines, accent) => {
+        const w = Math.max(...lines.map(l => textWidth(l))) + 8, h = lines.length * 8 + 4;
+        let tx = Math.round(mouse.x + 9), ty = Math.round(mouse.y + 9);
+        tx = Math.max(PX + 3, Math.min(tx, PX + PW - w - 3)); ty = Math.max(PY + 3, Math.min(ty, PY + PH - h - 3));
+        ctx.fillStyle = 'rgba(10,12,20,0.96)'; ctx.fillRect(tx, ty, w, h);
+        ctx.strokeStyle = accent; ctx.lineWidth = 1; ctx.strokeRect(tx + 0.5, ty + 0.5, w - 1, h - 1);
+        let yy = ty + 3; for (let i = 0; i < lines.length; i++) { drawText(ctx, lines[i], tx + 4, yy, i === 0 ? accent : '#c8ccd8'); yy += 8; }
+    };
+    if (hovT) {
+        const orc = hovT.culture === 'orc';
+        worldTip([hovT.name.toUpperCase() + (orc ? ' - WARBAND' : ''),
+            orc ? `${hovT.pop} raiders - day ${hovT.day}` : `${hovT.pop} settlers - day ${hovT.day}`,
+            `reach ${Math.round(hovT.reach)} - towns MEET when reaches overlap`,
+            `rumor ~${Math.round(hovT.reach * 1.9)} - scouts venture out this far`], hovT.tint.css);
+    } else if (hovTrav) {
+        const o = String(hovTrav.origin).split(' ')[0], d = String(hovTrav.destination).split(' ')[0];
+        if (hovTrav.kind === 'news') worldTip(['NEWS COURIER', `${o} -> ${d}`, 'word of a distant clash', `arrives ~day ${hovTrav.arrivalDay}`], '#e0c060');
+        else worldTip(['SCOUT (en route)', `${o} -> ${d}`, `${hovTrav.fromCulture === 'orc' ? 'an orc' : 'a human'} town's traveler`, 'delivers word so they meet forewarned', `arrives ~day ${hovTrav.arrivalDay}`], hovTrav.fromCulture === 'orc' ? '#e0806a' : '#8fd070');
+    }
+
+    if (worldMapKeyOpen) drawWorldKey(PX, PY, PW, PH);
+    if (worldMapFoundOpen) drawWorldFound(PX, PY, PW, PH);
+}
+
+// The MAP KEY — every glyph on the world map, explained. Reach vs rumor, scouts vs couriers, the line colours.
+function drawWorldKey(PX, PY, PW, PH) {
+    const w = Math.min(PW - 24, 260), h = 150, x = PX + Math.floor((PW - w) / 2), y = PY + Math.floor((PH - h) / 2);
+    ctx.fillStyle = 'rgba(10,12,20,0.97)'; ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = '#c8b0e0'; ctx.lineWidth = 1; ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+    drawText(ctx, 'MAP KEY', x + 6, y + 5, '#c8b0e0', 1);
+    drawText(ctx, 'X', x + w - 10, y + 5, '#c8ccd8');
+    let ry = y + 18; const IX = x + 8, TX = x + 26;
+    const row = (draw, label, desc) => {
+        draw(IX + 6, ry + 3);
+        drawText(ctx, label, TX, ry, '#e8ecf5'); drawText(ctx, desc, TX + textWidth(label + ' '), ry, '#8a8f9c');
+        ry += 11;
+    };
+    row((cx, cy) => { ctx.fillStyle = '#8fd070'; ctx.beginPath(); ctx.arc(cx, cy, 3, 0, 6.283); ctx.fill(); }, 'TOWN', '- size=pop, colour=culture');
+    row((cx, cy) => { ctx.strokeStyle = 'rgba(200,200,210,0.7)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(cx, cy, 4, 0, 6.283); ctx.stroke(); }, 'REACH', '- influence, towns MEET on overlap');
+    row((cx, cy) => { ctx.strokeStyle = 'rgba(200,200,210,0.5)'; ctx.setLineDash([2, 2]); ctx.beginPath(); ctx.arc(cx, cy, 4, 0, 6.283); ctx.stroke(); ctx.setLineDash([]); }, 'RUMOR', '- wider, a scout sets out here');
+    row((cx, cy) => { ctx.fillStyle = '#8fd070'; ctx.beginPath(); ctx.arc(cx, cy, 2, 0, 6.283); ctx.fill(); }, 'SCOUT', '- traveler (green human/red orc)');
+    row((cx, cy) => { ctx.fillStyle = '#e0c060'; ctx.beginPath(); ctx.arc(cx, cy, 2, 0, 6.283); ctx.fill(); }, 'NEWS', '- courier of a distant clash');
+    row((cx, cy) => { ctx.strokeStyle = '#9a9a9a'; ctx.lineWidth = 0.8; ctx.beginPath(); ctx.moveTo(cx - 2, cy - 2); ctx.lineTo(cx + 2, cy + 2); ctx.moveTo(cx + 2, cy - 2); ctx.lineTo(cx - 2, cy + 2); ctx.stroke(); }, 'LOST', '- a traveler that never arrived');
+    ry += 2; ctx.fillStyle = '#20242f'; ctx.fillRect(x + 6, ry, w - 12, 1); ry += 5;
+    let lx = IX; const seg = (t, c) => { drawText(ctx, t, lx, ry, c); lx += textWidth(t + ' '); };
+    drawText(ctx, 'LINES:', lx, ry, '#8a8f9c'); lx += textWidth('LINES: ');
+    seg('LINEAGE', '#c8a0e0'); seg('RAID', '#e6503c'); seg('PEACE', '#7dd069'); seg('MEETING', '#e6c878');
+    worldMapUiHits = worldMapUiHits || {};
+    worldMapUiHits.keyClose = { x, y, w, h };
+}
+
+// FOUND A TOWN — birth a new colony of a chosen kind. Human FARMERS (grass) or an Orc WARBAND (desert). The
+// current town is autosaved; this navigates to a fresh seed with the culture set, so the world gains a real,
+// visitable town of that type (and orc towns finally exist to meet + raid).
+function drawWorldFound(PX, PY, PW, PH) {
+    const w = Math.min(PW - 24, 232), h = 96, x = PX + Math.floor((PW - w) / 2), y = PY + Math.floor((PH - h) / 2);
+    ctx.fillStyle = 'rgba(10,12,20,0.97)'; ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = '#7dd069'; ctx.lineWidth = 1; ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+    drawText(ctx, 'FOUND A NEW TOWN', x + 6, y + 5, '#7dd069', 1);
+    drawText(ctx, 'X', x + w - 10, y + 5, '#c8ccd8');
+    const bw = w - 16, hb = { x: x + 8, y: y + 18, w: bw, h: 16 }, ob = { x: x + 8, y: y + 38, w: bw, h: 16 };
+    ctx.fillStyle = 'rgba(125,208,105,0.16)'; ctx.fillRect(hb.x, hb.y, hb.w, hb.h);
+    ctx.strokeStyle = '#7dd069'; ctx.strokeRect(hb.x + 0.5, hb.y + 0.5, hb.w - 1, hb.h - 1);
+    drawText(ctx, 'HUMAN FARMERS - a green settlement', hb.x + 6, hb.y + 5, '#b6e8a0');
+    ctx.fillStyle = 'rgba(224,128,106,0.16)'; ctx.fillRect(ob.x, ob.y, ob.w, ob.h);
+    ctx.strokeStyle = '#e0806a'; ctx.strokeRect(ob.x + 0.5, ob.y + 0.5, ob.w - 1, ob.h - 1);
+    drawText(ctx, 'ORC WARBAND - a desert wasteland', ob.x + 6, ob.y + 5, '#f0b0a0');
+    drawText(ctx, 'This town is saved. A new one grows fresh.', x + 8, y + 60, '#6a6f7c');
+    drawText(ctx, 'You travel there to found it.', x + 8, y + 72, '#5a5f6c');
+    worldMapUiHits = worldMapUiHits || {};
+    worldMapUiHits.foundHuman = hb; worldMapUiHits.foundOrc = ob; worldMapUiHits.foundClose = { x, y, w, h };
+}
+
+// Birth a new town of a chosen culture: navigate to a FRESH random seed with the culture set. The current town
+// is autosaved (on the tab-hide/unload the navigation triggers) and stays in the world index — not lost — so the
+// world gains a real, visitable town of that kind. (Math.random is fine here: this is the UI picking a seed, not
+// the sim — the deterministic core never sees it.) An orc seed boots the desert biome + warband cast.
+function foundNewTown(culture) {
+    const seed = Math.floor(Math.random() * 0x7fffffff);
+    location.href = location.pathname + '?seed=' + seed + (culture === 'orc' ? '&culture=orc' : '');
 }
 
 // ---------------------------------------------------------------------------
@@ -5270,6 +5392,22 @@ out.addEventListener('pointerup', (e) => {
     // world-map overlay (modal): X / click-outside closes; a town node selects it; VISIT switches active town
     if (worldMapOpen) {
         const PW = Math.min(GW - 12, 380), PH = GH - 40, PX = Math.floor((GW - PW) / 2), PY = 22;
+        const U = worldMapUiHits || {};
+        // FOUND overlay (drawn on top) — handle its buttons first, then X / click-outside closes it
+        if (worldMapFoundOpen) {
+            if (U.foundHuman && inRect(p, U.foundHuman)) { foundNewTown('human'); return; }
+            if (U.foundOrc && inRect(p, U.foundOrc)) { foundNewTown('orc'); return; }
+            if (U.foundClose && ((p.x > U.foundClose.x + U.foundClose.w - 12 && p.y < U.foundClose.y + 12) || !inRect(p, U.foundClose))) { worldMapFoundOpen = false; }
+            return;
+        }
+        // KEY overlay — X / click-outside closes it
+        if (worldMapKeyOpen) {
+            if (U.keyClose && ((p.x > U.keyClose.x + U.keyClose.w - 12 && p.y < U.keyClose.y + 12) || !inRect(p, U.keyClose))) { worldMapKeyOpen = false; }
+            return;
+        }
+        // header chips
+        if (U.key && inRect(p, U.key)) { worldMapKeyOpen = true; worldMapFoundOpen = false; return; }
+        if (U.found && inRect(p, U.found)) { worldMapFoundOpen = true; worldMapKeyOpen = false; return; }
         if ((p.x > PX + PW - 14 && p.y < PY + 12) || p.x < PX || p.x > PX + PW || p.y < PY || p.y > PY + PH) { worldMapOpen = false; return; }
         if (worldMapVisit && inRect(p, worldMapVisit)) { location.search = '?seed=' + worldMapVisit.seed; return; }
         for (const h of worldMapHits) { const dx = p.x - h.x, dy = p.y - h.y; if (dx * dx + dy * dy <= (h.r + 2) * (h.r + 2)) { worldMapSel = h.seed; return; } }
