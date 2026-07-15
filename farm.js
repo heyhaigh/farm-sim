@@ -644,7 +644,8 @@ function shortName(farmer) {
 // #113 word-wrap a saying into lines of <= max chars, so the bubble can animate the FULL sentiment
 // line-by-line instead of truncating it. A single over-long word is hard-split so it never overflows.
 const SAY_LINE_CHARS = 18;   // MAX bubble line width (3px font). Narrower than before → a tighter, faster-read box.
-const SAY_LINE_SEC = 0.85;   // each line holds this long before advancing (typewriter reveals within it)
+const SAY_LINE_SEC = 0.85;   // per-line read pace (used for speechReadTime / turn-taking delays)
+const SAY_CHAR_SEC = 0.03;   // #bubble typewriter rate (~33 cps): the whole saying types across ALL its lines at once
 function wrapGreedy(words, max) {
     const lines = []; let cur = '';
     for (let word of words) {
@@ -7994,8 +7995,12 @@ export class Farmer {
     say(text, color = '#fff') {
         this._pendingSay = null;   // a direct line supersedes any queued (deferred) reply
         const lines = wrapWords(this.#orcLine(text));
-        const t0 = lines.length * SAY_LINE_SEC + 0.4;
-        this.bubble = { lines, text: lines[0], color, t: t0, t0, lineSec: SAY_LINE_SEC };
+        // #bubble the WHOLE statement shows at once and types across ALL its lines (no line-at-a-time paging, no
+        // 4-line cut-off). t0 = type-out time + a read hold that scales with length, so even a long saying stays
+        // up long enough to read every line. The congregation director reads t0 for its turn cadence.
+        const chars = lines.reduce((n, l) => n + l.length, 0);
+        const t0 = chars * SAY_CHAR_SEC + Math.max(1.1, lines.length * 0.5);
+        this.bubble = { lines, text: lines[0], color, t: t0, t0, charSec: SAY_CHAR_SEC };
     }
 
     // #dialogue-pacing — speak after a delay, so a reply doesn't stack on top of the line it answers and a
