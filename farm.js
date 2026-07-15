@@ -785,6 +785,7 @@ export class World {
         this.raidsSuffered = 0;    // #134 how many raids this town has weathered — drives the LEARNING ARC
         this.learned = null;       // #134 its learned response once battered enough: 'defense' (hold the wall) | 'truce' (sue for peace)
         this.dmCooldown = 90;      // a grace period before the first threat stalks the young town
+        this.foeCooldown = 240;    // #foe-cadence the FIRST lethal foe (orc/assassin) holds off ~1+ day past the grace
         this._live = false;        // #108 true only while this town is the one being WATCHED (set by main.js on
                                    // boot). A cross-town raid landing on a live town STAGES a visible warband +
                                    // alarm; on a dormant town it stays the instant text-callout. Never serialized
@@ -2603,7 +2604,7 @@ export class World {
             season: this.season, seasonDay: this.seasonDay, year: this.year,
             harvestTotal: this.harvestTotal, dayHarvestStart: this._dayHarvestStart,
             weather: this.weather, weatherTimer: this.weatherTimer, lightningTimer: this.lightningTimer,   // #Codex25-5 gates the storm strike + world.rand
-            dmCooldown: this.dmCooldown, preyCooldown: this.preyCooldown,
+            dmCooldown: this.dmCooldown, preyCooldown: this.preyCooldown, foeCooldown: this.foeCooldown,
             townCollab: this.townCollab, townCompete: this.townCompete, townVolatile: this.townVolatile,
             stormLosses: this.stormLosses,
             workMult: this.workMult, growthMult: this.growthMult,
@@ -2743,7 +2744,7 @@ export class World {
         this.season = d.season; this.seasonDay = d.seasonDay; this.year = d.year;
         this.harvestTotal = d.harvestTotal; this._dayHarvestStart = d.dayHarvestStart;
         this.weather = d.weather; this.weatherTimer = d.weatherTimer; this.lightningTimer = d.lightningTimer ?? 0;   // #Codex25-5
-        this.dmCooldown = d.dmCooldown; this.preyCooldown = d.preyCooldown;
+        this.dmCooldown = d.dmCooldown; this.preyCooldown = d.preyCooldown; this.foeCooldown = d.foeCooldown || 0;
         this.townCollab = d.townCollab; this.townCompete = d.townCompete; this.townVolatile = d.townVolatile;
         this.stormLosses = d.stormLosses;
         this.workMult = d.workMult; this.growthMult = d.growthMult;
@@ -2905,26 +2906,37 @@ export class World {
     // display only, drawing no rng and holding no digest state, so it can't touch determinism. Skips any founder
     // no longer present (died/left) to the next on the roster.
     currentWatcher() {
-        const r = this.roles;
-        if (r.watch != null) return null;                 // an elected Watch stands — the rotation is retired
-        const rot = r.watchRotation;
+        if (this.roles.watch != null) return null;        // an elected Watch stands — the rotation is retired (display)
+        return this.#rotationWatcher();
+    }
+    // #watch a sentry has to be FIT to stand: not dead, not felled, and NOT sick (a sick watcher rests at home,
+    // so they can't hold the line — the beat must hand off, not go dark). One predicate, used everywhere.
+    static #watchFit(f) { return f && f.health !== 'dead' && f.health !== 'sick' && !f.downed; }
+    // #watch the founders' shared rotation-holder for TODAY, skipping anyone unfit (dead/sick/felled) to the next
+    // on the roster. Election-agnostic — it's the STAND-IN pool the sentry falls back to when the seated Watch is
+    // absent. Pure day-math + seed order, no rng, holds no digest state.
+    #rotationWatcher() {
+        const rot = this.roles.watchRotation;
         if (!Array.isArray(rot) || !rot.length) return null;
         const n = rot.length, start = ((this.day - 1) % n + n) % n;
         for (let k = 0; k < n; k++) {
             const f = this.farmers.find(x => x.sheet.seed === rot[(start + k) % n]);
-            if (f && f.health !== 'dead' && !f.downed) return f;
+            if (World.#watchFit(f)) return f;
         }
         return null;
     }
-    // #watch — WHO stands the watch right now: the elected Watch once the town seats one, else the founders'
-    // rotation-holder for today. The single sentry the night beat belongs to.
+    // #watch — WHO stands the watch right now: a whisper-post, else the elected Watch, else the founders'
+    // rotation-holder — but each only if FIT. A sick/felled seated Watch HANDS OFF to the rotation (the town is
+    // never left unwatched because its one sentry took ill), rather than a dark beat.
     currentSentry() {
         // #132 a whisper-posted watcher (via the confer-with-Manager loop, or straight up pre-election) stands
         // TODAY, relieving the rotation/Watch — max one on the beat (the post REPLACES, never stacks). Day-stamped
         // so it lapses at the next dawn (the standing arrangement resumes). Seeded state — rides the save.
         const wp = this.roles.watchPost;
-        if (wp && wp.day === this.day) { const f = this.farmers.find(x => x.sheet.seed === wp.seed); if (f && f.health !== 'dead' && !f.downed) return f; }
-        return this.watchFarmer() || this.currentWatcher();
+        if (wp && wp.day === this.day) { const f = this.farmers.find(x => x.sheet.seed === wp.seed); if (World.#watchFit(f)) return f; }
+        const wf = this.watchFarmer();
+        if (World.#watchFit(wf)) return wf;                // the seated Watch, if fit to stand tonight
+        return this.#rotationWatcher();                     // else a founder covers the beat (sick-Watch hand-off)
     }
     // #132 post a farmer to today's watch (a heeded "take watch" whisper — relieves whoever holds it; max one).
     postWatch(f, via = 'whisper') { this.roles.watchPost = { seed: f.sheet.seed, day: this.day, via }; }
@@ -5645,6 +5657,7 @@ export class World {
         for (const e of this.encounters) this.#advanceEncounter(e, dt);
         if (this.encounters.some(e => e.done)) this.encounters = this.encounters.filter(e => !e.done);
         this.dmCooldown -= dt;
+        this.foeCooldown = Math.max(0, (this.foeCooldown || 0) - dt);   // #foe-cadence lethal-foe gate (own long timer)
         if (this.dmCooldown > 0 || this.encounters.length >= MAX_ENCOUNTERS) return;
         const prey = this.farmers.filter(f => this.#inWild(f) && !this.encounterFor(f));
         if (!prey.length) { this.dmCooldown = 10; return; }
@@ -5655,7 +5668,15 @@ export class World {
     #spawnEncounter(f) {
         const standout = f.sheet.level >= 6 || this.leader === f;   // the assassin stalks the best hand
         const r = this.rand();
-        const kind = (standout && r < 0.16) ? 'assassin' : r < 0.42 ? 'fox' : r < 0.78 ? 'boar' : 'orc';
+        // #foe-cadence a LETHAL foe (orc/assassin) can only spawn when its long cooldown has elapsed — otherwise
+        // this is a beast (fox/boar), the ordinary wilderness "weather". So raids are rare + well-spaced, and most
+        // wilds encounters are non-lethal. When a foe DOES land, re-arm the gate so the next one is days away.
+        const foeReady = (this.foeCooldown || 0) <= 0;
+        let kind;
+        if (foeReady && standout && r < 0.20) kind = 'assassin';       // the RARE stalker — only ever after the standout
+        else if (foeReady && r < 0.65) kind = 'orc';                   // the usual raider when a foe is due
+        else kind = r < 0.55 ? 'fox' : 'boar';                         // the common case: a beast (the wilds "weather")
+        if (kind === 'orc' || kind === 'assassin') this.foeCooldown = FOE_COOLDOWN + this.rand() * FOE_JITTER;
         const def = ENCOUNTER_DEFS[kind];
         const ang = Math.atan2(f.pos.j - CENTER, f.pos.i - CENTER) + (this.rand() - 0.5) * 1.2;   // out of the wild
         const d = 4 + this.rand() * 3;
@@ -6092,16 +6113,26 @@ export class World {
             this.addChronicle('peril', `${f.sheet.name.split(' ')[0]} was struck down by a ${e.def.name.toLowerCase()}, but ${rescuers.map(h => h.sheet.name.split(' ')[0]).join(' & ')} pulled them back.`, f, rescuers[0], '#e07040',
                 { tier: 'grand', tone: 'triumph', label: 'PULLED BACK FROM THE BRINK', why: `${rescuers.map(h => h.sheet.name.split(' ')[0]).join(' & ')} reached them in time`, icon: null });
         } else {
-            // no one came: resent the able-bodied who were near enough to have helped
-            const bystanders = this.farmers.filter(x => x !== f && !x.downed && x.plot?.sited && x.state !== 'sleep'
+            // #watch was a watcher standing when this happened? Then "no one came" is too broad — a sentry held the
+            // line but the blow fell before they could reach. Only when the town truly left them alone is it "no one
+            // came." Either way the near-enough able-bodied (never the sentry — they had the beat) draw the resentment.
+            const sentry = this.currentSentry();
+            const watched = sentry && sentry !== f;
+            const bystanders = this.farmers.filter(x => x !== f && x !== sentry && !x.downed && x.plot?.sited && x.state !== 'sleep'
                 && x.sheet.stats.str >= 11 && Math.hypot(x.pos.i - downI, x.pos.j - downJ) < 30).slice(0, 2);
             for (const b of bystanders) {
                 f.adjustOpinion(b, -0.22, `left me to ${e.def.name} out in the wilds`);
                 f.remember('person', `${b.sheet.name.split(' ')[0]} was near enough to help and left me to ${e.def.name}`, b, 1.3);
             }
-            if (bystanders.length) this.addLog(`${f.sheet.name} won't forget that no one came.`, '#c05840');
-            this.addChronicle('peril', `${f.sheet.name.split(' ')[0]} was struck down by a ${e.def.name.toLowerCase()} in the wilds — no one came.`, f, null, '#e03828',
-                { tier: 'grand', tone: 'somber', label: 'STRUCK DOWN', why: `struck down out in the wilds, and no one came in time`, icon: null });
+            if (watched) {
+                this.addLog(`${f.sheet.name} fell before ${sentry.sheet.name.split(' ')[0]} could reach them.`, '#c05840');
+                this.addChronicle('peril', `${f.sheet.name.split(' ')[0]} was struck down by a ${e.def.name.toLowerCase()} — ${sentry.sheet.name.split(' ')[0]} could not reach them in time.`, f, sentry, '#e03828',
+                    { tier: 'grand', tone: 'somber', label: 'STRUCK DOWN', why: `the watch could not reach them before the blow fell`, icon: null });
+            } else {
+                if (bystanders.length) this.addLog(`${f.sheet.name} won't forget that no one came.`, '#c05840');
+                this.addChronicle('peril', `${f.sheet.name.split(' ')[0]} was struck down by a ${e.def.name.toLowerCase()} in the wilds — no one came.`, f, null, '#e03828',
+                    { tier: 'grand', tone: 'somber', label: 'STRUCK DOWN', why: `struck down out in the wilds, and no one came in time`, icon: null });
+            }
         }
         // shun the ground where they fell — a scar on the map they'll avoid and speak of
         (f.dangerZones ||= []).push({ i: downI, j: downJ, kind: e.def.kind });
@@ -6342,8 +6373,12 @@ const ENCOUNTER_DEFS = {
     orc:      { name: 'an orc raider',     kind: 'foe',   diff: 15, hp: 4, dmg: 5, speed: 1.05, menace: 1.3, loot: 'ore',   color: '#6a8a4a' },
     assassin: { name: 'a hooded assassin', kind: 'foe',   diff: 17, hp: 4, dmg: 6, speed: 1.45, menace: 1.6, loot: 'goods', color: '#6a5a7a' },
 };
-const ENCOUNTER_INTERVAL = 130, ENCOUNTER_JITTER = 130;   // game-seconds between spawn attempts (~1-2/day)
+const ENCOUNTER_INTERVAL = 150, ENCOUNTER_JITTER = 160;   // game-seconds between spawn attempts (mostly beasts)
 const MAX_ENCOUNTERS = 3, WILD_RADIUS = 30;             // the wilds begin ~this far from the plaza
+// #foe-cadence a LETHAL foe (orc/assassin — the kind that can STRIKE A FARMER DOWN) is a rare, spaced-out event,
+// NOT a near-daily one. Beasts (fox/boar) still wander in on the ordinary interval as the "weather"; a foe is
+// gated behind its OWN long, heavily-jittered cooldown so raids feel like a real, infrequent threat. ~day = 190s.
+const FOE_COOLDOWN = 620, FOE_JITTER = 900;             // ~3 days minimum, up to ~8, before another lethal foe
 // #131b the raid cinematic's APPROACH: raiders spawn out at the fog/map edge and stream in; the "UNDER RAID"
 // battle-transition fires only when the lead raider crosses RAID_STRUCK_RADIUS (the town proper), not at spawn —
 // so you SEE them come out of the fog, and the blow lands when they actually reach town.
@@ -7930,12 +7965,27 @@ export class Farmer {
         const threat = this.#spotThreat();
         if (threat) {
             this.#soundWatchAlarm(threat);
+            // #watch the sentry STANDS AT ARMS — not just a tripwire. If the foe is already on a townsfolk (or has
+            // pressed into the village), the watcher is the FIRST responder: they charge in to defend, guaranteed,
+            // never gated by the ordinary neighbour-nerve check (that's the whole point of the office). Only a foe
+            // still far out in the empty wilds, on no one, gets the fall-back-and-rally treatment.
+            const victim = threat.target && threat.target !== this && !threat.target.downed && this.world.farmers.includes(threat.target);
+            if (victim || w.threatInVillage(threat)) {
+                threat.helpers.add(this); threat.helpWanted = true; this.combatStance = 'fight';
+                this.think(w.culture === 'orc' ? 'TO ARMS! OFF MY KIN!' : 'TO ARMS — GET OFF THEM!');
+                if (victim && !this._watcherCharged) { this._watcherCharged = true; this.say(w.culture === 'orc' ? `OFF ${shortName(threat.target)}!` : `OFF ${shortName(threat.target)}, RAIDER!`, '#e0c040'); }
+                if (Math.hypot(this.pos.i - threat.i, this.pos.j - threat.j) > 1.3) {
+                    if (!this.#goTo(threat.i, threat.j, 'fight')) { this.fightTimer = 0.6; this.state = 'fight'; }
+                } else { this.fightTimer = 0.8; this.state = 'fight'; }
+                return;
+            }
             this.think(w.culture === 'orc' ? 'HOLD! THE BAND IS ROUSED' : 'STAND FAST - HELP IS COMING');
-            // fall back toward the town rally point (keeping eyes on it), NOT to a private fence to hide
+            // a distant threat on no one: fall back toward the rally point (eyes on it), NOT to a fence to hide
             const bi = CENTER + (this.pos.i - CENTER) * 0.45, bj = CENTER + (this.pos.j - CENTER) * 0.45;
             if (this.#goTo(bi, bj, 'patrol')) return;
             this.state = 'watch'; this.watchScanT = WATCH_SCAN; return;
         }
+        this._watcherCharged = false;   // no active threat — re-arm the one-shot charge cry for the next alarm
         const posts = w.watchPosts();
         if (!posts.length) { this.state = 'idle'; this.wanderTimer = 1; return; }
         const p = posts[(this.watchPost || 0) % posts.length];
@@ -8660,7 +8710,13 @@ export class Farmer {
             this.combatStance = nerve > 0.5 ? 'fight' : 'flee';
             // voice WHY they'll stand or run — the enemy + how they rate their odds
             if (this.combatStance === 'fight') this.say(powerGap > 4 ? `just ${def.name} — come on!` : `${def.name}? i'll chance it`, '#e0c040');
-            else { this.say(powerGap < -3 ? `${def.name} — no match, HELP!` : `${def.name}! RUN!`, '#e05040'); e.helpWanted = true; }
+            else {
+                // #watch call the WATCHER by name — running to the guard is running for help (they stand at arms)
+                const sentry = this.world.currentSentry(), guard = sentry && sentry !== this && !sentry.downed ? sentry : null;
+                if (guard) this.say(`${shortName(guard)}! ${def.name} — HELP!`, '#e05040');
+                else this.say(powerGap < -3 ? `${def.name} — no match, HELP!` : `${def.name}! RUN!`, '#e05040');
+                e.helpWanted = true;
+            }
         }
         // bloodied mid-fight? break off and run rather than fight to the ground (unless help's at hand)
         if (this.combatStance === 'fight' && this.hp < this.maxHp * 0.35 && e.helpers.size === 0) {
@@ -11014,8 +11070,15 @@ export class Farmer {
                 const enc = this.world.encounterFor(this);
                 const foe = !!(enc && enc.def && enc.def.kind === 'foe');
                 const wary = (this.threatWary.foe || 0) >= 1;
-                const homeSafe = this.plot && this.plot.sited && this.plot.built.fence && !(foe && wary);
-                const home = homeSafe ? { i: this.plot.x + 6, j: this.plot.y + 6 } : { i: CENTER, j: CENTER };
+                // #watch a sentry stands at arms, so running TO the guard is running for help. Vs a foe, if a fit
+                // sentry other than us holds the beat, the refuge is the guard (rally behind the town's defender);
+                // a sentry who is themselves the quarry never counts their own fence safe — they fall back to the
+                // plaza for help rather than hiding on their plot to be cut down there. Pure lived state, no rng.
+                const sentry = foe ? this.world.currentSentry() : null;
+                const guard = sentry && sentry !== this && !sentry.downed ? sentry : null;
+                const homeSafe = this.plot && this.plot.sited && this.plot.built.fence && !(foe && (wary || this === sentry));
+                const home = guard ? { i: guard.pos.i, j: guard.pos.j }
+                    : homeSafe ? { i: this.plot.x + 6, j: this.plot.y + 6 } : { i: CENTER, j: CENTER };
                 const dx = home.i - this.pos.i, dy = home.j - this.pos.j, d = Math.hypot(dx, dy) || 1;
                 const sp = this.speed * 1.2 * dt;
                 const ni = this.pos.i + dx / d * sp, nj = this.pos.j + dy / d * sp;

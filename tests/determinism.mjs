@@ -33,10 +33,20 @@ const BASELINE = {
     // re-baselined 2026-07-15 for Codex #31 P1 — a raider-BREACHED fence is now REPAIRED by its owner at any house
     // level (was stranded for housed plots), and #foeBashFence no longer nulls an in-progress upgrade — both shift
     // the day-2+ trajectory whenever a foe bashes a fence in the run. same-twice held all seeds.
-    20260706: '50783d62',
-    42: 'c196897d',
-    7: '91783dd5',
-    3: 'db261d65',
+    // re-baselined 2026-07-15 for the WATCH/FOE-CADENCE batch (all seeded, same-twice held): (1) lethal foes
+    // (orc/assassin) are now gated behind their own long #foeCooldown so raids are rare + well-spaced (beasts still
+    // wander in on the ordinary interval) — shifts the encounter timeline; (2) the day's SENTRY stands at arms —
+    // charges to defend a townsfolk under attack (joins as a helper → changes clash resolution) instead of only
+    // sounding the alarm; (3) a fleeing farmer runs TO the fit sentry (the guard is the refuge), and a sentry who's
+    // the quarry never counts home safe; (4) a sick/felled watcher HANDS OFF to the founders' rotation (currentSentry
+    // now skips the unfit), so the beat is never dark; (5) "no one came" excludes the on-duty sentry from the
+    // resented bystanders (changes adjustOpinion/remember). All five touch day-2+ sim state → the fingerprint moves.
+    // (foe kind-roll rebalanced same batch: assassin is now the RARE stalker (r<0.20, standout only), orc the usual
+    // raider (r<0.65) — the fingerprint moved again; same-twice held.)
+    20260706: 'd124375d',
+    42: '1bbd99f8',
+    7: 'af6ef44f',
+    3: 'c3368191',
 };
 
 function boot(seed, culture) {

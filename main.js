@@ -108,7 +108,10 @@ let recapSeq = -1;                // last day-recap seq we've seen (to detect a 
 let dramaSpotlight = null;        // { seed, kind, label, t } — a recent off-camera story beat worth watching (B4)
 let lastChronLen = -1;            // chronicle length last frame, to detect NEW beats to spotlight
 // which chronicle kinds are dramatic enough to nudge the player to go watch, + their short cue label
-const DRAMA_KINDS = { peril: 'peril!', rift: 'a falling-out', crime: 'a theft', hunt: 'a hunt' };
+// #drama-cue only beats with SUSTAINED, watchable action get a "jump to watch" nudge — a 'rift' (a falling-out) is
+// over by the time the camera arrives (nothing to see), so it's scrubbed from the cues (it still logs a chronicle).
+// Each surviving kind carries a DISTINCT emblem (drawn in the cue) so they read at a glance, not four identical "- W"s.
+const DRAMA_KINDS = { peril: 'peril', crime: 'a theft', hunt: 'a hunt' };
 let recapShownAt = -1e9;          // real-time (ms) the current recap appeared; drives its fade-out
 let sheetScroll = 0;              // scroll offset for the selected-farmer detail card
 let sheetContentH = 0;           // measured content height (for clamping the scroll)
@@ -3994,6 +3997,8 @@ function drawSheet(f) {
 
 let rosterRows = [];              // { farmer, y0, y1 } hit regions (screen px)
 let rosterView = null;            // { x, y, w, h, bodyTop, bodyBot, rowH, maxScroll }
+let rosterTab = 0;                // 0 PLAYER STATS (the cast stat list), 1 ROLES (civic offices — moved out of Chronicle)
+let rosterTabHits = null;         // [{ x, y, w, h, tab }] roster tab-chip rects (game px)
 
 function rosterSorted() {
     return [...world.farmers].sort((a, b) => (b.sheet.cropsHarvested || 0) - (a.sheet.cropsHarvested || 0));
@@ -4004,7 +4009,7 @@ function drawRoster() {
     const PH = GH - 40;
     const PX = Math.floor((GW - PW) / 2);
     const PY = 22;
-    rosterRows = [];
+    rosterRows = []; rosterTabHits = [];
 
     // dim the world behind
     ctx.fillStyle = 'rgba(6,7,11,0.72)';
@@ -4019,8 +4024,30 @@ function drawRoster() {
     // close X
     drawText(ctx, 'X', PX + PW - 10, PY + 5, '#c8ccd8');
 
+    // TAB BAR — PLAYER STATS / ROLES. Roles moved here from the Chronicle (it's about the individuals, so it lives
+    // with the roster). The stat list and the civic offices are two views of the same cast, swapped by these chips.
+    const RT_LABELS = ['PLAYER STATS', cultureWord(world.culture, 'panel.rolesTitle')];
+    let tabX = PX + 6; const tabY = PY + 15;
+    for (let i = 0; i < RT_LABELS.length; i++) {
+        const label = RT_LABELS[i], tw = textWidth(label) + 8, active = rosterTab === i;
+        ctx.fillStyle = active ? 'rgba(125,208,105,0.18)' : 'rgba(255,255,255,0.05)';
+        ctx.fillRect(tabX, tabY, tw, 10);
+        if (active) { ctx.fillStyle = '#7dd069'; ctx.fillRect(tabX, tabY + 9, tw, 1); }
+        drawText(ctx, label, tabX + 4, tabY + 2, active ? '#7dd069' : '#8a8f9c');
+        rosterTabHits.push({ x: tabX, y: tabY, w: tw, h: 10, tab: i });
+        tabX += tw + 3;
+    }
+
+    // ROLES view — the civic offices, hosted here (drawChronicleRoles is self-contained, no external scroll).
+    if (rosterTab === 1) {
+        const rTop = tabY + 14, rBot = PY + PH - 10;
+        drawChronicleRoles(PX, rTop, PW, rBot);
+        rosterView = { x: PX, y: PY, w: PW, h: PH, bodyTop: rTop, bodyBot: rBot, rowH: 11, maxScroll: 0 };
+        return;
+    }
+
     // column header
-    const hy = PY + 16;
+    const hy = tabY + 14;
     const colName = PX + 6;
     const colLv = PX + 86;
     const colStats = PX + 106;
@@ -4332,9 +4359,9 @@ let chronView = null;             // { x, y, w, h, bodyTop, bodyBot, maxScroll }
 let chronPanel = null;            // { x, y, w, h } — the WHOLE modal (title+tabs+body); used for click-outside close
 let chronTownWide = false;        // force the town-wide chronicle even when a farmer is in focus
 let chronScopeHits = null;        // { town, farmer } toggle-chip rects (game px)
-let chronTab = 0;                 // 0 NEWS (the event log/saga), 1 ROLES (civic band), 2 RECIPES (discoveries)
+let chronTab = 0;                 // 0 NEWS (the event log/saga), 1 RECIPES (discoveries), 2 TALES (ROLES → Roster)
 let chronTabHits = null;          // [{ x, y, w, h, tab }] tab-chip rects (game px)
-const CHRON_TABS = ['NEWS', 'ROLES', 'RECIPES', 'TALES'];
+const CHRON_TABS = ['NEWS', 'RECIPES', 'TALES'];   // ROLES moved to the Roster panel (it's about the individuals)
 const CHRON_ACCENT = '#c8a0e0';
 
 // The farmer whose SAGA the chronicle is showing (or null for town-wide). Follows the camera focus
@@ -4622,7 +4649,7 @@ function drawChronicle() {
 
     // header — the panel title reflects the active tab (NEWS can narrow to one Ry's saga)
     const cf = chronTab === 0 ? chronFocusFarmer() : null;
-    const title = chronTab === 1 ? cultureWord(world.culture, 'panel.rolesTitle') : chronTab === 2 ? cultureWord(world.culture, 'panel.recipesTitle') : chronTab === 3 ? cultureWord(world.culture, 'panel.talesTitle')
+    const title = chronTab === 1 ? cultureWord(world.culture, 'panel.recipesTitle') : chronTab === 2 ? cultureWord(world.culture, 'panel.talesTitle')
         : cf ? `SAGA OF ${cf.sheet.name.split(' ')[0].toUpperCase()}` : cultureWord(world.culture, 'panel.chronicleTitle');
     drawText(ctx, title, PX + 7, PY + 5, CHRON_ACCENT, 1);
     const entries = chronEntries();
@@ -4651,8 +4678,8 @@ function drawChronicle() {
     ctx.fillStyle = '#20242f';
     ctx.fillRect(PX + 4, PY + 15, PW - 8, 1);
 
-    // TAB BAR — NEWS / ROLES / RECIPES. Splitting the (growing) town view into swappable tabs keeps
-    // each readable: the story log, the civic offices, and what the town has invented.
+    // TAB BAR — NEWS / RECIPES / TALES. Splitting the (growing) town view into swappable tabs keeps
+    // each readable: the story log, what the town has invented, and its tales. (ROLES lives in the Roster now.)
     chronTabHits = [];
     let tabX = PX + 8;
     for (let i = 0; i < CHRON_TABS.length; i++) {
@@ -4669,10 +4696,10 @@ function drawChronicle() {
     const bodyTop = PY + 33;
     const bodyBot = PY + PH - 11;
 
-    // ROLES + RECIPES render their own (non-scrolling) bodies and return; NEWS falls through below.
-    if (chronTab === 1) { drawChronicleRoles(PX, bodyTop, PW, bodyBot); return; }
-    if (chronTab === 2) { drawChronicleRecipes(PX, bodyTop, PW, bodyBot); return; }
-    if (chronTab === 3) { drawChronicleTales(PX, bodyTop, PW, bodyBot); return; }
+    // RECIPES + TALES render their own (non-scrolling) bodies and return; NEWS falls through below. (ROLES moved
+    // to the Roster panel.)
+    if (chronTab === 1) { drawChronicleRecipes(PX, bodyTop, PW, bodyBot); return; }
+    if (chronTab === 2) { drawChronicleTales(PX, bodyTop, PW, bodyBot); return; }
     const viewH = bodyBot - bodyTop;
     const IX = PX + 8;
     const maxChars = Math.max(30, Math.floor((PW - 30) / 4.2));
@@ -5285,6 +5312,8 @@ out.addEventListener('pointerup', (e) => {
             // close X / click well outside the panel
             if ((p.x > rv.x + rv.w - 14 && p.y < rv.y + 12) ||
                 p.x < rv.x || p.x > rv.x + rv.w || p.y < rv.y || p.y > rv.y + rv.h) { rosterOpen = false; return; }
+            // tab chips: PLAYER STATS / ROLES
+            if (rosterTabHits) { for (const t of rosterTabHits) if (inRect(p, t)) { rosterTab = t.tab; rosterScroll = 0; return; } }
             // list rows: open that farmer's detail sheet AND follow them (roster select + follow are one action)
             for (const row of rosterRows) {
                 if (p.y >= row.y0 && p.y <= row.y1 && p.x > rv.x && p.x < rv.x + rv.w) {
@@ -5405,11 +5434,37 @@ function drawDramaCue() {
     ctx.lineTo(ax + Math.cos(ang + 2.5) * s, ay + Math.sin(ang + 2.5) * s);
     ctx.lineTo(ax + Math.cos(ang - 2.5) * s, ay + Math.sin(ang - 2.5) * s);
     ctx.closePath(); ctx.fill();
-    const label = `${dramaSpotlight.label} - W`, tw = textWidth(label);   // "- W" = press W to watch (font has no brackets)
-    const lx = Math.max(4, Math.min(GW - tw - 4, ax - Math.cos(ang) * 10 - tw / 2));
-    const ly = Math.max(26, Math.min(GH - 10, ay - Math.sin(ang) * 10 - 4));
-    ctx.fillStyle = 'rgba(16,14,10,0.8)'; ctx.fillRect(Math.round(lx) - 2, Math.round(ly) - 1, tw + 4, 8);
-    drawText(ctx, label, Math.round(lx), Math.round(ly), '#f0d060');
+    // [emblem] label [W] — the emblem says WHAT the beat is at a glance (distinct per kind), the keycap says how to
+    // jump to it. Layout: 9px emblem + gap, the label, a gap, a small bordered W keycap.
+    const txt = dramaSpotlight.label, tw = textWidth(txt);
+    const EMB = 10, KEY = 9, boxW = EMB + tw + 3 + KEY;
+    const lx = Math.max(4, Math.min(GW - boxW - 4, ax - Math.cos(ang) * 10 - boxW / 2));
+    const ly = Math.max(26, Math.min(GH - 11, ay - Math.sin(ang) * 10 - 4));
+    const bx = Math.round(lx), by = Math.round(ly);
+    ctx.fillStyle = 'rgba(16,14,10,0.82)'; ctx.fillRect(bx - 2, by - 2, boxW + 3, 10);
+    drawCueEmblem(dramaSpotlight.kind, bx, by - 1);
+    drawText(ctx, txt, bx + EMB, by, '#f0d060');
+    // the W keycap (a hairline box so it reads as a KEY, not a letter in the phrase)
+    const kx = bx + EMB + tw + 3;
+    ctx.fillStyle = 'rgba(240,208,96,0.6)'; ctx.strokeStyle = 'rgba(240,208,96,0.6)';
+    ctx.fillRect(kx - 1, by - 2, KEY, 9);
+    drawText(ctx, 'W', kx, by, '#16120a');
+}
+// #drama-cue a tiny (≈8px) per-kind emblem so the edge cue reads at a glance — like the watcher's eye.
+// peril = a red danger spike; a hunt = a tan paw; a theft = a masked/hooded face. Pure fillRect for crisp low-res.
+function drawCueEmblem(kind, x, y) {
+    if (kind === 'hunt') {                       // tan paw: pad + three toes
+        ctx.fillStyle = '#d8b070';
+        ctx.fillRect(x + 2, y + 3, 4, 3);
+        ctx.fillRect(x + 1, y + 1, 1, 1); ctx.fillRect(x + 3, y, 1, 1); ctx.fillRect(x + 5, y + 1, 1, 1);
+    } else if (kind === 'crime') {               // theft: a dark hood with two pale eye-slits
+        ctx.fillStyle = '#6a4a80'; ctx.fillRect(x + 1, y, 6, 6);
+        ctx.fillStyle = '#e8e0f0'; ctx.fillRect(x + 2, y + 2, 1, 1); ctx.fillRect(x + 5, y + 2, 1, 1);
+    } else {                                     // peril: a red danger spike (triangle) with a dark notch
+        ctx.fillStyle = '#e8484c';
+        ctx.beginPath(); ctx.moveTo(x + 4, y - 1); ctx.lineTo(x + 8, y + 6); ctx.lineTo(x, y + 6); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = '#16120a'; ctx.fillRect(x + 3, y + 1, 1, 3); ctx.fillRect(x + 3, y + 5, 1, 1);
+    }
 }
 // #131 THE THREAT TELL — a top-center marquee while a raid is telegraphed (world.pendingRaid), plus a pulsing
 // arrow at the screen edge pointing to the flank the warband comes from. Two beats: "A WARBAND GATHERS" while
@@ -5997,8 +6052,10 @@ function drawBootScreen(t) {
         // deterministic stepping for reproducibility tests: N uniform FIXED_DT sim ticks
         runSteps: (n) => { for (let k = 0; k < n; k++) world.tick(FIXED_DT); },
         FIXED_DT,
-        // QA: open the town chronicle straight to a tab (0 NEWS / 1 ROLES / 2 RECIPES / 3 TALES)
-        openChron: (tab = 1) => { rosterOpen = boardOpen = worldMapOpen = settingsOpen = false; chronOpen = true; chronTab = tab; chronScroll = 0; },
+        // QA: open the town chronicle straight to a tab (0 NEWS / 1 RECIPES / 2 TALES)
+        openChron: (tab = 0) => { rosterOpen = boardOpen = worldMapOpen = settingsOpen = false; chronOpen = true; chronTab = tab; chronScroll = 0; },
+        // QA: open the Roster straight to a tab (0 PLAYER STATS / 1 ROLES)
+        openRoster: (tab = 0) => { chronOpen = boardOpen = worldMapOpen = settingsOpen = false; rosterOpen = true; rosterTab = tab; rosterScroll = 0; },
         // center the camera on a tile (uses the REAL internal resolution — external camera
         // math can only guess GW/GH from the window aspect and lands wide of the mark)
         goTo: (i, j) => { cam.x = GW / 2 - isoX(i, j); cam.y = GH / 2 - isoY(i, j); },
