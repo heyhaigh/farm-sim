@@ -4790,7 +4790,7 @@ function scanMoments() {
 // then move to the next. Short-lived by design so beats flash past rather than piling up.
 const calloutQueue = [];      // chronicle entries waiting to flash
 let activeCallout = null;     // { e, shownAt }
-let CALLOUT_MS = 3800;        // #callout 2x longer (was 1900) — a discovery toast lingers long enough to read + dismiss
+let CALLOUT_MS = 5700;        // #callout longer still (1900 -> 3800 -> 5700, +1.5x) — a discovery toast lingers to read + dismiss
 const CALLOUT_CLOSE = { x: 0, y: 0, w: 0, h: 0 };   // the toast's X hit-rect (set each frame one is up; cleared otherwise)
 function drawCallouts() {
     const nowMs = performance.now();
