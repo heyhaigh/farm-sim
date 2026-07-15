@@ -3361,12 +3361,32 @@ function drawWorldFound(PX, PY, PW, PH) {
     worldMapUiHits.foundHuman = hb; worldMapUiHits.foundOrc = ob; worldMapUiHits.foundClose = { x, y, w, h };
 }
 
-// Birth a new town of a chosen culture: navigate to a FRESH random seed with the culture set. The current town
-// is autosaved (on the tab-hide/unload the navigation triggers) and stays in the world index — not lost — so the
-// world gains a real, visitable town of that kind. (Math.random is fine here: this is the UI picking a seed, not
-// the sim — the deterministic core never sees it.) An orc seed boots the desert biome + warband cast.
+// Birth a new town of a chosen culture: navigate to a FRESH seed with the culture set. The current town is
+// autosaved (the navigation triggers a tab-hide/unload save) and stays in the world index — not lost.
+//
+// #P0 PLACEMENT (council precondition): a town's world position is townPos(seed) — a pure hash — so a purely random
+// seed lands ANYWHERE, its reach never overlaps yours, and it never interacts (no meeting, no raid, no seam). So we
+// REJECTION-SAMPLE the seed: keep the one whose townPos lands in a target BAND around the anchor town (the one
+// selected on the map, else the one we're in), just inside its reach so their circles MEET within a session — a
+// created orc warband then actually shows up to raid. Math.random is fine here: UI picking a seed, never the sim.
 function foundNewTown(culture) {
-    const seed = Math.floor(Math.random() * 0x7fffffff);
+    const idx = worldMapIdx || { towns: {} };
+    const anchorSeed = worldMapSel != null ? worldMapSel : (world ? world.seed : null);
+    let seed = Math.floor(Math.random() * 0x7fffffff);
+    if (anchorSeed != null) {
+        const a = townPos(anchorSeed);
+        const aSum = (idx.towns || {})[String(anchorSeed)];
+        const aReach = aSum ? townReach(aSum) : 140;
+        const minD = Math.max(55, aReach * 0.55), maxD = aReach + 55;   // just inside the anchor's reach → they meet soon
+        let best = seed, bestErr = Infinity;
+        for (let i = 0; i < 500; i++) {
+            const s = Math.floor(Math.random() * 0x7fffffff);
+            const p = townPos(s), d = Math.hypot(p.x - a.x, p.y - a.y);
+            const err = d < minD ? minD - d : d > maxD ? d - maxD : 0;
+            if (err < bestErr) { bestErr = err; best = s; if (err === 0) break; }
+        }
+        seed = best;
+    }
     location.href = location.pathname + '?seed=' + seed + (culture === 'orc' ? '&culture=orc' : '');
 }
 
