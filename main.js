@@ -561,9 +561,6 @@ function itemIcon(idx) {
     if (!img) { img = new Image(); img.onerror = () => {}; img.src = `${ITEM_ICON_BASE}${idx}_1.png`; itemIcons[idx] = img; }
     return img;
 }
-// #town-icons world-map culture markers — a component-library 1-bit icon per town kind (via packEmote), so human
-// vs orc reads at a glance (TEST). 30 = farmers, 65 = orc; tinted to a culture colour.
-const TOWN_ICON = { human: 30, orc: 65 };
 // preload the icons we know we'll draw
 for (const it of Object.values(ITEMS)) itemIcon(it.icon);
 for (const r of CRAFTABLES) itemIcon(r.icon);
@@ -3230,25 +3227,15 @@ function drawWorldMap() {
             worldMapTravHits.push({ x: mx, y: my, r: 4, kind: 'news', origin: O.name, destination: D.name, arrivalDay: nw.arrivalDay });
         }
     }
-    // town markers + labels — #town-icons TEST: a component-library 1-bit icon (packEmote 30 farmers / 65 orc)
-    // tinted to a culture colour so kind reads at a glance, with a faint memory-tinted disc behind (keeps a hint of
-    // the per-town colour). Falls back to a plain tinted dot until the pack sheet loads.
+    // town dots + labels
     for (const n of nodes) {
-        const x = toX(n), y = toY(n);
+        const x = toX(n), y = toY(n), r = Math.max(2, Math.min(6, 2 + n.pop * 0.3));
         const active = world && String(n.seed) === String(world.seed);
         const seld = worldMapSel != null && String(n.seed) === String(worldMapSel);
-        const orc = n.culture === 'orc';
-        const isz = 13, rad = isz / 2 + 1;
-        const ico = packEmote(orc ? TOWN_ICON.orc : TOWN_ICON.human, isz, orc ? '#e0806a' : '#8fd070');
-        if (ico) {
-            ctx.fillStyle = `hsla(${n.tint.h} ${n.tint.s}% 50% / 0.28)`; ctx.beginPath(); ctx.arc(x, y, rad, 0, Math.PI * 2); ctx.fill();
-            ctx.drawImage(ico, Math.round(x - isz / 2), Math.round(y - isz / 2));
-        } else {
-            ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.fillStyle = n.tint.css; ctx.fill();
-        }
-        if (active || seld) { ctx.strokeStyle = active ? '#f0e0a0' : '#ffffff'; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(x, y, rad + 1, 0, Math.PI * 2); ctx.stroke(); }
-        drawText(ctx, n.name.split(' ')[0], x + rad + 2, y - 3, active ? '#f0e0a0' : '#c8ccd8');
-        worldMapHits.push({ seed: n.seed, x, y, r: rad + 1 });
+        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fillStyle = n.tint.css; ctx.fill();
+        if (active || seld) { ctx.strokeStyle = active ? '#f0e0a0' : '#ffffff'; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(x, y, r + 2, 0, Math.PI * 2); ctx.stroke(); }
+        drawText(ctx, n.name.split(' ')[0], x + r + 2, y - 3, active ? '#f0e0a0' : '#c8ccd8');
+        worldMapHits.push({ seed: n.seed, x, y, r: r + 3 });
     }
     ctx.restore();   // end map-viewport clip (the footer card + overlays below draw unclipped)
     // selected-town info bar (fixed footer). The map region above reserves its height, so it never clips a town.
