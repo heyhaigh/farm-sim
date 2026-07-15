@@ -4790,7 +4790,8 @@ function scanMoments() {
 // then move to the next. Short-lived by design so beats flash past rather than piling up.
 const calloutQueue = [];      // chronicle entries waiting to flash
 let activeCallout = null;     // { e, shownAt }
-let CALLOUT_MS = 1900;        // short: appears and vanishes quickly (let, so RYFARMS.calloutMs() can hold for QA)
+let CALLOUT_MS = 3800;        // #callout 2x longer (was 1900) — a discovery toast lingers long enough to read + dismiss
+const CALLOUT_CLOSE = { x: 0, y: 0, w: 0, h: 0 };   // the toast's X hit-rect (set each frame one is up; cleared otherwise)
 function drawCallouts() {
     const nowMs = performance.now();
     if (activeCallout && nowMs - activeCallout.shownAt > CALLOUT_MS) activeCallout = null;
@@ -4798,7 +4799,7 @@ function drawCallouts() {
         activeCallout = { e: calloutQueue.shift(), shownAt: nowMs };
         try { audio.moment('neutral'); } catch { /* not ready */ }
     }
-    if (!activeCallout) return;
+    if (!activeCallout) { CALLOUT_CLOSE.w = 0; return; }
     const y = (RECAP_CARD.w ? RECAP_CARD.y + RECAP_CARD.h + 4 : 22);
     {
         const c = activeCallout;
@@ -4806,12 +4807,15 @@ function drawCallouts() {
         const fade = Math.min(1, age / 140) * Math.min(1, (CALLOUT_MS - age) / 420);
         const accent = c.e.tone === 'somber' ? '#7a9ade' : c.e.tone === 'triumph' ? '#f0d060' : '#9ad0e0';
         const txt = c.e.text.toUpperCase();
-        const w = Math.min(GW - 16, textWidth(txt) + 14), x = Math.floor((GW - w) / 2);
+        const XW = 10;   // room for the dismiss X on the right
+        const w = Math.min(GW - 16, textWidth(txt) + 14 + XW), x = Math.floor((GW - w) / 2);
         ctx.save(); ctx.globalAlpha = fade;
         ctx.fillStyle = 'rgba(12,14,22,0.92)'; ctx.fillRect(x, y, w, 12);
         ctx.fillStyle = accent; ctx.fillRect(x, y, 2, 12);
-        drawText(ctx, txt.slice(0, Math.floor((w - 10) / 4)), x + 6, y + 3, '#dfe4ee');
+        drawText(ctx, txt.slice(0, Math.floor((w - 10 - XW) / 4)), x + 6, y + 3, '#dfe4ee');
+        drawText(ctx, 'X', x + w - 7, y + 3, 'rgba(210,150,150,0.95)');   // click to dismiss
         ctx.restore();
+        CALLOUT_CLOSE.x = x + w - 10; CALLOUT_CLOSE.y = y; CALLOUT_CLOSE.w = 10; CALLOUT_CLOSE.h = 12;   // full-height, easy to tap
     }
 }
 
@@ -5126,6 +5130,8 @@ out.addEventListener('pointerdown', (e) => {
     mouse.downX = p.x; mouse.downY = p.y;
     // #98 a grand Moment spotlight eats the next click (dismiss it, don't fall through to world/pan)
     if (activeMoment && MOMENTS_HIT.w) { activeMoment = null; mouse.panStart = null; return; }
+    // #callout the X on a discovery toast dismisses it (only the X — clicking the bar itself falls through)
+    if (activeCallout && CALLOUT_CLOSE.w && inRect(p, CALLOUT_CLOSE)) { activeCallout = null; mouse.panStart = null; return; }
     // settings volume sliders: press to grab, drag to set
     if (settingsOpen && settingsHits) {
         if (inRect(p, settingsHits.musicSlider)) { settingsDrag = 'music'; audio.setMusicVolume((p.x - settingsHits.musicSlider.x) / settingsHits.musicSlider.w); mouse.panStart = null; return; }
