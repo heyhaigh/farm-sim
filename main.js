@@ -2,7 +2,7 @@
 
 import { fetchMemories, generateCrew, mod, fmtMod, STAT_NAMES, TRAIT_NAMES, TRAIT_LABELS, hashString, mulberry32 } from './dna.js';
 import { audio } from './audio.js';
-import { World, CHUNK, T, DAY_LENGTH, NIGHT_LENGTH, ITEMS, CRAFTABLES, RECIPE_BY_ID, INVENTION_TABLE, RARE_NAME, xpForLevel, obstacleTier, treeVariant, treeIsFruit, SEASONS } from './farm.js';
+import { World, CHUNK, T, GRID, CENTER, DAY_LENGTH, NIGHT_LENGTH, ITEMS, CRAFTABLES, RECIPE_BY_ID, INVENTION_TABLE, RARE_NAME, xpForLevel, obstacleTier, treeVariant, treeIsFruit, SEASONS } from './farm.js';
 import {
     TILE_W, TILE_H, makeCanvas, drawText, textWidth,
     makeFarmerSprites, makeCropSprites, makeHouse, makeWell, makeBoard, makeFencePost,
@@ -1454,6 +1454,56 @@ function drawTerrainChunks() {
             let entry = chunkCanvases.get(key);
             if (!entry) { entry = bakeChunk(cx, cy); chunkCanvases.set(key, entry); }
             ctx.drawImage(entry.canvas, dx, dy);
+        }
+    }
+}
+
+// #P1 THE RAID SEAM (render-only) — when a raid is telegraphed or underway, the orc neighbour's DESERT bleeds into
+// the fog in the threat direction: the ground the warband musters on and marches across. It reads ONLY display
+// state (pendingRaid.dir / raidEvent), paints over FOG tiles only (never touches world.tiles / reveal / farmers),
+// and draws no world.rand — so the sim + determinism are untouched. It gives "a warband gathers to the north" a
+// place to actually look: the unexplored dark in that bearing becomes their scorched land, and the raiders (which
+// already spawn at the map edge along the same bearing) march out of it.
+const RAID_DESERT = { A: '#9d7448', B: '#8f6a40' };   // the neighbour's sun-baked earth (the SPRING desert palette)
+function drawRaidSeam() {
+    const pr = world.pendingRaid, re = world.raidEvent;
+    if (!pr && !re) return;
+    let dir;
+    if (pr) dir = pr.dir;
+    else { const r0 = re.raiders && re.raiders[0]; if (!r0) return; dir = Math.atan2(r0.j - CENTER, r0.i - CENTER); }
+    // a low ember while a warband merely GATHERS; brighter once the alarm has sounded (detected) or it has landed.
+    const hot = (pr && pr.detected) || !!re;
+    const base = hot ? 1.0 : 0.55;
+    const pulse = 0.05 * Math.sin(performance.now() / 500);
+    const half = 0.85;   // fan half-angle (raiders fan ~±0.5; a touch wider so it reads as "their land", not a beam)
+    const rIn = 26, rFull = 46;   // the seam ramps grass→desert from the town's edge (rIn, faint) out to the horizon (rFull, full)
+    const cs = [screenToTile(0, 0), screenToTile(GW, 0), screenToTile(GW, GH), screenToTile(0, GH)];
+    let iMin = Infinity, iMax = -Infinity, jMin = Infinity, jMax = -Infinity;
+    for (const c of cs) { iMin = Math.min(iMin, c.i); iMax = Math.max(iMax, c.i); jMin = Math.min(jMin, c.j); jMax = Math.max(jMax, c.j); }
+    iMin = Math.max(0, Math.floor(iMin)); iMax = Math.min(GRID - 1, Math.ceil(iMax));
+    jMin = Math.max(0, Math.floor(jMin)); jMax = Math.min(GRID - 1, Math.ceil(jMax));
+    for (let j = jMin; j <= jMax; j++) {
+        for (let i = iMin; i <= iMax; i++) {
+            const di = i - CENTER, dj = j - CENTER, r = Math.hypot(di, dj);
+            if (r < rIn) continue;
+            let da = Math.atan2(dj, di) - dir; da = Math.atan2(Math.sin(da), Math.cos(da));   // wrap to [-pi, pi]
+            if (Math.abs(da) > half) continue;
+            // gradient: faint at the town's edge (grass shows through), full desert toward the horizon; softer at the fan sides.
+            const edge = 1 - Math.abs(da) / half, ramp = Math.min(1, (r - rIn) / (rFull - rIn));
+            const fog = !world.isRevealed(i, j);                      // the unknown dark takes full desert; revealed grass keeps a wash (the transition)
+            const a = Math.max(0, Math.min(1, (base + pulse) * edge * ramp * (fog ? 1 : 0.72)));
+            if (a < 0.03) continue;
+            const sx = cam.x + isoX(i, j) - TILE_W / 2, sy = cam.y + isoY(i, j);
+            ctx.save(); ctx.globalAlpha = a;
+            fillDiamond(ctx, sx, sy, (i + j) % 2 ? RAID_DESERT.A : RAID_DESERT.B);
+            // sparse orc-desert scatter (dead brush / pebbles) so it reads as their scorched land, not flat sand
+            if (grassDetailsReady && rand2(i, j, 71) < 0.13) {
+                const d = pickTile(ORC_GROUND_DECALS, i, j, 72);
+                const scale = 0.44 + rand2(i, j, 73) * 0.22, dw = Math.round(d.w * scale), dh = Math.round(d.h * scale);
+                const ox = Math.round((rand2(i, j, 74) - 0.5) * 8), oy = Math.round((rand2(i, j, 75) - 0.5) * 4);
+                ctx.drawImage(grassDetailsImg, d.x, d.y, d.w, d.h, sx + Math.floor(TILE_W / 2 - dw / 2) + ox, sy + Math.floor(TILE_H / 2 - dh / 2) + oy, dw, dh);
+            }
+            ctx.restore();
         }
     }
 }
@@ -5967,6 +6017,7 @@ function frame(now) {
     world._tilesChanged = false;   // chunk-level dirt now drives rebakes
     if (world._seasonChanged) { chunkCanvases.clear(); world._seasonChanged = false; }
     drawTerrainChunks();
+    drawRaidSeam();   // #P1 the orc neighbour's desert bleeding in from the threat direction during a raid (render-only)
 
     // hover tile highlight (only over charted ground — the fog keeps its secrets)
     if (mouse.x >= 0 && !mouse.dragging) {
