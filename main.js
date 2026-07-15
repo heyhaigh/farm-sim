@@ -2545,27 +2545,25 @@ function drawFarmerBubble(f, sx) {
         ctx.restore();
     }
 
-    // speech bubble — #bubble-typewriter: the WHOLE saying shows at once (all its wrapped lines stacked) and TYPES
-    // across them left-to-right, top-to-bottom, so a long statement is shown in full — no line-at-a-time paging,
-    // no 4-line cap, no progress dots. The box is pre-sized to the full statement so it never resizes as text
-    // streams in; a caret marks the typing head.
+    // speech bubble — #bubble-typewriter: the saying is shown ONE LINE AT A TIME (advancing every b.lineSec), each
+    // line typing out left-to-right. It pages through EVERY line — a 9-line saying shows all 9, one after the
+    // other (no 4-line cap, and no progress dots that made it read as capped). The plate is pre-sized to the
+    // widest line so it never resizes as lines advance; a caret marks the typing head.
     if (f.bubble && !f.memoryEcho) {
         const b = f.bubble, lines = b.lines || [b.text];
-        const elapsed = (b.t0 || 0) - b.t, charSec = b.charSec || 0.03, lineH = 6;
+        const elapsed = (b.t0 || 0) - b.t, lineSec = b.lineSec || 0.85, charSec = b.charSec || 0.03;
+        const idx = Math.min(lines.length - 1, Math.max(0, Math.floor(elapsed / lineSec)));
+        const line = lines[idx] || '';
         const w = Math.max(...lines.map(l => textWidth(l))) + 4;
-        const h = lines.length * lineH + 3;
-        const bx = Math.floor(sx - w / 2), by = Math.max(20, py - 4 - h);   // grows UP with the statement; clamped below the HUD
+        const bx = Math.floor(sx - w / 2), by = py - 10;
         ctx.fillStyle = 'rgba(16,18,26,0.85)';
-        ctx.fillRect(bx, by, w, h);
-        let revealed = Math.max(1, Math.floor(elapsed / charSec)), ty = by + 2, caret = false;
-        for (const ln of lines) {
-            const shown = Math.min(ln.length, revealed);
-            if (shown > 0) drawText(ctx, ln.slice(0, shown), bx + 2, ty, b.color);
-            if (!caret && shown < ln.length && revealed > 0 && (Math.floor(elapsed * 8) % 2)) {   // blinking caret at the typing head
-                ctx.fillStyle = b.color; ctx.fillRect(bx + 2 + textWidth(ln.slice(0, shown)), ty, 1, 5); caret = true;
-            }
-            revealed -= shown; ty += lineH;
-            if (revealed <= 0) break;   // later lines not yet reached — the pre-sized box already reserves their space
+        ctx.fillRect(bx, by, w, 9);
+        const lineElapsed = elapsed - idx * lineSec;
+        const shown = Math.max(1, Math.min(line.length, Math.floor(lineElapsed / charSec)));
+        const typed = line.slice(0, shown);
+        drawText(ctx, typed, bx + 2, by + 2, b.color);
+        if (shown < line.length && (Math.floor(elapsed * 8) % 2)) {   // blinking caret at the typing head
+            ctx.fillStyle = b.color; ctx.fillRect(bx + 2 + textWidth(typed), by + 2, 1, 5);
         }
     }
 }

@@ -26,13 +26,14 @@ const BASELINE = {
     // homestead; (2) the ACTION_ENERGY falsy-0 bug fixed (`?? 0.05`, not `|| 0.05`) so plant/harvest/clear are
     // truly FREE and tilling is a light 0.017 (was silently 0.05) — which shifts every farming day's energy curve.
     // same-twice held all seeds (fully reproducible; only the fingerprint moved).
-    // re-baselined 2026-07-15 — the day's WATCHER now prioritises the watch: they prowl the perimeter day AND
-    // night on their rotation day even before their own house is up (was gated on being housed, so an early
-    // unhoused watcher farmed to exhaustion instead of keeping the beat). same-twice held all seeds.
-    20260706: '20f5b60a',
-    42: 'c9efadbb',
-    7: 'e01f8331',
-    3: 'af6c6cdb',
+    // re-baselined 2026-07-15 — FOE-vs-FENCE: a foe (orc/assassin) no longer breaks off when a farmer reaches
+    // their fenced plot — it presses in and BASHES the fence down (property destruction), and a farmer flees for
+    // help at the plaza rather than a false-safe fence (a wary one straight away, a naive one once it's breached).
+    // Real behavioural changes to the encounter/flee loop; same-twice held all seeds.
+    20260706: '6dbe689c',
+    42: 'd1c4c480',
+    7: '35c98309',
+    3: 'f93e50f5',
 };
 
 function boot(seed, culture) {

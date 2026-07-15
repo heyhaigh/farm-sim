@@ -5967,9 +5967,10 @@ export class World {
             if (standing >= 3) { this.#endEncounter(e, `Outnumbered, ${e.def.name} turned tail and fled.`, '#7dd069'); return; }
         }
         if (e.life <= 0) { this.#endEncounter(e, `${e.def.name} lost the trail and slunk back into the wilds.`, '#9a9a8a'); return; }
-        // made it HOME behind their OWN fence? that's their refuge — the threat breaks off. (A
-        // neighbour's fence is no sanctuary; you have to reach your own gate.)
-        if (this.#onOwnFencedPlot(f)) {
+        // #foe-fence — made it HOME behind their OWN fence? A BEAST gives up ("leap-of-faith": an animal won't
+        // besiege a fence). A FOE (orc/assassin) does NOT — it's smart enough to force the gate, so a fenced plot
+        // is no sure refuge from it (it presses in + bashes the fence below). The farmer must get HELP, not hide.
+        if (beast && this.#onOwnFencedPlot(f)) {
             this.#endEncounter(e, `${f.sheet.name} made it home behind the fence — ${e.def.name} can't follow.`, '#7dd069'); return;
         }
         const dx = f.pos.i - e.i, dy = f.pos.j - e.j, dist = Math.hypot(dx, dy) || 1;
@@ -5979,7 +5980,7 @@ export class World {
             const ni = e.i + dx / dist * sp, nj = e.j + dy / dist * sp;
             const onFence = this.tileInFencedPlot(Math.floor(ni), Math.floor(nj));
             if (beast) { if (!onFence) { e.i = ni; e.j = nj; } }        // a fence turns a BEAST away entirely
-            else { if (onFence) sp *= 0.4; e.i += dx / dist * sp; e.j += dy / dist * sp; }   // a FOE breaches, but slowly
+            else { if (onFence) { sp *= 0.4; this.#foeBashFence(e, Math.floor(ni), Math.floor(nj), dt); } e.i += dx / dist * sp; e.j += dy / dist * sp; }   // a FOE breaches — slowly, wrecking the fence
         } else {
             e.clashTimer -= dt;
             if (e.clashTimer <= 0) { e.clashTimer = 1.4; this.#resolveClash(e); }
@@ -5996,6 +5997,24 @@ export class World {
         const k = pkey(i, j);
         for (const p of this.plots) if (p.sited && p.built.fence && p.cells.has(k)) return true;
         return false;
+    }
+    // #foe-fence — a FOE forcing a fenced plot BASHES the fence down as it breaches: ~1.5s of battering knocks a
+    // post out, and once enough are gone the fence no longer holds (built.fence=false → it stops being a barrier
+    // and re-renders damaged). Real property destruction — a farmer's fence is no sure refuge from something that
+    // can wreck it. Deterministic (a dt accumulator on the encounter, no rng); the post loss rides the save.
+    #foeBashFence(e, i, j, dt) {
+        // only bash the TARGET's OWN fence — the wall it's forcing to get at its quarry (not a bystander's fence
+        // it merely crosses while chasing someone toward the plaza).
+        const p = e.target && e.target.plot;
+        if (!p || !p.sited || !p.built.fence || !p.cells.has(pkey(i, j))) return;
+        e.bashT = (e.bashT || 0) + dt;
+        if (e.bashT < 1.5) return;
+        e.bashT = 0;
+        p.fencePosts = Math.max(0, (p.fencePosts || 0) - 1);
+        if (p.fencePosts < (p.fenceTarget || 1)) { p.built.fence = false; p.building = null; }   // the line is breached — no longer a wall
+        p.rev = (p.rev || 0) + 1;
+        const owner = this.farmers.find(f => f.plot === p);
+        this.addLog(`${e.foeName ? `${e.def.name} - ${e.foeName}` : e.def.name} bashes through ${owner ? shortName(owner) + "'s" : 'the'} fence!`, '#e05040');
     }
     // A tree's current growth stage (0 sapling / 1 young / 2 mature) — rises over the days.
     treeStage(i, j) { return treeStageAt(i, j, this.day, this.treePlanted); }
@@ -7995,12 +8014,11 @@ export class Farmer {
     say(text, color = '#fff') {
         this._pendingSay = null;   // a direct line supersedes any queued (deferred) reply
         const lines = wrapWords(this.#orcLine(text));
-        // #bubble the WHOLE statement shows at once and types across ALL its lines (no line-at-a-time paging, no
-        // 4-line cut-off). t0 = type-out time + a read hold that scales with length, so even a long saying stays
-        // up long enough to read every line. The congregation director reads t0 for its turn cadence.
-        const chars = lines.reduce((n, l) => n + l.length, 0);
-        const t0 = chars * SAY_CHAR_SEC + Math.max(1.1, lines.length * 0.5);
-        this.bubble = { lines, text: lines[0], color, t: t0, t0, charSec: SAY_CHAR_SEC };
+        // #bubble ONE line at a time (typewriter within the line), advancing through EVERY line — a 9-line saying
+        // shows all 9, one after the other (no 4-line cap). t0 scales with the line count so it stays up for all
+        // of them + a tail; the congregation director reads t0 for its turn cadence.
+        const t0 = lines.length * SAY_LINE_SEC + 0.4;
+        this.bubble = { lines, text: lines[0], color, t: t0, t0, lineSec: SAY_LINE_SEC, charSec: SAY_CHAR_SEC };
     }
 
     // #dialogue-pacing — speak after a delay, so a reply doesn't stack on top of the line it answers and a
@@ -10963,11 +10981,16 @@ export class Farmer {
                 if (this.fightTimer <= 0) this.state = 'decide';
                 break;
             case 'flee': {   // bolt for a REAL refuge, sidestepping obstacles as they run
-                // #flee-foresight the homestead is only a refuge if its FENCE IS ACTUALLY UP — an open, half-fenced
-                // plot is no safe spot (the threat just follows them in, as it should). With no complete fence to
-                // duck behind, they run for the PLAZA instead — the settled heart, where the town can lend a hand.
-                const fenced = this.plot && this.plot.sited && this.plot.built.fence;
-                const home = fenced ? { i: this.plot.x + 6, j: this.plot.y + 6 } : { i: CENTER, j: CENTER };
+                // #flee-foresight the homestead is a real refuge against a BEAST behind a COMPLETE fence. A FOE
+                // (orc/assassin) BREACHES the fence, so it's no true safety. A WARY farmer (mauled by a foe before,
+                // threatWary.foe >= 1) KNOWS this and runs for the PLAZA + help directly; a naive one still runs
+                // home — until the foe bashes the fence down (built.fence flips false), when this same check
+                // re-routes them to the plaza. That's the realization: "it's not safe here — I have to get help."
+                const enc = this.world.encounterFor(this);
+                const foe = !!(enc && enc.def && enc.def.kind === 'foe');
+                const wary = (this.threatWary.foe || 0) >= 1;
+                const homeSafe = this.plot && this.plot.sited && this.plot.built.fence && !(foe && wary);
+                const home = homeSafe ? { i: this.plot.x + 6, j: this.plot.y + 6 } : { i: CENTER, j: CENTER };
                 const dx = home.i - this.pos.i, dy = home.j - this.pos.j, d = Math.hypot(dx, dy) || 1;
                 const sp = this.speed * 1.2 * dt;
                 const ni = this.pos.i + dx / d * sp, nj = this.pos.j + dy / d * sp;
