@@ -561,9 +561,12 @@ function itemIcon(idx) {
     if (!img) { img = new Image(); img.onerror = () => {}; img.src = `${ITEM_ICON_BASE}${idx}_1.png`; itemIcons[idx] = img; }
     return img;
 }
+// #town-icons world-map culture markers — a fantasy-icon per town kind, so human vs orc reads at a glance (TEST).
+const TOWN_ICON = { human: 30, orc: 65 };
 // preload the icons we know we'll draw
 for (const it of Object.values(ITEMS)) itemIcon(it.icon);
 for (const r of CRAFTABLES) itemIcon(r.icon);
+itemIcon(TOWN_ICON.human); itemIcon(TOWN_ICON.orc);   // #town-icons world-map culture markers (30 farmers / 65 orcs)
 
 // #107 recipe INGREDIENT icons. The RECIPES tab shows a recipe's contents as imagery + a quantity badge
 // instead of a wall of words. Goods that already have a PROCEDURAL icon (GOOD_ICON above: fish/lily/egg/milk/
@@ -3120,25 +3123,23 @@ function drawWorldMap() {
     const idx = worldMapIdx || { towns: {}, encounters: [] };
     const nodes = computeLayout(idx);
     const enc = idx.encounters || [];
-    const travCount = Object.values(idx.pairs || {}).filter(p => p.state === 'enRoute').length;
-    const hdr = `${nodes.length} town${nodes.length !== 1 ? 's' : ''} - ${enc.length} encounter${enc.length !== 1 ? 's' : ''}${travCount ? ` - ${travCount} traveling` : ''}`;
-    drawText(ctx, hdr, PX + 7, PY + 14, '#9aa0b4');
 
-    // header buttons (top-right, left of the X): KEY (legend overlay) + FOUND (birth a town). Small chips.
+    // header buttons UNDER the title, left-aligned (where the town/encounter counts used to be): KEY (legend) +
+    // CREATE TOWN (birth a colony). The counts line was removed — the map itself shows what's out there.
     worldMapUiHits = {};
     {
-        const chip = (label, rx, active, accent) => {
-            const w = textWidth(label) + 8;
-            const b = { x: rx - w, y: PY + 3, w, h: 9 };
+        let bx = PX + 7; const by = PY + 13;
+        const chip = (label, active, accent) => {
+            const w = textWidth(label) + 8, b = { x: bx, y: by, w, h: 9 };
             ctx.fillStyle = active ? hexA(accent, 0.20) : 'rgba(255,255,255,0.05)';
             ctx.fillRect(b.x, b.y, w, 9);
             if (active) { ctx.fillStyle = accent; ctx.fillRect(b.x, b.y + 8, w, 1); }
             drawText(ctx, label, b.x + 4, b.y + 2, active ? accent : '#9aa0b4');
+            bx += w + 4;
             return b;
         };
-        const foundB = chip('+ FOUND', PX + PW - 16, worldMapFoundOpen, '#7dd069');
-        const keyB = chip('KEY', foundB.x - 4, worldMapKeyOpen, '#c8b0e0');
-        worldMapUiHits.found = foundB; worldMapUiHits.key = keyB;
+        worldMapUiHits.key = chip('KEY', worldMapKeyOpen, '#c8b0e0');
+        worldMapUiHits.found = chip('CREATE TOWN', worldMapFoundOpen, '#7dd069');
     }
 
     // RESERVE the footer's height (+padding) out of the map region, so the town nodes are always laid out
@@ -3157,6 +3158,10 @@ function drawWorldMap() {
     const toX = n => mapX + mapW / 2 + (n.x - cx) * S;
     const toY = n => mapY + mapH / 2 + (n.y - cy) * S;
     const bySeed = new Map(nodes.map(n => [String(n.seed), n]));
+
+    // CLIP all map content (halos, reach/rumor rings, lines, travelers, dots) to the map viewport so nothing —
+    // especially a big reach halo or a hover ring — spills past the panel frame into the world behind it.
+    ctx.save(); ctx.beginPath(); ctx.rect(mapX, mapY, mapW, mapH); ctx.clip();
 
     // faint memory-tinted reach halos
     for (const n of nodes) { ctx.beginPath(); ctx.arc(toX(n), toY(n), Math.max(4, n.reach * S), 0, Math.PI * 2); ctx.fillStyle = `hsla(${n.tint.h} ${n.tint.s}% 55% / 0.06)`; ctx.fill(); }
@@ -3225,16 +3230,30 @@ function drawWorldMap() {
             worldMapTravHits.push({ x: mx, y: my, r: 4, kind: 'news', origin: O.name, destination: D.name, arrivalDay: nw.arrivalDay });
         }
     }
-    // town dots + labels
+    // town markers + labels — #town-icons TEST: a culture ICON (30 farmers / 65 orc) so kind reads at a glance,
+    // with a faint memory-tinted disc behind it (keeps a little of the per-town colour). Falls back to a plain
+    // tinted dot until the icon image loads. Hit-radius/label offset track the icon size.
     for (const n of nodes) {
-        const x = toX(n), y = toY(n), r = Math.max(2, Math.min(6, 2 + n.pop * 0.3));
+        const x = toX(n), y = toY(n);
         const active = world && String(n.seed) === String(world.seed);
         const seld = worldMapSel != null && String(n.seed) === String(worldMapSel);
-        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fillStyle = n.tint.css; ctx.fill();
-        if (active || seld) { ctx.strokeStyle = active ? '#f0e0a0' : '#ffffff'; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(x, y, r + 2, 0, Math.PI * 2); ctx.stroke(); }
-        drawText(ctx, n.name.split(' ')[0], x + r + 2, y - 3, active ? '#f0e0a0' : '#c8ccd8');
-        worldMapHits.push({ seed: n.seed, x, y, r: r + 3 });
+        const ico = itemIcon(n.culture === 'orc' ? TOWN_ICON.orc : TOWN_ICON.human);
+        const isz = 16, rad = isz / 2;
+        if (ico && ico.complete && ico.naturalWidth) {
+            ctx.fillStyle = `hsla(${n.tint.h} ${n.tint.s}% 50% / 0.30)`; ctx.beginPath(); ctx.arc(x, y, rad, 0, Math.PI * 2); ctx.fill();
+            ctx.drawImage(ico, Math.round(x - rad), Math.round(y - rad), isz, isz);
+            if (active || seld) { ctx.strokeStyle = active ? '#f0e0a0' : '#ffffff'; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(x, y, rad + 1, 0, Math.PI * 2); ctx.stroke(); }
+            drawText(ctx, n.name.split(' ')[0], x + rad + 2, y - 3, active ? '#f0e0a0' : '#c8ccd8');
+            worldMapHits.push({ seed: n.seed, x, y, r: rad + 1 });
+        } else {
+            const r = Math.max(2, Math.min(6, 2 + n.pop * 0.3));
+            ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fillStyle = n.tint.css; ctx.fill();
+            if (active || seld) { ctx.strokeStyle = active ? '#f0e0a0' : '#ffffff'; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(x, y, r + 2, 0, Math.PI * 2); ctx.stroke(); }
+            drawText(ctx, n.name.split(' ')[0], x + r + 2, y - 3, active ? '#f0e0a0' : '#c8ccd8');
+            worldMapHits.push({ seed: n.seed, x, y, r: r + 3 });
+        }
     }
+    ctx.restore();   // end map-viewport clip (the footer card + overlays below draw unclipped)
     // selected-town info bar (fixed footer). The map region above reserves its height, so it never clips a town.
     if (worldMapSel != null) {
         const n = bySeed.get(String(worldMapSel));
@@ -3274,10 +3293,12 @@ function drawWorldMap() {
     if (hovT) {
         const RUMOR = 1.9;   // == reconciliation.js TRAVELER.rumorMult — a scout sets out when reaches drift within reach-sum*this
         const hx = toX(hovT), hy = toY(hovT);
+        ctx.save(); ctx.beginPath(); ctx.rect(mapX, mapY, mapW, mapH); ctx.clip();   // mask the rings to the map viewport
         ctx.strokeStyle = `hsla(${hovT.tint.h} ${hovT.tint.s}% 62% / 0.55)`; ctx.lineWidth = 1;
         ctx.beginPath(); ctx.arc(hx, hy, Math.max(4, hovT.reach * S), 0, Math.PI * 2); ctx.stroke();     // REACH (influence)
         ctx.strokeStyle = `hsla(${hovT.tint.h} ${hovT.tint.s}% 62% / 0.26)`; ctx.setLineDash([2, 3]);
         ctx.beginPath(); ctx.arc(hx, hy, Math.max(6, hovT.reach * S * RUMOR), 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);   // RUMOR
+        ctx.restore();
     }
     // a boxed multi-line tooltip near the cursor, clamped inside the panel
     const worldTip = (lines, accent) => {
