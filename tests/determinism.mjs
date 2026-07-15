@@ -26,10 +26,13 @@ const BASELINE = {
     // homestead; (2) the ACTION_ENERGY falsy-0 bug fixed (`?? 0.05`, not `|| 0.05`) so plant/harvest/clear are
     // truly FREE and tilling is a light 0.017 (was silently 0.05) — which shifts every farming day's energy curve.
     // same-twice held all seeds (fully reproducible; only the fingerprint moved).
-    20260706: 'cc596997',
-    42: '4b2c6cac',
-    7: 'a71885da',
-    3: 'c897836c',
+    // re-baselined 2026-07-15 — the day's WATCHER now prioritises the watch: they prowl the perimeter day AND
+    // night on their rotation day even before their own house is up (was gated on being housed, so an early
+    // unhoused watcher farmed to exhaustion instead of keeping the beat). same-twice held all seeds.
+    20260706: '20f5b60a',
+    42: 'c9efadbb',
+    7: 'e01f8331',
+    3: 'af6c6cdb',
 };
 
 function boot(seed, culture) {

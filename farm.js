@@ -7879,8 +7879,11 @@ export class Farmer {
     // (sick/exhausted) is handled ABOVE this in #decide, and an un-roofed founder BUILDS/SHELTERS first (they take
     // up the full watch once they've a roof) — so the early days don't strand a homeless founder on the perimeter.
     #onWatchDuty() {
-        if (this.health === 'sick' || this.downed) return false;
-        if (this.plot.built.level < 1) return false;
+        if (this.health === 'sick' || this.downed) return false;   // genuine survival (sick/exhausted) still comes first (handled above in #decide)
+        if (!this.plot.sited) return false;                        // still homesteading — not settled enough to stand a watch
+        // #watch the day's watcher makes the WATCH their PRIORITY — they prowl the perimeter day AND night, not
+        // farm their plot to exhaustion (whether or not their own house is up yet; it's one day's civic duty on
+        // the rotation, and patrolling doesn't tire them). They build/farm on the days they're NOT the watcher.
         return this.world.currentSentry() === this;
     }
     // #watch — stand the beat: pace to the next perimeter post, hold there to scan, then move to the next (the
