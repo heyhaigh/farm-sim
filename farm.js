@@ -685,6 +685,13 @@ const ECHO_TEMPLATES = {
     wonder: [(a, b) => `REMINDS ME OF THE ${a} — THE ${b}.`, (a) => `THE ${a}... I'D ALMOST FORGOTTEN.`],
     bond: [(a) => `LIKE THE ${a}, ONCE. GOOD NOT TO BE ALONE.`, (a, b) => `THE ${a}, THE ${b} — I KNEW FOLK LIKE THIS.`],
     resolve: [(a) => `THE ${a} MADE ME. I'LL SEE THIS THROUGH.`, (a, b) => `THE ${a}, THE ${b} — I DON'T QUIT.`],
+    // #135 reconciliation's MIDDLE ACT — a soul TORN between the inherited fear (a word from the memory they were
+    // grown from) and the earned belief (they saw an old enemy keep faith). Voiced only NEAR the crossover.
+    reckon: [
+        (a) => `THE ${a} TAUGHT ME TO FEAR THEM... BUT I SAW ONE KEEP FAITH.`,
+        (a, b) => `THE ${a}, THE ${b} — ALL MY LIFE. YET THEY DID NOT BETRAY ME.`,
+        (a) => `I WAS RAISED ON THE ${a}. NOW I'M NO LONGER SO SURE OF IT.`,
+    ],
 };
 function weaveEcho(context, w1, w2, r) {
     const bank = ECHO_TEMPLATES[context] || ECHO_TEMPLATES.wonder;
@@ -7351,6 +7358,10 @@ export class Farmer {
             const nextStrongest = (this.creeds || []).filter(k => k !== c).reduce((m, k) => Math.max(m, k.weight), 0);
             c.weight = authority;
             const overwritten = authority < nextStrongest - 0.05;   // hysteresis margin so it doesn't flicker
+            // #135 reconciliation's MIDDLE ACT — the earned belief has eroded the old creed to the BRINK of the
+            // crossover but not past it: the soul is torn. Voice that tension as a fleeting memory-echo (gated to
+            // this near-crossover band + surfaceMemory's own cooldown, so it's a passing beat, never a badge).
+            if (!overwritten && n >= 1 && authority <= nextStrongest + 0.15) this.surfaceMemory('reckon');
             if (overwritten && !c.overwritten) {
                 c.overwritten = true;
                 this.world.addChronicle('lineage', `${shortName(this)} no longer quotes the old fear - a belief they earned has outweighed the creed they were grown from.`, this, null, '#eef0f4',
