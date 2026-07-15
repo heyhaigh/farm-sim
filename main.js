@@ -5055,6 +5055,9 @@ function townSummary(w) {
             envoy = { seed: f.sheet.seed, curiosity: +(p.curiosity || 0).toFixed(2), honesty: +(p.honesty || 0).toFixed(2), collaboration: +(p.collaboration || 0).toFixed(2) };
         }
     }
+    // #134 the learning arc's TRUCE path: a town that resolved to sue for peace sends its envoy to the frontier
+    // WILLING to talk (the world layer's willParley reads this), so the next cross-faction meeting parleys.
+    if (envoy && w.learned === 'truce') envoy.suePeace = true;
     return {
         seed: w.seed, name: w.name, day: w.day, year: w.year, pop: w.farmers.length,
         harvestTotal: w.harvestTotal || 0, lineage: [...anc], motto, fingerprint: fp >>> 0,

@@ -85,8 +85,10 @@ export function envoyDigest(e) {
 // (This resolves an internal contradiction in the council's spec, which gated orc attendance on honesty>0.45
 // while also requiring honesty<0.3 to betray, making orc betrayal impossible.) Humans have two ways to the
 // table (curiosity OR collaboration); orcs a single, tighter one.
-function humanWillParley(e) { return (e.curiosity || 0) > 0.6 || (e.collaboration || 0) > 0.6; }
-function orcWillParley(e) { return (e.curiosity || 0) > 0.6; }
+// #134 `suePeace` = the town LEARNED (from repeated raids) to seek a truce, so its envoy comes to the table
+// willing even if their raw curiosity/collaboration wouldn't otherwise carry them there.
+function humanWillParley(e) { return !!e.suePeace || (e.curiosity || 0) > 0.6 || (e.collaboration || 0) > 0.6; }
+function orcWillParley(e) { return !!e.suePeace || (e.curiosity || 0) > 0.6; }
 
 export const PARLEY = {
     hostile: { honored: 0.25, betrayed: 0.10 },   // rest -> raid

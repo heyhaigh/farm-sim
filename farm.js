@@ -770,6 +770,8 @@ export class World {
         this.raidEvent = null;     // #Slice3 the in-progress WATCHED raid choreography (live-only, never serialized)
         this.pendingRaid = null;   // #131 a TELEGRAPHED incoming raid: seeded state (rides the save), lands on a
                                    // this.time deadline identically watched or dormant. See applyInbox + #tickPendingRaid.
+        this.raidsSuffered = 0;    // #134 how many raids this town has weathered — drives the LEARNING ARC
+        this.learned = null;       // #134 its learned response once battered enough: 'defense' (hold the wall) | 'truce' (sue for peace)
         this.dmCooldown = 90;      // a grace period before the first threat stalks the young town
         this._live = false;        // #108 true only while this town is the one being WATCHED (set by main.js on
                                    // boot). A cross-town raid landing on a live town STAGES a visible warband +
@@ -2573,6 +2575,7 @@ export class World {
             inboxApplied: (this._inboxApplied || []).slice(-200),   // #reconciliation exactly-once inbox ledger
             inboxWatermark: { ...(this._inboxWatermark || {}) },    // Codex #22.2 durable per-pairKey ordinal watermark
             pendingRaid: this.pendingRaid ? { ...this.pendingRaid, e: { ...this.pendingRaid.e } } : null,   // #131 a telegraphed raid survives a reload (seeded, plain)
+            raidsSuffered: this.raidsSuffered || 0, learned: this.learned || null,   // #134 the learning arc rides the save
             // continue the RNG from a save-derived seed WITHOUT consuming the live stream
             // (saving must never be observable to the sim)
             randSeed: (this.seed ^ Math.imul(this.day, 2654435761) ^ ((this.time * 997) | 0)) >>> 0,
@@ -2706,6 +2709,7 @@ export class World {
         this._inboxApplied = Array.isArray(d.inboxApplied) ? d.inboxApplied : [];   // #reconciliation exactly-once
         this._inboxWatermark = (d.inboxWatermark && typeof d.inboxWatermark === 'object') ? { ...d.inboxWatermark } : {};
         this.pendingRaid = (d.pendingRaid && d.pendingRaid.e) ? { ...d.pendingRaid, e: { ...d.pendingRaid.e } } : null;   // #131 restore a telegraphed raid mid-flight
+        this.raidsSuffered = d.raidsSuffered || 0; this.learned = d.learned || null;   // #134 the learning arc
         this.lineageRoot = d.lineageRoot != null ? String(d.lineageRoot) : String(this.seed);   // #reconciliation lineage root
         this.name = d.name || generateTownName(this.seed, this.culture);   // (pre-name saves regenerate deterministically)
         this.rand = mulberry32(d.randSeed >>> 0);
@@ -2947,6 +2951,10 @@ export class World {
     // martial (raids); a Manager-led or leaderless peaceable town holds the wall. Refined by the pair ledger
     // in the world layer (a much-raided town turns to the palisade). See DOCTRINE_DEFS in reconciliation.js.
     doctrine() {
+        // #134 a town BATTERED into a defensive resolve (the learning arc) holds the wall regardless of who leads —
+        // this is the "much-raided town turns to the palisade" the note promised, now actually wired. Palisade
+        // halves an incoming raid's bite (DOCTRINE_DEFS.biteReduce), so learning defence measurably pays off.
+        if (this.learned === 'defense') return 'palisade';
         const mgr = this.managerFarmer(), wch = this.watchFarmer();
         const martial = !!wch && (!mgr || this.#watchFitness(wch) >= this.#managerFitness(mgr) * 1.05);
         const collab = this.townCollab ?? 0.5, big = this.farmers.length >= 7;
@@ -5787,10 +5795,32 @@ export class World {
     // docked from the harvest AS IT STANDS NOW — the raiders take what's there when they hit, not what was stored
     // when the alarm first went up. Runs in BOTH the watched and dormant path; the cinematic (live-only) is pure
     // display over the resolved snapshot, marched in from the same seeded `dir` the tell pointed at.
+    // #134 THE LEARNING ARC — a town that keeps getting raided REMEMBERS and, once battered enough, LEARNS a
+    // response in its own character: a warm/collaborative town grows weary of the bloodshed and resolves to seek a
+    // TRUCE (its envoy comes to the frontier willing — the world layer parleys instead of raiding); a grim/low-
+    // trust town resolves to make itself too costly and holds the WALL (doctrine -> palisade -> the world layer
+    // halves future bites). Every raid also deepens the townsfolk's wariness of raiders (they rally readier next
+    // time). All seeded/deterministic (no rng); it rides the save and is legible as a grand "the town learned" beat.
+    #townLearns() {
+        this.raidsSuffered = (this.raidsSuffered || 0) + 1;
+        for (const f of this.farmers) if (!f.downed) f.threatWary.foe = (f.threatWary.foe || 0) + 0.5;   // the town remembers
+        if (this.learned || this.raidsSuffered < 2) return;   // one raid is bad luck; a PATTERN (2+) is when a town learns. Sticky once learned.
+        const collab = this.townCollab ?? 0.5;
+        this.learned = collab >= 0.5 ? 'truce' : 'defense';
+        if (this.learned === 'defense') {
+            this.addChronicle('town', `After ${this.raidsSuffered} raids, ${this.name} resolved to make itself too costly to raid — it turns to the wall and keeps a hard watch.`,
+                null, null, '#c8a860', { tier: 'grand', tone: 'somber', label: 'THE TOWN LEARNED: HOLD THE WALL', why: 'battered into a defensive resolve' });
+        } else {
+            this.addChronicle('town', `After ${this.raidsSuffered} raids, ${this.name} grew weary of the bloodshed — it resolved to seek a truce at the frontier, not another fight.`,
+                null, null, '#c8b0e0', { tier: 'grand', tone: 'triumph', label: 'THE TOWN LEARNED: SUE FOR PEACE', why: 'weary of raids, reaching for peace' });
+        }
+    }
+
     #landRaid(e, dir, dirName) {
         const harvest = this.harvestTotal || 0;
         const out = this.#resolveRaid(e, harvest);   // #133 the resolver computes the bite (a rallied defence shaves it)
         this.harvestTotal = Math.max(0, harvest - out.harvestLost);
+        this.#townLearns();   // #134 remember this raid; learn a response once battered enough
         this.addChronicle('raid', `${out.clan} fell upon ${this.name}, carrying off ${out.harvestLost} of its stored harvest — and the town rose to meet them.`,
             null, null, '#e05840', { tier: 'grand', tone: 'somber', label: 'RAIDERS AT THE GATE', why: `raided by ${out.clan}` });
         this.addLog(`${out.clan} descends on ${this.name} — raiders at the fence!`, '#e05040');

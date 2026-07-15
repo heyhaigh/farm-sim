@@ -114,6 +114,24 @@ console.log('#133 — the guard takes the real wound + an honest frozen-roll cou
     ok(a.currentSentry() != null, `a guard stood the line (currentSentry = ${a.currentSentry() ? a.currentSentry().sheet.name.split(' ')[0] : 'none'})`);
 }
 
+// ---------- #134: the learning arc — a battered town learns a character-gated response ----------
+console.log('#134 — repeated raids teach the town a response (defense hardens the wall, truce sues for peace)');
+{
+    const mk = () => { const w = boot(20260706); for (let i = 0; i < 13000; i++) w.tick(DT); return w; };
+    const raid = (w, k) => { w.harvestTotal = 100; w._live = false; w.applyInbox([raidEvt(w, 800 + k, 0.4)]); };
+    // DEFENSE: a grim, low-trust town holds the wall (doctrine -> palisade, which the world layer's biteReduce halves)
+    const d = mk(); d.townCollab = 0.3;
+    raid(d, 1); ok(d.learned == null && d.raidsSuffered === 1, `one raid is bad luck, not yet a lesson (raidsSuffered=${d.raidsSuffered})`);
+    raid(d, 2); ok(d.learned === 'defense' && d.doctrine() === 'palisade', `a grim town LEARNED defence -> palisade (${d.learned}/${d.doctrine()})`);
+    raid(d, 3); ok(d.learned === 'defense', 'the learned response is STICKY across further raids');
+    // TRUCE: a warm, collaborative town sues for peace (envoy comes to the table willing)
+    const t = mk(); t.townCollab = 0.7;
+    raid(t, 1); raid(t, 2);
+    ok(t.learned === 'truce', `a warm town LEARNED to sue for peace (${t.learned})`);
+    const learnBeat = [...d.chronicle, ...t.chronicle].some(c => /THE TOWN LEARNED/.test(c.label || ''));
+    ok(learnBeat, 'a grand "THE TOWN LEARNED" beat is chronicled');
+}
+
 // ---------- P1: monument cap holds across many raids ----------
 console.log('P1 — raid monuments respect the 40-cap over many raids');
 {
