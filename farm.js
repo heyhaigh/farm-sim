@@ -2688,7 +2688,7 @@ export class World {
             farmers: this.farmers.map(f => ({
                 sheet: f.sheet, plotIdx: plotIdx.get(f.plot),
                 pos: { ...f.pos }, facing: f.facing, moveDir: f.moveDir,
-                energy: f.energy, hp: f.hp, sleepDebt: f.sleepDebt, strain: f.strain,
+                energy: f.energy, hp: f.hp, sleepDebt: f.sleepDebt, strain: f.strain, roughStreak: f.roughStreak, nightsExposed: f.nightsExposed,
                 // #Codex24-5: the family of action cooldowns that each GATE a seeded rand() draw. If they reset to
                 // 0 on reload, a restored town re-triggers the throttled action immediately and draws an extra
                 // rand() a non-reloaded town wouldn't — so a reload silently forks the rng trajectory. Persist all.
@@ -2827,7 +2827,7 @@ export class World {
         this.farmers = d.farmers.map(fd => {
             const f = new Farmer(fd.sheet, this.plots[fd.plotIdx], this);
             f.pos = { ...fd.pos }; f.facing = fd.facing; f.moveDir = fd.moveDir;
-            f.energy = fd.energy; f.hp = fd.hp; f.sleepDebt = fd.sleepDebt; f.strain = fd.strain;
+            f.energy = fd.energy; f.hp = fd.hp; f.sleepDebt = fd.sleepDebt; f.strain = fd.strain; f.roughStreak = fd.roughStreak || 0; f.nightsExposed = fd.nightsExposed || 0;
             // #Codex24-5: restore the rng-gating cooldowns (default 0 only for genuinely old saves)
             f.healSeekCd = fd.healSeekCd ?? 0; f.chatCooldown = fd.chatCooldown ?? 0; f.poachCooldown = fd.poachCooldown ?? 0;
             f.teachCooldown = fd.teachCooldown ?? 0; f.sabotageCooldown = fd.sabotageCooldown ?? 0; f.barterCooldown = fd.barterCooldown ?? 0;
@@ -5462,21 +5462,34 @@ export class World {
             // ramps gently (+2/+4/+6). The old +3/+6/+9 from night 2 sicked out a whole homeless founding cast by
             // night 3 — before any tipi could go up (a mass day-3 sick-out).
             const exposure = homeless ? Math.min(6, Math.max(0, f.nightsExposed - 3) * 2) : 0;
-            const risky = (homeless && f.nightsExposed >= 4) || f.energy < 0.3 || f.sleepDebt >= 5 || f.strain >= 4;
-            if (risky) {
-                // sleep debt drives the DC only at HALF weight (was full): a chronic night-owl still risks
-                // illness, but a whole warband of late workers no longer spirals into a perpetual town-wide
-                // sick-out (the debt itself is capped below so the DC can't run away).
-                const dc = 10 + Math.floor(f.sleepDebt / 2) + (f.energy < 0.2 ? 3 : 0) + Math.floor(f.strain / 3) + exposure;
+            // #health a SINGLE rough night is survivable — you power through and it's forgotten. Illness only
+            // threatens when it COMPOUNDS: a STREAK of rough nights running, sleeping ROOFLESS past the grace, or a
+            // rough night through genuinely INCLEMENT weather. The on-duty SENTRY is EXEMPT — standing the watch
+            // means not sleeping, which is their DUTY, not neglect, and one night on the beat must never sicken them.
+            // Even when at risk it's a CON save (a chance, never a certainty) whose DC scales with how much piled up.
+            const roughNight = f.energy < 0.3 || f.sleepDebt >= 5 || f.strain >= 4;
+            f.roughStreak = roughNight ? Math.min(6, (f.roughStreak || 0) + 1) : 0;
+            const inclement = this.weather === 'blizzard' ? 4 : this.weather === 'storm' ? 3 : (this.weather === 'rain' || this.weather === 'drought') ? 1 : 0;
+            // at risk ONLY when it stacks: 2+ rough nights in a row, real roofless exposure, or a rough night in foul
+            // weather. An isolated calm rough night never even rolls — you just look worn and carry on to morning.
+            const atRisk = !f.stoodWatch && (f.roughStreak >= 2 || exposure > 0 || (roughNight && inclement >= 3));
+            if (atRisk) {
+                // DC climbs with the ROUGH-NIGHT STREAK (not one night's debt), roofless exposure, and the weather —
+                // so the first qualifying night is a modest chance for an average CON and it bites harder the longer
+                // it drags on or the worse the sky. Kept below the old flat DC=10+debt so no town-wide sick-out.
+                const dc = 9 + Math.max(0, f.roughStreak - 1) * 2 + exposure + inclement + (f.energy < 0.15 ? 2 : 0);
                 const save = d20(this.rand, mod(f.sheet.stats.con));
                 const exposed = exposure > 0;
                 if (save.total < dc && !save.crit) {
-                    f.fallIll(2 + Math.floor(this.rand() * 3) + (f.strain >= 8 ? 2 : 0) + (exposed ? 1 : 0), exposed ? 'sleeping out in the cold' : 'overworking');
-                    this.addLog(exposed ? `${f.sheet.name} took ill from sleeping out in the cold! (CON ${save.total} vs DC ${dc})` : `${f.sheet.name} fell ill from overwork! (CON ${save.total} vs DC ${dc})`, '#c05840');
+                    f.fallIll(2 + Math.floor(this.rand() * 3) + (exposed ? 1 : 0) + (inclement >= 3 ? 1 : 0),
+                        exposed ? 'sleeping out in the cold' : inclement >= 3 ? 'a rough night out in foul weather' : 'a run of hard nights');
+                    this.addLog(`${f.sheet.name} took ill — ${exposed ? 'no roof against the cold' : inclement >= 3 ? 'a night out in the weather' : 'one hard night too many'}. (CON ${save.total} vs DC ${dc})`, '#c05840');
                     f.say(exposed ? 'I need a roof...' : 'I... dont feel well', '#c05840');
+                    f.roughStreak = 0;   // the tab's been paid — reset the streak
                 } else if (exposed) this.addLog(`${f.sheet.name} shivered through another roofless night (CON ${save.total} vs ${dc})`, '#e0a03c');
-                else if (f.sleepDebt >= 2 || f.strain >= 5) this.addLog(`${f.sheet.name} looks worn out but powers through (CON ${save.total} vs ${dc})`, '#e0a03c');
+                else this.addLog(`${f.sheet.name} looks worn from a hard run of nights but powers through (CON ${save.total} vs ${dc})`, '#e0a03c');
             }
+            f.stoodWatch = false;   // clear the nightly watch-exemption flag (set while on the beat at night)
             f.strain = Math.max(0, f.strain - 4);   // a night's rest works off most of the strain
             // a personal run of storm losses fades if the sky stops singling them out (the town's
             // collective tally persists until the guardian actually goes up)
@@ -6982,6 +6995,8 @@ export class Farmer {
         this.hp = this.maxHp;                     // LIFE: bled by combat + untreated illness, knit back by REST
         this.sleepDebt = 0;
         this.strain = 0;   // accumulates when laboring while exhausted -> sickness risk
+        this.roughStreak = 0;   // #health consecutive "rough nights" (low energy / high debt / high strain) -> escalating illness risk
+        this.stoodWatch = false;   // #health set while on the beat at night -> exempt from that dawn's sleep-out sickness roll
         this.health = 'healthy';
         this.sickDays = 0;
         this.workedLate = false;
@@ -7973,6 +7988,7 @@ export class Farmer {
     // alarm rouses farmers (a real, deterministic sim effect), so the day-2+ digest re-baselines with this.
     #takeWatch() {
         const w = this.world;
+        if (w.isNight()) this.stoodWatch = true;   // #health on the beat at night instead of sleeping — exempt from the dawn sleep-out sickness roll
         const threat = this.#spotThreat();
         if (threat) {
             this.#soundWatchAlarm(threat);

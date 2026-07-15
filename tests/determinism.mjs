@@ -50,10 +50,15 @@ const BASELINE = {
     // which at matched speed it rarely did, so an intercepting guard was inert). Together: a defended fleeing farmer's
     // foe now takes damage / is driven off. Verified: foe HP 4→1 while the quarry fled + the sentry fought. same-twice
     // held; the day-2+ trajectory shifts wherever a guard engages a foe in the run.
-    20260706: 'cc2b11e5',
-    42: '9485255c',
-    7: '359ecd18',
-    3: '1c8440c8',
+    // re-baselined 2026-07-15 — SLEEP-OUT SICKNESS reworked: (1) the on-duty SENTRY is exempt from the dawn illness
+    // roll (standing watch = not sleeping is their duty — `stoodWatch` flag); (2) a single CALM rough night never
+    // rolls — illness needs a STREAK (`roughStreak>=2`), roofless exposure past the grace, or a rough night in
+    // inclement weather (storm/blizzard), always a CON save whose DC scales with the streak/exposure/weather. New
+    // serialized farmer fields `roughStreak`/`nightsExposed`. Changes the day-2+ dawn-check trajectory; same-twice held.
+    20260706: 'b9fdb11b',
+    42: '49314834',
+    7: '246728a5',
+    3: '640f109e',
 };
 
 function boot(seed, culture) {
