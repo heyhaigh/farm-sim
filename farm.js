@@ -5643,33 +5643,67 @@ export class World {
         if (this.monuments.length > 40) this.monuments.shift();
     }
 
-    #resolveRaid(e, lost) {
+    // #133 — the AUTHORITATIVE raid resolution + a FROZEN COUNTERFACTUAL. `#scoreRaid` is a pure scorer over the
+    // rolls; we run it TWICE on the SAME seeded stream (identical rolls) — once with the guard on the line, once
+    // WITHOUT — so the delta is the guard's honest marginal effect (never roll-variance). The counterfactual is a
+    // display side-channel: its own fresh stream, never applied, so it can't perturb the authoritative outcome.
+    #resolveRaid(e, harvest) {
         const rid = e.id || `${e.pairKey}:${e.ordinal}`;
-        const r = mulberry32(hashString('raidres:' + rid + ':' + this.seed));
-        const n = Math.min(4, 2 + Math.round((e.commit ?? 0.2) * 4));   // raider party size
         const defenders = this.farmers.filter(f => !f.downed && f.health !== 'sick');
-        const watch = this.watchFarmer();
+        const g = this.currentSentry();   // the one on the exposed line: rotation-holder / elected Watch / whisper-posted
+        const guard = (g && !g.downed && g.health !== 'sick' && defenders.includes(g)) ? g : null;
+        const out = this.#scoreRaid(e, rid, harvest, defenders, guard, 'raidres');
+        if (guard) {
+            const cf = this.#scoreRaid(e, rid, harvest, defenders.filter(f => f !== guard), null, 'raidres');
+            out.marginal = { felled: out.felled - cf.felled, lost: cf.harvestLost - out.harvestLost, guardSeed: guard.sheet.seed };
+        }
+        out.clan = e.by || 'a warband';
+        return out;
+    }
+
+    // #133 — score a raid over a FIXED-LENGTH seeded roll sequence (so the guard-in / guard-out runs stay
+    // roll-aligned for an honest counterfactual). The guard's worth = detection + RALLY (a defPower bump, NOT
+    // stackable flat combat power — one good lookout is enough, per #131). A stronger, rallied defence fells more
+    // raiders AND shaves the stores carried off. The guard stands the exposed line: they rank first for wounds and,
+    // in a severe raid met thin, can be OVERWHELMED and DOWNED — the real cost of gambling a specific person.
+    #scoreRaid(e, rid, harvest, defenders, guard, seedTag) {
+        const r = mulberry32(hashString(seedTag + ':' + rid + ':' + this.seed));
+        const commit = e.commit ?? 0.2;
+        const n = Math.min(4, 2 + Math.round(commit * 4));   // raider party size (depends only on commit — same both runs)
         let defPower = 0;
-        for (const f of defenders) defPower += 1 + Math.max(0, mod(f.sheet.stats.str)) * 0.5 + (f === watch ? 1.5 : 0);
-        const doc = this.doctrine();
-        const wallBonus = doc === 'palisade' ? 1.4 : doc === 'greatMuster' ? 1.2 : 1;
+        for (const f of defenders) defPower += 1 + Math.max(0, mod(f.sheet.stats.str)) * 0.5;
+        if (guard) defPower += 2.5 + Math.max(0, mod(guard.sheet.stats.str)) * 0.5;   // the lookout who rallied the town
+        const wallBonus = this.doctrine() === 'palisade' ? 1.4 : this.doctrine() === 'greatMuster' ? 1.2 : 1;
         const FOE = ['Gruk', 'Morg', 'Tharg', 'Uzka', 'Drek', 'Snaga', 'Krul', 'Bolg'];
         const EPI = ['of the Red Fen', 'the Fence-Breaker', 'of the Black Pines', 'the Crop-Burner', 'One-Tusk', 'the Howler'];
-        // felling a raider is HARD — a raid should usually carry off stores and get away; the Watch only
-        // sometimes avenges one (a rare stand → a meaningful monument). Capped so a crushing defence can't
-        // litter the map with stones. (Balance: raids are a threat, memorials stay rare.)
+        // FELLED — draw a FIXED n iterations (4 rolls each) regardless of the guard, so the counterfactual is
+        // roll-aligned; decide inside. Felling a raider is HARD (a raid usually carries off stores and gets away).
         let felled = 0; const felledNames = [];
-        for (let k = 0; k < n && felled < 2; k++) {
+        for (let k = 0; k < n; k++) {
             const townRoll = (defPower / n) * wallBonus * (0.5 + r() * 0.8);
-            const raiderRoll = 3 + (e.commit ?? 0.2) * 3.5 * (0.5 + r() * 0.9);
-            if (townRoll > raiderRoll) { felled++; felledNames.push(`${FOE[Math.floor(r() * FOE.length)]} ${EPI[Math.floor(r() * EPI.length)]}`); }
+            const raiderRoll = 3 + commit * 3.5 * (0.5 + r() * 0.9);
+            const nm1 = Math.floor(r() * FOE.length), nm2 = Math.floor(r() * EPI.length);   // always draw (sequence alignment)
+            if (felled < 2 && townRoll > raiderRoll) { felled++; felledNames.push(`${FOE[nm1]} ${EPI[nm2]}`); }
         }
-        // the clash costs the town — a few hale defenders (the Watch + strongest first) take wounds
-        const woundCount = Math.min(defenders.length, Math.round((e.commit ?? 0.2) * 3 * (0.5 + r())));
-        const ranked = [...defenders].sort((a, b) => ((b === watch ? 1 : 0) - (a === watch ? 1 : 0)) || (mod(b.sheet.stats.str) - mod(a.sheet.stats.str)) || (a.sheet.seed - b.sheet.seed));
+        // BITE — stores carried off. Base = harvest x commit; a strong, rallied defence drives them off before
+        // they strip the stores (deterministic from defPower, so the guard's marginal effect is clean).
+        const defShave = Math.max(0, Math.min(0.4, (defPower - 6) * 0.028));
+        const harvestLost = Math.max(0, Math.round(harvest * commit * (1 - defShave)));
+        // WOUNDS — a few hale defenders take them, the guard (on the line) + strongest first
+        const woundRoll = r();
+        const woundCount = Math.min(defenders.length, Math.round(commit * 3 * (0.5 + woundRoll)));
+        const ranked = [...defenders].sort((a, b) => ((b === guard ? 1 : 0) - (a === guard ? 1 : 0)) || (mod(b.sheet.stats.str) - mod(a.sheet.stats.str)) || (a.sheet.seed - b.sheet.seed));
         const woundSeeds = ranked.slice(0, woundCount).map(f => f.sheet.seed);
-        const hero = felled > 0 ? (watch || ranked[0] || null) : null;
-        return { harvestLost: lost, n, felled, felledNames, woundSeeds, heroSeed: hero ? hero.sheet.seed : null, clan: e.by || 'a warband' };
+        // GUARD DOWNED — always draw the roll (alignment). The guard on the exposed line can be overwhelmed when
+        // the raid is severe, the town met it thin, and few raiders were felled — tempered by their grit (CON).
+        const downRoll = r();
+        let guardDowned = false;
+        if (guard) {
+            const risk = commit * 1.3 - defenders.length * 0.04 - Math.max(0, mod(guard.sheet.stats.con)) * 0.05 - felled * 0.08;
+            guardDowned = downRoll < Math.max(0, Math.min(0.55, risk));
+        }
+        const hero = felled > 0 ? (guard || ranked[0] || null) : null;
+        return { harvestLost, n, felled, felledNames, woundSeeds, guardDowned, guardSeed: guard ? guard.sheet.seed : null, heroSeed: hero ? hero.sheet.seed : null };
     }
 
     // #legibility Slice 3 / #Codex23 — apply a resolved raid outcome: monuments for felled raiders at
@@ -5690,6 +5724,21 @@ export class World {
             monSpots.push(spot);
         }
         for (const seed of out.woundSeeds) { const f = this.farmers.find(x => x.sheet.seed === seed); if (f && !f.downed) { f.hp = Math.max(1, Math.round(f.maxHp * 0.45)); f._wasHurt = true; f.threatAlert = Math.max(f.threatAlert || 0, 2); } }
+        // #133 THE REAL WOUND — the guard on the exposed line, overwhelmed in a severe raid met thin, is DOWNED
+        // (not a scratch): carried home, out for days, healing via the health economy (rest + the healer mend them
+        // faster) — the cost of gambling a specific person you posted to the watch. Reuses the foe-down reset.
+        if (out.guardDowned && out.guardSeed != null) {
+            const gu = this.farmers.find(f => f.sheet.seed === out.guardSeed);
+            if (gu && !gu.downed) {
+                gu.downed = true; gu.reviveDay = this.day + 3; gu.state = 'downed'; gu.hp = 0; gu.combatStance = null; gu._wasHurt = true;
+                const home = gu.plot && gu.plot.sited ? this.houseDoor(gu.plot) : { i: gu.pos.i, j: gu.pos.j };
+                gu.pos = { i: home.i, j: home.j };
+                this.recordEncounter(gu, { kind: 'foe', name: 'raiders' }, 'downed');
+                this.addChronicle('peril', `${shortName(gu)} held the line against ${out.clan} and was struck down — the town's watcher, carried home to mend.`,
+                    gu, null, '#e03828', { tier: 'grand', tone: 'somber', label: 'THE WATCHER FELL', why: 'downed holding the line against a raid' });
+                this.addLog(`${shortName(gu)} was struck down holding the line against ${out.clan}.`, '#e03828');
+            }
+        }
         for (const f of this.farmers) f.threatAlert = Math.max(f.threatAlert || 0, 1.5);   // the whole town is roused — authoritative (both paths), so watched behaves like dormant
         if (out.felled > 0) {
             const tail = out.felled > 1 ? ` and ${out.felled - 1} more` : '';
@@ -5698,6 +5747,22 @@ export class World {
         } else {
             this.addChronicle('raid', `${out.clan} slipped away clean with ${this.name}'s stores — not a raider felled.`,
                 null, null, '#e05840', { tier: 'callout', tone: 'somber', why: 'a raid that got away' });
+        }
+        // #133 THE COUNTERFACTUAL — honestly report what the guard's watch actually changed (frozen-roll delta),
+        // including the zero-delta case: sometimes one lookout turns the raid, sometimes the town would have met
+        // it the same either way. This is what makes posting a watcher (#132) a decision with felt, legible stakes.
+        if (out.marginal) {
+            const m = out.marginal, gu = this.farmers.find(f => f.sheet.seed === m.guardSeed), gn = gu ? shortName(gu) : 'the watch';
+            if (m.felled > 0 || m.lost > 0) {
+                const parts = [];
+                if (m.felled > 0) parts.push(`${m.felled} raider${m.felled > 1 ? 's' : ''} would have gotten away unscathed`);
+                if (m.lost > 0) parts.push(`${out.clan} would have carried off ${m.lost} more`);
+                this.addChronicle('legend', `Had ${gn} not kept the watch, ${parts.join(' and ')} — the alarm turned the raid.`,
+                    gu, null, '#e0c060', { tier: 'callout', tone: 'triumph', why: 'the watch measurably changed the raid' });
+            } else {
+                this.addChronicle('raid', `${gn} kept the watch, but ${out.clan} would have been met the same either way — the town's strength turned them, not one lookout.`,
+                    gu, null, '#b0b8c8', { tier: 'callout', tone: 'somber', why: 'the watch made no measurable difference this time' });
+            }
         }
         return monSpots;
     }
@@ -5709,10 +5774,10 @@ export class World {
     // when the alarm first went up. Runs in BOTH the watched and dormant path; the cinematic (live-only) is pure
     // display over the resolved snapshot, marched in from the same seeded `dir` the tell pointed at.
     #landRaid(e, dir, dirName) {
-        const lost = Math.round((this.harvestTotal || 0) * (e.commit ?? 0.2));
-        this.harvestTotal = Math.max(0, (this.harvestTotal || 0) - lost);
-        const out = this.#resolveRaid(e, lost);
-        this.addChronicle('raid', `${out.clan} fell upon ${this.name}, carrying off ${lost} of its stored harvest — and the town rose to meet them.`,
+        const harvest = this.harvestTotal || 0;
+        const out = this.#resolveRaid(e, harvest);   // #133 the resolver computes the bite (a rallied defence shaves it)
+        this.harvestTotal = Math.max(0, harvest - out.harvestLost);
+        this.addChronicle('raid', `${out.clan} fell upon ${this.name}, carrying off ${out.harvestLost} of its stored harvest — and the town rose to meet them.`,
             null, null, '#e05840', { tier: 'grand', tone: 'somber', label: 'RAIDERS AT THE GATE', why: `raided by ${out.clan}` });
         this.addLog(`${out.clan} descends on ${this.name} — raiders at the fence!`, '#e05040');
         const monSpots = this.#applyRaidOutcome(out, e);

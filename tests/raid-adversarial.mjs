@@ -99,6 +99,21 @@ console.log('P0#4 — a raid consumed while dormant docks stores immediately (ne
     ok(w.harvestTotal < 100 && w.pendingRaid == null, `dormant consume docked stores with zero live ticks (${w.harvestTotal})`);
 }
 
+// ---------- #133: the guard's real wound + a frozen-roll counterfactual, WITHOUT perturbing the outcome ----------
+console.log('#133 — the guard takes the real wound + an honest frozen-roll counterfactual');
+{
+    // a guard present must NOT change determinism of the authoritative roll (the counterfactual is a fork): the
+    // same raid on the same town resolves byte-identically twice.
+    const mk = () => { const w = boot(20260706); for (let i = 0; i < 13000; i++) w.tick(DT); w.harvestTotal = 100; w._live = false; w.applyInbox([raidEvt(w, 501, 0.5)]); return w; };   // past day 1 -> the founders' watch rotation is seeded, so a guard stands
+    const a = mk(), b = mk();
+    ok(a.harvestTotal === b.harvestTotal, `authoritative outcome reproducible with the counterfactual fork (${a.harvestTotal} == ${b.harvestTotal})`);
+    // a counterfactual line is chronicled (either "turned the raid" or the zero-delta "met the same either way")
+    const cf = a.chronicle.slice(-8).map(c => c.text).some(t => /kept the watch|not kept the watch|met the same either way|turned the raid/i.test(t));
+    ok(cf, 'a frozen-roll counterfactual is reported (marginal effect, zero-delta kept)');
+    // a housed/rostered guard exists as currentSentry by now, so the marginal path ran
+    ok(a.currentSentry() != null, `a guard stood the line (currentSentry = ${a.currentSentry() ? a.currentSentry().sheet.name.split(' ')[0] : 'none'})`);
+}
+
 // ---------- P1: monument cap holds across many raids ----------
 console.log('P1 — raid monuments respect the 40-cap over many raids');
 {
