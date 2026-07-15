@@ -5094,13 +5094,15 @@ async function registerWorld(w, summary) {
 const inboxEventId = e => e.id || `${e.pairKey}:${e.ordinal}:${e.kind}`;
 async function consumeInbox(w, events) {
     w.applyInbox(events);                          // idempotent: re-delivered events are skipped by applied-id
+    // #Codex30/#Codex31 P1 — applyInbox may have changed this town's DOCTRINE/ENVOY (a raid it LEARNED from: #134
+    // defence -> palisade, or truce -> envoy.suePeace); republish its summary so another tab can't resolve an
+    // encounter against the stale pre-raid posture. Capture the summary NOW, SYNCHRONOUSLY with saveTown's own
+    // serialize (both run before the first await), so it reflects exactly the saved snapshot — NOT newer state the
+    // sim advanced into while saveTown awaited IndexedDB. The committed rev is stamped after the save succeeds.
+    const summary = townSummary(w);
     const saved = await saveTown(w);               // persist applied effects + applied-ids BEFORE clearing
     if (saved == null) return;                     // save failed -> do NOT clear; the inbox replays next time
-    // #Codex30 P1 — applyInbox may have changed this town's DOCTRINE/ENVOY (a raid it LEARNED from: #134 defence
-    // -> palisade, or truce -> envoy.suePeace). Capture a fresh summary NOW (synchronous with the just-saved
-    // state) so we can republish it in the SAME transaction that clears the inbox — else the index keeps the
-    // stale pre-raid posture until the next daily register, and another tab could resolve an encounter against it.
-    const summary = townSummary(w); summary.rev = w._rev;
+    summary.rev = w._rev;                          // stamp the COMMITTED rev (as maybeAutosave does)
     // clear everything we processed — EXCEPT a traveler still en route (arrivalDay in the future): it must
     // linger in the inbox until the sim reaches its day, when Slice C consumes it. (applyInbox leaves it too.)
     const done = new Set(events.filter(e => !(e.kind === 'traveler' && (e.day || 0) > w.day)).map(inboxEventId));

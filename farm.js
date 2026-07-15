@@ -6011,7 +6011,10 @@ export class World {
         if (e.bashT < 1.5) return;
         e.bashT = 0;
         p.fencePosts = Math.max(0, (p.fencePosts || 0) - 1);
-        if (p.fencePosts < (p.fenceTarget || 1)) { p.built.fence = false; p.building = null; }   // the line is breached — no longer a wall
+        // #Codex31 P1 — the line is breached (no longer a wall), but DON'T touch p.building: a house upgrade in
+        // progress keeps its paid materials + progress (it's just PAUSED while the fence is down — the repair
+        // branch in #decide preempts it, then it resumes). The owner (housed or not) rebuilds the fence.
+        if (p.fencePosts < (p.fenceTarget || 1)) p.built.fence = false;
         p.rev = (p.rev || 0) + 1;
         const owner = this.farmers.find(f => f.plot === p);
         this.addLog(`${e.foeName ? `${e.def.name} - ${e.foeName}` : e.def.name} bashes through ${owner ? shortName(owner) + "'s" : 'the'} fence!`, '#e05040');
@@ -8705,6 +8708,37 @@ export class Farmer {
 
     // A raw settler clears their land, fences it, then raises a house — before normal farming.
     // Returns true if it took an action this tick.
+    // #Codex31 build OR REPAIR the plot fence, one post at a time (clear the line, gather wood, raise a
+    // post). Shared by a new settler homesteading AND by any owner (housed too) whose fence a raider
+    // bashed down (#foeBashFence). Returns true if it took the tick (it always does work when called).
+    #pursueFence() {
+        const w = this.world, p = this.plot;
+        if (!p.fenceTarget) p.fenceTarget = w.fencePostTarget(p);
+        // the whole fence line must be clear first — no post goes up while a rock/tree/brush
+        // still sits on ANY border tile. Clear the nearest such obstacle, then raise posts.
+        const blocker = this.#nearestFenceLineObstacle(p);
+        if (blocker) {
+            this.think('CLEARING THE FENCE LINE');
+            if (this.#clearObstacle(blocker)) return true;
+            // genuinely unreachable (e.g. a rock walled in by water) — give up on it so the
+            // fence can still finish instead of retrying the same tile forever.
+            (p.fenceSkip || (p.fenceSkip = new Set())).add(pkey(blocker.i, blocker.j));
+            this.#backoff(); return true;
+        }
+        // every fence post costs real wood, and the farmer must have it ON HAND to raise one —
+        // no fencing from nothing. A whole perimeter is a genuine lumber sink (see FENCE_POST_WOOD).
+        if (this.wood < FENCE_POST_WOOD) {
+            this.think(this.wood > 0 ? 'NEED MORE WOOD FOR THE FENCE' : 'GATHERING WOOD TO FENCE MY LAND');
+            if (this.#goChop()) return true;
+            this.#backoff(); return true;
+        }
+        const spot = w.fencePostSpot(p, p.fencePosts);   // fence line is clear now — pick a post spot
+        this.pendingFence = { cost: FENCE_POST_WOOD };
+        this.think(this.#tr(`RAISING PALISADE POST ${p.fencePosts + 1}/${p.fenceTarget}`, `RAISING FENCE POST ${p.fencePosts + 1}/${p.fenceTarget}`));
+        if (this.#goTo(spot.i + 0.5, spot.j + 0.5, 'fencepost')) return true;
+        p.fencePosts++; this.#backoff(); return true;   // spot unreachable — skip it, don't loop
+    }
+
     #pursueHomestead() {
         const w = this.world, p = this.plot;
         if (p.built.level >= 1 || w.isNight()) return false;
@@ -8721,32 +8755,7 @@ export class Farmer {
             return true;
         }
         // 1) fence the claim first — one post at a time (a real chunk of work)
-        if (!p.built.fence) {
-            if (!p.fenceTarget) p.fenceTarget = w.fencePostTarget(p);
-            // the whole fence line must be clear first — no post goes up while a rock/tree/brush
-            // still sits on ANY border tile. Clear the nearest such obstacle, then raise posts.
-            const blocker = this.#nearestFenceLineObstacle(p);
-            if (blocker) {
-                this.think('CLEARING THE FENCE LINE');
-                if (this.#clearObstacle(blocker)) return true;
-                // genuinely unreachable (e.g. a rock walled in by water) — give up on it so the
-                // fence can still finish instead of retrying the same tile forever.
-                (p.fenceSkip || (p.fenceSkip = new Set())).add(pkey(blocker.i, blocker.j));
-                this.#backoff(); return true;
-            }
-            // every fence post costs real wood, and the farmer must have it ON HAND to raise one —
-            // no fencing from nothing. A whole perimeter is a genuine lumber sink (see FENCE_POST_WOOD).
-            if (this.wood < FENCE_POST_WOOD) {
-                this.think(this.wood > 0 ? 'NEED MORE WOOD FOR THE FENCE' : 'GATHERING WOOD TO FENCE MY LAND');
-                if (this.#goChop()) return true;
-                this.#backoff(); return true;
-            }
-            const spot = w.fencePostSpot(p, p.fencePosts);   // fence line is clear now — pick a post spot
-            this.pendingFence = { cost: FENCE_POST_WOOD };
-            this.think(this.#tr(`RAISING PALISADE POST ${p.fencePosts + 1}/${p.fenceTarget}`, `RAISING FENCE POST ${p.fencePosts + 1}/${p.fenceTarget}`));
-            if (this.#goTo(spot.i + 0.5, spot.j + 0.5, 'fencepost')) return true;
-            p.fencePosts++; this.#backoff(); return true;   // spot unreachable — skip it, don't loop
-        }
+        if (!p.built.fence && this.#pursueFence()) return true;
         // 2) clear the whole building site of trees/rocks/brush
         if (!w.houseSiteClear(p)) {
             const b = this.#nearestSiteBlocker();
@@ -9353,6 +9362,11 @@ export class Farmer {
                 node.claimant = null;   // couldn't reach it — leave it for another
             }
         }
+
+        // #Codex31 a raider bashed the fence down (built.fence=false on a sited plot) — REPAIR it, at ANY house
+        // level, before other work (a house upgrade stays paused, its materials preserved, and resumes once the
+        // wall's back up). Security first. Daytime work; survival/rally branches above still preempt it.
+        if (this.plot.sited && this.plot.built.level >= 1 && !this.plot.built.fence && !w.isNight() && this.#pursueFence()) return;
 
         // a new settler must clear their land, fence it, then build a house before farming
         if (this.plot.built.level < 1 && this.#pursueHomestead()) return;

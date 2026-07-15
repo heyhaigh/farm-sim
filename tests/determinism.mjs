@@ -30,10 +30,13 @@ const BASELINE = {
     // their fenced plot — it presses in and BASHES the fence down (property destruction), and a farmer flees for
     // help at the plaza rather than a false-safe fence (a wary one straight away, a naive one once it's breached).
     // Real behavioural changes to the encounter/flee loop; same-twice held all seeds.
-    20260706: '6dbe689c',
-    42: 'd1c4c480',
-    7: '35c98309',
-    3: 'f93e50f5',
+    // re-baselined 2026-07-15 for Codex #31 P1 — a raider-BREACHED fence is now REPAIRED by its owner at any house
+    // level (was stranded for housed plots), and #foeBashFence no longer nulls an in-progress upgrade — both shift
+    // the day-2+ trajectory whenever a foe bashes a fence in the run. same-twice held all seeds.
+    20260706: '50783d62',
+    42: 'c196897d',
+    7: '91783dd5',
+    3: 'db261d65',
 };
 
 function boot(seed, culture) {
