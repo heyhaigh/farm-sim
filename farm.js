@@ -8046,10 +8046,14 @@ export class Farmer {
     }
     // #watch — what the sentry mutters on the beat: seeded + culture-cast (no rng, no LLM in the loop).
     #watchLine() {
-        const orc = this.world.culture === 'orc';
+        // #watch time-specific mutterings — the sentry walks the beat by DAY as well as night now, so "the town
+        // sleeps" only fits after dark. Day lines are about the perimeter/approaches; night lines about the quiet dark.
+        const orc = this.world.culture === 'orc', night = this.world.isNight();
         const pool = orc
-            ? ['ALL QUIET ON THE LINE.', 'NOTHING STIRS... GOOD.', 'THE WARBAND SLEEPS. I DO NOT.', 'EYES ON THE DARK.']
-            : ['ALL QUIET TONIGHT.', 'NOTHING MOVING OUT THERE.', 'THE TOWN SLEEPS — I KEEP WATCH.', 'EYES ON THE TREELINE.'];
+            ? (night ? ['ALL QUIET ON THE LINE.', 'NOTHING STIRS... GOOD.', 'THE WARBAND SLEEPS. I DO NOT.', 'EYES ON THE DARK.']
+                     : ['THE APPROACHES ARE CLEAR.', 'NO WARBAND ON THE HORIZON.', 'I WALK THE LINE.', 'EYES ON THE WASTE.'])
+            : (night ? ['ALL QUIET TONIGHT.', 'NOTHING MOVING IN THE DARK.', 'THE TOWN SLEEPS — I KEEP WATCH.', 'EYES ON THE TREELINE.']
+                     : ['PERIMETER LOOKS CLEAR.', 'KEEPING THE ROADS WATCHED.', 'ALL CALM ON THE EDGE.', 'EYES ON THE TREELINE.']);
         return pool[hashString(this.sheet.seed + ':watch:' + Math.floor(this.world.clock / 4)) % pool.length];
     }
 
