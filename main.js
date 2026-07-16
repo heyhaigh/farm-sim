@@ -1483,6 +1483,7 @@ function raidMusterFigures(pr) {
 }
 
 const RAID_TINT = { A: '224,72,56', B: '196,56,44' };   // a danger RED, keyed to the "RAIDERS CLOSING" toast
+const seamHash = (i, j) => { let h = (i * 374761393 + j * 668265263) | 0; h = (h ^ (h >>> 13)) * 1274126177; return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };   // pure position hash, 0..1
 function drawRaidSeam() {
     const pr = world.pendingRaid, re = world.raidEvent;
     if (!pr && !re) return;
@@ -1492,8 +1493,13 @@ function drawRaidSeam() {
     // a low ember while a warband merely GATHERS; brighter once the alarm has sounded (detected) or it has landed.
     // kept SEMI-TRANSPARENT (the terrain reads through) so it's a danger overlay, like the toast — not a repaint.
     const hot = (pr && pr.detected) || !!re;
-    const base = hot ? 0.5 : 0.3;
-    const pulse = 0.05 * Math.sin(performance.now() / 500);
+    const base = hot ? 0.48 : 0.3;
+    // the ALARM PULSE: while merely gathering the seam barely breathes; once the alarm sounds it throbs —
+    // a sharp heartbeat (fast attack, slow decay) rather than a sine shimmer, so it reads as the alarm itself.
+    const tNow = performance.now();
+    const pulse = hot
+        ? 0.14 * Math.pow(0.5 + 0.5 * Math.sin(tNow / 260), 3)   // ~1.6s heartbeat, spiky
+        : 0.04 * Math.sin(tNow / 700);                            // faint slow breathing
     const half = 0.85;   // fan half-angle (raiders fan ~±0.5; a touch wider so it reads as "their land", not a beam)
     const rIn = 26, rFull = 46;   // the seam ramps grass→desert from the town's edge (rIn, faint) out to the horizon (rFull, full)
     const cs = [screenToTile(0, 0), screenToTile(GW, 0), screenToTile(GW, GH), screenToTile(0, GH)];
@@ -1504,17 +1510,20 @@ function drawRaidSeam() {
     for (let j = jMin; j <= jMax; j++) {
         for (let i = iMin; i <= iMax; i++) {
             const di = i - CENTER, dj = j - CENTER, r = Math.hypot(di, dj);
-            if (r < rIn) continue;
+            const h = seamHash(i, j);                                 // per-tile grain: mottles the wash + raggs the borders
+            if (r < rIn - 2 + h * 4) continue;                        // ragged inner shoreline, not a clean arc
             let da = Math.atan2(dj, di) - dir; da = Math.atan2(Math.sin(da), Math.cos(da));   // wrap to [-pi, pi]
-            if (Math.abs(da) > half) continue;
+            const hj = half + (h - 0.5) * 0.14;                       // ragged fan sides
+            if (Math.abs(da) > hj) continue;
             // gradient: faint at the town's edge (grass shows through), full desert toward the horizon; softer at the fan sides.
-            const edge = 1 - Math.abs(da) / half, ramp = Math.min(1, (r - rIn) / (rFull - rIn));
+            const edge = smooth(1 - Math.abs(da) / hj), ramp = smooth(Math.min(1, (r - rIn) / (rFull - rIn)));
             const fog = !world.isRevealed(i, j);                      // strongest over the unknown dark; a lighter wash over revealed ground
-            const a = Math.max(0, Math.min(1, (base + pulse) * edge * ramp * (fog ? 1 : 0.8)));
+            const grain = 0.75 + h * 0.5;                             // organic mottle (±25%) — replaces the old checkerboard parity
+            const a = Math.max(0, Math.min(1, (base + pulse) * edge * ramp * grain * (fog ? 1 : 0.8)));
             if (a < 0.03) continue;
             const sx = cam.x + isoX(i, j) - TILE_W / 2, sy = cam.y + isoY(i, j);
             ctx.save(); ctx.globalAlpha = a;
-            fillDiamond(ctx, sx, sy, `rgb(${(i + j) % 2 ? RAID_TINT.A : RAID_TINT.B})`);
+            fillDiamond(ctx, sx, sy, `rgb(${h < 0.5 ? RAID_TINT.A : RAID_TINT.B})`);
             ctx.restore();
         }
     }
