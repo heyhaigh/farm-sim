@@ -176,6 +176,18 @@ console.log('#nemesis — the named war: stable name, counted returns, sworn gru
     // save round-trip carries the arc
     const w3 = World.fromSave(structuredClone(w.serialize()));
     ok(w3.nemesis && w3.nemesis.pairKey === w.nemesis.pairKey && w3.nemesis.name === w.nemesis.name, 'the arc rides the save');
+    // ADMIN BOOTH rehearsals are GHOSTS (user check): staging + landing + playing out a rehearsal raid must
+    // not advance the arc by a single count — it reads the nemesis for the show and writes NOTHING back.
+    const arcBefore = JSON.stringify(w.nemesis);
+    w._live = true;
+    w.startRaidRehearsal(7);
+    ok(w.pendingRaid != null && w.pendingRaid.rehearsal === true, 'booth stages a rehearsal telegraph');
+    w.time = w.pendingRaid.landsAt; w.tick(DT);      // land the ghost
+    for (let i = 0; i < 1600; i++) w.tick(DT);       // play the whole show out (approach, duels, flee)
+    ok(JSON.stringify(w.nemesis) === arcBefore, 'a rehearsal raid does NOT advance the nemesis arc');
+    ok(!w.pendingRaid && !w.raidEvent && !w.rehearsal, 'the ghost cleaned up after itself');
+    const s4 = w.serialize();
+    ok(s4.nemesis && JSON.stringify(s4.nemesis) === arcBefore, 'the serialized arc is untouched by the rehearsal');
 }
 
 console.log(pass ? '\nALL ADVERSARIAL PROBES PASSED' : '\nSOME PROBES FAILED');
