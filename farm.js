@@ -6235,10 +6235,10 @@ export class World {
                     if (best) {
                         claimed.add(best);
                         const h = hashString('raiddu:' + rid + ':' + k);
-                        r.duel = { opp: best, round: 0, rounds: (r.falls ? 4 : 3) + (h % 2), nextAt: null, stagger: 0.25 + ((h >>> 3) % 90) / 100 };
+                        r.duel = { opp: best, round: 0, rounds: (r.falls ? 6 : 5) + (h % 2), nextAt: null, stagger: 0.25 + ((h >>> 3) % 90) / 100 };
                     }
                 });
-                re.timer = 16;   // room for the exchanges, then the survivors' run on the stores
+                re.timer = 24;   // room for the full exchanges, the pursuit, and the survivors' run on the stores
             }
             for (const r of re.raiders) {
                 if (r.fell) continue;   // dropped in their duel — they lie where the line stopped them
@@ -6264,7 +6264,7 @@ export class World {
             const settled = re.raiders.every(r => r.fell || ((!r.duel || r.duel.done) && r.lootAt != null && this.time - r.lootAt > 1.4));
             if (re.timer <= 0 || settled) { re.raiders = re.raiders.filter(r => !r.fell && !r.falls); re.phase = 'flee'; re.timer = 2.8; }
         } else {   // flee — survivors run back out to the fog, then vanish
-            for (const f of this.farmers) f._skirmish = false;   // the clash is over — the line stands down its blades
+            for (const f of this.farmers) { f._skirmish = false; f._freed = false; }   // the clash is over — the line stands down (pursuers re-flag below until the runners are seen off)
             for (const r of re.raiders) {
                 const dx = r.i - CENTER, dy = r.j - CENTER, dist = Math.hypot(dx, dy) || 1;
                 // same screen-x rule fleeing outward: moving toward greater (i - j) reads as running RIGHT.
@@ -6276,13 +6276,58 @@ export class World {
                 if (re.rehearsal && this.rehearsal && this.rehearsal.kind === 'raid') this.rehearsal = null;   // #admin curtain
             }
         }
+        // #raid-feel THE PURSUIT + THE GANG-UP (display motion; runs march AND flee so runners are seen off).
+        // A raider that BROKE OFF is chased by their defender — harried with swings at their back all the way
+        // to the stores and out again, seen off at the wilds with a parting cry. A defender FREED by felling
+        // their raider drifts to the nearest live duel and flanks it. The town doesn't watch; it presses.
+        if (this.raidEvent) {
+            for (const r of re.raiders) {
+                if (!r.pursuedBy || r.fell) continue;
+                const f = this.farmers.find(x => x.sheet.seed === r.pursuedBy);
+                if (!f || !this.#holdsLine(f)) { r.pursuedBy = null; continue; }
+                const dch = Math.hypot(r.i - f.pos.i, r.j - f.pos.j);
+                const rr2 = Math.hypot(r.i - CENTER, r.j - CENTER);
+                if (re.phase === 'flee' && rr2 > WILD_RADIUS) {   // seen off at the wilds
+                    r.pursuedBy = null;
+                    if (!(f.bubble && f.bubble.t > 0)) f.say(this.culture === 'orc' ? 'AND STAY OUT!' : 'and STAY out!', '#e0c078');
+                    continue;
+                }
+                if (dch > 1.5) {   // give chase (a shade slower than the runner — harrying, not tackling)
+                    f.pos.i += (r.i - f.pos.i) / dch * 3.3 * dt; f.pos.j += (r.j - f.pos.j) / dch * 3.3 * dt;
+                    f.facing = ((r.i - r.j) - (f.pos.i - f.pos.j)) >= 0 ? 1 : -1;
+                    f._skirmish = true;
+                } else if (this.time >= (r._harryAt || 0)) {   // a swing at the runner's back
+                    r._harryAt = this.time + 1.5;
+                    f._swingAt = this.time; f._swingI = r.i - f.pos.i; f._swingJ = r.j - f.pos.j;
+                    const hr = hashString('harry:' + (r.foeName || 'r') + ':' + Math.floor(this.time * 2));
+                    re.fx.push({ i: r.i, j: r.j, text: (hr % 2) ? 'HIT!' : 'MISS', color: (hr % 2) ? '#ffa040' : '#9a9a8a', at: this.time });
+                    if (re.fx.length > 30) re.fx.shift();
+                }
+            }
+        }
         // #raid-feel THE CLASH AT THE LINE (display-only): a mustered defender with a raider in reach squares
         // up and SWINGS (the renderer shows fight frames off `_skirmish`), shouting the line's war-cries on a
-        // pure-hash cadence. No dice here — the outcome was already scored by #resolveRaid; this pass just
-        // makes it VISIBLE: the doomed raiders drop at the line the defenders are holding, not in a vacuum.
+        // pure-hash cadence. A FREED defender (their raider felled) drifts to the nearest LIVE duel to flank
+        // it. No dice here — the outcome was already scored by #resolveRaid; this pass makes it VISIBLE.
         if (re.phase !== 'flee' && this.raidEvent) {
             for (const f of this.farmers) {
-                if (!this.#holdsLine(f)) { f._skirmish = false; continue; }
+                if (!this.#holdsLine(f)) { f._skirmish = false; f._freed = false; continue; }
+                if (f._freed) {   // join the nearest live duel as a flanker
+                    let tgt = null, td = Infinity;
+                    for (const r of re.raiders) {
+                        if (r.fell || !r.duel || r.duel.done) continue;
+                        const d2 = Math.hypot(r.i - f.pos.i, r.j - f.pos.j);
+                        if (d2 < td) { td = d2; tgt = r; }
+                    }
+                    if (tgt && td > 1.8) { f.pos.i += (tgt.i - f.pos.i) / td * 2.6 * dt; f.pos.j += (tgt.j - f.pos.j) / td * 2.6 * dt; }
+                    else if (tgt && this.time >= (f._flankAt || 0)) {   // a flanking swing from the second angle
+                        f._flankAt = this.time + 2.1;
+                        f._swingAt = this.time; f._swingI = tgt.i - f.pos.i; f._swingJ = tgt.j - f.pos.j;
+                        const hf = hashString('flank:' + f.sheet.seed + ':' + Math.floor(this.time * 2));
+                        re.fx.push({ i: tgt.i, j: tgt.j, text: (hf % 3) ? 'HIT!' : 'PARRY!', color: (hf % 3) ? '#ffa040' : '#9ad0e0', at: this.time });
+                        if (re.fx.length > 30) re.fx.shift();
+                    }
+                }
                 let best = null, bd = Infinity;
                 for (const r of re.raiders) {
                     const d = Math.hypot(r.i - f.pos.i, r.j - f.pos.j);
@@ -6310,36 +6355,73 @@ export class World {
         return f.state === 'muster' || (f.state === 'walk' && f.path && f.path.then === 'muster');
     }
 
-    // #raid-feel ONE staged exchange of a raid duel. Attacker alternates by round (raider first); the outcome
-    // of an ordinary round is a pure keyed-hash roll (MISS / PARRY! / HIT!); the FINAL round is scripted to the
-    // seeded resolver verdict — a `falls` raider takes the defender's finishing blow ("FELLED!"), a survivor
-    // breaks off toward the stores. Sets transient swing timers (renderer lunges) + floating-text fx entries.
+    // #raid-feel ONE staged exchange of a raid duel — v2, the D&D-round treatment (user: "one attempt and
+    // then they just watched"). Attacker alternates by round (raider first, a STAGGERED side forfeits its
+    // swing); the outcome of an ordinary round is a pure keyed-hash roll over a five-way table — MISS /
+    // PARRY! / DODGE! / HIT! / STAGGERED! — and EVERY outcome moves the pair (footwork: a landed hit knocks
+    // the target back and the attacker presses in; a parry recoils the attacker; a dodge sidesteps). The
+    // FINAL round is scripted to the seeded resolver verdict — a `falls` raider takes the finishing blow
+    // ("FELLED!", and their defender is FREED to flank another duel), a survivor BREAKS OFF marked for
+    // PURSUIT (their defender harries them to the stores and sees them off). Display-only randomness.
     #duelExchange(re, r) {
-        const DUEL_BEAT = 1.35;
+        const DUEL_BEAT = 1.15;
         const d = r.duel, f = d.opp;
         const rid = re.e.id || `${re.e.pairKey}:${re.e.ordinal}`;
         const roll = mulberry32(hashString('raidduel:' + rid + ':' + (r.foeName || 'r') + ':' + d.round))();
         const last = d.round >= d.rounds - 1;
-        const fx = (i, j, text, color) => { re.fx.push({ i, j, text, color, at: this.time }); if (re.fx.length > 24) re.fx.shift(); };
+        const fx = (i, j, text, color) => { re.fx.push({ i, j, text, color, at: this.time }); if (re.fx.length > 30) re.fx.shift(); };
         const farmerSwing = () => { f._swingAt = this.time; f._swingI = r.i - f.pos.i; f._swingJ = r.j - f.pos.j; };
         const raiderSwing = () => { r._swingAt = this.time; r._swingI = f.pos.i - r.i; r._swingJ = f.pos.j - r.j; };
+        // footwork: unit vector raider->defender (+ its perpendicular for sidesteps)
+        const nx = f.pos.i - r.i, ny = f.pos.j - r.j, nn = Math.hypot(nx, ny) || 1;
+        const ux = nx / nn, uy = ny / nn, px = -uy, py = ux;
+        const side = (roll * 997 | 0) % 2 ? 1 : -1;
+        const moveRaider = (di, dj) => { r.i += di; r.j += dj; };
+        const moveFarmer = (di, dj) => { f.pos.i += di; f.pos.j += dj; };
         if (last && r.falls) {          // the line holds: the defender's blow lands and the raider drops
             farmerSwing(); r.fell = true; d.done = true;
+            f._freed = true;            // free to flank the nearest live duel (the gang-up)
             fx(r.i, r.j, 'FELLED!', '#ff5a3c');
-        } else if (last) {              // the raider thinks better of it and makes for the stores
+        } else if (last) {              // the raider thinks better of it — and is CHASED for it
             d.done = true;
+            r.pursuedBy = f.sheet.seed;
             fx(r.i, r.j, 'BREAKS OFF', '#c8b090');
-        } else if (d.round % 2 === 0) { // raider's swing
-            raiderSwing();
-            const out = roll < 0.38 ? 'MISS' : roll < 0.68 ? 'PARRY!' : 'HIT!';
-            if (out === 'HIT!' && Array.isArray(re.out.woundSeeds) && re.out.woundSeeds.includes(f.sheet.seed) && !f._woundShown) {
-                f._woundShown = true;   // transient — echo the resolver's wound where it visibly landed
-                fx(f.pos.i, f.pos.j, 'WOUNDED!', '#ff4030');
-            } else fx(f.pos.i, f.pos.j, out, out === 'HIT!' ? '#ffa040' : out === 'PARRY!' ? '#9ad0e0' : '#9a9a8a');
-        } else {                        // defender's swing back
-            farmerSwing();
-            const out = roll < 0.38 ? 'MISS' : roll < 0.68 ? 'PARRY!' : 'HIT!';
-            fx(r.i, r.j, out, out === 'HIT!' ? '#ffa040' : out === 'PARRY!' ? '#9ad0e0' : '#9a9a8a');
+        } else {
+            let raiderTurn = d.round % 2 === 0;
+            if (d.skip) {               // a staggered side forfeits its swing (turn passes)
+                if (d.skip === (raiderTurn ? 'raider' : 'defender')) raiderTurn = !raiderTurn;
+                d.skip = null;
+            }
+            const out = roll < 0.28 ? 'MISS' : roll < 0.50 ? 'PARRY!' : roll < 0.62 ? 'DODGE!' : roll < 0.88 ? 'HIT!' : 'STAGGERED!';
+            const col = out === 'HIT!' ? '#ffa040' : out === 'PARRY!' ? '#9ad0e0' : out === 'DODGE!' ? '#a0e0b0' : out === 'STAGGERED!' ? '#f0c860' : '#9a9a8a';
+            if (raiderTurn) {           // raider's swing at the defender
+                raiderSwing();
+                if (out === 'HIT!' || out === 'STAGGERED!') {
+                    moveFarmer(ux * 0.7, uy * 0.7); moveRaider(ux * 0.35, uy * 0.35);   // driven back; the raider presses
+                    if (out === 'STAGGERED!') d.skip = 'defender';
+                    if (out === 'HIT!' && Array.isArray(re.out.woundSeeds) && re.out.woundSeeds.includes(f.sheet.seed) && !f._woundShown) {
+                        f._woundShown = true;   // echo the resolver's wound where it visibly landed
+                        fx(f.pos.i, f.pos.j, 'WOUNDED!', '#ff4030');
+                    } else fx(f.pos.i, f.pos.j, out, col);
+                } else {
+                    if (out === 'PARRY!') moveRaider(-ux * 0.4, -uy * 0.4);             // turned aside — recoils
+                    if (out === 'DODGE!') moveFarmer(px * side * 0.6, py * side * 0.6); // slips the blow
+                    if (out === 'MISS') moveRaider(px * side * 0.3, py * side * 0.3);   // swings past
+                    fx(f.pos.i, f.pos.j, out, col);
+                }
+            } else {                    // defender's swing back
+                farmerSwing();
+                if (out === 'HIT!' || out === 'STAGGERED!') {
+                    moveRaider(-ux * 0.7, -uy * 0.7); moveFarmer(-ux * 0.35, -uy * 0.35);   // (moving AWAY from f = -u)
+                    if (out === 'STAGGERED!') d.skip = 'raider';
+                    fx(r.i, r.j, out, col);
+                } else {
+                    if (out === 'PARRY!') moveFarmer(ux * 0.4, uy * 0.4);
+                    if (out === 'DODGE!') moveRaider(px * side * 0.6, py * side * 0.6);
+                    if (out === 'MISS') moveFarmer(px * side * 0.3, py * side * 0.3);
+                    fx(r.i, r.j, out, col);
+                }
+            }
         }
         d.round++; d.nextAt = this.time + DUEL_BEAT;
     }
