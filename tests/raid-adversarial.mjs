@@ -142,5 +142,41 @@ console.log('P1 — raid monuments respect the 40-cap over many raids');
     ok(w.monuments.length <= 40, `monuments capped (${w.monuments.length} <= 40)`);
 }
 
+// ---------- #nemesis (council Phase 1): one named arc per faction pair, deterministic, honestly ended ----------
+console.log('#nemesis — the named war: stable name, counted returns, sworn grudge, honest endings');
+{
+    const evt = (w, ord, pk = 'nem-pair') => ({ id: `nem-${pk}-${ord}`, kind: 'raided', day: w.day, pairKey: pk, ordinal: ord, commit: 0.5, by: 'the Ashfang clan' });
+    const w = boot(20260706);
+    for (let i = 0; i < 13000; i++) w.tick(DT);   // past day 1 so a guard stands
+    w._live = false;
+    w.harvestTotal = 100; w.applyInbox([evt(w, 0)]);
+    ok(w.nemesis != null && w.nemesis.raidCount === 1, `first raid founds the arc silently (count ${w.nemesis && w.nemesis.raidCount})`);
+    const name1 = w.nemesis.name;
+    ok(typeof name1 === 'string' && name1.length > 3, `the foe has a seeded name (${name1})`);
+    const swore = w.nemesis.sworeAgainst;
+    w.harvestTotal = 100; w.applyInbox([evt(w, 1)]);
+    ok(w.nemesis.raidCount === 2 && w.nemesis.name === name1, 'the second raid increments the SAME arc, name stable');
+    // dormant raids have no telegraph — the NAME must still reach the record via the landing/recap line
+    ok(w.chronicle.some(c => (c.text || '').includes(name1)), 'the return is chronicled by name (dormant recap included)');
+    if (swore != null) ok(w.nemesis.sworeAgainst != null, 'the grudge target persists/updates');
+    // determinism of the arc: a parallel world consuming the same events grows the SAME nemesis
+    const w2 = boot(20260706);
+    for (let i = 0; i < 13000; i++) w2.tick(DT);
+    w2._live = false;
+    w2.harvestTotal = 100; w2.applyInbox([evt(w2, 0)]);
+    w2.harvestTotal = 100; w2.applyInbox([evt(w2, 1)]);
+    ok(w2.nemesis.name === w.nemesis.name && w2.nemesis.raidCount === w.nemesis.raidCount &&
+       w2.nemesis.sworeAgainst === w.nemesis.sworeAgainst, 'the arc is deterministic across parallel worlds');
+    // peace ends the named war
+    w.applyInbox([{ id: 'nem-peace', kind: 'reconciled', day: w.day, pairKey: 'nem-pair', ordinal: 2, withName: 'the Ashfang clan' }]);
+    ok(w.nemesis.ended === true && w.nemesis.lastOutcome === 'peace', 'reconciliation ends the arc (peace)');
+    // a NEW pair founds a NEW arc (one at a time — the old one is over)
+    w.harvestTotal = 100; w.applyInbox([evt(w, 0, 'other-pair')]);
+    ok(w.nemesis.pairKey === 'other-pair' && w.nemesis.raidCount === 1, 'a new pair founds a fresh arc after the old war ends');
+    // save round-trip carries the arc
+    const w3 = World.fromSave(structuredClone(w.serialize()));
+    ok(w3.nemesis && w3.nemesis.pairKey === w.nemesis.pairKey && w3.nemesis.name === w.nemesis.name, 'the arc rides the save');
+}
+
 console.log(pass ? '\nALL ADVERSARIAL PROBES PASSED' : '\nSOME PROBES FAILED');
 process.exit(pass ? 0 : 1);

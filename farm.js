@@ -410,6 +410,12 @@ const WATCH_POSTS = 6, WATCH_SCAN = 3.2;
 const RAID_LEAD = 45, RAID_RALLY = 30;
 // #131 seeded bearing -> a plain-word compass label for the tell; index = round(dir / 45deg) % 8, dir 0 = +i.
 const COMPASS = ['east', 'south-east', 'south', 'south-west', 'west', 'north-west', 'north', 'north-east'];
+// #nemesis the warleader name tables (same voice as the DM's encounter names) — a nemesis name is a PURE
+// HASH of the faction pair, so "Krul the Howler" is Krul in every retelling, on every machine, forever.
+const NEM_FOE = ['Gruk', 'Morg', 'Tharg', 'Uzka', 'Drek', 'Snaga', 'Krul', 'Bolg'];
+const NEM_EPI = ['of the Red Fen', 'the Fence-Breaker', 'of the Black Pines', 'the Crop-Burner', 'One-Tusk', 'the Howler'];
+const NTH = ['first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth', 'tenth'];
+
 // #admin authored stump-speech pools for the election REHEARSAL's speeches phase (display bubbles only —
 // picked by a pure hash of speaker seed + the admin nonce, so a re-run casts fresh lines without rng).
 // #raid-feel what the muster line SAYS: strategy + nerve while the warband closes (the telegraph window),
@@ -827,6 +833,10 @@ export class World {
         this.raidEvent = null;     // #Slice3 the in-progress WATCHED raid choreography (live-only, never serialized)
         this.pendingRaid = null;   // #131 a TELEGRAPHED incoming raid: seeded state (rides the save), lands on a
                                    // this.time deadline identically watched or dormant. See applyInbox + #tickPendingRaid.
+        this.nemesis = null;       // #nemesis (council Phase 1) — the town's ONE named foe arc, DETERMINISTIC data:
+                                   // { pairKey, name, raidCount, sworeAgainst, lastOutcome, ended }. Advanced only by
+                                   // seeded facts (inbox events + the resolver's verdict); the LLM merely VOICES it.
+                                   // Rides the save. "Two Kruls is zero Kruls" — one arc at a time, ever.
         this.rehearsal = null;     // #admin the director's booth: an ADMIN-TRIGGERED ghost run of a raid or the vote
                                    // (live-only, never serialized). The show plays in full; NOTHING is recorded — no
                                    // chronicle/log, no stores docked, no wounds, no monuments, no role changes, no
@@ -1823,7 +1833,19 @@ export class World {
                 const rid = e.id || `${e.pairKey}:${e.ordinal}`;
                 const dir = (hashString('raiddir:' + rid) % 360) * Math.PI / 180;   // seeded flank they come from (cosmetic, but consistent across tell/muster/cinematic)
                 const dirName = COMPASS[Math.round(dir / (Math.PI / 4)) % 8];
-                const evt = { id: e.id, pairKey: e.pairKey, ordinal: e.ordinal, commit: e.commit, by: e.by };
+                // #nemesis — the war gets a NAME. Every raid from the same faction pair advances ONE arc: the
+                // first raid founds it (silently — a name earns its dread by RETURNING), each return increments
+                // it, and from the second raid on the telegraph names him. Deterministic: pure pairKey hash for
+                // the name, inbox events for the count — the LLM never touches this state.
+                if (!this.nemesis || this.nemesis.ended || this.nemesis.pairKey !== e.pairKey) {
+                    const nh = hashString('nemname:' + e.pairKey);
+                    this.nemesis = { pairKey: e.pairKey, name: `${NEM_FOE[nh % NEM_FOE.length]} ${NEM_EPI[(nh >>> 4) % NEM_EPI.length]}`,
+                                     raidCount: 0, sworeAgainst: null, lastOutcome: null, ended: false };
+                }
+                this.nemesis.raidCount++;
+                const nem = this.nemesis;
+                const foe = nem.raidCount >= 2 ? { name: nem.name, raidCount: nem.raidCount, sworeAgainst: nem.sworeAgainst } : null;
+                const evt = { id: e.id, pairKey: e.pairKey, ordinal: e.ordinal, commit: e.commit, by: e.by, foe };
                 // #Codex29 P1 — a raid CONSUMED WHILE DORMANT (on load, before world._live is set) already HAPPENED
                 // while the town was away: it lands SYNCHRONOUSLY here, becoming a "raiders came while you were
                 // gone" recap (as it did pre-#131), NOT a fresh alarm+ambush RAID_LEAD into the resumed session.
@@ -1833,12 +1855,27 @@ export class World {
                 else {
                     // keep ONLY what #resolveRaid + the chronicle need, so the pending raid clones plain into the save
                     this.pendingRaid = { e: evt, landsAt: this.time + RAID_LEAD, detectAt: this.time + RAID_LEAD - RAID_RALLY, dir, dirName, detected: false };
-                    this.addChronicle('raid', `Word reached ${this.name}: a warband is massing to the ${dirName}, bound for the town — the watch has a little time.`,
-                        null, null, '#e0a040', { tier: 'callout', tone: 'tense', label: 'A WARBAND GATHERS', why: 'raiders on the move' });
-                    this.addLog(`A warband masses to the ${dirName} — ${this.name} has a little time.`, '#e0a040');
+                    if (foe) {   // #nemesis the return is the dread: the telegraph lands like a bell
+                        const sworn = foe.sworeAgainst != null ? this.farmers.find(x => x.sheet.seed === foe.sworeAgainst) : null;
+                        this.addChronicle('raid', `${foe.name} returns — the ${NTH[Math.min(foe.raidCount - 1, NTH.length - 1)]} raid of his war on ${this.name}, massing to the ${dirName}${sworn ? ` — and he comes for ${shortName(sworn)}` : ''}.`,
+                            sworn || null, null, '#e05840', { tier: 'callout', tone: 'tense', label: `${foe.name.toUpperCase()} RETURNS`, why: 'the named foe is back' });
+                        this.addLog(`${foe.name} masses to the ${dirName} — the ${NTH[Math.min(foe.raidCount - 1, NTH.length - 1)]} raid of his war.`, '#e05840');
+                    } else {
+                        this.addChronicle('raid', `Word reached ${this.name}: a warband is massing to the ${dirName}, bound for the town — the watch has a little time.`,
+                            null, null, '#e0a040', { tier: 'callout', tone: 'tense', label: 'A WARBAND GATHERS', why: 'raiders on the move' });
+                        this.addLog(`A warband masses to the ${dirName} — ${this.name} has a little time.`, '#e0a040');
+                    }
                     n++;
                 }
             } else if (e.kind === 'reconciled') {
+                // #nemesis peace ends the named war — the OTHER honest ending of the arc.
+                if (this.nemesis && !this.nemesis.ended && this.nemesis.pairKey === e.pairKey && this.nemesis.raidCount >= 2) {
+                    this.nemesis.ended = true; this.nemesis.lastOutcome = 'peace';
+                    this.addChronicle('lineage', `${this.nemesis.name}'s war on ${this.name} ends at the parley table — ${NTH[Math.min(this.nemesis.raidCount - 1, NTH.length - 1)]} raid and last.`,
+                        envoy, null, '#c8b0e0', { tier: 'grand', tone: 'triumph', label: 'THE WAR ENDS IN PEACE', why: 'the named foe chose the open hand' });
+                } else if (this.nemesis && !this.nemesis.ended && this.nemesis.pairKey === e.pairKey) {
+                    this.nemesis.ended = true; this.nemesis.lastOutcome = 'peace';   // a one-raid feud fizzles quietly
+                }
                 // Slice C: the envoy EARNS a cross-faction belief that begins to overwrite their raid-creed.
                 if (envoy) envoy.earnCrossFaction(e.withName, e.pairKey, +1);
                 const other = (e.withName || 'their neighbors').split(' ')[0];
@@ -2642,6 +2679,7 @@ export class World {
             // it must never ride a save (a stray save mid-show would greet the next boot with a phantom warband).
             pendingRaid: (this.pendingRaid && !this.pendingRaid.rehearsal) ? { ...this.pendingRaid, e: { ...this.pendingRaid.e } } : null,
             raidsSuffered: this.raidsSuffered || 0, learned: this.learned || null,   // #134 the learning arc rides the save
+            nemesis: this.nemesis ? { ...this.nemesis } : null,   // #nemesis the named-war arc rides the save (plain, deterministic)
             // #Codex30 P1 — the DAY-1 congregation director's coverage state survives a reload (Sets flattened to
             // arrays), so a town reloaded mid-congregation doesn't restart the exchange and re-strand its later
             // founders (only foundingPhase used to persist; spokenSet/turns/last did not).
@@ -2784,6 +2822,7 @@ export class World {
         this._inboxWatermark = (d.inboxWatermark && typeof d.inboxWatermark === 'object') ? { ...d.inboxWatermark } : {};
         this.pendingRaid = (d.pendingRaid && d.pendingRaid.e) ? { ...d.pendingRaid, e: { ...d.pendingRaid.e } } : null;   // #131 restore a telegraphed raid mid-flight
         this.raidsSuffered = d.raidsSuffered || 0; this.learned = d.learned || null;   // #134 the learning arc
+        this.nemesis = d.nemesis || null;   // #nemesis the named-war arc (old saves: no arc yet — the next raid founds one)
         // #Codex30 P1 restore the congregation director's coverage state (rebuild the Sets), so a reload mid-scene
         // continues covering the AS-YET-UNSPOKEN founders instead of replaying the ones who already spoke.
         this._congState = (d.congState && Array.isArray(d.congState.order)) ? {
@@ -5814,7 +5853,9 @@ export class World {
             const cf = this.#scoreRaid(e, rid, harvest, defenders.filter(f => f !== guard), null, 'raidres');
             out.marginal = { felled: out.felled - cf.felled, lost: cf.harvestLost - out.harvestLost, guardSeed: guard.sheet.seed };
         }
-        out.clan = e.by || 'a warband';
+        // #nemesis a NAMED war is credited to its warleader everywhere the raid is written down — including
+        // the dormant "while you were away" recap, where the telegraph's RETURNS line never fires.
+        out.clan = (e.foe && e.foe.name) ? `${e.foe.name}'s band` : (e.by || 'a warband');
         return out;
     }
 
@@ -5871,6 +5912,24 @@ export class World {
     #applyRaidOutcome(out, e) {
         const rid = e.id || `${e.pairKey}:${e.ordinal}`;
         const hero = out.heroSeed != null ? this.farmers.find(f => f.sheet.seed === out.heroSeed) : null;
+        // #nemesis the arc advances on the verdict the resolver already fixed (deterministic — no new rolls):
+        // the whole band broken = the war ENDS at the hero's feet; anyone getting away = the nemesis ESCAPED,
+        // and he swears against the defender who bested his band (the hero) — next telegraph names the grudge.
+        const nem = this.nemesis;
+        if (nem && !nem.ended && e.pairKey && nem.pairKey === e.pairKey) {
+            if (out.felled >= out.n) {
+                nem.ended = true; nem.lastOutcome = 'fell';
+                if (nem.raidCount >= 2) this.addChronicle('legend', `${nem.name}'s war on ${this.name} ends at ${hero ? shortName(hero) : 'the town'}'s feet — the whole band broken on the line.`,
+                    hero, null, '#f0d060', { tier: 'grand', tone: 'triumph', label: 'THE WAR ENDS', why: 'the named foe fell with his band' });
+            } else {
+                nem.lastOutcome = 'escaped';
+                if (out.heroSeed != null && nem.sworeAgainst !== out.heroSeed) {
+                    nem.sworeAgainst = out.heroSeed;
+                    this.addChronicle('raid', `${nem.name} broke off — and swore against ${hero ? shortName(hero) : 'the town'} as he ran.`,
+                        hero, null, '#e05840', { tier: 'callout', tone: 'tense', why: 'a grudge sworn in retreat' });
+                }
+            }
+        }
         const monSpots = [];
         for (let k = 0; k < out.felled; k++) {
             const ang = (hashString('raidmon:' + rid + ':' + k) % 360) * Math.PI / 180;
@@ -5982,7 +6041,10 @@ export class World {
         const rid = 'rehearsal:' + (nonce >>> 0);
         const dir = (hashString('raiddir:' + rid) % 360) * Math.PI / 180;
         const dirName = COMPASS[Math.round(dir / (Math.PI / 4)) % 8];
-        const e = { id: rid, by: by || 'a warband out of the dark', commit: 0.5, rehearsal: true };
+        // #nemesis the booth can rehearse the NAMED war (read-only: the ghost stages Krul, never advances him)
+        const nem = (this.nemesis && !this.nemesis.ended && this.nemesis.raidCount >= 1) ? this.nemesis : null;
+        const e = { id: rid, by: by || (nem ? `${nem.name}'s warband` : 'a warband out of the dark'), commit: 0.5, rehearsal: true,
+                    foe: nem ? { name: nem.name, raidCount: nem.raidCount + 1, sworeAgainst: nem.sworeAgainst } : null };
         this.pendingRaid = { e, landsAt: this.time + RAID_LEAD, detectAt: this.time + RAID_LEAD - RAID_RALLY,
                              dir, dirName, detected: false, rehearsal: true };
         this.rehearsal = { kind: 'raid', rid };
@@ -6184,6 +6246,14 @@ export class World {
             raiders.push({ kind: 'orc', def, i: CENTER + co * d, j: CENTER + si * d, facing: 1,
                            hp: def.hp, foeName: out.felledNames[k] || null, falls, target });
         }
+        // #nemesis cast the NAMED foe into the band: he leads (first survivor if the seeded verdict lets one
+        // away, else he falls with his band this raid — the war's end). His name shows on hover; the duel
+        // pairing sends him at the one he swore against. Keyed off e.foe (stamped at applyInbox for real
+        // raids, by the booth for rehearsals) so ghost runs stage him identically without touching the arc.
+        if (e.foe && raiders.length) {
+            const lead = raiders.find(r => !r.falls) || raiders[raiders.length - 1];
+            lead.nemesis = true; lead.foeName = e.foe.name;
+        }
         // #131b start in 'approach' (streaming in from the fog); #tickRaidEvent flips to 'march' + sets `struck`
         // when the lead raider crosses into the town proper — the edge main.js watches to fire the UNDER RAID beat.
         this.raidEvent = { out, e, raiders, phase: 'approach', struck: false, timer: 9 };
@@ -6225,9 +6295,18 @@ export class World {
                 const rid = re.e.id || `${re.e.pairKey}:${re.e.ordinal}`;
                 const defenders = this.farmers.filter(f => this.#holdsLine(f));
                 const claimed = new Set();
-                re.raiders.forEach((r, k) => {
+                // #nemesis the named foe picks FIRST — and he goes for the one he swore against, if that
+                // defender holds the line (the grudge made flesh); else nearest, like the rest of the band.
+                const order = [...re.raiders].sort((a, b) => (b.nemesis ? 1 : 0) - (a.nemesis ? 1 : 0));
+                const sworn = re.e.foe ? re.e.foe.sworeAgainst : null;   // (rehearsal-safe: rides the event, not the arc)
+                order.forEach(r => {
+                    const k = re.raiders.indexOf(r);
                     let best = null, bd = Infinity;
-                    for (const f of defenders) {
+                    if (r.nemesis && sworn != null) {
+                        const sf = defenders.find(f => f.sheet.seed === sworn && !claimed.has(f));
+                        if (sf) { best = sf; bd = 0; }
+                    }
+                    if (!best) for (const f of defenders) {
                         if (claimed.has(f)) continue;
                         const d2 = Math.hypot(f.pos.i - r.i, f.pos.j - r.j);
                         if (d2 < bd) { bd = d2; best = f; }
@@ -6235,7 +6314,7 @@ export class World {
                     if (best) {
                         claimed.add(best);
                         const h = hashString('raiddu:' + rid + ':' + k);
-                        r.duel = { opp: best, round: 0, rounds: (r.falls ? 6 : 5) + (h % 2), nextAt: null, stagger: 0.25 + ((h >>> 3) % 90) / 100 };
+                        r.duel = { opp: best, round: 0, rounds: (r.falls ? 6 : 5) + (h % 2), nextAt: null, stagger: r.nemesis ? 0.2 : 0.25 + ((h >>> 3) % 90) / 100 };
                     }
                 });
                 // #raid-focus (council Phase 0) — the FOCUS duel is the battle's story subject (the nemesis
@@ -6353,6 +6432,15 @@ export class World {
                     let tgt = null, td = Infinity;
                     for (const r of re.raiders) {
                         if (r.fell || !r.duel || r.duel.done) continue;
+                        // #nemesis THE WITHHELD GANG-UP (fable's beat): none touch the named foe — the one he
+                        // swore against fights him alone, and says so, once. The flanker finds another duel.
+                        if (r.nemesis) {
+                            if (!re._mineSaid && r.duel.opp && !(r.duel.opp.bubble && r.duel.opp.bubble.t > 0)) {
+                                re._mineSaid = true;
+                                r.duel.opp.say(this.culture === 'orc' ? 'NONE TOUCH HIM. MINE.' : "NO - he's mine!", '#ff6a50');
+                            }
+                            continue;
+                        }
                         const d2 = Math.hypot(r.i - f.pos.i, r.j - f.pos.j);
                         if (d2 < td) { td = d2; tgt = r; }
                     }

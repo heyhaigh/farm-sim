@@ -74,8 +74,15 @@ async function generate(body) {
     const town = String(body.town || (orc ? 'the hold' : 'the town')).slice(0, 40);
     const foe = String(body.foe || 'a warband').slice(0, 60);
     const dir = String(body.dir || 'the dark').slice(0, 20);
+    // #nemesis the named war, if one exists — the counsel should KNOW its history, not discover it
+    const nem = body.nemesis && body.nemesis.name ? {
+        name: String(body.nemesis.name).slice(0, 40),
+        raidCount: Math.max(1, body.nemesis.raidCount | 0),
+        sworeAgainst: body.nemesis.sworeAgainst ? String(body.nemesis.sworeAgainst).slice(0, 30) : null,
+    } : null;
     const system = [
         `You write the MUSTER COUNSEL in RY FARMS, a pixel farming sim. ${foe} has been sighted massing to the ${dir} of ${town}; the alarm is up and these ${orc ? 'orcs of the hold' : 'farmer-neighbours'} have formed a defensive line at the frontier with only moments before the raiders reach them.`,
+        nem ? `THIS IS A NAMED WAR: the warleader is ${nem.name}, and this is raid number ${nem.raidCount} of his war on ${town}. They know him by name now.${nem.sworeAgainst ? ` Last time he broke off he SWORE against ${nem.sworeAgainst} - everyone on the line knows he is coming for ${nem.sworeAgainst}, and ${nem.sworeAgainst} knows it too. Let that hang over the exchange: some want to shield ${nem.sworeAgainst}, and ${nem.sworeAgainst} refuses to be shielded.` : ''}` : null,
         'Write their urgent exchange while they wait: real, flowing, turn-taking — they set STRATEGY (who holds the middle, who takes the flank, fall back to the well if the line gives, protect the stores/the sick), steady each other\'s NERVE, and speak to each other BY NAME. Distinct voices — each sounds like their own personality; a bold one is eager, a timid one is scared and says so, a wise one thinks two steps ahead.',
         'Rules:',
         '- 8 to 12 short turns total. Most of the cast should speak.',
@@ -85,7 +92,7 @@ async function generate(body) {
         orc ? '- These are orcs defending their own hold: blunt, martial, eager. Not villains - a people defending home.' : '- These are farmers, not soldiers: brave but scared, practical, protective of each other.',
         '- Plain ASCII only. No markdown, no em dashes (use " - "), straight quotes, no emojis, no stage directions, no narration.',
         'Return JSON only: { "script": [ { "speaker": "<name>", "line": "<what they say>" }, ... ] }.',
-    ].join('\n');
+    ].filter(Boolean).join('\n');
     const view = cast.map(f => ({
         name: f.name,
         trade: f.archetype || null,

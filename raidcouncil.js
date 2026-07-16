@@ -43,6 +43,11 @@ export async function requestRaidCouncil(world) {
             body: JSON.stringify({
                 culture: world.culture, town: world.name,
                 foe: (pr.e && pr.e.by) || 'a warband', dir: pr.dirName || 'the dark',
+                // #nemesis the grudge, so the counsel KNOWS its history ("he'll come for Cricket. he swore it.")
+                nemesis: (pr.e && pr.e.foe) ? {
+                    name: pr.e.foe.name, raidCount: pr.e.foe.raidCount,
+                    sworeAgainst: (() => { const f = world.farmers.find(x => x.sheet.seed === pr.e.foe.sworeAgainst); return f ? shortNameOf(f) : null; })(),
+                } : null,
                 cast: cast.map(f => castView(world, f)),
             }),
             signal: controller.signal,

@@ -6006,7 +6006,11 @@ function drawThreatTell() {
     const pr = world.pendingRaid; if (!pr) return;
     const hot = pr.detected;
     const pulse = 0.6 + 0.4 * Math.sin(performance.now() / (hot ? 120 : 260));
-    const label = hot ? `RAIDERS CLOSING FROM THE ${pr.dirName.toUpperCase()} - RALLY` : `A WARBAND GATHERS TO THE ${pr.dirName.toUpperCase()}`;
+    // #nemesis a NAMED return lands like a bell — the marquee carries the war, not just the weather
+    const foe = pr.e && pr.e.foe;
+    const label = foe
+        ? (hot ? `${foe.name.toUpperCase()} CLOSES FROM THE ${pr.dirName.toUpperCase()} - RALLY` : `${foe.name.toUpperCase()} RETURNS - RAID ${foe.raidCount} OF HIS WAR`)
+        : (hot ? `RAIDERS CLOSING FROM THE ${pr.dirName.toUpperCase()} - RALLY` : `A WARBAND GATHERS TO THE ${pr.dirName.toUpperCase()}`);
     const tw = textWidth(label), bx = Math.round(GW / 2 - tw / 2), by = 22;
     ctx.fillStyle = `rgba(20,10,8,${0.7 + 0.15 * pulse})`;
     ctx.fillRect(bx - 5, by - 2, tw + 10, 11);
