@@ -6238,7 +6238,30 @@ export class World {
                         r.duel = { opp: best, round: 0, rounds: (r.falls ? 6 : 5) + (h % 2), nextAt: null, stagger: 0.25 + ((h >>> 3) % 90) / 100 };
                     }
                 });
-                re.timer = 24;   // room for the full exchanges, the pursuit, and the survivors' run on the stores
+                // #raid-focus (council Phase 0) — the FOCUS duel is the battle's story subject (the nemesis
+                // pairing once Phase 1 lands > a duel whose defender the resolver WOUNDED > the duel nearest
+                // the well). It drives the CAMERA/STORY machinery (the withheld flank, the one DM beat) — NOT
+                // a text gate: the designer overruled suppressing combat text ("it makes the battle feel more
+                // alive"); pacing does the decluttering instead (the initiative order below).
+                let focus = null, fscore = -Infinity;
+                for (const r of re.raiders) {
+                    if (!r.duel) continue;
+                    const wounded = Array.isArray(re.out.woundSeeds) && re.out.woundSeeds.includes(r.duel.opp.sheet.seed);
+                    const near = -Math.hypot(r.i - CENTER, r.j - CENTER);
+                    const score = (r.nemesis ? 2000 : 0) + (wounded ? 1000 : 0) + near;
+                    if (score > fscore) { fscore = score; focus = r; }
+                }
+                re.focus = focus;
+                // #raid-initiative (designer direction) — D&D turn order: the whole battle resolves ONE
+                // exchange at a time, round-robin across the live duels on a global beat. Only one floating
+                // text is ever born at once, so the fight reads as TURNS, not four simultaneous tickers —
+                // and the battle draws out into a proper scene. Order = the duels' seeded stagger.
+                re.initiative = re.raiders.filter(r => r.duel)
+                    .sort((a, b) => a.duel.stagger - b.duel.stagger || (a.foeName || '').localeCompare(b.foeName || ''));
+                re.turnIdx = 0;
+                re.turnAt = this.time + 0.9;
+                re.cryUntil = this.time + 3.5;   // war-cries at first contact, then the fight itself does the talking
+                re.timer = 34;   // room for the sequential exchanges, the pursuit, and the survivors' run on the stores
             }
             for (const r of re.raiders) {
                 if (r.fell) continue;   // dropped in their duel — they lie where the line stopped them
@@ -6246,19 +6269,33 @@ export class World {
                     const f = r.duel.opp;
                     if (!f || !this.#holdsLine(f)) { r.duel.done = true; continue; }   // opponent gone — disengage
                     const dx = f.pos.i - r.i, dy = f.pos.j - r.j, dist = Math.hypot(dx, dy);
-                    if (dist > 1.7) {   // close to blade range first
+                    if (dist > 1.7) {   // close to blade range (exchanges fire from the initiative beat below)
                         r.i += dx / dist * 3.4 * dt; r.j += dy / dist * 3.4 * dt; r.facing = (dx - dy) >= 0 ? 1 : -1;
                         continue;
                     }
                     r.facing = (dx - dy) >= 0 ? 1 : -1;
-                    if (r.duel.nextAt == null) r.duel.nextAt = this.time + r.duel.stagger;
-                    if (this.time >= r.duel.nextAt) this.#duelExchange(re, r);
                     continue;
                 }
                 // no duel left: press on to the stores, take, and be ready to run
                 const dx = r.target.i - r.i, dy = r.target.j - r.j, dist = Math.hypot(dx, dy);
                 if (dist > 0.6) { r.i += dx / dist * 3.4 * dt; r.j += dy / dist * 3.4 * dt; r.facing = (dx - dy) >= 0 ? 1 : -1; }
                 else if (r.lootAt == null) r.lootAt = this.time;   // pausing at the stores — the grab
+            }
+            // #raid-initiative — the global turn: on each beat, exactly ONE live duel (round-robin) resolves
+            // ONE exchange. A pair still closing to blade range simply passes (their turn comes round again).
+            if (re.initiative && re.initiative.length && this.time >= re.turnAt) {
+                let tries = re.initiative.length;
+                while (tries-- > 0) {
+                    const r = re.initiative[re.turnIdx % re.initiative.length];
+                    re.turnIdx++;
+                    if (r.fell || !r.duel || r.duel.done) continue;
+                    const f = r.duel.opp;
+                    if (!f || !this.#holdsLine(f)) continue;                            // (disengage handled above)
+                    if (Math.hypot(f.pos.i - r.i, f.pos.j - r.j) > 1.7) continue;       // still closing — passes
+                    this.#duelExchange(re, r);
+                    break;
+                }
+                re.turnAt = this.time + 1.1;
             }
             re.timer -= dt;
             const settled = re.raiders.every(r => r.fell || ((!r.duel || r.duel.done) && r.lootAt != null && this.time - r.lootAt > 1.4));
@@ -6336,7 +6373,9 @@ export class World {
                 f._skirmish = bd < 3.2;
                 if (f._skirmish && best) {
                     f.facing = ((best.i - best.j) - (f.pos.i - f.pos.j)) >= 0 ? 1 : -1;   // square up (iso screen-x)
-                    if (!(f.bubble && f.bubble.t > 0)) {
+                    // war-cries at FIRST CONTACT only, then quiet — once the exchanges start, speech bubbles
+                    // fighting the combat text was two channels talking over each other (council Phase 0).
+                    if ((re.cryUntil == null || this.time < re.cryUntil) && !(f.bubble && f.bubble.t > 0)) {
                         const h = hashString('raidcry:' + f.sheet.seed + ':' + Math.floor(this.time / 3));
                         if ((h % 5) === 0) {
                             const pool = this.culture === 'orc' ? RAID_CRIES.orc : RAID_CRIES.human;
@@ -6364,7 +6403,6 @@ export class World {
     // ("FELLED!", and their defender is FREED to flank another duel), a survivor BREAKS OFF marked for
     // PURSUIT (their defender harries them to the stores and sees them off). Display-only randomness.
     #duelExchange(re, r) {
-        const DUEL_BEAT = 1.15;
         const d = r.duel, f = d.opp;
         const rid = re.e.id || `${re.e.pairKey}:${re.e.ordinal}`;
         const roll = mulberry32(hashString('raidduel:' + rid + ':' + (r.foeName || 'r') + ':' + d.round))();
@@ -6423,7 +6461,7 @@ export class World {
                 }
             }
         }
-        d.round++; d.nextAt = this.time + DUEL_BEAT;
+        d.round++;   // (pacing lives in the global initiative beat — see #raid-initiative in the march phase)
     }
 
     #advanceEncounter(e, dt) {
