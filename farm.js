@@ -410,6 +410,26 @@ const WATCH_POSTS = 6, WATCH_SCAN = 3.2;
 const RAID_LEAD = 45, RAID_RALLY = 30;
 // #131 seeded bearing -> a plain-word compass label for the tell; index = round(dir / 45deg) % 8, dir 0 = +i.
 const COMPASS = ['east', 'south-east', 'south', 'south-west', 'west', 'north-west', 'north', 'north-east'];
+// #admin authored stump-speech pools for the election REHEARSAL's speeches phase (display bubbles only —
+// picked by a pure hash of speaker seed + the admin nonce, so a re-run casts fresh lines without rng).
+const STUMP_LINES = {
+    human: [
+        "i'd keep the granary full and the fences mended - that's my whole pitch.",
+        'fair shares, fair watches. no one carries it alone.',
+        "you've seen my fields. i'd run the town the same way.",
+        "i won't promise sun. i'll promise we're ready for the rain.",
+        'ask my neighbours - i show up. that\'s the job.',
+        'a full larder and a quiet night watch. vote how you like.',
+    ],
+    orc: [
+        'I KEEP THE STORES FAT AND THE ENEMIES THIN.',
+        'FOLLOW ME AND THE BAND EATS FIRST.',
+        'I DO NOT PROMISE. I DELIVER, OR I STAND DOWN.',
+        'STRONG WALLS. STRONGER FRIENDS. MY WORD ON IT.',
+        'THE WATCH UNDER ME SLEEPS WITH ONE EYE OPEN.',
+        'I HAVE BLED FOR THIS BAND. LET ME WORK FOR IT TOO.',
+    ],
+};
 // Recall is the EMERGENCY removal between elections — deliberately rare so tenures are meaningful and the
 // yearly ballot does the ordinary turnover. A holder must sit below RECALL_FLOOR for RECALL_DWELL days
 // running (a sustained rejection, not statistical noise near the line), and a town can recall at most
@@ -782,6 +802,10 @@ export class World {
         this.raidEvent = null;     // #Slice3 the in-progress WATCHED raid choreography (live-only, never serialized)
         this.pendingRaid = null;   // #131 a TELEGRAPHED incoming raid: seeded state (rides the save), lands on a
                                    // this.time deadline identically watched or dormant. See applyInbox + #tickPendingRaid.
+        this.rehearsal = null;     // #admin the director's booth: an ADMIN-TRIGGERED ghost run of a raid or the vote
+                                   // (live-only, never serialized). The show plays in full; NOTHING is recorded — no
+                                   // chronicle/log, no stores docked, no wounds, no monuments, no role changes, no
+                                   // SuperMemory. See startRaidRehearsal / startElectionRehearsal / cancelRehearsal.
         this.raidsSuffered = 0;    // #134 how many raids this town has weathered — drives the LEARNING ARC
         this.learned = null;       // #134 its learned response once battered enough: 'defense' (hold the wall) | 'truce' (sue for peace)
         this.dmCooldown = 90;      // a grace period before the first threat stalks the young town
@@ -1768,6 +1792,8 @@ export class World {
                 // authoritative outcome is byte-identical to the old instant path, just RAID_LEAD later.
                 // Back-to-back: if a raid is already in flight, settle it NOW before telegraphing the new one, so
                 // no raid is ever dropped (the #Codex23 no-clobber guarantee holds — only one pending slot).
+                // (#admin exception: a REHEARSAL occupying the slot is a ghost — the real raid supersedes it, curtain down.)
+                if (this.pendingRaid && this.pendingRaid.rehearsal) this.cancelRehearsal();
                 if (this.pendingRaid) { const p = this.pendingRaid; this.pendingRaid = null; this.#landRaid(p.e, p.dir, p.dirName); }
                 const rid = e.id || `${e.pairKey}:${e.ordinal}`;
                 const dir = (hashString('raiddir:' + rid) % 360) * Math.PI / 180;   // seeded flank they come from (cosmetic, but consistent across tell/muster/cinematic)
@@ -2587,7 +2613,9 @@ export class World {
             _rev: this._rev || 0,   // Codex #22.1 monotonic save revision (CAS in saveTown rejects a stale overwrite)
             inboxApplied: (this._inboxApplied || []).slice(-200),   // #reconciliation exactly-once inbox ledger
             inboxWatermark: { ...(this._inboxWatermark || {}) },    // Codex #22.2 durable per-pairKey ordinal watermark
-            pendingRaid: this.pendingRaid ? { ...this.pendingRaid, e: { ...this.pendingRaid.e } } : null,   // #131 a telegraphed raid survives a reload (seeded, plain)
+            // #131 a telegraphed raid survives a reload (seeded, plain) — but an ADMIN REHEARSAL raid is a ghost:
+            // it must never ride a save (a stray save mid-show would greet the next boot with a phantom warband).
+            pendingRaid: (this.pendingRaid && !this.pendingRaid.rehearsal) ? { ...this.pendingRaid, e: { ...this.pendingRaid.e } } : null,
             raidsSuffered: this.raidsSuffered || 0, learned: this.learned || null,   // #134 the learning arc rides the save
             // #Codex30 P1 — the DAY-1 congregation director's coverage state survives a reload (Sets flattened to
             // arrays), so a town reloaded mid-congregation doesn't restart the exchange and re-strand its later
@@ -3203,7 +3231,11 @@ export class World {
         }
     }
     // True while the town is assembled and deliberating (drives the farmers' walk-to-square behaviour).
-    foundingGathering() { return this.roles.foundingPhase === 'gathering'; }
+    foundingGathering() {
+        // #admin an election REHEARSAL borrows the day-10 gathering behavior wholesale: farmers converge on
+        // the well, hold there deliberating (the 'assemble' state + its thoughts), and disperse at curtain.
+        return this.roles.foundingPhase === 'gathering' || (this.rehearsal != null && this.rehearsal.kind === 'election');
+    }
     // #congregation True during the DAY-1 founding congregation (the town gathers to self-organize, then disperses).
     congregating() { return this.roles.foundingPhase === 'congregate'; }
 
@@ -5547,6 +5579,7 @@ export class World {
         this.#tickFounding();   // #106 drive the day-10 gathering -> dusk ballot across the day
         this.#tickPendingRaid(); // #131 drive a telegraphed raid across its lead window (no-op unless one is pending)
         this.#tickRaidEvent(dt); // #Slice3 drive the watched raid choreography (no-op unless a raid is staged)
+        this.#tickRehearsal(dt); // #admin drive an election REHEARSAL's phases (no-op unless the booth staged one)
         this.weatherTimer -= dt;
         if (this.weatherTimer <= 0) this.#rollWeather();
         if (this.townLevelFlash > 0) this.townLevelFlash -= dt;   // UI-only level-up pulse
@@ -5881,6 +5914,7 @@ export class World {
     }
 
     #landRaid(e, dir, dirName) {
+        if (e && e.rehearsal) { this.#landRehearsalRaid(e, dir); return; }   // #admin a ghost raid stages the show, records nothing
         const harvest = this.harvestTotal || 0;
         const out = this.#resolveRaid(e, harvest);   // #133 the resolver computes the bite (a rallied defence shaves it)
         this.harvestTotal = Math.max(0, harvest - out.harvestLost);
@@ -5890,6 +5924,136 @@ export class World {
         this.addLog(`${out.clan} descends on ${this.name} — raiders at the fence!`, '#e05040');
         const monSpots = this.#applyRaidOutcome(out, e);
         if (this._live) this.#stageRaidCinematic(out, e, monSpots, dir);
+    }
+
+    // ------------------------------------------------------------------------------------------------
+    // #admin THE DIRECTOR'S BOOTH — ghost rehearsals, triggered from the settings Admin panel (or
+    // RYFARMS.admin) for making videos and stress-testing. THE PRIME RULE: a rehearsal is a GHOST — the
+    // full experience plays out (telegraph, alarm, muster, seam, warband, or the gather-and-vote), but
+    // NOTHING becomes record: no chronicle/log, no stores docked, no wounds/downs, no monuments, no role
+    // changes, no voteLog/remember, no SuperMemory — and serialize() strips rehearsal state so a save
+    // mid-show persists none of it. The town IS overridden in the moment (farmers muster, gather, orate —
+    // that's the show, and the accepted cost); when the curtain falls they return to their business.
+    // Rehearsal randomness = pure keyed hashes of an ADMIN-SUPPLIED nonce (callers pass wall-clock) —
+    // this file draws no Date/Math.random and NEVER touches this.rand for a rehearsal, so the sim's
+    // seeded stream is exactly where it would have been. The two rehearsals supersede one another.
+    // ------------------------------------------------------------------------------------------------
+    startRaidRehearsal(nonce = 1, by = null) {
+        this.cancelRehearsal();
+        const rid = 'rehearsal:' + (nonce >>> 0);
+        const dir = (hashString('raiddir:' + rid) % 360) * Math.PI / 180;
+        const dirName = COMPASS[Math.round(dir / (Math.PI / 4)) % 8];
+        const e = { id: rid, by: by || 'a warband out of the dark', commit: 0.5, rehearsal: true };
+        this.pendingRaid = { e, landsAt: this.time + RAID_LEAD, detectAt: this.time + RAID_LEAD - RAID_RALLY,
+                             dir, dirName, detected: false, rehearsal: true };
+        this.rehearsal = { kind: 'raid', rid };
+        return true;
+    }
+
+    // The ghost landing: the SAME pure scorer + cinematic as a real raid (so the show is honest — raiders
+    // fall where the seeded outcome says they would), but the outcome is applied NOWHERE: harvest stands,
+    // no one is wounded or downed, no monuments rise, nothing is chronicled, the town learns nothing.
+    #landRehearsalRaid(e, dir) {
+        const out = this.#resolveRaid(e, this.harvestTotal || 0);   // pure — computed for the show only
+        const monSpots = [];
+        for (let k = 0; k < out.felled; k++) {   // fall SPOTS only (same seeded placement) — no monuments raised
+            const ang = (hashString('raidmon:' + e.id + ':' + k) % 360) * Math.PI / 180;
+            const d = 7 + (hashString('raidmd:' + e.id + ':' + k) % 4);
+            const mi = Math.round(CENTER + Math.cos(ang) * d), mj = Math.round(CENTER + Math.sin(ang) * d);
+            monSpots.push(this.nearestOpenTile({ i: mi, j: mj }) || { i: mi, j: mj });
+        }
+        for (const f of this.farmers) f.threatAlert = Math.max(f.threatAlert || 0, 1.5);   // the town meets them (in-the-moment)
+        if (this._live) {
+            this.#stageRaidCinematic(out, e, monSpots, dir);
+            if (this.raidEvent) this.raidEvent.rehearsal = true;
+        } else this.rehearsal = null;   // headless: nothing to show
+    }
+
+    startElectionRehearsal(nonce = 1) {
+        this.cancelRehearsal();
+        if (this.farmers.filter(f => f.health !== 'sick' && !f.downed).length < 2) return false;
+        this.rehearsal = { kind: 'election', phase: 'gather', t: 0, nonce: nonce >>> 0, spoken: 0, speakQueue: null, result: null };
+        return true;
+    }
+
+    cancelRehearsal() {
+        if (this.pendingRaid && this.pendingRaid.rehearsal) this.pendingRaid = null;
+        if (this.raidEvent && this.raidEvent.rehearsal) this.raidEvent = null;
+        this.rehearsal = null;
+        // farmers hijacked into 'muster'/'assemble' release on their own next check (their hold conditions
+        // read pendingRaid / foundingGathering, both false again now) — no stuck states.
+    }
+
+    // The election rehearsal's stage director: gather at the well -> the candidates make their case, one
+    // voice at a time (speech-floor paced) -> a real tally of CURRENT sentiment (#ghostOffice — the same
+    // ballot math as the winter vote, minus every write) -> the would-be winner speaks -> curtain.
+    #tickRehearsal(dt) {
+        const rh = this.rehearsal; if (!rh || rh.kind !== 'election') return;
+        rh.t += dt;
+        if (rh.phase === 'gather') {
+            const near = this.farmers.filter(f => Math.abs(f.pos.i - this.well.i) + Math.abs(f.pos.j - this.well.j) < 7).length;
+            if (near >= Math.ceil(this.farmers.length * 0.6) || rh.t > 30) {
+                rh.phase = 'speeches'; rh.t = 0; rh.spoken = 0;
+                rh.speakQueue = [...new Set([...this.#electionCandidates('manager'), ...this.#electionCandidates('watch')])];
+            }
+        } else if (rh.phase === 'speeches') {
+            if (this.floorFree() && rh.speakQueue && rh.spoken < rh.speakQueue.length) {
+                const f = this.farmers.find(x => x.sheet.seed === rh.speakQueue[rh.spoken]);
+                rh.spoken++;
+                if (f && !f.downed && f.health !== 'sick') {
+                    const line = this.#stumpLine(f, rh.nonce);
+                    f.say(line, '#e8d060');
+                    this.holdFloor(Math.max(2.8, line.length * 0.055));
+                }
+            }
+            if ((!rh.speakQueue || rh.spoken >= rh.speakQueue.length) && this.floorFree()) { rh.phase = 'tally'; rh.t = 0; }
+        } else if (rh.phase === 'tally') {
+            if (!rh.result && rh.t > 3.5) {
+                const voters = this.farmers.filter(f => f.health !== 'sick' && !f.downed);
+                const year = this.year + 1;
+                const mgrSeed = this.#ghostOffice('manager', this.#electionCandidates('manager'), voters, year);
+                const watchSeed = this.#ghostOffice('watch', this.#electionCandidates('watch').filter(s => s !== mgrSeed), voters, year);
+                const nm = s => { const f = this.farmers.find(x => x.sheet.seed === s); return f ? shortName(f) : 'no one'; };
+                rh.result = { manager: mgrSeed, watch: watchSeed, managerName: nm(mgrSeed), watchName: nm(watchSeed) };
+                const mgr = this.farmers.find(x => x.sheet.seed === mgrSeed);
+                if (mgr) { mgr.say(this.culture === 'orc' ? 'THE BAND HAS SPOKEN. I CARRY IT.' : "the town has spoken - i'll carry it.", '#f0d060'); this.holdFloor(3.4); }
+            }
+            if (rh.result && rh.t > 8) { rh.phase = 'announce'; rh.t = 0; }
+        } else if (rh.phase === 'announce') {
+            if (rh.t > 8) this.cancelRehearsal();   // curtain — the gather condition drops and the town disperses
+        }
+    }
+
+    // The winter vote's exact ballot math (argmax #ballotPref per voter, fitness-then-seed tiebreaks) with
+    // every write removed: no voteLog, no #seatElected, no remember(), no chronicle. Pure reads + the
+    // per-tuple keyed jitter stream — safe to evaluate any day, any number of times.
+    #ghostOffice(office, candSeeds, voters, year) {
+        const r = this.roles;
+        const incumbentSeed = office === 'manager' ? r.manager : r.watch;
+        const cands = candSeeds.map(s => this.farmers.find(f => f.sheet.seed === s)).filter(Boolean);
+        if (!cands.length || voters.length < 2) return incumbentSeed;
+        if (cands.length === 1) return cands[0].sheet.seed;
+        const fitFn = office === 'manager' ? (f => this.#managerFitness(f)) : (f => this.#watchFitness(f));
+        const maxFit = Math.max(0.001, ...cands.map(fitFn));
+        const tally = new Map(cands.map(c => [c.sheet.seed, 0]));
+        for (const v of voters) {
+            let best = null, bestP = -1e9;
+            for (const c of cands) {
+                const p = this.#ballotPref(v, c, office, incumbentSeed, year, fitFn, maxFit);
+                if (p > bestP || (p === bestP && (best == null || c.sheet.seed < best.sheet.seed))) { bestP = p; best = c; }
+            }
+            tally.set(best.sheet.seed, tally.get(best.sheet.seed) + 1);
+        }
+        let winner = null, bestVotes = -1;
+        for (const c of [...cands].sort((a, b) => (fitFn(b) - fitFn(a)) || (a.sheet.seed - b.sheet.seed))) {
+            const vc = tally.get(c.sheet.seed); if (vc > bestVotes) { bestVotes = vc; winner = c; }
+        }
+        return winner.sheet.seed;
+    }
+
+    #stumpLine(f, nonce) {
+        const pool = this.culture === 'orc' ? STUMP_LINES.orc : STUMP_LINES.human;
+        return pool[hashString('stump:' + f.sheet.seed + ':' + nonce) % pool.length];
     }
 
     // #131 — drive a telegraphed raid across its lead window (both watched and dormant, so the timing is
@@ -5903,9 +6067,11 @@ export class World {
             const sentry = this.currentSentry();
             for (const f of this.farmers) f.threatAlert = Math.max(f.threatAlert || 0, 1.5);   // the whole town is roused (both paths)
             if (sentry) sentry.say(this.culture === 'orc' ? 'RAIDERS! ROUSE THE BAND!' : 'RAIDERS! TO ARMS!', '#e05040');
-            this.addLog(`${sentry ? shortName(sentry) : 'The watch'} sounds the alarm — raiders closing from the ${pr.dirName}!`, '#e05040');
-            this.addChronicle('raid', `The watch caught a warband closing on ${this.name} from the ${pr.dirName} — the alarm went up and the town rallied to meet it.`,
-                sentry, null, '#e0a040', { tier: 'callout', tone: 'tense', why: 'a raid seen coming — the tripwire earned its keep' });
+            if (!pr.rehearsal) {   // #admin a ghost run keeps the full alarm SHOW (cry, muster, seam) but writes no record
+                this.addLog(`${sentry ? shortName(sentry) : 'The watch'} sounds the alarm — raiders closing from the ${pr.dirName}!`, '#e05040');
+                this.addChronicle('raid', `The watch caught a warband closing on ${this.name} from the ${pr.dirName} — the alarm went up and the town rallied to meet it.`,
+                    sentry, null, '#e0a040', { tier: 'callout', tone: 'tense', why: 'a raid seen coming — the tripwire earned its keep' });
+            }
         }
         if (this.time >= pr.landsAt) { const { e, dir, dirName } = pr; this.pendingRaid = null; this.#landRaid(e, dir, dirName); }
     }
@@ -5990,7 +6156,10 @@ export class World {
                 r.i += dx / dist * 5.5 * dt; r.j += dy / dist * 5.5 * dt; r.facing = (dx - dy) >= 0 ? 1 : -1;
             }
             re.timer -= dt;
-            if (re.timer <= 0) this.raidEvent = null;
+            if (re.timer <= 0) {
+                this.raidEvent = null;
+                if (re.rehearsal && this.rehearsal && this.rehearsal.kind === 'raid') this.rehearsal = null;   // #admin curtain
+            }
         }
     }
 

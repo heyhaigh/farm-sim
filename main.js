@@ -3098,6 +3098,9 @@ function drawUI() {
     barIconBtn(SND_BTN, 12, (x, y) => drawSpeakerIcon(x + 2, y + 2, audio.enabled));
     // settings cog — folds in New Town + music/SFX volume (sound on/off stays a top-bar quick action)
     barIconBtn(SETTINGS_BTN, 12, (x, y) => drawGearIcon(x + 2, y + 2, settingsOpen));   // green icon = active, no bg swap
+    // #admin a small amber dot on the gear while a ghost rehearsal is live — the booth's only permanent tell
+    // (deliberately subtle: the show itself should read clean for the camera).
+    if (world.rehearsal) { ctx.fillStyle = '#f0c860'; ctx.fillRect(SETTINGS_BTN.x + SETTINGS_BTN.w - 3, SETTINGS_BTN.y, 3, 3); }
 
     // speed controls in the corner: > = 5x, >> = 20x; a 1X revert appears while sped up
     const spd = world._speedMult || 1;
@@ -3476,7 +3479,7 @@ function foundNewTown(culture) {
 // Settings menu — New Town + music/SFX volume. Opened by the top-bar gear cog.
 // ---------------------------------------------------------------------------
 function drawSettings() {
-    const PW = Math.min(GW - 24, 240), PH = 148;
+    const PW = Math.min(GW - 24, 240), PH = 210;
     const PX = Math.floor((GW - PW) / 2), PY = Math.floor((GH - PH) / 2) - 6;
     ctx.fillStyle = 'rgba(6,7,11,0.72)'; ctx.fillRect(0, 18, GW, GH - 18);
     uiPanel(PX, PY, PW, PH);
@@ -3529,7 +3532,25 @@ function drawSettings() {
     drawText(ctx, nlabel, nb.x + Math.floor((nb.w - textWidth(nlabel)) / 2), nb.y + 4, confirming ? '#ff9080' : '#e07868');
     settingsHits.newBtn = nb;
     drawText(ctx, 'A NEW TOWN GROWS A NEW CAST - THIS ONE IS SAVED, NOT LOST.', IX, PY + 120, '#5a5f6c');
-    drawText(ctx, 'ESC OR CLICK OUTSIDE TO CLOSE', IX, PY + 134, '#4a4f5c');
+
+    ctx.fillStyle = '#20242f'; ctx.fillRect(PX + 4, PY + 130, PW - 8, 1);
+
+    // #admin THE DIRECTOR'S BOOTH — stage a ghost rehearsal (raid / the vote) for videos and stress-tests.
+    // Nothing a rehearsal does is recorded (no chronicle, no roles, no SuperMemory, stripped from saves).
+    const rh = world.rehearsal;
+    drawText(ctx, 'ADMIN - REHEARSALS (GHOST RUNS, NOTHING RECORDED)', IX, PY + 136, '#8a6fae');
+    const admRow = (y, key, live, liveLabel, idleLabel) => {
+        const b = { x: IX, y, w: PW - 16, h: 14 };
+        ctx.fillStyle = live ? '#2e2410' : '#141824'; ctx.fillRect(b.x, b.y, b.w, b.h);
+        ctx.strokeStyle = live ? '#e0b040' : '#5a6f9c'; ctx.strokeRect(b.x + 0.5, b.y + 0.5, b.w - 1, b.h - 1);
+        const label = live ? liveLabel : idleLabel;
+        drawText(ctx, label, b.x + Math.floor((b.w - textWidth(label)) / 2), b.y + 4, live ? '#f0c860' : '#9ab8e8');
+        settingsHits[key] = b;
+    };
+    admRow(PY + 146, 'admRaid', rh && rh.kind === 'raid', 'RAID REHEARSAL LIVE - CANCEL', 'STAGE A RAID');
+    admRow(PY + 164, 'admVote', rh && rh.kind === 'election', 'VOTE REHEARSAL LIVE - CANCEL', 'STAGE THE VOTE');
+
+    drawText(ctx, 'ESC OR CLICK OUTSIDE TO CLOSE', IX, PY + 186, '#4a4f5c');
     settingsHits.panel = { x: PX, y: PY, w: PW, h: PH };
 }
 
@@ -5186,7 +5207,26 @@ function drawRaidFx() {
     }
 }
 
+// #admin best-effort villain casting for a raid rehearsal: the first known town of the OTHER culture from
+// the world index (if the map has been opened this session), else null -> farm.js's stock phantom warband.
+function adminFoeName() {
+    try {
+        const towns = Object.values((worldMapIdx && worldMapIdx.towns) || {});
+        const foe = towns.find(t => t && t.culture && t.culture !== world.culture && String(t.seed) !== String(world.seed));
+        return foe && foe.name ? `the ${foe.name} warband` : null;
+    } catch { return null; }
+}
+
 function drawMoments() {
+    // #admin the election rehearsal's tally lands as a REAL spotlight card (the authentic election visual) —
+    // but synthesized here, display-only: the entry never enters world.chronicle, so nothing is recorded.
+    const rh = world.rehearsal;
+    if (rh && rh.kind === 'election' && rh.result && !rh._carded) {
+        rh._carded = true;   // rehearsal object is transient scratch — safe to mark
+        activeMoment = { e: { label: 'THE TOWN DECIDES', kind: 'town', tone: 'triumph', color: '#f0d060',
+            text: `${rh.result.managerName} would carry the town - and ${rh.result.watchName} the watch - if the vote were held today.`,
+            whoSeed: rh.result.manager, day: world.day, season: world.season, year: world.year }, shownAt: performance.now() };
+    }
     // A full-screen modal is ON TOP: don't draw the spotlight/toasts over it — but FREEZE the active ones (bump
     // their shownAt each frame) so they don't expire behind the modal; they resume, viewable, once it's dismissed.
     if (rosterOpen || chronOpen || boardOpen || settingsOpen || worldMapOpen) {
@@ -5502,6 +5542,18 @@ out.addEventListener('pointerup', (e) => {
             // NEW TOWN: first click arms ("SURE?"), a second within 3s wipes the save + reloads fresh
             if (performance.now() < newConfirmUntil) { newConfirmUntil = 0; wipeTown(world.seed).finally(() => { location.href = location.pathname + '?fresh=1'; }); }
             else newConfirmUntil = performance.now() + 3000;
+            return;
+        }
+        // #admin the director's booth: stage/cancel a ghost rehearsal (raid / the vote). The wall-clock nonce
+        // is the rehearsal's ONLY randomness (farm.js keys pure hashes off it — the sim's rng is never touched).
+        if (settingsHits.admRaid && inRect(p, settingsHits.admRaid)) {
+            if (world.rehearsal && world.rehearsal.kind === 'raid') world.cancelRehearsal();
+            else { world.startRaidRehearsal((performance.now() * 31) >>> 0 || 1, adminFoeName()); settingsOpen = false; }
+            return;
+        }
+        if (settingsHits.admVote && inRect(p, settingsHits.admVote)) {
+            if (world.rehearsal && world.rehearsal.kind === 'election') world.cancelRehearsal();
+            else if (world.startElectionRehearsal((performance.now() * 31) >>> 0 || 1)) settingsOpen = false;
             return;
         }
         if (!inRect(p, settingsHits.panel)) { settingsOpen = false; return; }   // click outside closes
@@ -5985,7 +6037,8 @@ function frame(now) {
     // soundtrack follows the sim: seasonal theme by day, crickets/owls at night,
     // rain/thunder by weather, and a rooster crow at dawn once the town has one
     const anyBuilding = world.farmers.some(f => f.state === 'housebuild' || f.state === 'fencepost' || f.state === 'build' || f.state === 'coopbuild' || f.state === 'scarecrow');
-    audio.update({ isNight: world.isNight(), weather: world.weather, flash: world.lightningFlash, season: world.season, culture: world.culture, hasRooster: world.hasRooster(), building: anyBuilding });
+    audio.update({ isNight: world.isNight(), weather: world.weather, flash: world.lightningFlash, season: world.season, culture: world.culture, hasRooster: world.hasRooster(), building: anyBuilding,
+        raid: !!(world.raidEvent || (world.pendingRaid && world.pendingRaid.detected)) });   // #raid-score war music from the alarm to the last raider gone (rehearsals included)
     // at extreme speeds keep a bounded backlog (spread over coming frames) rather than dropping
     // all the leftover time, but cap it so we never spiral.
     if (steps >= 800) simAccumulator = Math.min(simAccumulator, 800 * FIXED_DT);
@@ -6343,6 +6396,13 @@ function drawBootScreen(t) {
         get pendingRaid() { return world.pendingRaid; },                                   // #131 inspect a telegraphed raid
         raidDetect: () => { const pr = world.pendingRaid; if (pr) world.time = pr.detectAt; return world.pendingRaid; },  // #131 jump to the sentry's alarm
         raidLand: () => { const pr = world.pendingRaid; if (pr) world.time = pr.landsAt; return world.pendingRaid; },     // #131 fast-forward to the blow
+        // #admin the director's booth (same as the settings panel): GHOST rehearsals — full show, zero record
+        admin: {
+            raid: () => world.startRaidRehearsal((performance.now() * 31) >>> 0 || 1, adminFoeName()),
+            election: () => world.startElectionRehearsal((performance.now() * 31) >>> 0 || 1),
+            cancel: () => world.cancelRehearsal(),
+            get active() { return world.rehearsal; },
+        },
         // deterministic stepping for reproducibility tests: N uniform FIXED_DT sim ticks
         runSteps: (n) => { for (let k = 0; k < n; k++) world.tick(FIXED_DT); },
         FIXED_DT,
