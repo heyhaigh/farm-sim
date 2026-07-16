@@ -202,9 +202,10 @@ class FarmAudio {
     toggleSfx() { this.sfxOn = !this.sfxOn; this.#save('sfxOn', this.sfxOn ? '1' : '0'); this.#applySfx(); return this.sfxOn; }
 
     // called every frame with sim state
-    update({ isNight, weather, flash, season = 0, culture = 'human', hasRooster = false, building = false }) {
+    update({ isNight, weather, flash, season = 0, culture = 'human', hasRooster = false, building = false, raid = false }) {
         this.hasRooster = hasRooster;
         this.culture = culture === 'orc' ? 'orc' : 'human';   // #3.1 orc warbands get their own dark score
+        this.raid = !!raid;   // #raid-score a raid is underway (alarm sounded / warband on the field) — see #schedule
         if (!this.ctx) { this.wasNight = isNight; this.season = season; return; }
         const t = this.ctx.currentTime;
         // (structure-raising hammer is now emitted PER FARMER by the renderer via workSfx(), so it's
@@ -214,10 +215,11 @@ class FarmAudio {
         // it's pulled from the dawn cue. (#crow()/playCrow() are left dormant below for a future
         // rework; re-enable by restoring the call: if (this.wasNight && !isNight && hasRooster) this.#crow();)
         this.wasNight = isNight;
-        // day/night crossfade: music out, night chorus in (~4s)
+        // day/night crossfade: music out, night chorus in (~4s) — but a RAID overrides the hush: the war
+        // score plays at full strength whatever the hour (a night raid must not be scored by crickets).
         const target = isNight ? 1 : 0;
         this.nightMix += (target - this.nightMix) * 0.01;
-        this.musicGain.gain.setTargetAtTime(this.musicLevel() * (1 - this.nightMix), t, 0.5);
+        this.musicGain.gain.setTargetAtTime(this.musicLevel() * (this.raid ? 1 : 1 - this.nightMix), t, 0.5);
         this.cricketGain.gain.setTargetAtTime(0.5 * this.nightMix, t, 0.5);
         // rain/wind bed by weather (blizzard drives the noise bed as howling wind)
         this.rainTarget = weather === 'storm' ? 0.24 : weather === 'blizzard' ? 0.2 : weather === 'rain' ? 0.13 : 0;
@@ -232,10 +234,17 @@ class FarmAudio {
     #schedule() {
         const t = this.ctx.currentTime;
         const songs = this.culture === 'orc' ? ORC_SEASON_SONGS : SEASON_SONGS;   // #3.1 dark warband score
-        const song = songs[this.season] || songs[0] || SEASON_SONGS[0];
+        // #raid-score while a raid is underway the season theme YIELDS to the war music — the town's own
+        // soundtrack is invaded along with its fields. A human town hears the raiders' theme arrive (ORC
+        // SPRING, "The Muster" — the phrygian march); an orc town, already living on the war score, escalates
+        // to "The Gorging" (the frenzied summer war-dance). Swaps on the next bar boundary; reverts the same
+        // way when the raid ends. Music is deliberately non-deterministic/display-only — the sim never hears it.
+        const song = this.raid
+            ? ORC_SEASON_SONGS[this.culture === 'orc' ? 1 : 0]
+            : (songs[this.season] || songs[0] || SEASON_SONGS[0]);
         const bar = (60 / song.tempo) * 4;
         while (this.nextBar < t + 0.4) {
-            if (this.nightMix < 0.85) this.#scheduleBar(this.nextBar, song, this.barIdx);
+            if (this.nightMix < 0.85 || this.raid) this.#scheduleBar(this.nextBar, song, this.barIdx);
             this.nextBar += bar;
             this.barIdx = (this.barIdx + 1) % song.chords.length;
         }
