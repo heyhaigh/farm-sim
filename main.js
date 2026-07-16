@@ -6647,8 +6647,11 @@ function drawBootScreen(t) {
         animalRow: (n) => { ANIMAL_SIDE_ROW = n; },
         // #raidfx QA: TELEGRAPH a raid now (#131 — word arrives, the warband masses; the alarm + muster + blow
         // follow across the lead window). Advance with runSteps, or fast-forward with raidDetect()/raidLand().
+        // #nemesis STABLE pairKey ('dbg-war') so repeat calls advance ONE named arc, exactly like a real
+        // neighbour's raids do — the second call debuts the named return. (Was a fresh pairKey per call:
+        // every raid founded a separate war and the nemesis never reached raid two.)
         raid: (commit = 0.28) => { world._live = true; const k = (window.__raidDbg = (window.__raidDbg || 0) + 1);
-            world.applyInbox([{ id: 'dbg-raid-' + k, kind: 'raided', day: world.day, pairKey: 'dbg-raid-' + k, ordinal: k, commit, by: 'the Ashfang clan' }]); },
+            world.applyInbox([{ id: 'dbg-raid-' + k, kind: 'raided', day: world.day, pairKey: 'dbg-war', ordinal: k, commit, by: 'the Ashfang clan' }]); },
         get pendingRaid() { return world.pendingRaid; },                                   // #131 inspect a telegraphed raid
         raidDetect: () => { const pr = world.pendingRaid; if (pr) world.time = pr.detectAt; return world.pendingRaid; },  // #131 jump to the sentry's alarm
         raidLand: () => { const pr = world.pendingRaid; if (pr) world.time = pr.landsAt; return world.pendingRaid; },     // #131 fast-forward to the blow
