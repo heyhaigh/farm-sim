@@ -6140,7 +6140,7 @@ export class World {
                 f.remember('person', `${h.sheet.name.split(' ')[0]} stood with me when ${e.def.name} had me — I owe them`, h, 1.4);
             }
             this.addLog(`${f.sheet.name} owes their life to ${rescuers.map(h => h.sheet.name.split(' ')[0]).join(' & ')}.`, '#7dd069');
-            this.addChronicle('peril', `${f.sheet.name.split(' ')[0]} was struck down by a ${e.def.name.toLowerCase()}, but ${rescuers.map(h => h.sheet.name.split(' ')[0]).join(' & ')} pulled them back.`, f, rescuers[0], '#e07040',
+            this.addChronicle('peril', `${f.sheet.name.split(' ')[0]} was struck down by ${e.def.name.toLowerCase()}, but ${rescuers.map(h => h.sheet.name.split(' ')[0]).join(' & ')} pulled them back.`, f, rescuers[0], '#e07040',
                 { tier: 'grand', tone: 'triumph', label: 'PULLED BACK FROM THE BRINK', why: `${rescuers.map(h => h.sheet.name.split(' ')[0]).join(' & ')} reached them in time`, icon: null });
         } else {
             // #watch was a watcher standing when this happened? Then "no one came" is too broad — a sentry held the
@@ -6156,11 +6156,11 @@ export class World {
             }
             if (watched) {
                 this.addLog(`${f.sheet.name} fell before ${sentry.sheet.name.split(' ')[0]} could reach them.`, '#c05840');
-                this.addChronicle('peril', `${f.sheet.name.split(' ')[0]} was struck down by a ${e.def.name.toLowerCase()} — ${sentry.sheet.name.split(' ')[0]} could not reach them in time.`, f, sentry, '#e03828',
+                this.addChronicle('peril', `${f.sheet.name.split(' ')[0]} was struck down by ${e.def.name.toLowerCase()} — ${sentry.sheet.name.split(' ')[0]} could not reach them in time.`, f, sentry, '#e03828',
                     { tier: 'grand', tone: 'somber', label: 'STRUCK DOWN', why: `the watch could not reach them before the blow fell`, icon: null });
             } else {
                 if (bystanders.length) this.addLog(`${f.sheet.name} won't forget that no one came.`, '#c05840');
-                this.addChronicle('peril', `${f.sheet.name.split(' ')[0]} was struck down by a ${e.def.name.toLowerCase()} in the wilds — no one came.`, f, null, '#e03828',
+                this.addChronicle('peril', `${f.sheet.name.split(' ')[0]} was struck down by ${e.def.name.toLowerCase()} in the wilds — no one came.`, f, null, '#e03828',
                     { tier: 'grand', tone: 'somber', label: 'STRUCK DOWN', why: `struck down out in the wilds, and no one came in time`, icon: null });
             }
         }
