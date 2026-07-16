@@ -2369,8 +2369,8 @@ function drawFarmer(f, sx, sy) {
     let frame = frames.idle;
     if (f.state === 'walk' || f.state === 'flee') {
         frame = Math.floor(f.animTime * (f.state === 'flee' ? 11 : 7)) % 2 ? frames.walk1 : frames.walk2;
-    } else if (f.state === 'work' || f.state === 'build' || f.state === 'coopbuild' || f.state === 'housebuild' || f.state === 'chop' || f.state === 'break' || f.state === 'forage' || f.state === 'mine' || f.state === 'fencepost' || f.state === 'scarecrow' || f.state === 'fight') {
-        frame = Math.floor(f.animTime * (f.state === 'fight' ? 8 : 5)) % 2 ? frames.work : frames.idle;
+    } else if (f.state === 'work' || f.state === 'build' || f.state === 'coopbuild' || f.state === 'housebuild' || f.state === 'chop' || f.state === 'break' || f.state === 'forage' || f.state === 'mine' || f.state === 'fencepost' || f.state === 'scarecrow' || f.state === 'fight' || (f.state === 'muster' && f._skirmish)) {
+        frame = Math.floor(f.animTime * ((f.state === 'fight' || f._skirmish) ? 8 : 5)) % 2 ? frames.work : frames.idle;
     } else if (f.state === 'sleep') {
         frame = frames.sleep;
     }
@@ -5145,26 +5145,29 @@ function drawGem(kind, cx, cy, r, tone) {
 // alternating edges (staggered so they cascade), a big "UNDER RAID" callout while the screen is
 // covered, then the bands snap open to reveal the raid already underway. Display-only; drawn under
 // the CRT shader (so it gets the scanline/aberration treatment for free).
-const RAIDFX_DUR = 1.25;
+// #raid-feel the transition now LINGERS (1.25s → 3.2s: user note — "it just disappears, doesn't feel as
+// triumphant as it can be"): a fast slam, a LONG covered hold with the callout up, then the reveal — and the
+// war-horn sting sounds THREE times across it (fired from the ticker at t 0 / 1.05 / 2.1, see the main loop).
+const RAIDFX_DUR = 3.2;
 function drawRaidFx() {
     const p = Math.min(1, raidFx.t / RAIDFX_DUR);
 
     // A — impact flash: a red slam with a white core at the very first instant
-    if (p < 0.18) {
-        ctx.fillStyle = `rgba(196,32,24,${(1 - p / 0.18) * 0.72})`;
+    if (p < 0.08) {
+        ctx.fillStyle = `rgba(196,32,24,${(1 - p / 0.08) * 0.72})`;
         ctx.fillRect(0, 0, GW, GH);
-        if (p < 0.05) { ctx.fillStyle = `rgba(255,238,228,${(1 - p / 0.05) * 0.6})`; ctx.fillRect(0, 0, GW, GH); }
+        if (p < 0.02) { ctx.fillStyle = `rgba(255,238,228,${(1 - p / 0.02) * 0.6})`; ctx.fillRect(0, 0, GW, GH); }
     }
 
-    // B — war-bands close (0.10→0.44), hold (0.44→0.60), open (0.60→1.0), each band staggered + torn
+    // B — war-bands slam shut FAST (0.04→0.20), HOLD covered long (0.20→0.72 ≈ 1.7s), open (0.72→1.0)
     const bands = 8, bandH = Math.ceil(GH / bands);
     for (let k = 0; k < bands; k++) {
         const fromLeft = (k % 2) === 0;
         let c;   // 0 = fully open, 1 = fully covering
-        const cs = 0.10 + k * 0.012;
-        if (p < 0.44) c = Math.min(1, Math.max(0, (p - cs) / (0.44 - cs)));
-        else if (p < 0.60) c = 1;
-        else { const os = 0.60 + k * 0.010; c = 1 - Math.min(1, Math.max(0, (p - os) / (1.0 - os))); }
+        const cs = 0.04 + k * 0.008;
+        if (p < 0.20) c = Math.min(1, Math.max(0, (p - cs) / (0.20 - cs)));
+        else if (p < 0.72) c = 1;
+        else { const os = 0.72 + k * 0.008; c = 1 - Math.min(1, Math.max(0, (p - os) / (1.0 - os))); }
         if (c <= 0) continue;
         const e = c < 0.5 ? 4 * c * c * c : 1 - Math.pow(-2 * c + 2, 3) / 2;   // easeInOutCubic
         const w = Math.round(GW * e);
@@ -5181,10 +5184,10 @@ function drawRaidFx() {
         }
     }
 
-    // C — the "UNDER RAID" callout, held while the screen is covered, with a punch-in then fade
-    if (p > 0.30 && p < 0.94) {
-        const q = Math.min(1, (p - 0.30) / 0.10);                 // punch-in 0→1
-        const fade = p > 0.82 ? Math.max(0, 1 - (p - 0.82) / 0.12) : 1;
+    // C — the "UNDER RAID" callout: punch in early, HOLD through the covered stretch, fade with the reveal
+    if (p > 0.12 && p < 0.95) {
+        const q = Math.min(1, (p - 0.12) / 0.05);                 // punch-in 0→1
+        const fade = p > 0.86 ? Math.max(0, 1 - (p - 0.86) / 0.09) : 1;
         const scale = Math.round(3 + q);                          // 3 → 4
         const big = (world.culture === 'orc') ? 'UNDER SIEGE' : 'UNDER RAID';
         const bw = textWidth(big, scale);
@@ -5199,9 +5202,9 @@ function drawRaidFx() {
     }
 
     // D — a lingering red vignette as the world comes back
-    if (p > 0.58) {
+    if (p > 0.68) {
         const g = ctx.createRadialGradient(GW / 2, GH / 2, GH * 0.3, GW / 2, GH / 2, GH * 0.75);
-        const a = Math.max(0, 1 - (p - 0.58) / 0.42) * 0.5;
+        const a = Math.max(0, 1 - (p - 0.68) / 0.32) * 0.5;
         g.addColorStop(0, 'rgba(120,10,6,0)'); g.addColorStop(1, `rgba(120,10,6,${a})`);
         ctx.fillStyle = g; ctx.fillRect(0, 0, GW, GH);
     }
@@ -6038,7 +6041,7 @@ function frame(now) {
     // rain/thunder by weather, and a rooster crow at dawn once the town has one
     const anyBuilding = world.farmers.some(f => f.state === 'housebuild' || f.state === 'fencepost' || f.state === 'build' || f.state === 'coopbuild' || f.state === 'scarecrow');
     audio.update({ isNight: world.isNight(), weather: world.weather, flash: world.lightningFlash, season: world.season, culture: world.culture, hasRooster: world.hasRooster(), building: anyBuilding,
-        raid: !!(world.raidEvent || (world.pendingRaid && world.pendingRaid.detected)) });   // #raid-score war music from the alarm to the last raider gone (rehearsals included)
+        raidPhase: world.raidEvent ? 2 : world.pendingRaid ? 1 : 0 });   // #raid-score 1 = buildup from the moment a warband gathers · 2 = battle once it lands (rehearsals included)
     // at extreme speeds keep a bounded backlog (spread over coming frames) rather than dropping
     // all the leftover time, but cap it so we never spiral.
     if (steps >= 800) simAccumulator = Math.min(simAccumulator, 800 * FIXED_DT);
@@ -6056,7 +6059,7 @@ function frame(now) {
     }
     if (world.raidEvent && world.raidEvent.struck && !_raidStruck) {
         _raidStruck = true;
-        raidFx = { t: 0 };
+        raidFx = { t: 0, stings: 1 };   // #raid-feel the war-horn refires at t≈1.05 and t≈2.1 (three in all)
         raidShake = 7;
         const e = world.raidEvent.e || {};
         raidFocus = (e.i != null && e.j != null) ? { i: e.i, j: e.j } : (world.well ? { i: world.well.i, j: world.well.j } : raidFocus);
@@ -6145,7 +6148,11 @@ function frame(now) {
     // (end-of-day recap card removed — the Moments/callout banners + the chronicle carry the day's beats now;
     // the "PREVIOUSLY ON" catch-up card on RESUME is separate and stays, see drawResumeCard)
     drawMoments();   // #98: spotlight the profound beats on top of the HUD (still under the CRT shader)
-    if (raidFx) { drawRaidFx(); raidFx.t += dt; if (raidFx.t >= RAIDFX_DUR) raidFx = null; }   // #raidfx battle-transition, topmost in-game layer
+    if (raidFx) {   // #raidfx battle-transition, topmost in-game layer; the war-horn sounds three times across it
+        drawRaidFx(); raidFx.t += dt;
+        if (raidFx.stings < 3 && raidFx.t >= raidFx.stings * 1.05) { raidFx.stings++; if (audio.raidSting) audio.raidSting(); }
+        if (raidFx.t >= RAIDFX_DUR) raidFx = null;
+    }
     // a quiet indicator while the camera is trailing someone (F, or the sheet's crosshair, toggles it)
     FOLLOW_PREV.w = FOLLOW_NEXT.w = 0;   // no banner, no clickable arrows (cleared each frame)
     if (followMode && followTarget && world.farmers.includes(followTarget) && !rosterOpen && !chronOpen && !boardOpen) {

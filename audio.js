@@ -104,6 +104,33 @@ const ORC_SEASON_SONGS = [
     },
 ];
 
+// #raid-score TWO dedicated raid songs, played in sequence as a raid unfolds (user direction: a BUILDUP
+// while the warband gathers on the edges, then real BATTLE music once the town is struck).
+// APPROACH — "The Gathering Dark": a slow low E drone under a bare root+fifth, the lead barely moving on the
+// phrygian E–F half-step, a lone deep drum on the bar — dread with a pulse, not yet a fight.
+const RAID_APPROACH_SONG = {
+    tempo: 72, lead: { type: 'triangle', gain: 0.055, vibrato: false },
+    padGain: 0.055, bassGain: 0.50, pluckProb: 0.15, restProb: 0.62, drums: [0, 2.5],
+    chords: [
+        { bass: 41.20, notes: [82.41, 123.47], melody: [164.81, 174.61, 164.81, 196.00] },      // E  (E–F hammer)
+        { bass: 41.20, notes: [82.41, 123.47], melody: [164.81, 174.61, 220.00] },              // E  (reach for A)
+        { bass: 43.65, notes: [87.31, 130.81], melody: [174.61, 164.81, 174.61, 196.00] },      // F (bII lean)
+        { bass: 38.89, notes: [77.78, 116.54], melody: [155.56, 164.81, 174.61] },              // Eb (the ground tilts)
+    ],
+};
+// BATTLE — "Iron at the Gate": fast phrygian drive, kick on every beat + snare on the backbeat, sawtooth
+// lead hammering the blade riff high. This is the clash itself; it takes over when the raid LANDS.
+const RAID_BATTLE_SONG = {
+    tempo: 132, lead: { type: 'sawtooth', gain: 0.062, vibrato: true },
+    padGain: 0.050, bassGain: 0.52, pluckProb: 0.85, restProb: 0.15, drums: [0, 1, 1.5, 2, 3, 3.5],
+    chords: [
+        { bass: 41.20, notes: [82.41, 123.47], melody: [329.63, 349.23, 329.63, 392.00, 440.00] },   // E  (blade riff)
+        { bass: 43.65, notes: [87.31, 130.81], melody: [349.23, 392.00, 440.00, 466.16] },           // F (bII surge)
+        { bass: 49.00, notes: [98.00, 146.83], melody: [392.00, 440.00, 493.88, 587.33] },           // G (climb)
+        { bass: 41.20, notes: [82.41, 123.47], melody: [440.00, 415.30, 349.23, 329.63] },           // E  (crash home)
+    ],
+};
+
 class FarmAudio {
     constructor() {
         this.ctx = null;
@@ -202,10 +229,10 @@ class FarmAudio {
     toggleSfx() { this.sfxOn = !this.sfxOn; this.#save('sfxOn', this.sfxOn ? '1' : '0'); this.#applySfx(); return this.sfxOn; }
 
     // called every frame with sim state
-    update({ isNight, weather, flash, season = 0, culture = 'human', hasRooster = false, building = false, raid = false }) {
+    update({ isNight, weather, flash, season = 0, culture = 'human', hasRooster = false, building = false, raidPhase = 0 }) {
         this.hasRooster = hasRooster;
         this.culture = culture === 'orc' ? 'orc' : 'human';   // #3.1 orc warbands get their own dark score
-        this.raid = !!raid;   // #raid-score a raid is underway (alarm sounded / warband on the field) — see #schedule
+        this.raidPhase = raidPhase | 0;   // #raid-score 0 = peace · 1 = warband APPROACHING (telegraph) · 2 = BATTLE (raid landed)
         if (!this.ctx) { this.wasNight = isNight; this.season = season; return; }
         const t = this.ctx.currentTime;
         // (structure-raising hammer is now emitted PER FARMER by the renderer via workSfx(), so it's
@@ -217,9 +244,14 @@ class FarmAudio {
         this.wasNight = isNight;
         // day/night crossfade: music out, night chorus in (~4s) — but a RAID overrides the hush: the war
         // score plays at full strength whatever the hour (a night raid must not be scored by crickets).
+        // It also gets an AUDIBILITY FLOOR: a raid is a cinematic event, so if the music slider is set low
+        // the war score still ducks IN at a hearable level (0.35 approach / 0.55 battle) — but a music
+        // toggle of OFF is still respected (musicLevel() is 0 and the floor only applies while musicOn).
         const target = isNight ? 1 : 0;
         this.nightMix += (target - this.nightMix) * 0.01;
-        this.musicGain.gain.setTargetAtTime(this.musicLevel() * (this.raid ? 1 : 1 - this.nightMix), t, 0.5);
+        const raidFloor = this.musicOn ? (this.raidPhase === 2 ? 0.55 : this.raidPhase === 1 ? 0.35 : 0) : 0;
+        const lvl = Math.max(this.musicLevel(), raidFloor);
+        this.musicGain.gain.setTargetAtTime(lvl * (this.raidPhase ? 1 : 1 - this.nightMix), t, 0.5);
         this.cricketGain.gain.setTargetAtTime(0.5 * this.nightMix, t, 0.5);
         // rain/wind bed by weather (blizzard drives the noise bed as howling wind)
         this.rainTarget = weather === 'storm' ? 0.24 : weather === 'blizzard' ? 0.2 : weather === 'rain' ? 0.13 : 0;
@@ -234,17 +266,17 @@ class FarmAudio {
     #schedule() {
         const t = this.ctx.currentTime;
         const songs = this.culture === 'orc' ? ORC_SEASON_SONGS : SEASON_SONGS;   // #3.1 dark warband score
-        // #raid-score while a raid is underway the season theme YIELDS to the war music — the town's own
-        // soundtrack is invaded along with its fields. A human town hears the raiders' theme arrive (ORC
-        // SPRING, "The Muster" — the phrygian march); an orc town, already living on the war score, escalates
-        // to "The Gorging" (the frenzied summer war-dance). Swaps on the next bar boundary; reverts the same
-        // way when the raid ends. Music is deliberately non-deterministic/display-only — the sim never hears it.
-        const song = this.raid
-            ? ORC_SEASON_SONGS[this.culture === 'orc' ? 1 : 0]
-            : (songs[this.season] || songs[0] || SEASON_SONGS[0]);
+        // #raid-score while a raid unfolds the season theme YIELDS to the war music, in TWO MOVEMENTS
+        // (user direction): the telegraph window plays "The Gathering Dark" (a low-drone BUILDUP with a lone
+        // frame-drum while the warband congregates on the edges); the moment the raid LANDS it hard-cuts to
+        // "Iron at the Gate" (driving battle music, kick on every beat). Swaps on bar boundaries; reverts the
+        // same way when the field clears. Music is display-only/non-deterministic — the sim never hears it.
+        const song = this.raidPhase === 2 ? RAID_BATTLE_SONG
+                   : this.raidPhase === 1 ? RAID_APPROACH_SONG
+                   : (songs[this.season] || songs[0] || SEASON_SONGS[0]);
         const bar = (60 / song.tempo) * 4;
         while (this.nextBar < t + 0.4) {
-            if (this.nightMix < 0.85 || this.raid) this.#scheduleBar(this.nextBar, song, this.barIdx);
+            if (this.nightMix < 0.85 || this.raidPhase) this.#scheduleBar(this.nextBar, song, this.barIdx);
             this.nextBar += bar;
             this.barIdx = (this.barIdx + 1) % song.chords.length;
         }
@@ -283,6 +315,20 @@ class FarmAudio {
             if (Math.random() > song.pluckProb) continue;
             const f = ch.notes[1 + Math.floor(Math.random() * (ch.notes.length - 1))];
             this.#pluck(t0 + beat * (k + 0.5), f, 0.10);
+        }
+        // #raid-score war-drum lane (raid songs only): a filtered-noise frame-drum hit at each beat offset —
+        // integer offsets land as deep KICKS, half-beat offsets as brighter snare-ish backbeats.
+        if (song.drums) for (const off of song.drums) {
+            const t = t0 + beat * off, snare = off % 1 !== 0;
+            const src = this.ctx.createBufferSource(); src.buffer = this.#noiseBuffer(0.4);
+            const lp = this.ctx.createBiquadFilter(); lp.type = 'lowpass';
+            lp.frequency.setValueAtTime(snare ? 900 : 200, t);
+            lp.frequency.exponentialRampToValueAtTime(snare ? 300 : 48, t + 0.22);
+            const g = this.ctx.createGain();
+            g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(snare ? 0.22 : 0.42, t + 0.012);
+            g.gain.exponentialRampToValueAtTime(0.0001, t + (snare ? 0.16 : 0.30));
+            src.connect(lp); lp.connect(g); g.connect(this.musicGain);
+            src.start(t); src.stop(t + 0.4);
         }
         // lead: a lazy random walk on the chord's melody pool
         const pool = ch.melody;

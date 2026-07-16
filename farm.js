@@ -412,6 +412,31 @@ const RAID_LEAD = 45, RAID_RALLY = 30;
 const COMPASS = ['east', 'south-east', 'south', 'south-west', 'west', 'north-west', 'north', 'north-east'];
 // #admin authored stump-speech pools for the election REHEARSAL's speeches phase (display bubbles only —
 // picked by a pure hash of speaker seed + the admin nonce, so a re-run casts fresh lines without rng).
+// #raid-feel what the muster line SAYS: strategy + nerve while the warband closes (the telegraph window),
+// war-cries once the clash is joined. Picked by pure hashes of (farmer seed, a time bucket) — no rng drawn.
+const MUSTER_TALK = {
+    human: [
+        'they come from the {dir} - eyes up.',
+        'hold until they show. no one breaks alone.',
+        'if the line gives, fall back to the well.',
+        'stay by me. we hold together.',
+        'let them come to us - keep the line.',
+        'watch the treeline. they use the dark.',
+        'steady. the watch will call it.',
+    ],
+    orc: [
+        'THEY COME FROM THE {dir}. GOOD.',
+        'NO ONE BREAKS. NO ONE RUNS.',
+        'LET THEM REACH US - THEN TEETH.',
+        'SHOULDER TO SHOULDER. HOLD.',
+        'THE STORES ARE OURS. REMEMBER IT.',
+        'EYES ON THE DARK. THEY LIKE THE DARK.',
+    ],
+};
+const RAID_CRIES = {
+    human: ['HOLD THE LINE!', 'DRIVE THEM OFF!', 'STAND! STAND!', 'NOT OUR HARVEST!', 'PUSH THEM BACK!'],
+    orc: ['BLOOD AND IRON!', 'BREAK THEM!', 'NONE PASS!', 'FOR THE BAND!', 'TEETH OUT!'],
+};
 const STUMP_LINES = {
     human: [
         "i'd keep the granary full and the fences mended - that's my whole pitch.",
@@ -6150,6 +6175,7 @@ export class World {
             re.timer -= dt;
             if (re.timer <= 0) { re.raiders = re.raiders.filter(r => !r.falls); re.phase = 'flee'; re.timer = 2.8; }   // the doomed drop; survivors turn to flee
         } else {   // flee — survivors run back out to the fog, then vanish
+            for (const f of this.farmers) f._skirmish = false;   // the clash is over — the line stands down its blades
             for (const r of re.raiders) {
                 const dx = r.i - CENTER, dy = r.j - CENTER, dist = Math.hypot(dx, dy) || 1;
                 // same screen-x rule fleeing outward: moving toward greater (i - j) reads as running RIGHT.
@@ -6159,6 +6185,31 @@ export class World {
             if (re.timer <= 0) {
                 this.raidEvent = null;
                 if (re.rehearsal && this.rehearsal && this.rehearsal.kind === 'raid') this.rehearsal = null;   // #admin curtain
+            }
+        }
+        // #raid-feel THE CLASH AT THE LINE (display-only): a mustered defender with a raider in reach squares
+        // up and SWINGS (the renderer shows fight frames off `_skirmish`), shouting the line's war-cries on a
+        // pure-hash cadence. No dice here — the outcome was already scored by #resolveRaid; this pass just
+        // makes it VISIBLE: the doomed raiders drop at the line the defenders are holding, not in a vacuum.
+        if (re.phase !== 'flee' && this.raidEvent) {
+            for (const f of this.farmers) {
+                if (f.state !== 'muster' || f.downed) { f._skirmish = false; continue; }
+                let best = null, bd = Infinity;
+                for (const r of re.raiders) {
+                    const d = Math.hypot(r.i - f.pos.i, r.j - f.pos.j);
+                    if (d < bd) { bd = d; best = r; }
+                }
+                f._skirmish = bd < 3.2;
+                if (f._skirmish && best) {
+                    f.facing = ((best.i - best.j) - (f.pos.i - f.pos.j)) >= 0 ? 1 : -1;   // square up (iso screen-x)
+                    if (!(f.bubble && f.bubble.t > 0)) {
+                        const h = hashString('raidcry:' + f.sheet.seed + ':' + Math.floor(this.time / 3));
+                        if ((h % 5) === 0) {
+                            const pool = this.culture === 'orc' ? RAID_CRIES.orc : RAID_CRIES.human;
+                            f.say(pool[h % pool.length], '#ff6a50');
+                        }
+                    }
+                }
             }
         }
     }
@@ -9212,6 +9263,9 @@ export class Farmer {
     // conversation happened.
     #maybeChat() {
         const w = this.world;
+        // #raid-feel nobody stops for weather talk while the alarm is up or a warband is on the field —
+        // the muster line has its own speech (MUSTER_TALK / RAID_CRIES), and small talk mid-raid broke the scene.
+        if ((w.pendingRaid && w.pendingRaid.detected) || w.raidEvent) return false;
         if (this.chatCooldown > 0 || this.health !== 'healthy') return false;
         const busy = o => o.health !== 'healthy' || o.state === 'sleep' || o.state === 'rest' || o.state === 'sick' || o.state === 'shelter';
         const other = w.farmers.find(o => o !== this && !busy(o) && Math.abs(o.pos.i - this.pos.i) + Math.abs(o.pos.j - this.pos.j) < 3.2);
@@ -11397,8 +11451,23 @@ export class Farmer {
             case 'idle': this.wanderTimer -= dt; if (this.wanderTimer <= 0) this.state = 'decide'; break;
             // #watch the sentry holds a perimeter post to scan, then paces on to the next (re-decide advances it)
             case 'watch': this.watchScanT -= dt; if (this.watchScanT <= 0) { this.watchPost = (this.watchPost || 0) + 1; this.state = 'decide'; } break;
-            // #131 hold the muster line until the raid lands or the alarm passes (pendingRaid cleared/undetected), then resume
-            case 'muster': if (!this.world.pendingRaid || !this.world.pendingRaid.detected) this.state = 'decide'; break;
+            // #131 hold the muster line until the alarm passes — and #raid-feel THROUGH the battle itself
+            // (world.raidEvent): the line does not walk back to its chores while the warband is on the field.
+            // While waiting, the line TALKS like a militia (strategy + nerve, pure-hash picked on a per-farmer
+            // cadence — no rng, no record); the clash-time war-cries + skirmish flags come from #tickRaidEvent.
+            case 'muster': {
+                const w = this.world, pr = w.pendingRaid;
+                if (!(pr && pr.detected) && !w.raidEvent) { this.state = 'decide'; this._skirmish = false; break; }
+                if (pr && !w.raidEvent && !(this.bubble && this.bubble.t > 0)) {
+                    const bucket = Math.floor(w.time / 7);   // a line lands every so often along the line, offset per farmer
+                    const h = hashString('mustertalk:' + this.sheet.seed + ':' + bucket);
+                    if ((h % 11) === 0) {
+                        const pool = w.culture === 'orc' ? MUSTER_TALK.orc : MUSTER_TALK.human;
+                        this.say(pool[h % pool.length].replace('{dir}', pr.dirName || 'dark'), '#e0c078');
+                    }
+                }
+                break;
+            }
             case 'sleep': if (!this.world.isNight()) { this.state = 'decide'; this.say(this.#wakeLine(), '#e8d8a0'); this.visitedSick.clear(); } break;
             case 'rest': if (this.energy > 0.5) { this.state = 'decide'; this.say('back to it'); } break;
             case 'sick': if (this.health !== 'sick') this.state = 'decide'; break;
