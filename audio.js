@@ -473,6 +473,40 @@ class FarmAudio {
 
     // #raidfx — the audio takeover for the "UNDER RAID" battle-transition: a low war-horn that bends
     // upward, a pair of deep drum thumps, and a tense minor cluster on top. Ominous, short, punchy.
+    // #raid-feel one duel exchange's sound, keyed off the floating combat text: HIT!/FELLED!/WOUNDED! = a dull
+    // body thud; PARRY! = a bright metallic tink; MISS/BREAKS OFF = a short air whoosh. Fired by the renderer
+    // as each fx entry first appears (display-only, like every sound here).
+    clash(kind = '') {
+        if (!this.ctx || !this.enabled) return;
+        const t0 = this.ctx.currentTime + 0.01;
+        const k = String(kind).toUpperCase();
+        if (k.startsWith('HIT') || k.startsWith('FELLED') || k.startsWith('WOUNDED')) {
+            const src = this.ctx.createBufferSource(); src.buffer = this.#noiseBuffer(0.25);
+            const lp = this.ctx.createBiquadFilter(); lp.type = 'lowpass';
+            lp.frequency.setValueAtTime(600, t0); lp.frequency.exponentialRampToValueAtTime(80, t0 + 0.16);
+            const g = this.ctx.createGain();
+            g.gain.setValueAtTime(0.0001, t0); g.gain.linearRampToValueAtTime(0.32, t0 + 0.008);
+            g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.2);
+            src.connect(lp); lp.connect(g); g.connect(this.sfxBus); src.start(t0); src.stop(t0 + 0.26);
+        } else if (k.startsWith('PARRY')) {
+            for (const f of [2100, 3150]) {
+                const o = this.ctx.createOscillator(); o.type = 'square'; o.frequency.value = f;
+                const g = this.ctx.createGain();
+                g.gain.setValueAtTime(0.0001, t0); g.gain.linearRampToValueAtTime(0.07, t0 + 0.006);
+                g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.12);
+                o.connect(g); g.connect(this.sfxBus); o.start(t0); o.stop(t0 + 0.14);
+            }
+        } else {
+            const src = this.ctx.createBufferSource(); src.buffer = this.#noiseBuffer(0.2);
+            const bp = this.ctx.createBiquadFilter(); bp.type = 'bandpass';
+            bp.frequency.setValueAtTime(900, t0); bp.frequency.exponentialRampToValueAtTime(2400, t0 + 0.12);
+            const g = this.ctx.createGain();
+            g.gain.setValueAtTime(0.0001, t0); g.gain.linearRampToValueAtTime(0.10, t0 + 0.02);
+            g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.15);
+            src.connect(bp); bp.connect(g); g.connect(this.sfxBus); src.start(t0); src.stop(t0 + 0.2);
+        }
+    }
+
     raidSting() {
         if (!this.ctx || !this.enabled) return;
         this.ensure();

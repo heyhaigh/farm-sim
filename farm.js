@@ -3281,6 +3281,19 @@ export class World {
     // pace ceremony speech without perturbing determinism. NOT a global lock on ambient chatter (scene-scoped).
     floorFree() { return (this._floorHold || 0) <= 0; }
     holdFloor(sec) { this._floorHold = Math.max(this._floorHold || 0, sec); }
+    // #raid-council — the LLM-written muster exchange (client raidcouncil.js sets this._raidScript when the
+    // model answers; DISPLAY ONLY, the sim never reads it). Lines play IN ORDER: a mustered farmer asking for
+    // a line gets the head only if it's theirs; a head that waits >10s is given to whoever asks (understudy),
+    // so an absent speaker can't stall the scene. Falls back to the authored pools when there's no script.
+    nextRaidCouncilLine(f) {
+        const sc = this._raidScript;
+        if (!sc || !Array.isArray(sc.lines) || sc.i >= sc.lines.length) return null;
+        const head = sc.lines[sc.i];
+        if (head.seed === f.sheet.seed) { sc.i++; sc.headSince = null; return head.line; }
+        if (sc.headSince == null) sc.headSince = this.time;
+        if (this.time - sc.headSince > 10) { sc.i++; sc.headSince = null; return head.line; }
+        return null;
+    }
     // A deterministic slot on a loose ring around the well for a farmer to stand while the town deliberates.
     assembleSpot(f) {
         const well = this.well, h = hashString(f.sheet.seed + ':assemble');
@@ -5939,6 +5952,7 @@ export class World {
     }
 
     #landRaid(e, dir, dirName) {
+        this._raidScript = null;   // #raid-council the counsel is over — the blades speak now
         if (e && e.rehearsal) { this.#landRehearsalRaid(e, dir); return; }   // #admin a ghost raid stages the show, records nothing
         const harvest = this.harvestTotal || 0;
         const out = this.#resolveRaid(e, harvest);   // #133 the resolver computes the bite (a rallied defence shaves it)
@@ -6002,7 +6016,7 @@ export class World {
     }
 
     cancelRehearsal() {
-        if (this.pendingRaid && this.pendingRaid.rehearsal) this.pendingRaid = null;
+        if (this.pendingRaid && this.pendingRaid.rehearsal) { this.pendingRaid = null; this._raidScript = null; }
         if (this.raidEvent && this.raidEvent.rehearsal) this.raidEvent = null;
         this.rehearsal = null;
         // farmers hijacked into 'muster'/'assemble' release on their own next check (their hold conditions
@@ -6087,11 +6101,38 @@ export class World {
     // the warband arrives and #landRaid resolves it. No rng, no wall-clock — pure state + this.time comparisons.
     #tickPendingRaid() {
         const pr = this.pendingRaid; if (!pr) return;
+        // #raid-feel SIGHTING THE MUSTER: a hand working near where the warband gathers (the seeded edge point
+        // in pr.dir — the same spot the cosmetic muster figures stand) SEES them and raises the alarm EARLY,
+        // bolting back toward town. The world reacts to what's on its doorstep instead of waiting out the clock.
+        // Pure geometry + this.time (no rng); identical watched or dormant since positions are part of the sim.
+        if (!pr.detected && this.time < pr.detectAt) {
+            const co = Math.cos(pr.dir), si = Math.sin(pr.dir), m = 4;
+            const tx = co > 0 ? (GRID - m - CENTER) / co : co < 0 ? (m - CENTER) / co : Infinity;
+            const ty = si > 0 ? (GRID - m - CENTER) / si : si < 0 ? (m - CENTER) / si : Infinity;
+            const d = Math.max(40, Math.min(tx, ty)) - 3;
+            const mi = CENTER + co * d, mj = CENTER + si * d;
+            const seer = this.farmers.find(f => !f.downed && f.health !== 'sick' &&
+                Math.hypot(f.pos.i - mi, f.pos.j - mj) < 11);
+            if (seer) {
+                pr.detectAt = this.time;   // the sighting IS the detection — the block below fires this tick
+                pr.seenBy = seer.sheet.seed;
+                seer.say(this.culture === 'orc' ? 'A WARBAND! MASSING ON OUR GROUND!' : 'raiders! massing out here - RUN, WARN THE TOWN!', '#ff6a50');
+                seer.threatAlert = Math.max(seer.threatAlert || 0, 2.5);
+            }
+        }
         if (!pr.detected && this.time >= pr.detectAt) {
             pr.detected = true;
             const sentry = this.currentSentry();
-            for (const f of this.farmers) f.threatAlert = Math.max(f.threatAlert || 0, 1.5);   // the whole town is roused (both paths)
-            if (sentry) sentry.say(this.culture === 'orc' ? 'RAIDERS! ROUSE THE BAND!' : 'RAIDERS! TO ARMS!', '#e05040');
+            for (const f of this.farmers) {
+                f.threatAlert = Math.max(f.threatAlert || 0, 1.5);   // the whole town is roused (both paths)
+                // #raid-feel the alarm INTERRUPTS: drop the hoe mid-swing and re-decide NOW (the muster branch
+                // sits high in #decide) — the line forms in seconds, not whenever chores happen to wind down.
+                // Before this, most of the town finished their tasks first and the "line" was one or two souls.
+                if (!f.downed && f.health !== 'sick' && f.state !== 'muster' && f.state !== 'fight' && f.state !== 'flee') {
+                    f.state = 'decide'; f.path = null;
+                }
+            }
+            if (sentry && !pr.seenBy) sentry.say(this.culture === 'orc' ? 'RAIDERS! ROUSE THE BAND!' : 'RAIDERS! TO ARMS!', '#e05040');
             if (!pr.rehearsal) {   // #admin a ghost run keeps the full alarm SHOW (cry, muster, seam) but writes no record
                 this.addLog(`${sentry ? shortName(sentry) : 'The watch'} sounds the alarm — raiders closing from the ${pr.dirName}!`, '#e05040');
                 this.addChronicle('raid', `The watch caught a warband closing on ${this.name} from the ${pr.dirName} — the alarm went up and the town rallied to meet it.`,
@@ -6157,23 +6198,71 @@ export class World {
         if (re.phase === 'approach') {
             // #131b the warband streams in from the fog toward town; no battle-transition yet — this is the
             // "you see them coming" beat. When the lead raider crosses into the town proper the blow lands.
-            let nearest = Infinity;
+            let nearest = Infinity, contact = false;
+            const line = this.farmers.filter(f => this.#holdsLine(f));
             for (const r of re.raiders) {
                 const dx = CENTER - r.i, dy = CENTER - r.j, dist = Math.hypot(dx, dy) || 1;
                 r.i += dx / dist * RAID_APPROACH_SPEED * dt; r.j += dy / dist * RAID_APPROACH_SPEED * dt;
                 r.facing = (dx - dy) >= 0 ? 1 : -1;
                 nearest = Math.min(nearest, dist);
+                // #raid-feel the slam fires at CONTACT: the muster line stands OUTSIDE the old struck radius,
+                // so raiders were walking straight past the defenders a beat before the transition hit (user
+                // report). First blade-range meeting with the line — or crossing into town — is the moment.
+                if (!contact) for (const f of line) if (Math.hypot(f.pos.i - r.i, f.pos.j - r.j) < 2.6) { contact = true; break; }
             }
-            if (nearest <= RAID_STRUCK_RADIUS) { re.struck = true; re.phase = 'march'; re.timer = 9; }   // crossed into town -> PRESS (main.js fires the UNDER RAID beat off `struck`)
+            if (nearest <= RAID_STRUCK_RADIUS || contact) { re.struck = true; re.phase = 'march'; re.timer = 9; }   // engaged/crossed -> PRESS (main.js fires the UNDER RAID beat off `struck`)
         } else if (re.phase === 'march') {
+            // #raid-feel TURN-BASED DUELS (user direction: "show what happens — a swing that misses, a parry,
+            // a swing back"). Each raider is PAIRED with a mustered defender and the fight plays as staged
+            // exchanges on a beat: swing -> MISS / PARRY! / HIT! floating text + lunge animation, alternating
+            // attacker each round. The ENDING of every duel is scripted to the already-seeded outcome
+            // (#resolveRaid): a `falls` raider is FELLED by the final blow at the line; a survivor BREAKS OFF,
+            // makes for the stores, grabs what it can, and flees. Display-only randomness: the exchange rolls
+            // come from a pure keyed hash ('raidduel:'), never world.rand — the resolver's verdict is untouched.
+            if (!re.duelsAssigned) {
+                re.duelsAssigned = true;
+                re.fx = [];
+                const rid = re.e.id || `${re.e.pairKey}:${re.e.ordinal}`;
+                const defenders = this.farmers.filter(f => this.#holdsLine(f));
+                const claimed = new Set();
+                re.raiders.forEach((r, k) => {
+                    let best = null, bd = Infinity;
+                    for (const f of defenders) {
+                        if (claimed.has(f)) continue;
+                        const d2 = Math.hypot(f.pos.i - r.i, f.pos.j - r.j);
+                        if (d2 < bd) { bd = d2; best = f; }
+                    }
+                    if (best) {
+                        claimed.add(best);
+                        const h = hashString('raiddu:' + rid + ':' + k);
+                        r.duel = { opp: best, round: 0, rounds: (r.falls ? 4 : 3) + (h % 2), nextAt: null, stagger: 0.25 + ((h >>> 3) % 90) / 100 };
+                    }
+                });
+                re.timer = 16;   // room for the exchanges, then the survivors' run on the stores
+            }
             for (const r of re.raiders) {
+                if (r.fell) continue;   // dropped in their duel — they lie where the line stopped them
+                if (r.duel && !r.duel.done) {
+                    const f = r.duel.opp;
+                    if (!f || !this.#holdsLine(f)) { r.duel.done = true; continue; }   // opponent gone — disengage
+                    const dx = f.pos.i - r.i, dy = f.pos.j - r.j, dist = Math.hypot(dx, dy);
+                    if (dist > 1.7) {   // close to blade range first
+                        r.i += dx / dist * 3.4 * dt; r.j += dy / dist * 3.4 * dt; r.facing = (dx - dy) >= 0 ? 1 : -1;
+                        continue;
+                    }
+                    r.facing = (dx - dy) >= 0 ? 1 : -1;
+                    if (r.duel.nextAt == null) r.duel.nextAt = this.time + r.duel.stagger;
+                    if (this.time >= r.duel.nextAt) this.#duelExchange(re, r);
+                    continue;
+                }
+                // no duel left: press on to the stores, take, and be ready to run
                 const dx = r.target.i - r.i, dy = r.target.j - r.j, dist = Math.hypot(dx, dy);
-                // face the SCREEN-x direction of travel: iso screen-x tracks (i - j), so a raider heading toward
-                // greater (i - j) is moving RIGHT (facing = 1). Using world-dx alone faced them wrong on diagonals.
-                if (dist > 0.5) { r.i += dx / dist * 3.4 * dt; r.j += dy / dist * 3.4 * dt; r.facing = (dx - dy) >= 0 ? 1 : -1; }
+                if (dist > 0.6) { r.i += dx / dist * 3.4 * dt; r.j += dy / dist * 3.4 * dt; r.facing = (dx - dy) >= 0 ? 1 : -1; }
+                else if (r.lootAt == null) r.lootAt = this.time;   // pausing at the stores — the grab
             }
             re.timer -= dt;
-            if (re.timer <= 0) { re.raiders = re.raiders.filter(r => !r.falls); re.phase = 'flee'; re.timer = 2.8; }   // the doomed drop; survivors turn to flee
+            const settled = re.raiders.every(r => r.fell || ((!r.duel || r.duel.done) && r.lootAt != null && this.time - r.lootAt > 1.4));
+            if (re.timer <= 0 || settled) { re.raiders = re.raiders.filter(r => !r.fell && !r.falls); re.phase = 'flee'; re.timer = 2.8; }
         } else {   // flee — survivors run back out to the fog, then vanish
             for (const f of this.farmers) f._skirmish = false;   // the clash is over — the line stands down its blades
             for (const r of re.raiders) {
@@ -6193,7 +6282,7 @@ export class World {
         // makes it VISIBLE: the doomed raiders drop at the line the defenders are holding, not in a vacuum.
         if (re.phase !== 'flee' && this.raidEvent) {
             for (const f of this.farmers) {
-                if (f.state !== 'muster' || f.downed) { f._skirmish = false; continue; }
+                if (!this.#holdsLine(f)) { f._skirmish = false; continue; }
                 let best = null, bd = Infinity;
                 for (const r of re.raiders) {
                     const d = Math.hypot(r.i - f.pos.i, r.j - f.pos.j);
@@ -6212,6 +6301,47 @@ export class World {
                 }
             }
         }
+    }
+
+    // #raid-feel who counts as HOLDING THE LINE: standing at the muster, or still hustling toward it (a
+    // defender mid-stride still meets the raider that reaches them — before this only the arrived stood).
+    #holdsLine(f) {
+        if (f.downed || f.health === 'sick') return false;
+        return f.state === 'muster' || (f.state === 'walk' && f.path && f.path.then === 'muster');
+    }
+
+    // #raid-feel ONE staged exchange of a raid duel. Attacker alternates by round (raider first); the outcome
+    // of an ordinary round is a pure keyed-hash roll (MISS / PARRY! / HIT!); the FINAL round is scripted to the
+    // seeded resolver verdict — a `falls` raider takes the defender's finishing blow ("FELLED!"), a survivor
+    // breaks off toward the stores. Sets transient swing timers (renderer lunges) + floating-text fx entries.
+    #duelExchange(re, r) {
+        const DUEL_BEAT = 1.35;
+        const d = r.duel, f = d.opp;
+        const rid = re.e.id || `${re.e.pairKey}:${re.e.ordinal}`;
+        const roll = mulberry32(hashString('raidduel:' + rid + ':' + (r.foeName || 'r') + ':' + d.round))();
+        const last = d.round >= d.rounds - 1;
+        const fx = (i, j, text, color) => { re.fx.push({ i, j, text, color, at: this.time }); if (re.fx.length > 24) re.fx.shift(); };
+        const farmerSwing = () => { f._swingAt = this.time; f._swingI = r.i - f.pos.i; f._swingJ = r.j - f.pos.j; };
+        const raiderSwing = () => { r._swingAt = this.time; r._swingI = f.pos.i - r.i; r._swingJ = f.pos.j - r.j; };
+        if (last && r.falls) {          // the line holds: the defender's blow lands and the raider drops
+            farmerSwing(); r.fell = true; d.done = true;
+            fx(r.i, r.j, 'FELLED!', '#ff5a3c');
+        } else if (last) {              // the raider thinks better of it and makes for the stores
+            d.done = true;
+            fx(r.i, r.j, 'BREAKS OFF', '#c8b090');
+        } else if (d.round % 2 === 0) { // raider's swing
+            raiderSwing();
+            const out = roll < 0.38 ? 'MISS' : roll < 0.68 ? 'PARRY!' : 'HIT!';
+            if (out === 'HIT!' && Array.isArray(re.out.woundSeeds) && re.out.woundSeeds.includes(f.sheet.seed) && !f._woundShown) {
+                f._woundShown = true;   // transient — echo the resolver's wound where it visibly landed
+                fx(f.pos.i, f.pos.j, 'WOUNDED!', '#ff4030');
+            } else fx(f.pos.i, f.pos.j, out, out === 'HIT!' ? '#ffa040' : out === 'PARRY!' ? '#9ad0e0' : '#9a9a8a');
+        } else {                        // defender's swing back
+            farmerSwing();
+            const out = roll < 0.38 ? 'MISS' : roll < 0.68 ? 'PARRY!' : 'HIT!';
+            fx(r.i, r.j, out, out === 'HIT!' ? '#ffa040' : out === 'PARRY!' ? '#9ad0e0' : '#9a9a8a');
+        }
+        d.round++; d.nextAt = this.time + DUEL_BEAT;
     }
 
     #advanceEncounter(e, dt) {
@@ -8202,6 +8332,10 @@ export class Farmer {
     #onWatchDuty() {
         if (this.health === 'sick' || this.downed) return false;   // genuine survival (sick/exhausted) still comes first (handled above in #decide)
         if (!this.plot.sited) return false;                        // still homesteading — not settled enough to stand a watch
+        // #raid-feel once the alarm is UP the watch stands DOWN from the beat and joins the line with everyone
+        // else — pacing the treeline while the town rallied read as obliviousness (user report). Their tripwire
+        // job is done (the cry already went out); their place now is the muster.
+        if ((this.world.pendingRaid && this.world.pendingRaid.detected) || this.world.raidEvent) return false;
         // #watch the day's watcher makes the WATCH their PRIORITY — they prowl the perimeter day AND night, not
         // farm their plot to exhaustion (whether or not their own house is up yet; it's one day's civic duty on
         // the rotation, and patrolling doesn't tire them). They build/farm on the days they're NOT the watcher.
@@ -11458,12 +11592,20 @@ export class Farmer {
             case 'muster': {
                 const w = this.world, pr = w.pendingRaid;
                 if (!(pr && pr.detected) && !w.raidEvent) { this.state = 'decide'; this._skirmish = false; break; }
-                if (pr && !w.raidEvent && !(this.bubble && this.bubble.t > 0)) {
-                    const bucket = Math.floor(w.time / 7);   // a line lands every so often along the line, offset per farmer
-                    const h = hashString('mustertalk:' + this.sheet.seed + ':' + bucket);
-                    if ((h % 11) === 0) {
-                        const pool = w.culture === 'orc' ? MUSTER_TALK.orc : MUSTER_TALK.human;
-                        this.say(pool[h % pool.length].replace('{dir}', pr.dirName || 'dark'), '#e0c078');
+                // one voice at a time (the speech floor, like the congregation) and ONE line per time-bucket
+                // per farmer (a bubble that expired mid-bucket must NOT re-say the same line — looked like a loop).
+                if (pr && !w.raidEvent && !(this.bubble && this.bubble.t > 0) && w.floorFree()) {
+                    const bucket = Math.floor(w.time / 7);
+                    if (bucket !== this._musterBucket) {
+                        const h = hashString('mustertalk:' + this.sheet.seed + ':' + bucket);
+                        if ((h % 7) === 0) {
+                            this._musterBucket = bucket;
+                            const scripted = w.nextRaidCouncilLine ? w.nextRaidCouncilLine(this) : null;   // #raid-council LLM script first
+                            const pool = w.culture === 'orc' ? MUSTER_TALK.orc : MUSTER_TALK.human;
+                            const line = scripted || pool[h % pool.length].replace('{dir}', pr.dirName || 'dark');
+                            this.say(line, '#e0c078');
+                            w.holdFloor((this.bubble ? this.bubble.t0 : 2.2) + 0.7);   // finish before the next voice
+                        }
                     }
                 }
                 break;

@@ -16,6 +16,7 @@ import { saveTown, loadTown, wipeTown, undoWipe, loadWorldIndex, registerTownInW
 import { computeLayout, detectEncounters, encounterLine, townPos, townReach, townTint } from './worldmap.js';
 import { enrichStories } from './dm.js';
 import { requestCongregation } from './congregation.js';
+import { requestRaidCouncil } from './raidcouncil.js';
 import { persistLives, persistTownHistory } from './memory-writeback.js';
 import { enrichInventions, persistTownInventions } from './memory-invent.js';
 import { whisper } from './conscience.js';
@@ -2137,7 +2138,16 @@ function drawPrey(a, sx, sy) {
 // A wilderness threat: one sliced side-profile frame of its real sprite (fallback: a menace blob).
 function drawThreat(e, sx, sy) {
     const c = THREAT_ART[e.kind], img = threatImg[e.kind];
+    // #raid-feel duel lunge: a swinging raider snaps toward their opponent and eases back (display timer set
+    // by #duelExchange); a FELLED raider sinks and darkens where the line stopped them.
+    if (e._swingAt != null && world && world.time - e._swingAt < 0.32) {
+        const k = Math.sin(Math.PI * Math.min(1, (world.time - e._swingAt) / 0.32));
+        const n = Math.hypot(e._swingI || 0, e._swingJ || 0) || 1;
+        sx += ((e._swingI - e._swingJ) / n) * 3.5 * k;
+        sy += ((e._swingI + e._swingJ) / n) * 1.75 * k;
+    }
     ctx.imageSmoothingEnabled = false;
+    if (e.fell) { ctx.save(); ctx.globalAlpha = 0.75; ctx.filter = 'brightness(0.55)'; sy += 3; }
     if (img && img.complete && img.naturalWidth > 0) {
         const fw = c.fw, rows = Math.max(1, Math.round(img.naturalHeight / fw));
         const row = Math.min(c.row ?? 2, rows - 1);
@@ -2155,6 +2165,7 @@ function drawThreat(e, sx, sy) {
         ctx.beginPath(); ctx.ellipse(sx, sy - 6, 7, 9, 0, 0, Math.PI * 2); ctx.fill();
         ctx.fillStyle = '#1a1414'; ctx.fillRect(Math.round(sx - 3), Math.round(sy - 9), 2, 2); ctx.fillRect(Math.round(sx + 1), Math.round(sy - 9), 2, 2);
     }
+    if (e.fell) ctx.restore();
 }
 
 // the merchant's stall: the crate stack with a little striped awning + a coin banner above
@@ -2375,6 +2386,14 @@ function drawFarmer(f, sx, sy) {
         frame = frames.sleep;
     }
 
+    // #raid-feel duel lunge: a defender landing their swing snaps toward the raider and eases back (display
+    // timer set by #duelExchange — the same treatment the raiders get in drawThreat).
+    if (f._swingAt != null && world.time - f._swingAt < 0.32) {
+        const k = Math.sin(Math.PI * Math.min(1, (world.time - f._swingAt) / 0.32));
+        const n = Math.hypot(f._swingI || 0, f._swingJ || 0) || 1;
+        sx += ((f._swingI - f._swingJ) / n) * 3.5 * k;
+        sy += ((f._swingI + f._swingJ) / n) * 1.75 * k;
+    }
     const fw = frame.width, fh = frame.height;
     const px = Math.floor(sx - fw / 2);
     const py = Math.floor(sy + TILE_H / 2 - fh + 2);
@@ -2764,6 +2783,28 @@ function drawMinimap() {
             if (blink) { const [px, py] = t2m(e.i, e.j); ctx.fillStyle = '#ff3020'; ctx.fillRect(Math.floor(px), Math.floor(py), 2, 2); }
         } else {
             drawMiniEdgeArrow(mx, my, mw, mh, e.i - ci, e.j - cj);
+        }
+    }
+    // #raid-feel the RAID on the minimap (user report: the toast fired but nothing marked the map): during the
+    // telegraph, a pulsing red mark at the warband's gathering point (the seeded edge spot in pr.dir); once the
+    // raid is live, on the raiders themselves. Same edge-arrow treatment when it's outside the window.
+    {
+        const pr = world.pendingRaid, re = world.raidEvent;
+        let ti = null, tj = null;
+        if (pr) {
+            const co = Math.cos(pr.dir), si = Math.sin(pr.dir), m = 4;
+            const tx = co > 0 ? (GRID - m - CENTER) / co : co < 0 ? (m - CENTER) / co : Infinity;
+            const ty = si > 0 ? (GRID - m - CENTER) / si : si < 0 ? (m - CENTER) / si : Infinity;
+            const d = Math.max(40, Math.min(tx, ty)) - 3;
+            ti = CENTER + co * d; tj = CENTER + si * d;
+        } else if (re && re.raiders.length) {
+            ti = re.raiders.reduce((s, r) => s + r.i, 0) / re.raiders.length;
+            tj = re.raiders.reduce((s, r) => s + r.j, 0) / re.raiders.length;
+        }
+        if (ti != null) {
+            if (inWin(ti, tj)) {
+                if (blink) { const [px, py] = t2m(ti, tj); ctx.fillStyle = '#ff3020'; ctx.fillRect(Math.floor(px) - 1, Math.floor(py) - 1, 3, 3); }
+            } else if (blink) drawMiniEdgeArrow(mx, my, mw, mh, ti - ci, tj - cj);
         }
     }
     ctx.restore();
@@ -6042,6 +6083,9 @@ function frame(now) {
     const anyBuilding = world.farmers.some(f => f.state === 'housebuild' || f.state === 'fencepost' || f.state === 'build' || f.state === 'coopbuild' || f.state === 'scarecrow');
     audio.update({ isNight: world.isNight(), weather: world.weather, flash: world.lightningFlash, season: world.season, culture: world.culture, hasRooster: world.hasRooster(), building: anyBuilding,
         raidPhase: world.raidEvent ? 2 : world.pendingRaid ? 1 : 0 });   // #raid-score 1 = buildup from the moment a warband gathers · 2 = battle once it lands (rehearsals included)
+    // #raid-council a telegraphed raid asks the LLM (fire-and-forget, deduped per telegraph) to write the
+    // muster counsel — the line's own urgent strategy talk. Offline/slow = the authored pools carry it.
+    if (world.pendingRaid && !world.raidEvent) requestRaidCouncil(world);
     // at extreme speeds keep a bounded backlog (spread over coming frames) rather than dropping
     // all the leftover time, but cap it so we never spiral.
     if (steps >= 800) simAccumulator = Math.min(simAccumulator, 800 * FIXED_DT);
@@ -6136,6 +6180,22 @@ function frame(now) {
     // #bubble-overlay — words on top of the whole scene, so a farmer standing behind the silo/war-post/house
     // (or clustered at the well during the day-1 congregation) is never speaking from behind the building.
     for (const fb of farmerBubbles) drawFarmerBubble(fb.f, fb.sx);
+
+    // #raid-feel floating COMBAT TEXT (MISS / PARRY! / HIT! / FELLED! / BREAKS OFF) from the duel exchanges —
+    // rises and fades over ~1.2s of sim time; also the trigger for the clash SFX (each new entry plays once).
+    if (world.raidEvent && Array.isArray(world.raidEvent.fx)) {
+        for (const x of world.raidEvent.fx) {
+            const age = world.time - x.at;
+            if (age < 0 || age > 1.2) continue;
+            if (!x._heard) { x._heard = true; if (audio.clash) audio.clash(x.text); }
+            const sx2 = cam.x + isoX(x.i, x.j), sy2 = cam.y + isoY(x.i, x.j) - 24 - age * 8;
+            ctx.save(); ctx.globalAlpha = Math.max(0, 1 - Math.max(0, age - 0.6) / 0.6);
+            const wpx = textWidth(x.text);
+            ctx.fillStyle = 'rgba(8,9,14,0.72)'; ctx.fillRect(Math.round(sx2 - wpx / 2) - 2, Math.round(sy2) - 2, wpx + 4, 9);
+            drawText(ctx, x.text, Math.round(sx2 - wpx / 2), Math.round(sy2), x.color || '#e8ecf5');
+            ctx.restore();
+        }
+    }
 
     drawWeather(dt, t);
     } finally {
