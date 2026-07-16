@@ -124,6 +124,51 @@ function townHistoryDoc(th, town) {
         if (th.learned === 'defense') lines.push('What the town learned from being raided: to make itself too costly to raid — it holds the wall and keeps a hard watch.');
         else if (th.learned === 'truce') lines.push('What the town learned from being raided: it grew weary of the bloodshed and resolved to seek a truce at the frontier, not another fight.');
     }
+    // #nemesis THE BOOK OF WARS — the town's named-foe arcs, current and ended: who kept coming back, whom he
+    // swore against, and how each war finished. This is the continuity SuperMemory exists to hold.
+    const wars = th.wars || {};
+    const endWord = o => o === 'fell' ? 'ended with the warleader and his whole band broken on the line'
+                       : o === 'peace' ? 'ended at the parley table' : 'ended';
+    if (wars.current && !wars.current.ended) {
+        const c = wars.current;
+        lines.push(`The war now upon the town: ${c.name} has raided ${c.raidCount} time${c.raidCount > 1 ? 's' : ''} and is not done.` +
+                   (c.sworeAgainst ? ` He has sworn against ${c.sworeAgainst} — everyone knows he is coming for them.` : ''));
+    }
+    const pastWars = Array.isArray(wars.past) ? wars.past : [];
+    if (pastWars.length) {
+        lines.push('Wars the town has survived:');
+        for (const p of pastWars.slice(-8)) {
+            lines.push(` - The war of ${p.name}: ${p.raidCount} raid${p.raidCount > 1 ? 's' : ''}, ${endWord(p.outcome)} in year ${p.year}.` +
+                       (p.sworeAgainst ? ` His sworn enemy was ${p.sworeAgainst}.` : ''));
+        }
+    }
+    return lines.join('\n');
+}
+
+// #nemesis THE BATTLE RECORD — one document per real raid battle: the header (whose war, which raid), the
+// round-by-round exchanges as they showed on screen, and the honest ledger of the outcome. These are the
+// memories the hackathon loop exists to close: a town grown FROM memories writing its battles BACK as ones.
+function battleDoc(b, town) {
+    const lines = [];
+    const where = town || 'the town';
+    const NTHW = ['first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth', 'tenth'];
+    const nth = n => NTHW[Math.min(Math.max(1, n | 0), NTHW.length) - 1];
+    if (b.nemesis && b.nemesis.name) lines.push(`The battle of day ${b.day}, year ${b.year} — ${b.nemesis.name}'s raid (the ${nth(b.nemesis.raidCount || 1)} of his war) on ${where}.`);
+    else lines.push(`The battle of day ${b.day}, year ${b.year} — ${b.clan || 'a warband'} against ${where}.`);
+    const rounds = Array.isArray(b.rounds) ? b.rounds.slice(0, 48) : [];
+    if (rounds.length) {
+        lines.push('How it went, blow by blow:');
+        rounds.forEach((r, k) => lines.push(` ${k + 1}. ${r.who ? r.who + ' - ' : ''}${String(r.text || '').replace(/!+$/, '')}`));
+    }
+    const o = b.outcome || {};
+    const closing = [];
+    if (o.felled > 0) closing.push(`${o.felled} of ${o.n || '?'} raiders fell at the line`);
+    if (o.n != null && o.felled != null && o.felled < o.n) closing.push(`${o.n - o.felled} broke off and fled`);
+    if (o.harvestLost > 0) closing.push(`${o.harvestLost} measures of the harvest were carried away`);
+    else closing.push('the stores were held');
+    if (closing.length) lines.push(`The reckoning: ${closing.join('; ')}.`);
+    if (b.hero) lines.push(`${b.hero} held the line — the town will remember.`);
+    if (Array.isArray(b.wounded) && b.wounded.length) lines.push(`Wounded holding it: ${b.wounded.join(', ')}.`);
     return lines.join('\n');
 }
 
@@ -174,7 +219,8 @@ module.exports = async function handler(req, res) {
     const farmers = Array.isArray(body?.farmers) ? body.farmers.slice(0, MAX_FARMERS) : [];
     const townHistory = body?.townHistory && typeof body.townHistory === 'object' ? body.townHistory : null;
     const townInventions = body?.townInventions && typeof body.townInventions === 'object' ? body.townInventions : null;
-    if (!farmers.length && !townHistory && !townInventions) return send(res, 200, { ok: true, written: 0 });
+    const battle = body?.battle && typeof body.battle === 'object' && body.battle.rid ? body.battle : null;
+    if (!farmers.length && !townHistory && !townInventions && !battle) return send(res, 200, { ok: true, written: 0 });
 
     const base = (process.env.SUPERMEMORY_URL || DEFAULT_URL).replace(/\/+$/, '');
     const key = process.env.SUPERMEMORY_API_KEY || '';
@@ -198,6 +244,24 @@ module.exports = async function handler(req, res) {
         else if (out.stale) console.warn('[writeback] town-history skipped (stale rev)');
         else console.error('[writeback] town-history failed', out.status || '', out.text || out.err || '');
     }
+    // #nemesis THE BATTLE RECORD — one document PER BATTLE (customId keyed to the raid id, so a re-post of the
+    // same battle upserts instead of duplicating). The round-by-round tale of a real raid, written as it ended.
+    let battleWritten = false;
+    if (battle) {
+        const rid = String(battle.rid).replace(/[^\w:.-]/g, '_').slice(0, 80);
+        const doc = {
+            content: battleDoc(battle, body.town),
+            customId: `ry-farms:battle:${townSeed}:${rid}`,
+            containerTags: ['ry-farms'],
+            metadata: { app: 'ry-farms', kind: 'battle', rev: String(rev), townSeed: String(townSeed),
+                        day: String(battle.day ?? ''), year: String(battle.year ?? ''),
+                        ...(battle.nemesis && battle.nemesis.name ? { foe: String(battle.nemesis.name) } : {}),
+                        ...(body.town != null ? { town: String(body.town) } : {}) },
+        };
+        const out = await upsertDoc(base, headers, doc, rev);
+        if (out.ok) battleWritten = true;
+        else console.error('[writeback] battle failed', out.status || '', out.text || out.err || '');
+    }
     // #97 P5 — the town's book of inventions (one upserting doc per town)
     let townInventionsWritten = false;
     if (townInventions) {
@@ -213,7 +277,7 @@ module.exports = async function handler(req, res) {
         else if (out.stale) console.warn('[writeback] town-inventions skipped (stale rev)');
         else console.error('[writeback] town-inventions failed', out.status || '', out.text || out.err || '');
     }
-    if (!farmers.length) return send(res, 200, { ok: true, written: (townHistoryWritten ? 1 : 0) + (townInventionsWritten ? 1 : 0), townHistoryWritten, townInventionsWritten, source: base });
+    if (!farmers.length) return send(res, 200, { ok: true, written: (townHistoryWritten ? 1 : 0) + (townInventionsWritten ? 1 : 0) + (battleWritten ? 1 : 0), townHistoryWritten, townInventionsWritten, battleWritten, source: base });
 
     let written = 0;
     const persisted = [];
@@ -243,5 +307,5 @@ module.exports = async function handler(req, res) {
         else console.error('[writeback] farmer-life failed', out.status || '', out.text || out.err || '');
     }
     // report which seeds landed so the client stamps exactly those (a partial write is fine + resumable)
-    return send(res, 200, { ok: true, written, of: farmers.length, persisted, townHistoryWritten, townInventionsWritten, source: base });
+    return send(res, 200, { ok: true, written, of: farmers.length, persisted, townHistoryWritten, townInventionsWritten, battleWritten, source: base });
 };

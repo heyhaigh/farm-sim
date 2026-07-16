@@ -833,6 +833,9 @@ export class World {
         this.raidEvent = null;     // #Slice3 the in-progress WATCHED raid choreography (live-only, never serialized)
         this.pendingRaid = null;   // #131 a TELEGRAPHED incoming raid: seeded state (rides the save), lands on a
                                    // this.time deadline identically watched or dormant. See applyInbox + #tickPendingRaid.
+        this.nemesisLog = [];      // #nemesis ENDED wars, oldest first (capped) — the town's book of wars. Rides the
+                                   // save and flows to SuperMemory via the town-history writeback (the hackathon loop:
+                                   // lives grown FROM memories write their wars BACK as memories).
         this.nemesis = null;       // #nemesis (council Phase 1) — the town's ONE named foe arc, DETERMINISTIC data:
                                    // { pairKey, name, raidCount, sworeAgainst, lastOutcome, ended }. Advanced only by
                                    // seeded facts (inbox events + the resolver's verdict); the LLM merely VOICES it.
@@ -1869,12 +1872,11 @@ export class World {
                 }
             } else if (e.kind === 'reconciled') {
                 // #nemesis peace ends the named war — the OTHER honest ending of the arc.
-                if (this.nemesis && !this.nemesis.ended && this.nemesis.pairKey === e.pairKey && this.nemesis.raidCount >= 2) {
-                    this.nemesis.ended = true; this.nemesis.lastOutcome = 'peace';
-                    this.addChronicle('lineage', `${this.nemesis.name}'s war on ${this.name} ends at the parley table — ${NTH[Math.min(this.nemesis.raidCount - 1, NTH.length - 1)]} raid and last.`,
+                if (this.nemesis && !this.nemesis.ended && this.nemesis.pairKey === e.pairKey) {
+                    const named = this.nemesis.raidCount >= 2, nm = this.nemesis.name, nth = NTH[Math.min(this.nemesis.raidCount - 1, NTH.length - 1)];
+                    this.#archiveNemesis('peace');
+                    if (named) this.addChronicle('lineage', `${nm}'s war on ${this.name} ends at the parley table — ${nth} raid and last.`,
                         envoy, null, '#c8b0e0', { tier: 'grand', tone: 'triumph', label: 'THE WAR ENDS IN PEACE', why: 'the named foe chose the open hand' });
-                } else if (this.nemesis && !this.nemesis.ended && this.nemesis.pairKey === e.pairKey) {
-                    this.nemesis.ended = true; this.nemesis.lastOutcome = 'peace';   // a one-raid feud fizzles quietly
                 }
                 // Slice C: the envoy EARNS a cross-faction belief that begins to overwrite their raid-creed.
                 if (envoy) envoy.earnCrossFaction(e.withName, e.pairKey, +1);
@@ -2680,6 +2682,7 @@ export class World {
             pendingRaid: (this.pendingRaid && !this.pendingRaid.rehearsal) ? { ...this.pendingRaid, e: { ...this.pendingRaid.e } } : null,
             raidsSuffered: this.raidsSuffered || 0, learned: this.learned || null,   // #134 the learning arc rides the save
             nemesis: this.nemesis ? { ...this.nemesis } : null,   // #nemesis the named-war arc rides the save (plain, deterministic)
+            nemesisLog: (this.nemesisLog || []).map(x => ({ ...x })),   // #nemesis the town's book of ENDED wars
             // #Codex30 P1 — the DAY-1 congregation director's coverage state survives a reload (Sets flattened to
             // arrays), so a town reloaded mid-congregation doesn't restart the exchange and re-strand its later
             // founders (only foundingPhase used to persist; spokenSet/turns/last did not).
@@ -2823,6 +2826,7 @@ export class World {
         this.pendingRaid = (d.pendingRaid && d.pendingRaid.e) ? { ...d.pendingRaid, e: { ...d.pendingRaid.e } } : null;   // #131 restore a telegraphed raid mid-flight
         this.raidsSuffered = d.raidsSuffered || 0; this.learned = d.learned || null;   // #134 the learning arc
         this.nemesis = d.nemesis || null;   // #nemesis the named-war arc (old saves: no arc yet — the next raid founds one)
+        this.nemesisLog = Array.isArray(d.nemesisLog) ? d.nemesisLog.map(x => ({ ...x })) : [];
         // #Codex30 P1 restore the congregation director's coverage state (rebuild the Sets), so a reload mid-scene
         // continues covering the AS-YET-UNSPOKEN founders instead of replaying the ones who already spoke.
         this._congState = (d.congState && Array.isArray(d.congState.order)) ? {
@@ -5918,8 +5922,9 @@ export class World {
         const nem = this.nemesis;
         if (nem && !nem.ended && e.pairKey && nem.pairKey === e.pairKey) {
             if (out.felled >= out.n) {
-                nem.ended = true; nem.lastOutcome = 'fell';
-                if (nem.raidCount >= 2) this.addChronicle('legend', `${nem.name}'s war on ${this.name} ends at ${hero ? shortName(hero) : 'the town'}'s feet — the whole band broken on the line.`,
+                const named = nem.raidCount >= 2, nm = nem.name;
+                this.#archiveNemesis('fell');
+                if (named) this.addChronicle('legend', `${nm}'s war on ${this.name} ends at ${hero ? shortName(hero) : 'the town'}'s feet — the whole band broken on the line.`,
                     hero, null, '#f0d060', { tier: 'grand', tone: 'triumph', label: 'THE WAR ENDS', why: 'the named foe fell with his band' });
             } else {
                 nem.lastOutcome = 'escaped';
@@ -6075,6 +6080,17 @@ export class World {
         if (this.farmers.filter(f => f.health !== 'sick' && !f.downed).length < 2) return false;
         this.rehearsal = { kind: 'election', phase: 'gather', t: 0, nonce: nonce >>> 0, spoken: 0, speakQueue: null, result: null };
         return true;
+    }
+
+    // #nemesis close the arc + write it into the town's book of wars (one place, all three endings route here).
+    // Deterministic: called only from seeded sites (applyInbox 'reconciled', #applyRaidOutcome war-end).
+    #archiveNemesis(outcome) {
+        const nem = this.nemesis; if (!nem || nem.ended) return;
+        nem.ended = true; nem.lastOutcome = outcome;
+        const sworn = nem.sworeAgainst != null ? this.farmers.find(x => x.sheet.seed === nem.sworeAgainst) : null;
+        this.nemesisLog.push({ pairKey: nem.pairKey, name: nem.name, raidCount: nem.raidCount,
+                               sworeAgainst: sworn ? shortName(sworn) : null, outcome, day: this.day, year: this.year });
+        if (this.nemesisLog.length > 8) this.nemesisLog.shift();
     }
 
     cancelRehearsal() {
@@ -6416,8 +6432,9 @@ export class World {
                     r._harryAt = this.time + 1.5;
                     f._swingAt = this.time; f._swingI = r.i - f.pos.i; f._swingJ = r.j - f.pos.j;
                     const hr = hashString('harry:' + (r.foeName || 'r') + ':' + Math.floor(this.time * 2));
-                    re.fx.push({ i: r.i, j: r.j, text: (hr % 2) ? 'HIT!' : 'MISS', color: (hr % 2) ? '#ffa040' : '#9a9a8a', at: this.time });
-                    if (re.fx.length > 30) re.fx.shift();
+                    re.fx.push({ i: r.i, j: r.j, text: (hr % 2) ? 'HIT!' : 'MISS', color: (hr % 2) ? '#ffa040' : '#9a9a8a',
+                                 who: `${shortName(f)} harries ${r.foeName || 'a raider'}`, at: this.time });
+                    if (re.fx.length > 64) re.fx.shift();
                 }
             }
         }
@@ -6449,8 +6466,9 @@ export class World {
                         f._flankAt = this.time + 2.1;
                         f._swingAt = this.time; f._swingI = tgt.i - f.pos.i; f._swingJ = tgt.j - f.pos.j;
                         const hf = hashString('flank:' + f.sheet.seed + ':' + Math.floor(this.time * 2));
-                        re.fx.push({ i: tgt.i, j: tgt.j, text: (hf % 3) ? 'HIT!' : 'PARRY!', color: (hf % 3) ? '#ffa040' : '#9ad0e0', at: this.time });
-                        if (re.fx.length > 30) re.fx.shift();
+                        re.fx.push({ i: tgt.i, j: tgt.j, text: (hf % 3) ? 'HIT!' : 'PARRY!', color: (hf % 3) ? '#ffa040' : '#9ad0e0',
+                                     who: `${shortName(f)} flanks ${tgt.foeName || 'a raider'}`, at: this.time });
+                        if (re.fx.length > 64) re.fx.shift();
                     }
                 }
                 let best = null, bd = Infinity;
@@ -6495,7 +6513,9 @@ export class World {
         const rid = re.e.id || `${re.e.pairKey}:${re.e.ordinal}`;
         const roll = mulberry32(hashString('raidduel:' + rid + ':' + (r.foeName || 'r') + ':' + d.round))();
         const last = d.round >= d.rounds - 1;
-        const fx = (i, j, text, color) => { re.fx.push({ i, j, text, color, at: this.time }); if (re.fx.length > 30) re.fx.shift(); };
+        // fx entries carry WHO for the battle record (the round-by-round tale persisted to SuperMemory)
+        const vs = `${r.foeName || 'a raider'} vs ${shortName(f)}`;
+        const fx = (i, j, text, color, who = vs) => { re.fx.push({ i, j, text, color, who, at: this.time }); if (re.fx.length > 64) re.fx.shift(); };
         const farmerSwing = () => { f._swingAt = this.time; f._swingI = r.i - f.pos.i; f._swingJ = r.j - f.pos.j; };
         const raiderSwing = () => { r._swingAt = this.time; r._swingI = f.pos.i - r.i; r._swingJ = f.pos.j - r.j; };
         // footwork: unit vector raider->defender (+ its perpendicular for sidesteps)

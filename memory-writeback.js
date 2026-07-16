@@ -35,15 +35,18 @@ let lastHistorySig = null;
 let lastHistoryFailAt = -Infinity;
 function historySignature(world) {
     const r = world.roles || {};
-    // #134 raid-learnings fold into the signature so the town's SuperMemory record re-writes when it learns
-    return `${(r.history || []).length}:${r.manager}:${r.watch}:${r.managerTerms}:${world.year}:${world.raidsSuffered || 0}:${world.learned || ''}`;
+    const nem = world.nemesis;
+    // #134 raid-learnings fold into the signature so the town's SuperMemory record re-writes when it learns;
+    // #nemesis the named-war arc folds in too — every return, sworn grudge, and ending re-writes the record.
+    return `${(r.history || []).length}:${r.manager}:${r.watch}:${r.managerTerms}:${world.year}:${world.raidsSuffered || 0}:${world.learned || ''}` +
+           `:${nem ? `${nem.pairKey}.${nem.raidCount}.${nem.sworeAgainst ?? ''}.${nem.ended ? 1 : 0}` : ''}:${(world.nemesisLog || []).length}`;
 }
 export async function persistTownHistory(world, isCurrent = () => true) {
     if (typeof fetch !== 'function' || historyInflight) return false;
     if (Date.now() - lastHistoryFailAt < RETRY_COOLDOWN_MS) return false;
     const r = world.roles;
-    // #134 also worth remembering once the town has weathered a raid / learned a response — even pre-election
-    if (!r || (!r.history?.length && r.manager == null && !world.learned && !(world.raidsSuffered > 0))) return false;   // nothing to remember yet
+    // #134/#nemesis also worth remembering once the town has weathered a raid, learned, or has a named war
+    if (!r || (!r.history?.length && r.manager == null && !world.learned && !(world.raidsSuffered > 0) && !world.nemesis)) return false;   // nothing to remember yet
     const sig = historySignature(world);
     if (sig === lastHistorySig) return false;                            // unchanged since last successful write
 
@@ -58,6 +61,16 @@ export async function persistTownHistory(world, isCurrent = () => true) {
                 manager: nameOf(r.manager), managerTerms: r.managerTerms, watch: nameOf(r.watch), year: world.year,
                 history: (r.history || []).map(h => ({ office: h.office, name: h.name, fromYear: h.fromYear, toYear: h.toYear, endReason: h.endReason, why: h.why })),
                 raidsSuffered: world.raidsSuffered || 0, learned: world.learned || null,   // #134 the town's raid memory + what it learned
+                // #nemesis THE BOOK OF WARS — the named-foe arcs, current + ended (the hackathon loop closing:
+                // a town grown from memories writes its wars back as memories)
+                wars: {
+                    current: world.nemesis ? {
+                        name: world.nemesis.name, raidCount: world.nemesis.raidCount, ended: !!world.nemesis.ended,
+                        lastOutcome: world.nemesis.lastOutcome || null,
+                        sworeAgainst: world.nemesis.sworeAgainst != null ? (nameOf(world.nemesis.sworeAgainst) || null) : null,
+                    } : null,
+                    past: (world.nemesisLog || []).map(x => ({ name: x.name, raidCount: x.raidCount, sworeAgainst: x.sworeAgainst || null, outcome: x.outcome, year: x.year })),
+                },
             } }),
         });
         if (!res.ok) throw new Error(`town-history ${res.status}`);
@@ -153,4 +166,30 @@ export async function persistLives(world, isCurrent = () => true) {
         clearTimeout(timer);
         inflight = false;
     }
+}
+
+// #nemesis THE BATTLE RECORD — one document per REAL raid battle, written the moment the show ends: the
+// round-by-round exchanges (from the duel fx stream), who fell, who broke off, what was carried away, and
+// whose war it was. Display-derived data persisted through the side-channel (never sim state — dormant
+// raids get no battle doc, exactly as they got no show). Deduped per raid id; rehearsals never call this.
+const battlesSent = new Set();
+let battleInflight = false;
+export async function persistBattle(world, battle) {
+    if (typeof fetch !== 'function' || !battle || !battle.rid || battlesSent.has(battle.rid) || battleInflight) return false;
+    battlesSent.add(battle.rid);   // one shot per raid — a failed write is a lost tale, not a retry storm
+    battleInflight = true;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    try {
+        const res = await fetch(ENDPOINT, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
+            body: JSON.stringify({ town: world.name || 'RY FARMS', townSeed: world.seed, rev: world._rev || world.day || 0, battle }),
+        });
+        if (!res.ok) throw new Error(`battle ${res.status}`);
+        const data = await res.json();
+        return !!(data && data.battleWritten);
+    } catch (err) {
+        console.warn('ry-farms: battle writeback unavailable', err?.message || err);
+        return false;
+    } finally { clearTimeout(timer); battleInflight = false; }
 }

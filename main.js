@@ -17,7 +17,7 @@ import { computeLayout, detectEncounters, encounterLine, townPos, townReach, tow
 import { enrichStories } from './dm.js';
 import { requestCongregation } from './congregation.js';
 import { requestRaidCouncil } from './raidcouncil.js';
-import { persistLives, persistTownHistory } from './memory-writeback.js';
+import { persistLives, persistTownHistory, persistBattle } from './memory-writeback.js';
 import { enrichInventions, persistTownInventions } from './memory-invent.js';
 import { whisper } from './conscience.js';
 import { cultureWord } from './culture.js';   // #3.1 orc-vs-human display copy
@@ -5260,6 +5260,7 @@ function drawRaidFx() {
 // save loads via the exact boot path (World.fromSave -> set-hook -> exactly-once inbox consume -> _live).
 // No farmers migrate; nothing crosses but the camera. Determinism: the sim can't tell this from a reload.
 // ============================================================================
+let _battleWatch = null;   // #nemesis last-seen raidEvent — its END triggers the battle-record writeback
 let crossFx = null;        // { t, phase:'out'|'in', name, seed, ang } — the channel-change static
 let crossHint = null;      // { seed, name, ang, k } — this frame's edge cue (rebuilt each frame)
 let _switching = false;    // one swap at a time
@@ -6245,6 +6246,26 @@ function frame(now) {
     // #raid-council a telegraphed raid asks the LLM (fire-and-forget, deduped per telegraph) to write the
     // muster counsel — the line's own urgent strategy talk. Offline/slow = the authored pools carry it.
     if (world.pendingRaid && !world.raidEvent) requestRaidCouncil(world);
+    // #nemesis THE BATTLE RECORD → SuperMemory: the frame a REAL raid's show ends, compile the round-by-round
+    // record from the fx stream + the verdict and persist it as one battle document. Side-channel only (the
+    // show is display; dormant raids had no show and get no doc); rehearsals are ghosts and never fire this.
+    if (world.raidEvent) _battleWatch = world.raidEvent;
+    else if (_battleWatch) {
+        const re = _battleWatch; _battleWatch = null;
+        if (!re.rehearsal && re.struck && re.out && re.e) {
+            const nameOf = seed => { const f = world.farmers.find(x => x.sheet.seed === seed); return f ? f.sheet.name.split(' ')[0] : null; };
+            persistBattle(world, {
+                rid: re.e.id || `${re.e.pairKey}:${re.e.ordinal}`,
+                day: world.day, year: world.year,
+                clan: (re.out && re.out.clan) || (re.e.by || 'a warband'),
+                nemesis: re.e.foe ? { name: re.e.foe.name, raidCount: re.e.foe.raidCount } : null,
+                outcome: { felled: re.out.felled, n: re.out.n, harvestLost: re.out.harvestLost },
+                hero: re.out.heroSeed != null ? nameOf(re.out.heroSeed) : null,
+                wounded: (re.out.woundSeeds || []).map(nameOf).filter(Boolean),
+                rounds: (re.fx || []).map(x => ({ who: x.who || null, text: x.text })),
+            });
+        }
+    }
     // at extreme speeds keep a bounded backlog (spread over coming frames) rather than dropping
     // all the leftover time, but cap it so we never spiral.
     if (steps >= 800) simAccumulator = Math.min(simAccumulator, 800 * FIXED_DT);
