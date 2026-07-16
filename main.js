@@ -5251,6 +5251,161 @@ function drawRaidFx() {
     }
 }
 
+// ============================================================================
+// #P2 CURSOR-CROSSING — walk the camera across the frontier into a neighbour town.
+// Pan far enough from the well toward a town you've MET (reaches touching in the world plane) and an edge
+// cue names it; keep going and the channel CHANGES — a beat of CRT static, then you arrive on the far
+// town's frontier, entering from the side you left by. One live World at a time (the council's P2 shape):
+// the current town SETTLES + SAVES first (same discipline as opening the world map), then the neighbour's
+// save loads via the exact boot path (World.fromSave -> set-hook -> exactly-once inbox consume -> _live).
+// No farmers migrate; nothing crosses but the camera. Determinism: the sim can't tell this from a reload.
+// ============================================================================
+let crossFx = null;        // { t, phase:'out'|'in', name, seed, ang } — the channel-change static
+let crossHint = null;      // { seed, name, ang, k } — this frame's edge cue (rebuilt each frame)
+let _switching = false;    // one swap at a time
+
+const CROSS_HINT_R = 56;   // camera-distance (tiles from the well) where the cue appears
+const CROSS_R = 76;        // ...and where the crossing fires
+const CROSS_CONE = 0.6;    // radians of slack around a neighbour's bearing
+
+// Known neighbours whose reach TOUCHES ours (the met/meeting pairs), with their world-plane bearing mapped
+// onto the local grid (i = plane-x, j = plane-y — the same mapping everywhere a bearing is drawn).
+function crossNeighbors() {
+    if (!worldMapIdx || !worldMapIdx.towns || !world) return [];
+    const me = worldMapIdx.towns[String(world.seed)];
+    const A = townPos(world.seed), aReach = me ? townReach(me) : 60;
+    const out = [];
+    for (const t of Object.values(worldMapIdx.towns)) {
+        if (String(t.seed) === String(world.seed)) continue;
+        const B = townPos(t.seed);
+        const dist = Math.hypot(B.x - A.x, B.y - A.y);
+        if (dist > aReach + townReach(t)) continue;   // the seam only exists where reaches meet
+        out.push({ seed: t.seed >>> 0, name: t.name || `town ${t.seed}`, culture: t.culture, ang: Math.atan2(B.y - A.y, B.x - A.x), dist });
+    }
+    return out;
+}
+
+// Per-frame: is the camera out on a frontier that leads somewhere? (No cue mid-drama or in menus — and a
+// FOLLOWED farmer never drags the player across a border; only a deliberate pan crosses.)
+function updateCrossing() {
+    crossHint = null;
+    if (!booted || !world || _switching || crossFx || followMode) return;
+    if (rosterOpen || chronOpen || boardOpen || settingsOpen || worldMapOpen) return;
+    if (world.pendingRaid || world.raidEvent || world.rehearsal) return;
+    const c = screenToTile(GW / 2, GH / 2);
+    const di = c.i - CENTER, dj = c.j - CENTER, r = Math.hypot(di, dj);
+    if (r < CROSS_HINT_R) return;
+    const ang = Math.atan2(dj, di);
+    let best = null, bd = Infinity;
+    for (const n of crossNeighbors()) {
+        let da = ang - n.ang; da = Math.atan2(Math.sin(da), Math.cos(da));
+        if (Math.abs(da) > CROSS_CONE) continue;
+        if (Math.abs(da) < bd) { bd = Math.abs(da); best = n; }
+    }
+    if (!best) return;
+    crossHint = { ...best, k: Math.min(1, (r - CROSS_HINT_R) / (CROSS_R - CROSS_HINT_R)) };
+    if (r >= CROSS_R) { crossFx = { t: 0, phase: 'out', name: best.name, seed: best.seed, ang: best.ang }; crossHint = null; }
+}
+
+// The edge cue: a pulsing chevron + the neighbour's name, pinned toward the screen edge in its direction.
+function drawCrossHint() {
+    if (!crossHint || crossFx) return;
+    const sdx = Math.cos(crossHint.ang) - Math.sin(crossHint.ang);
+    const sdy = (Math.cos(crossHint.ang) + Math.sin(crossHint.ang)) / 2;
+    const n = Math.hypot(sdx, sdy) || 1;
+    const ex = Math.max(30, Math.min(GW - 30, GW / 2 + (sdx / n) * (GW / 2 - 40)));
+    const ey = Math.max(34, Math.min(GH - 30, GH / 2 + (sdy / n) * (GH / 2 - 40)));
+    const label = crossHint.k > 0.55 ? `KEEP GOING - CROSS INTO ${crossHint.name.toUpperCase()}` : `${crossHint.name.toUpperCase()} LIES THIS WAY`;
+    const col = crossHint.culture === 'orc' ? '#e07050' : '#7dd069';
+    const wpx = textWidth(label);
+    ctx.save(); ctx.globalAlpha = 0.55 + 0.45 * Math.abs(Math.sin(performance.now() / 320));
+    ctx.fillStyle = 'rgba(8,9,14,0.82)';
+    ctx.fillRect(Math.round(ex - wpx / 2) - 4, Math.round(ey) - 3, wpx + 8, 12);
+    drawText(ctx, label, Math.round(ex - wpx / 2), Math.round(ey), col);
+    // a small chevron pointing the way (screen-space direction)
+    const cx = ex + (sdx / n) * (wpx / 2 + 12), cy = ey + 3 + (sdy / n) * 8;
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    ctx.moveTo(cx + (sdx / n) * 4, cy + (sdy / n) * 4);
+    ctx.lineTo(cx - (sdy / n) * 3, cy + (sdx / n) * 3);
+    ctx.lineTo(cx + (sdy / n) * 3, cy - (sdx / n) * 3);
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+}
+
+// The channel change: static swells over the world, the destination card shows, static clears on arrival.
+function drawCrossFx() {
+    const a = crossFx.phase === 'out' ? Math.min(1, crossFx.t / 0.4) : Math.max(0, 1 - crossFx.t / 0.55);
+    ctx.fillStyle = `rgba(5,6,9,${(0.9 * a).toFixed(3)})`; ctx.fillRect(0, 0, GW, GH);
+    const grains = Math.floor(1400 * a);
+    for (let k = 0; k < grains; k++) {
+        const v = 30 + Math.random() * 100;
+        ctx.fillStyle = `rgb(${v},${v},${v})`;
+        ctx.fillRect((Math.random() * GW) | 0, (Math.random() * GH) | 0, 2, 1);
+    }
+    if (a > 0.55) {
+        const title = 'CROSSING THE FRONTIER';
+        drawText(ctx, title, Math.floor((GW - textWidth(title, 2)) / 2), Math.floor(GH / 2) - 14, '#9aa0b4', 2);
+        const sub = `> ${String(crossFx.name).toUpperCase()}`;
+        drawText(ctx, sub, Math.floor((GW - textWidth(sub)) / 2), Math.floor(GH / 2) + 6, '#7dd069');
+    }
+}
+
+// The in-place World swap. Saves + registers the town you leave, loads the neighbour's save through the
+// boot path, then resets every per-town lens this module holds. A neighbour with NO save falls back to URL
+// navigation (a full boot founds it properly — only ever hit via QA, since crossing targets known towns).
+async function switchTown(seed, ang) {
+    if (_switching) return false;
+    _switching = true;
+    try {
+        const s32 = seed >>> 0;
+        const saved = await loadTown(s32);
+        if (!saved) { location.search = '?seed=' + s32; return true; }
+        if (world) {
+            try { world.cancelRehearsal(); } catch { /* pre-admin saves */ }
+            const summary = townSummary(world);
+            const d = await saveTown(world);
+            if (d != null) { summary.rev = world._rev; await registerWorld(world, summary); }
+        }
+        let next;
+        try { next = World.fromSave(saved); }
+        catch (err) { console.warn('ry-farms: neighbour save unreadable - navigating', err); location.search = '?seed=' + s32; return true; }
+        const origSet = next.set.bind(next);
+        next.set = (i, j, t) => { origSet(i, j, t); next._tilesChanged = true; };
+        next._tilesChanged = true;
+        try {
+            const widx = await loadWorldIndex();
+            const pending = (widx.inbox && widx.inbox[String(s32)]) || [];
+            if (pending.length) await consumeInbox(next, pending);   // exactly-once, same as boot
+            worldMapIdx = widx;
+        } catch (err) { console.warn('ry-farms: inbox consume failed on cross', err); }
+        next._live = true;
+        next._tabHidden = document.hidden;
+        world = next;
+        lastSavedDay = world.day;
+        // reset every per-town lens in this module (anything keyed to the town we just left)
+        selected = null; selectedSlotKey = null; followMode = false; followTarget = null;
+        raidFocus = null; dramaSpotlight = null; _lastRaidEvent = null; _raidStruck = false; raidFx = null; raidShake = 0;
+        chatFarmer = null; chatWidgetOpen = false; chatDropdownOpen = false; blurChatInput();
+        momentQueue.length = 0; calloutQueue.length = 0; activeMoment = null; activeCallout = null; momentsPrimed = false;
+        chronReadTotal = world._chronTotal || 0; lastChronLen = -1; recapSeq = -1;
+        miniKey = null; chunkCanvases.clear();
+        worldMapSel = world.seed;
+        // arrive on the frontier you entered by — the side facing the town you left — looking inward
+        const ea = (ang != null ? ang : 0);
+        const ei = CENTER - Math.cos(ea) * 44, ej = CENTER - Math.sin(ea) * 44;
+        cam.x = GW / 2 - isoX(ei, ej); cam.y = GH / 2 - isoY(ei, ej);
+        world.addLog(`You cross the frontier into ${world.name} - day ${world.day}, year ${world.year}`, '#7dd069');
+        resumeCard = {   // the arrival payoff: what's been happening in the town you just walked into
+            day: world.day, season: world.season, year: world.year, shownAt: 0,
+            beats: world.chronicle.slice(-5).map(c => ({ text: c.text, color: c.color, day: c.day })),
+        };
+        try { history.replaceState(null, '', '?seed=' + s32); } catch { /* sandboxed contexts */ }
+        if (window.RYFARMS) window.RYFARMS.world = world;
+        return true;
+    } finally { _switching = false; }
+}
+
 // #admin best-effort villain casting for a raid rehearsal: the first known town of the OTHER culture from
 // the world index (if the map has been opened this session), else null -> farm.js's stock phantom warband.
 function adminFoeName() {
@@ -6213,6 +6368,13 @@ function frame(now) {
         if (raidFx.stings < 3 && raidFx.t >= raidFx.stings * 1.05) { raidFx.stings++; if (audio.raidSting) audio.raidSting(); }
         if (raidFx.t >= RAIDFX_DUR) raidFx = null;
     }
+    if (crossFx) {   // #P2 the channel change: static out -> swap the live World -> static in on the far frontier
+        drawCrossFx(); crossFx.t += dt;
+        if (crossFx.phase === 'out' && crossFx.t >= 0.5 && !crossFx.started) {
+            crossFx.started = true;
+            switchTown(crossFx.seed, crossFx.ang).then(ok => { if (crossFx) { if (!ok) { crossFx = null; } else { crossFx.phase = 'in'; crossFx.t = 0; } } });
+        } else if (crossFx.phase === 'in' && crossFx.t >= 0.7) crossFx = null;
+    }
     // a quiet indicator while the camera is trailing someone (F, or the sheet's crosshair, toggles it)
     FOLLOW_PREV.w = FOLLOW_NEXT.w = 0;   // no banner, no clickable arrows (cleared each frame)
     if (followMode && followTarget && world.farmers.includes(followTarget) && !rosterOpen && !chronOpen && !boardOpen) {
@@ -6254,6 +6416,7 @@ function frame(now) {
     updateDramaSpotlight();
     if (booted && !rosterOpen && !chronOpen && !boardOpen) drawDramaCue();
     if (booted && !rosterOpen && !chronOpen && !boardOpen && !worldMapOpen && !settingsOpen) drawThreatTell();   // #131
+    updateCrossing(); drawCrossHint();   // #P2 the frontier cue + crossing trigger (no-ops in menus/drama)
 
     drawResumeCard();   // the "previously on" catch-up card sits above every panel (only the cursor tops it)
 
@@ -6348,6 +6511,7 @@ function drawBootScreen(t) {
         const widx = await loadWorldIndex();
         const pending = (widx.inbox && widx.inbox[String(world.seed)]) || [];
         if (pending.length) await consumeInbox(world, pending);   // exactly-once (Codex r20/r21)
+        worldMapIdx = widx;   // #P2 the frontier cue needs the neighbour map from the first frame, not first map-open
     } catch (err) { console.warn('ry-farms: inbox consume failed', err); }
 
     // #108 from here on this town is the WATCHED one: a cross-town raid that ARRIVES during live play stages a
@@ -6463,6 +6627,15 @@ function drawBootScreen(t) {
         get pendingRaid() { return world.pendingRaid; },                                   // #131 inspect a telegraphed raid
         raidDetect: () => { const pr = world.pendingRaid; if (pr) world.time = pr.detectAt; return world.pendingRaid; },  // #131 jump to the sentry's alarm
         raidLand: () => { const pr = world.pendingRaid; if (pr) world.time = pr.landsAt; return world.pendingRaid; },     // #131 fast-forward to the blow
+        // #P2 QA: force a crossing to a known neighbour (bearing optional — defaults to its real world-plane
+        // bearing when it's in the index). RYFARMS.neighbors() lists who's reachable from here.
+        neighbors: () => crossNeighbors(),
+        cross: (seed, ang) => {
+            const n = crossNeighbors().find(x => String(x.seed) === String(seed >>> 0));
+            const t = worldMapIdx && worldMapIdx.towns && worldMapIdx.towns[String(seed >>> 0)];
+            crossFx = { t: 0, phase: 'out', seed: seed >>> 0, ang: ang != null ? ang : (n ? n.ang : 0), name: (n && n.name) || (t && t.name) || String(seed) };
+            return crossFx.name;
+        },
         // #admin the director's booth (same as the settings panel): GHOST rehearsals — full show, zero record
         admin: {
             raid: () => world.startRaidRehearsal((performance.now() * 31) >>> 0 || 1, adminFoeName()),
