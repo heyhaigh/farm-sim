@@ -3174,8 +3174,12 @@ function drawBarTooltips() {
 // #2 The WORLD MAP — the zoom-out camera tier: every town this browser has grown, where it sits, which towns
 // it descends from (lineage edges = the closed memory loop at world scale), and which have met (encounters).
 // ---------------------------------------------------------------------------
+// #Codex35-2: ONE closer for the world map — every close path (X, outside click, M, Esc, other panels opening)
+// must also drop the sub-overlays (KEY legend / CREATE TOWN picker), or a half-open picker greets the next open.
+function closeWorldMap() { worldMapOpen = false; worldMapFoundOpen = false; worldMapKeyOpen = false; }
 async function openWorldMap() {
     worldMapOpen = true;
+    worldMapFoundOpen = false; worldMapKeyOpen = false;   // never inherit a stale overlay from a prior session
     rosterOpen = chronOpen = boardOpen = false;
     worldMapSel = world ? world.seed : null;
     // #Codex25-1: opening the map must not publish UNCOMMITTED town state into the shared index. Persist first;
@@ -5190,6 +5194,7 @@ function drawMoments() {
         const now = performance.now();
         if (activeMoment) activeMoment.shownAt = now;
         if (activeCallout) activeCallout.shownAt = now;
+        MOMENTS_HIT.w = 0; CALLOUT_CLOSE.w = 0;   // stale hitboxes would let clicks dismiss the frozen moment BEHIND the modal
         return;
     }
     scanMoments();
@@ -5429,7 +5434,7 @@ out.addEventListener('pointerdown', (e) => {
     // don't world-pan when the gesture starts on the minimap, the detail card, the board, or the whisper widget
     const onChat = (CHAT_BTN.w && inRect(p, CHAT_BTN)) || (CHAT_PANEL.w && inRect(p, CHAT_PANEL));
     const onUI = !rosterOpen && !chronOpen && (inRect(p, MINIMAP) || (selected && inRect(p, SHEET_RECT)) || (boardOpen && inRect(p, BOARD_RECT)) || onChat);
-    mouse.panStart = (rosterOpen || chronOpen || settingsOpen || onUI) ? null : { x: p.x, y: p.y, camX: cam.x, camY: cam.y };
+    mouse.panStart = (rosterOpen || chronOpen || settingsOpen || worldMapOpen || onUI) ? null : { x: p.x, y: p.y, camX: cam.x, camY: cam.y };   // #Codex35-3: the world map is a full-screen modal too — a drag on its picker must not pan the hidden town camera
     mouse.dragging = false;
     try { out.setPointerCapture(e.pointerId); } catch { /* stale/synthetic pointer id — capture is best-effort */ }
 });
@@ -5502,9 +5507,9 @@ out.addEventListener('pointerup', (e) => {
         if (!inRect(p, settingsHits.panel)) { settingsOpen = false; return; }   // click outside closes
         return;   // click inside the panel, no-op
     }
-    if (inRect(p, ROSTER_BTN)) { rosterOpen = !rosterOpen; if (rosterOpen) { boardOpen = false; chronOpen = false; worldMapOpen = false; } else { chatDropdownOpen = false; blurChatInput(); } return; }
-    if (CHRON_BTN.w && inRect(p, CHRON_BTN)) { chronOpen = !chronOpen; if (chronOpen) { boardOpen = false; rosterOpen = false; worldMapOpen = false; chronScroll = 0; blurChatInput(); chronTownWide = !(followMode && followTarget && world.farmers.includes(followTarget)); } return; }
-    if (WORLD_BTN.w && inRect(p, WORLD_BTN)) { if (worldMapOpen) worldMapOpen = false; else openWorldMap(); return; }
+    if (inRect(p, ROSTER_BTN)) { rosterOpen = !rosterOpen; if (rosterOpen) { boardOpen = false; chronOpen = false; closeWorldMap(); } else { chatDropdownOpen = false; blurChatInput(); } return; }
+    if (CHRON_BTN.w && inRect(p, CHRON_BTN)) { chronOpen = !chronOpen; if (chronOpen) { boardOpen = false; rosterOpen = false; closeWorldMap(); chronScroll = 0; blurChatInput(); chronTownWide = !(followMode && followTarget && world.farmers.includes(followTarget)); } return; }
+    if (WORLD_BTN.w && inRect(p, WORLD_BTN)) { if (worldMapOpen) closeWorldMap(); else openWorldMap(); return; }
 
     // world-map overlay (modal): X / click-outside closes; a town node selects it; VISIT switches active town
     if (worldMapOpen) {
@@ -5525,7 +5530,7 @@ out.addEventListener('pointerup', (e) => {
         // header chips
         if (U.key && inRect(p, U.key)) { worldMapKeyOpen = true; worldMapFoundOpen = false; return; }
         if (U.found && inRect(p, U.found)) { worldMapFoundOpen = true; worldMapKeyOpen = false; return; }
-        if ((p.x > PX + PW - 14 && p.y < PY + 12) || p.x < PX || p.x > PX + PW || p.y < PY || p.y > PY + PH) { worldMapOpen = false; return; }
+        if ((p.x > PX + PW - 14 && p.y < PY + 12) || p.x < PX || p.x > PX + PW || p.y < PY || p.y > PY + PH) { closeWorldMap(); return; }
         if (worldMapVisit && inRect(p, worldMapVisit)) { location.search = '?seed=' + worldMapVisit.seed; return; }
         for (const h of worldMapHits) { const dx = p.x - h.x, dy = p.y - h.y; if (dx * dx + dy * dy <= (h.r + 2) * (h.r + 2)) { worldMapSel = h.seed; return; } }
         return;   // consume all clicks inside the map
@@ -5565,7 +5570,7 @@ out.addEventListener('pointerup', (e) => {
     }
 
     // board toggle button (only when the board has been built)
-    if (!BOARD_BTN.hidden && inRect(p, BOARD_BTN)) { boardOpen = !boardOpen; if (boardOpen) { selected = null; rosterOpen = false; chronOpen = false; worldMapOpen = false; boardScroll = 0; } return; }
+    if (!BOARD_BTN.hidden && inRect(p, BOARD_BTN)) { boardOpen = !boardOpen; if (boardOpen) { selected = null; rosterOpen = false; chronOpen = false; closeWorldMap(); boardScroll = 0; } return; }
 
     // board panel interactions (X or click-outside closes; clicks inside are consumed)
     if (boardOpen) {
@@ -5832,13 +5837,13 @@ window.addEventListener('keydown', (e) => {
     }
     // M — toggle the zoom-out WORLD map (the world of towns)
     if ((e.key === 'm' || e.key === 'M') && world && booted) {
-        if (worldMapOpen) worldMapOpen = false; else openWorldMap();
+        if (worldMapOpen) closeWorldMap(); else openWorldMap();
     }
     // Esc — stop following AND close the card / any open panel (a clean sweep back to the map)
     if (e.key === 'Escape' && world && booted) {
         followMode = false; followTarget = null;
         selected = null; selectedSlotKey = null;
-        rosterOpen = false; chronOpen = false; boardOpen = false; settingsOpen = false; worldMapOpen = false;
+        rosterOpen = false; chronOpen = false; boardOpen = false; settingsOpen = false; closeWorldMap();
         chatDropdownOpen = false; blurChatInput();
     }
     // ← / → — cycle through the whole cast: moves the open card and/or the follow target together
