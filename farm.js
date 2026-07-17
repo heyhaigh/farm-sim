@@ -3396,6 +3396,40 @@ export class World {
     // model answers; DISPLAY ONLY, the sim never reads it). Lines play IN ORDER: a mustered farmer asking for
     // a line gets the head only if it's theirs; a head that waits >10s is given to whoever asks (understudy),
     // so an absent speaker can't stall the scene. Falls back to the authored pools when there's no script.
+    // #banter the aftermath, spoken. A ROLE- and LORE-aware line for farmer `f` during the debrief: the
+    // sentry vows the watch, the manager plans the walls, the healer calls for the wounded; anyone may name
+    // the warband, count the raids of a RETURNING nemesis, or talk of fortifying. Seeded + deterministic
+    // (per-farmer, per 5s bucket), sequenced by the speech floor. The LLM debrief still leads via
+    // nextRaidCouncilLine; this is the authored floor that carries the scene offline — now with teeth.
+    debriefLineFor(f) {
+        const w = this, d = this._debrief, orc = this.culture === 'orc';
+        if (!d) return null;
+        const H = (salt) => hashString('dbrf:' + f.sheet.seed + ':' + salt + ':' + Math.floor(this.time / 5));
+        const foe = d.foe, clan = d.clan || (orc ? 'the rival warband' : 'the raiders');
+        const nem = foe && foe.name, nth = foe ? NTH[Math.min((foe.raidCount || 1) - 1, NTH.length - 1)] : '';
+        const role = (this.currentSentry && this.currentSentry() === f) ? 'sentry'
+                   : (this.managerFarmer && this.managerFarmer() === f) ? 'manager'
+                   : (this.healerFarmer && this.healerFarmer() === f) ? 'healer' : 'hand';
+        const cats = [];
+        if (role === 'sentry') cats.push(orc ? ['I KEEP THE WALL. NONE PASS ME TWICE.', 'DOUBLE THE WATCH — I STAND FIRST TONIGHT.']
+            : ["i'll not be caught off the wall again.", 'two on the watch tonight — i take first.']);
+        else if (role === 'manager') cats.push(orc ? ['WE MEET THEM AT THE TREELINE NEXT TIME.', 'RAISE THE STAKES. STACK THE STORES DEEP.']
+            : ['next time we meet them further out — past the fences.', 'we raise the fence a course before the frost.']);
+        else if (role === 'healer') cats.push(orc ? ['DRAG THE HURT TO MY FIRE.', 'SALVES BOILING BY DUSK. NONE DIE OF A SCRATCH.']
+            : ["bring me the wounded — i'll have salves by dusk.", "who's hurt? sing out, i'll tend you."]);
+        if (nem && foe.raidCount >= 2) cats.push(orc
+            ? [`${nem.toUpperCase()} AGAIN — HIS ${nth.toUpperCase()} RAID. HE WILL NOT STOP.`, `THIS IS ${nem.toUpperCase()}'S WAR. WE ARE WINNING IT.`]
+            : [`${nem} again — the ${nth} raid of his war on us.`, `${nem}'s not done with us. but we're still standing.`]);
+        else if (nem) cats.push(orc ? [`${nem.toUpperCase()}. LEARN THE NAME. HE WILL BE BACK.`] : [`${nem}, they call him. we'll not forget it.`]);
+        cats.push(orc ? [`${clan.toUpperCase()} — CAME FOR THE STORES, SAME AS EVER.`, 'THEY BLED FOR EVERY GRAIN THIS TIME.']
+            : [`${clan} — came for the granary, same as always.`, 'they paid in blood for every sack this time.']);
+        cats.push(orc ? ['DIG THE DITCH DEEPER. STAKE THE APPROACH.', 'MORE SPEARS BY THE GATE COME DAWN.']
+            : ['we dig the ditch deeper on that flank before winter.', 'more hands on the fence tomorrow — first thing.']);
+        cats.push(orc ? DEBRIEF_TALK.orc : DEBRIEF_TALK.human);   // the general aftermath floor
+        const cat = cats[H('cat') % cats.length];
+        return cat[H('line') % cat.length];
+    }
+
     nextRaidCouncilLine(f) {
         const sc = this._raidScript;
         if (!sc || !Array.isArray(sc.lines) || sc.i >= sc.lines.length) return null;
@@ -6725,7 +6759,13 @@ export class World {
                 // #raid-feel THE DEBRIEF: the line lingers for a spell — who's hurt, what was taken, what next —
                 // before drifting back to their lives (bubbles only; transient, never serialized; ghosts included,
                 // since spoken words write no record). The LLM debrief script slots in via world._raidScript.
-                if (re.struck) this._debrief = { at: this.time, until: this.time + 24 };
+                // #banter a longer aftermath (was 24s) so the town takes real stock — sequenced one voice at
+                // a time by the speech floor. Stamped with the foe + outcome so the lines can name the warband,
+                // count the raids of a returning nemesis, and talk fortifying (see #debriefLine).
+                if (re.struck) this._debrief = { at: this.time, until: this.time + 40,
+                    foe: re.e.foe ? { name: re.e.foe.name, raidCount: re.e.foe.raidCount } : null,
+                    clan: (re.out && re.out.clan) || re.e.by || null,
+                    felled: re.out && re.out.felled, harvestLost: re.out && re.out.harvestLost };
             }
         }
         // #raid-feel THE PURSUIT + THE GANG-UP (display motion; runs march AND flee so runners are seen off).
@@ -12255,9 +12295,15 @@ export class Farmer {
                         if ((h % (debrief ? 5 : 7)) === 0) {
                             this._musterBucket = bucket;
                             const scripted = w.nextRaidCouncilLine ? w.nextRaidCouncilLine(this) : null;   // #raid-council LLM script first
-                            const pool = debrief ? (w.culture === 'orc' ? DEBRIEF_TALK.orc : DEBRIEF_TALK.human)
-                                                 : (w.culture === 'orc' ? MUSTER_TALK.orc : MUSTER_TALK.human);
-                            const line = scripted || pool[h % pool.length].replace('{dir}', (pr && pr.dirName) || 'dark');
+                            // #banter the debrief uses the ROLE- + LORE-aware generator (names the warband,
+                            // counts a nemesis's raids, vows the walls); the muster keeps its flat pool.
+                            let line = scripted;
+                            if (!line && debrief) line = w.debriefLineFor ? w.debriefLineFor(this) : null;
+                            if (!line) {
+                                const pool = debrief ? (w.culture === 'orc' ? DEBRIEF_TALK.orc : DEBRIEF_TALK.human)
+                                                     : (w.culture === 'orc' ? MUSTER_TALK.orc : MUSTER_TALK.human);
+                                line = pool[h % pool.length].replace('{dir}', (pr && pr.dirName) || 'dark');
+                            }
                             this.say(line, debrief ? '#c8d0a8' : '#e0c078');
                             w.holdFloor((this.bubble ? this.bubble.t0 : 2.2) + 0.7);   // finish before the next voice
                         }
