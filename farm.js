@@ -6509,15 +6509,17 @@ export class World {
     // ring lost in the middle of known ground. Pure fog scan (isRevealed) — deterministic, draws no rng.
     frontierDist(dir) {
         const co = Math.cos(dir), si = Math.sin(dir);
-        const start = Math.round(this.townRadius() + 4);
-        let last = start;
-        for (let d = start; d < GRID; d++) {
-            const i = Math.round(CENTER + co * d), j = Math.round(CENTER + si * d);
-            if (i < 0 || j < 0 || i >= GRID || j >= GRID) break;   // reached the map edge in this bearing
-            if (this.isRevealed(i, j)) last = d; else break;        // fog begins — this is the frontier
+        // scan from a modest radius (past the immediate plaza) for the FIRST fog in THIS bearing. Keyed to the
+        // per-bearing fog edge, NOT the global town radius — so one far-flung homestead in some OTHER direction
+        // no longer shoves every raid out to the map edge; the threat masses where the dark actually begins here.
+        // scan INWARD from the map edge for the OUTERMOST solidly-revealed radius (3 revealed in a row), so
+        // inner fog pockets/rings (gaps under trees, unexplored holes) don't fool the scan — the true dark
+        // begins just past where known ground holds. The fog edge is a couple tiles beyond that.
+        const rev = (d) => { const i = Math.round(CENTER + co * d), j = Math.round(CENTER + si * d); return i >= 0 && j >= 0 && i < GRID && j < GRID && this.isRevealed(i, j); };
+        for (let d = Math.min(GRID - CENTER - 2, 112); d >= 18; d--) {
+            if (rev(d) && rev(d - 2) && rev(d - 4)) return Math.max(20, d + 2);   // solid revealed edge → fog just beyond
         }
-        // clamp so a barely-explored bearing still stages clear of the farms, and a fully-explored one stays on-grid
-        return Math.max(start, Math.min(last, GRID - CENTER - 4));
+        return 30;   // nothing much revealed out here — stage close
     }
 
     musterSpot(f) {

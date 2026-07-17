@@ -1596,13 +1596,14 @@ function drawTerrainChunks() {
 // positions are a pure fn of the seeded bearing + a wall-clock idle sway (display only) — no world.rand touched.
 function raidMusterFigures(pr) {
     const dir = pr.dir, n = 6, t = performance.now(), out = [];
-    // #fog-adaptive muster at the REVEALED FRONTIER in the threat bearing — on an explored map they mass at
-    // the far edge of known ground (where the player looks when they jump), not a fixed ring near the farms.
-    const frontier = world.frontierDist ? world.frontierDist(dir) : (world.townRadius ? world.townRadius() + 14 : 30);
+    // #fog-adaptive muster right at the REVEALED FRONTIER — each figure uses ITS OWN angle's frontier and
+    // stands a couple tiles INSIDE the revealed edge, so the warband masses ON KNOWN GROUND at the border
+    // (full opacity, plainly visible) rather than sunk in the deep fog where the low-opacity rule hides them.
     for (let k = 0; k < n; k++) {
         const ang = dir + (k - (n - 1) / 2) * 0.26;
         const co = Math.cos(ang), si = Math.sin(ang);
-        const d = frontier - 2 + 0.6 * Math.sin(t / 640 + k * 1.7);   // right at the fog's edge, restless
+        const fr = world.frontierDist ? world.frontierDist(ang) : (world.townRadius ? world.townRadius() + 14 : 30);
+        const d = fr - 3 + 0.6 * Math.sin(t / 640 + k * 1.7);   // just inside the revealed edge, restless
         const i = CENTER + co * d, j = CENTER + si * d;
         out.push({ kind: 'orc', def: { color: '#6f8f3f' }, i, j, facing: (i - j) > 0 ? -1 : 1,
                    mvI: -co, mvJ: -si,      // face in toward the town (mv picks the 4-direction sheet row)
@@ -1635,32 +1636,39 @@ function drawRaidSeam() {
     // #fog-adaptive the danger band sits at the REVEALED FRONTIER in the bearing — densest at the fog's
     // edge (where the warband masses) and fading toward town + on into the dark, so an explored map shows the
     // red out where the threat actually is, not a fixed ring stranded in known ground.
-    const tRad = world.townRadius ? world.townRadius() : 22;
-    const frontier = world.frontierDist ? world.frontierDist(dir) : Math.max(26, tRad + 5);
-    const rIn = Math.max(tRad + 5, frontier - 40);
-    const rFull = Math.max(rIn + 8, frontier - 6), rHorizon = frontier + 28;
+    // #fog-boundary the danger band HUGS the fog line — it's densest right where the fog meets revealed
+    // ground (a thin lip on the known side, fading a short way INTO the dark), so from town the red marks
+    // exactly where sight ends and the threat begins. Keyed to the PER-ANGLE frontier (sampled across the
+    // fan), so on a ragged/angled fog edge the red follows it instead of drifting deep into one bearing.
+    const SAMP = 28;
+    const fr = new Float32Array(SAMP + 1);
+    for (let s = 0; s <= SAMP; s++) fr[s] = world.frontierDist ? world.frontierDist(dir - half + (2 * half) * (s / SAMP)) : 40;
     const cs = [screenToTile(0, 0), screenToTile(GW, 0), screenToTile(GW, GH), screenToTile(0, GH)];
     let iMin = Infinity, iMax = -Infinity, jMin = Infinity, jMax = -Infinity;
     for (const c of cs) { iMin = Math.min(iMin, c.i); iMax = Math.max(iMax, c.i); jMin = Math.min(jMin, c.j); jMax = Math.max(jMax, c.j); }
-    // NO grid clamp: the wild past the grid renders (position-hash terrain), so stopping the wash at the
-    // grid border drew a razor diagonal against untinted ground — paint everything the camera sees.
     iMin = Math.floor(iMin); iMax = Math.ceil(iMax); jMin = Math.floor(jMin); jMax = Math.ceil(jMax);
     for (let j = jMin; j <= jMax; j++) {
         for (let i = iMin; i <= iMax; i++) {
-            const di = i - CENTER, dj = j - CENTER, r = Math.hypot(di, dj);
-            const h = seamHash(i, j);                                 // per-tile grain: mottles the wash + raggs the borders
-            if (r < rIn - 2 + h * 4 || r > rHorizon + h * 4) continue;   // ragged shorelines BOTH sides
+            const di = i - CENTER, dj = j - CENTER, r = Math.hypot(di, dj) || 1;
             let da = Math.atan2(dj, di) - dir; da = Math.atan2(Math.sin(da), Math.cos(da));   // wrap to [-pi, pi]
+            const h = seamHash(i, j);
             const hj = half + (h - 0.5) * 0.14;                       // ragged fan sides
             if (Math.abs(da) > hj) continue;
-            // gradient: faint at the town's edge, full over the middle band, faint again toward the horizon.
-            const edge = smooth(1 - Math.abs(da) / hj);
-            const ramp = smooth(Math.min(1, (r - rIn) / (rFull - rIn)));
-            const fall = smooth(Math.max(0, Math.min(1, (rHorizon - r) / 22)));
+            // this tile's LOCAL fog frontier (interp the per-angle samples), + this tile's DEPTH past it
+            const idx = (da + half) / (2 * half) * SAMP, i0 = Math.max(0, Math.min(SAMP - 1, Math.floor(idx)));
+            const frA = fr[i0] + (fr[i0 + 1] - fr[i0]) * (idx - i0);
+            const depth = r - frA + (h - 0.5) * 3;                    // >0 = fog side; +grain for a ragged shoreline
+            // density peaks AT the boundary: a short lip on the revealed side (-5..0), fading a little way
+            // into the fog (0..+18) — a red wall at the edge of sight, not a wash across the whole dark.
+            let prox;
+            if (depth >= 0) prox = smooth(1 - depth / 18);            // fog side
+            else prox = smooth(1 + depth / 5);                        // revealed lip
+            if (prox <= 0.03) continue;
             const inGrid = i >= 0 && j >= 0 && i < GRID && j < GRID;
-            const fog = !inGrid || !world.isRevealed(i, j);           // strongest over the unknown dark; lighter over revealed ground
-            const grain = 0.75 + h * 0.5;                             // organic mottle (±25%) — replaces the old checkerboard parity
-            const a = Math.max(0, Math.min(1, (base + pulse) * edge * ramp * fall * grain * (fog ? 1 : 0.8)));
+            const fog = !inGrid || !world.isRevealed(i, j);
+            const edge = smooth(1 - Math.abs(da) / hj);
+            const grain = 0.75 + h * 0.5;
+            const a = Math.max(0, Math.min(1, (base + pulse) * edge * prox * grain * (fog ? 1 : 0.6)));
             if (a < 0.03) continue;
             const sx = cam.x + isoX(i, j) - TILE_W / 2, sy = cam.y + isoY(i, j);
             ctx.save(); ctx.globalAlpha = a;
