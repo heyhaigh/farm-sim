@@ -1645,18 +1645,22 @@ function drawRaidSeam() {
         ? 0.14 * Math.pow(0.5 + 0.5 * Math.sin(tNow / 260), 3)   // ~1.6s heartbeat, spiky
         : 0.04 * Math.sin(tNow / 700);                            // faint slow breathing
     const half = 0.85;   // fan half-angle (raiders fan ~±0.5; a touch wider so it reads as "their land", not a beam)
-    // the seam stands OFF the farms however far they sprawl (player: "right on top of their plots"), ramps to
-    // full, holds, then FADES BACK OUT toward the horizon (player: fade both directions, no hard outer line).
-    // #fog-adaptive the danger band sits at the REVEALED FRONTIER in the bearing — densest at the fog's
-    // edge (where the warband masses) and fading toward town + on into the dark, so an explored map shows the
-    // red out where the threat actually is, not a fixed ring stranded in known ground.
-    // #fog-boundary the danger band HUGS the fog line — it's densest right where the fog meets revealed
-    // ground (a thin lip on the known side, fading a short way INTO the dark), so from town the red marks
-    // exactly where sight ends and the threat begins. Keyed to the PER-ANGLE frontier (sampled across the
-    // fan), so on a ragged/angled fog edge the red follows it instead of drifting deep into one bearing.
-    const SAMP = 28;
-    const fr = new Float32Array(SAMP + 1);
-    for (let s = 0; s <= SAMP; s++) fr[s] = world.frontierDist ? world.frontierDist(dir - half + (2 * half) * (s / SAMP)) : 40;
+    // #seam-boundary the red marks ONLY the fog/revealed BOUNDARY in the bearing — the tiles where known ground
+    // meets the dark. NOT a radial band: the old band chased the per-angle frontier deep into a scouted corridor
+    // (a red smear far out in the black) AND its inner taper crept back across revealed ground toward town. Here
+    // we paint a revealed EDGE tile (one that borders fog) at full and its immediate fog neighbour at a fraction,
+    // so it's a thin rim hugging the ACTUAL reveal shape — never in the open interior near the square, never
+    // stranded in deep fog. A ROBUST median reveal radius (sampled around the WHOLE circle, so a single long
+    // corridor can't skew it) fades out any boundary that lies far past the town's normal edge — e.g. the thin
+    // scouted path toward a neighbour, which otherwise lit up as the confusing "deep fog" red.
+    let medR = 26;
+    if (world.frontierDist) {
+        const samp = [];
+        for (let a = 0; a < 6.2832; a += 6.2832 / 16) samp.push(world.frontierDist(a));
+        samp.sort((x, y) => x - y);
+        medR = samp[Math.floor(samp.length / 2)] || 26;
+    }
+    const rev = (i, j) => i >= 0 && j >= 0 && i < GRID && j < GRID && world.isRevealed(i, j);
     const cs = [screenToTile(0, 0), screenToTile(GW, 0), screenToTile(GW, GH), screenToTile(0, GH)];
     let iMin = Infinity, iMax = -Infinity, jMin = Infinity, jMax = -Infinity;
     for (const c of cs) { iMin = Math.min(iMin, c.i); iMax = Math.max(iMax, c.i); jMin = Math.min(jMin, c.j); jMax = Math.max(jMax, c.j); }
@@ -1667,23 +1671,24 @@ function drawRaidSeam() {
             let da = Math.atan2(dj, di) - dir; da = Math.atan2(Math.sin(da), Math.cos(da));   // wrap to [-pi, pi]
             const h = seamHash(i, j);
             const hj = half + (h - 0.5) * 0.14;                       // ragged fan sides
-            if (Math.abs(da) > hj) continue;
-            // this tile's LOCAL fog frontier (interp the per-angle samples), + this tile's DEPTH past it
-            const idx = (da + half) / (2 * half) * SAMP, i0 = Math.max(0, Math.min(SAMP - 1, Math.floor(idx)));
-            const frA = fr[i0] + (fr[i0 + 1] - fr[i0]) * (idx - i0);
-            const depth = r - frA + (h - 0.5) * 4;                    // >0 = fog side; +grain for a ragged shoreline
-            // centered on the boundary but FEATHERED both ways (the old faded look), not a dense wall: a gentle
-            // fade into the fog and a soft, longer taper back across the revealed side toward town.
-            let prox;
-            if (depth >= 0) prox = smooth(1 - depth / 24);            // fog side — gentle fade into the dark
-            else prox = smooth(1 + depth / 16);                       // revealed side — soft, longer taper
-            if (prox <= 0.02) continue;
-            const inGrid = i >= 0 && j >= 0 && i < GRID && j < GRID;
-            const fog = !inGrid || !world.isRevealed(i, j);
-            const edge = smooth(1 - Math.abs(da) / hj);
+            if (Math.abs(da) > hj) continue;                          // outside the threat bearing
+            // a boundary tile is a REVEALED tile touching fog (full), or the FOG lip just past it (a soft bleed).
+            const here = rev(i, j);
+            const anyNbrRev = rev(i + 1, j) || rev(i - 1, j) || rev(i, j + 1) || rev(i, j - 1);
+            let side;
+            if (here) {
+                if (rev(i + 1, j) && rev(i - 1, j) && rev(i, j + 1) && rev(i, j - 1)) continue;   // open interior (incl. the square) → never
+                side = 1;                                             // a revealed edge tile — the boundary itself
+            } else {
+                if (!anyNbrRev) continue;                            // deep fog with no revealed neighbour → never
+                side = 0.5;                                          // the fog lip a single tile past the edge
+            }
+            // fade any boundary that sits far past the town's TYPICAL reveal radius (a scouted corridor's walls)
+            const distFade = smooth((medR + 14 - r) / 12);
+            if (distFade <= 0.02) continue;
+            const ang = smooth(1 - Math.abs(da) / hj);                // soften toward the fan's sides
             const grain = 0.8 + h * 0.4;
-            // hard cap keeps it a translucent overlay — the terrain always reads through (never a repaint)
-            const a = Math.max(0, Math.min(0.34, (base + pulse) * edge * prox * grain * (fog ? 1 : 0.6)));
+            const a = Math.max(0, Math.min(0.38, (base + pulse) * ang * distFade * grain * side));
             if (a < 0.02) continue;
             const sx = cam.x + isoX(i, j) - TILE_W / 2, sy = cam.y + isoY(i, j);
             ctx.save(); ctx.globalAlpha = a;
@@ -2379,7 +2384,14 @@ function drawThreat(e, sx, sy) {
             if (e._fellAt == null) e._fellAt = world.time;
             useAnim(banks.death[v], e._fellAt, DEATH_DUR, false);
         } else if (!e.fell) {
-            const walking = moved > 0.004 && !hurting && !swinging;
+            // #sprite-strobe the sim steps a foe at 30Hz but we render at 60-120Hz, so `moved` is 0 on the
+            // 2-3 render frames BETWEEN sim ticks. Gating `walking` on per-frame movement therefore flips the
+            // sprite back to the IDLE pose (arms down) on those frames and to a WALK frame (arm swung) on the
+            // step frame — a rapid two-pose strobe that reads as a shaky, VIBRATING orc with a semi-opaque
+            // "ghost arm" (the display blends the two arm positions). Latch the walk state on SIM-TIME, which
+            // is frozen between renders, so the walk frame HOLDS between steps and only advances on a real step.
+            if (moved > 0.0006) e._lastStepAt = world.time;
+            const walking = e._lastStepAt != null && (world.time - e._lastStepAt) < 0.14 && !hurting && !swinging;
             if (hurting) useAnim((banks.hurt || {})[v], e._hurtAt, HURT_DUR, false);
             else if (swinging) useAnim((banks.atk || {})[v], e._swingAt, SWING_DUR, false);
             else if (walking && banks.walk) {
@@ -6849,12 +6861,24 @@ function applyFarmerInterp(alpha) {
         if (di * di + dj * dj > 4) continue;   // teleport (> 2 tiles in one tick) — don't interpolate
         f.pos.i = f._riI + di * alpha; f.pos.j = f._riJ + dj * alpha;
     }
+    // #interp the raid warband (display-only .i/.j) — same lerp so raiders glide between 30Hz steps instead of
+    // teleporting each tick (the "really shaky" walk). A phase-jump (approach->march->flee) exceeds the gate and snaps.
+    const re = world.raidEvent;
+    if (re && re.raiders) for (const r of re.raiders) {
+        if (r._riI === undefined) { r._riI = r.i; r._riJ = r.j; }
+        r._trueI = r.i; r._trueJ = r.j;
+        const di = r._trueI - r._riI, dj = r._trueJ - r._riJ;
+        if (di * di + dj * dj > 4) continue;
+        r.i = r._riI + di * alpha; r.j = r._riJ + dj * alpha;
+    }
 }
 function restoreFarmerInterp() {
     // #Codex27-1 CLEAR the markers after restoring, so a farmer only carries `_trueI` while it is actually mutated
     // THIS pass. Otherwise, if applyFarmerInterp throws part-way through the next frame, the finally would rewrite
     // the newly-advanced sim positions of farmers it never touched this frame with LAST frame's stale coordinates.
     for (const f of world.farmers) if (f._trueI !== undefined) { f.pos.i = f._trueI; f.pos.j = f._trueJ; f._trueI = f._trueJ = undefined; }
+    const re = world.raidEvent;   // #interp restore the raiders' TRUE pos before the next tick / any read
+    if (re && re.raiders) for (const r of re.raiders) if (r._trueI !== undefined) { r.i = r._trueI; r.j = r._trueJ; r._trueI = r._trueJ = undefined; }
 }
 
 function frame(now) {
@@ -6876,6 +6900,8 @@ function frame(now) {
     let steps = 0;
     while (simAccumulator >= FIXED_DT && steps < 800) {
         for (const f of world.farmers) { f._riI = f.pos.i; f._riJ = f.pos.j; }   // #interp snapshot the PRE-tick pos as the "from"
+        const _re = world.raidEvent;   // #interp raiders (display-only, 30Hz) get the SAME smoothing so they don't jump/shake
+        if (_re && _re.raiders) for (const r of _re.raiders) { r._riI = r.i; r._riJ = r.j; }
         world.tick(FIXED_DT); simAccumulator -= FIXED_DT; steps++;
     }
     maybeFaceoff();   // #faceoff raise the VS card if a struck raid just resolved (reads the display-only debrief stamp)
