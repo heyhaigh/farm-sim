@@ -6442,8 +6442,12 @@ export class World {
     // watched raid draws zero sim rng and touches zero authoritative state. The felled raiders (first
     // `out.felled`) march to their monument spots and drop there; survivors press the centre, then flee.
     #stageRaidCinematic(out, e, monSpots, dir) {
-        this._duelBeat = null;   // #Codex38 P1-4: a beat left over from a prior raid never carries into this one
-        const rr = mulberry32(hashString('raidfx:' + (e.id || `${e.pairKey}:${e.ordinal}`) + ':' + this.seed));
+        const _rid = e.id || `${e.pairKey}:${e.ordinal}`;
+        // #Codex39 P1: drop ONLY a STALE beat (one stamped for a DIFFERENT raid). A beat requested during
+        // THIS raid's telegraph and stamped with this rid must SURVIVE the landing so the focus duel plays
+        // it — the earlier unconditional clear discarded the very beat it was meant to keep.
+        if (this._duelBeat && this._duelBeat.rid !== _rid) this._duelBeat = null;
+        const rr = mulberry32(hashString('raidfx:' + _rid + ':' + this.seed));
         const def = ENCOUNTER_DEFS.orc, n = out.n;
         // #131 march the warband in from the SAME seeded flank the threat tell pointed at (so "gathers to the
         // north" and the muster line all agree); fall back to the private raidfx stream if a raid lands untelegraphed.
@@ -8825,6 +8829,27 @@ export class Farmer {
         return pool[hashString(this.sheet.seed + ':found:' + Math.floor(this.world.clock / 5)) % pool.length];
     }
 
+    // #voice a founder's OWN dispersal line as they set off to stake ground — personality- and
+    // culture-varied like #foundingLine, and when they hail from a remembered town, a fraction reach
+    // back to it (the lineage voice made ambient). Seeded + deterministic; one line per founder.
+    #disperseLine() {
+        const orc = this.world.culture === 'orc', p = this.p || {};
+        const origin = this.sheet.origin && this.sheet.origin.name;
+        if (origin && hashString(this.sheet.seed + ':disp:o') % 3 === 0)
+            return this.#tr(`GROUND OF OUR OWN — LIKE ${origin.toUpperCase()} ONCE WAS`, `GROUND OF MY OWN — LIKE WE HAD BACK IN ${origin.toUpperCase()}`);
+        const warm = (p.collaboration ?? 0.5) > 0.55, bold = (p.competitiveness ?? 0.5) > 0.6, quiet = (p.diligence ?? 0.5) > 0.6;
+        const pool = orc
+            ? (bold ? ['I CLAIM THE HIGH GROUND.', 'THIS SPINE OF ROCK IS MINE.']
+                : quiet ? ['ROOM TO BREATHE, AWAY FROM THE REST.', 'A QUIET CORNER OF THE WASTE.']
+                : warm ? ['NEAR THE OTHERS — WE HOLD TOGETHER.', 'CLOSE ENOUGH TO GUARD BLOOD-KIN.']
+                : ['SOMEWHERE TO DIG IN.', 'FLAT GROUND FOR A CAMP.'])
+            : (bold ? ["THE BEST PLOT, BEFORE IT'S TAKEN.", 'HIGH GROUND WITH A VIEW — MINE.']
+                : quiet ? ['SOMEWHERE QUIET TO PUT DOWN ROOTS.', 'A STILL CORNER, AWAY FROM THE BUSTLE.']
+                : warm ? ['NEAR THE WELL, NEAR THE OTHERS.', 'CLOSE ENOUGH TO LEND A HAND.']
+                : ['GOOD SOIL AND A LITTLE SPACE.', 'FLAT GROUND NEAR WATER.']);
+        return pool[hashString(this.sheet.seed + ':disp') % pool.length];
+    }
+
     // #106 what a farmer mutters while the town deliberates at the founding gathering. Half the time they
     // name the peer they most respect (their likely vote); otherwise a general line. Deterministic (seeded).
     #deliberationThought() {
@@ -9671,7 +9696,11 @@ export class Farmer {
         }
         const stop = list[Math.min(this.scoutIdx, list.length - 1)];
         if (Math.abs(this.pos.i - (stop.i + 0.5)) + Math.abs(this.pos.j - (stop.j + 0.5)) >= 2.5) {
-            this.think('SCOUTING FOR GOOD GROUND TO SETTLE');            // still walking to this spot
+            // #voice the dispersal used to be ONE hardcoded line ("ground to settle") every founder thought
+            // in unison. Each now thinks a personality/lineage-flavoured line of their OWN — so even when two
+            // speak on the same frame they say different things, and their per-farmer thought-timers (already
+            // seeded) diverge the cadence from there. Same call pattern as before → the rng is untouched.
+            this.think(this.#disperseLine());
             if (!this.#goTo(stop.i + 0.5, stop.j + 0.5, 'scout')) this.#backoff();
             return;
         }

@@ -190,5 +190,28 @@ console.log('#nemesis — the named war: stable name, counted returns, sworn gru
     ok(s4.nemesis && JSON.stringify(s4.nemesis) === arcBefore, 'the serialized arc is untouched by the rehearsal');
 }
 
+// #Codex39 P1 — the DUEL BEAT lifecycle: a beat requested during the telegraph and stamped for THIS raid
+// must SURVIVE the landing (the over-eager clear used to discard the very beat it meant to keep); a beat
+// stamped for a DIFFERENT raid is dropped when a new raid stages.
+console.log('#duel-beat — a beat for THIS raid survives landing; a stale beat is dropped');
+{
+    const w = boot(20260706);
+    for (let i = 0; i < 400; i++) w.tick(DT);
+    w._live = true; w.harvestTotal = 100;
+    w.applyInbox([raidEvt(w, 4242, 0.5)]);
+    ok(w.pendingRaid != null, 'raid telegraphed for the beat probe');
+    const e = w.pendingRaid.e, rid = e.id || `${e.pairKey}:${e.ordinal}`;
+    w._duelBeat = { stunt: 'shove', by: 'foe', bark: 'YOU AGAIN', rid };   // a timely beat, stamped for this raid
+    landPending(w);
+    ok(w.raidEvent != null, 'raid landed (cinematic staged)');
+    ok(w._duelBeat && w._duelBeat.rid === rid, 'a beat stamped for THIS raid SURVIVES the landing');
+    for (let i = 0; i < 1600; i++) w.tick(DT);                            // play it out + clean up
+    w.harvestTotal = 100;
+    w._duelBeat = { stunt: 'taunt', by: 'defender', bark: 'STALE', rid: 'a-different-raid' };
+    w.applyInbox([raidEvt(w, 4243, 0.5)]);
+    landPending(w);
+    ok(!w._duelBeat || w._duelBeat.rid !== 'a-different-raid', 'a beat for a DIFFERENT raid is dropped on staging');
+}
+
 console.log(pass ? '\nALL ADVERSARIAL PROBES PASSED' : '\nSOME PROBES FAILED');
 process.exit(pass ? 0 : 1);
