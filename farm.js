@@ -2715,6 +2715,7 @@ export class World {
         const plotIdx = new Map(this.plots.map((p, i) => [p, i]));
         const snap = {
             v: World.SAVE_VERSION, seed: this.seed, name: this.name, culture: this.culture, lineageRoot: this.lineageRoot,
+            yardV: 1,   // #farmyard facilities live in the farmstead cluster; pre-yard saves reflow once on load
             _rev: this._rev || 0,   // Codex #22.1 monotonic save revision (CAS in saveTown rejects a stale overwrite)
             inboxApplied: (this._inboxApplied || []).slice(-200),   // #reconciliation exactly-once inbox ledger
             inboxWatermark: { ...(this._inboxWatermark || {}) },    // Codex #22.2 durable per-pairKey ordinal watermark
@@ -3017,6 +3018,9 @@ export class World {
         this.rareNodes = []; this.rareCooldown = 0;   // #97 P2: transient, like treasure — respawn after load
         this.lightningFlash = 0; this.struckTile = null; this.townLevelFlash = 0;   // #Codex25-5 lightningTimer is authoritative now — restored above, NOT reset here (display flashes stay transient)
         this.birds = []; this.#spawnBirds(4 + Math.floor(this.rand() * 3));   // re-perch on the REAL current trees
+        // #farmyard one-time migration: pre-yard saves scattered facilities mid-field with crops flush
+        // around them (player screenshots) — walk them home to the house cluster, then re-knit the fields.
+        if (!d.yardV) for (const p of this.plots) this.#reflowFacilities(p);
         this.updateLeader();
         this.#recomputeTownTraits();
     }
@@ -4036,8 +4040,9 @@ export class World {
         for (const key of plot.cells) {
             const c = key.indexOf(','), i = +key.slice(0, c), j = +key.slice(c + 1);
             if (this.#inHouse(plot, i, j) || !this.#interiorCell(plot, i, j)) continue;
-            // #pens facility regions are the animals' designated ground — crops stay OUT of the enclosures
-            if (plot.facilities.some(fc => i >= fc.x && i < fc.x + fc.w && j >= fc.y && j < fc.y + fc.h)) continue;
+            // #farmyard facility regions are the animals' ground — crops stay OUT, with a 1-tile buffer
+            // so the field never presses flush against a pen fence (player: "mashed together")
+            if (plot.facilities.some(fc => i >= fc.x - 1 && i < fc.x + fc.w + 1 && j >= fc.y - 1 && j < fc.y + fc.h + 1)) continue;
             const t = this.get(i, j);
             if (t === T.GRASS || t === T.TILLED) plot.fields.push({ i, j });
         }
@@ -4566,25 +4571,47 @@ export class World {
         });
     }
 
-    #findFacilityRegion(plot, type) {
-        const def = FACILITY_DEFS[type];
-        // Need a clear w x h block of plain field tiles, PLUS a 1-tile buffer so a
-        // facility never sits flush against water, a building, or the house — which
-        // caused ponds/coops to overlap and animals to appear standing on water.
+    // #farmyard the house's reserved rect (the #inHouse footprint+margins, as a rect) — the cluster anchor
+    #houseRect(plot) {
+        const c = this.houseCentre(plot), half = this.houseFt(plot) >> 1;
+        return { x: c.i - half - 1, y: c.j - half - 2, w: half * 2 + 3, h: half * 2 + 4 };
+    }
+    // chebyshev gap between two tile-rects: 0 = flush, 1 = one tile apart
+    static #rectGap(a, b) {
+        return Math.max(
+            Math.max(b.x - (a.x + a.w), a.x - (b.x + b.w), 0),
+            Math.max(b.y - (a.y + a.h), a.y - (b.y + b.h), 0));
+    }
+
+    #findFacilityRegion(plot, type, opts = {}) {
+        const def = opts.size || FACILITY_DEFS[type];
+        // #farmyard (player: "the dedicated areas are mashed together within the crops") — facilities
+        // form ONE farmstead CLUSTER chained off the house: every candidate region is validated as before
+        // (clear w x h block + a 1-tile buffer off water/buildings/house), then candidates that TOUCH the
+        // cluster (house rect or an existing facility, gap <= 1) win, nearest-to-house first; only when no
+        // adjacent spot exists does the nearest valid spot anywhere stand in. Crops fill the rest of the
+        // plot and #rebuildFields keeps them a tile clear of every region — two legible zones, not a mash.
+        const hr = this.#houseRect(plot), hc = this.houseCentre(plot);
+        const facs = plot.facilities.filter(f => f !== opts.ignore);
+        let bestAdj = null, bestAdjD = Infinity, bestAny = null, bestAnyD = Infinity;
         for (let y = plot.y + 1; y + def.h <= plot.y + plot.h - 1; y++) {
             for (let x = plot.x + 1; x + def.w <= plot.x + plot.w - 1; x++) {
-                let ok = true;
-                // the region itself must be plain, crop-free ground the plot actually owns
+                let ok = true, cropCost = 0;
+                // the region itself must be plain ground the plot actually owns. Cropped tiles are
+                // allowed — a farmer MAKES ROOM by the house rather than exiling the pen to the far
+                // field (the crops are cleared at build/move) — but each one costs score, so free
+                // grass wins ties and crops are only claimed when the farmstead needs the ground.
                 for (let j = y; j < y + def.h && ok; j++) {
                     for (let i = x; i < x + def.w; i++) {
                         const t = this.get(i, j);
-                        if (!this.#hasCell(plot, i, j) || this.#inHouse(plot, i, j) || (t !== T.GRASS && t !== T.TILLED) || this.cropAt(i, j)) { ok = false; break; }
-                        // #pens never overlap an existing facility's region — only the struct tile is
-                        // solid, so grassy pen interiors used to pass this scan and mills/hatcheries
-                        // ended up INSIDE the chicken run (invisible at 3x3; ugly with drawn fences)
-                        if (plot.facilities.some(fc => i >= fc.x && i < fc.x + fc.w && j >= fc.y && j < fc.y + fc.h)) { ok = false; break; }
+                        if (!this.#hasCell(plot, i, j) || this.#inHouse(plot, i, j) || (t !== T.GRASS && t !== T.TILLED)) { ok = false; break; }
+                        if (this.cropAt(i, j)) cropCost++;
+                        // never overlap an existing facility's region — only the struct tile is solid, so
+                        // grassy pen interiors used to pass this scan and mills ended up INSIDE the run
+                        if (facs.some(fc => i >= fc.x && i < fc.x + fc.w && j >= fc.y && j < fc.y + fc.h)) { ok = false; break; }
                     }
                 }
+                if (!ok) continue;
                 // the 1-tile border must not be water / a building / the house
                 for (let j = y - 1; j <= y + def.h && ok; j++) {
                     for (let i = x - 1; i <= x + def.w; i++) {
@@ -4593,13 +4620,81 @@ export class World {
                         if (t === T.WATER || t === T.COOP || t === T.BARN || t === T.MILL || t === T.HATCH || t === T.STRUCT || this.#inHouse(plot, i, j)) { ok = false; break; }
                     }
                 }
-                if (ok) return { x, y, w: def.w, h: def.h };
+                if (!ok) continue;
+                const r = { x, y, w: def.w, h: def.h };
+                const d = Math.abs(x + def.w / 2 - hc.i) + Math.abs(y + def.h / 2 - hc.j) + cropCost * 0.6;
+                const adj = World.#rectGap(r, hr) <= 1 || facs.some(f => World.#rectGap(r, f) <= 1);
+                if (adj && d < bestAdjD) { bestAdjD = d; bestAdj = r; }
+                if (d < bestAnyD) { bestAnyD = d; bestAny = r; }
             }
         }
-        return null;
+        return bestAdj || bestAny;
+    }
+
+    // #farmyard ONE-TIME reflow for pre-yard saves: any facility stranded out in the crops walks home to
+    // the farmstead cluster (its target may claim cropped tiles — those crops are cleared, the field
+    // re-knits behind it next replant). Deterministic: pure scans over the restored state, no world.rand.
+    #reflowFacilities(plot) {
+        const hr = this.#houseRect(plot);
+        // fixed-point 'home' set: home = gap<=2 to the house, or gap<=1 to a home facility (chains)
+        const home = new Set();
+        let grew = true;
+        while (grew) {
+            grew = false;
+            for (const f of plot.facilities) {
+                if (home.has(f)) continue;
+                if (World.#rectGap(f, hr) <= 2 || plot.facilities.some(o => home.has(o) && World.#rectGap(f, o) <= 1)) { home.add(f); grew = true; }
+            }
+        }
+        for (const fac of plot.facilities) {
+            if (home.has(fac)) continue;
+            // try the roomier def size first (legacy pens upgrade as they come home); on a plot too
+            // tight for that (thin ribbon farms), retry at the facility's CURRENT footprint
+            const target = this.#findFacilityRegion(plot, fac.type, { ignore: fac })
+                || this.#findFacilityRegion(plot, fac.type, { ignore: fac, size: { w: fac.w, h: fac.h } });
+            if (!target) continue;   // no room by the house — it stays where it stood (graceful)
+            this.#moveFacility(plot, fac, target);
+            home.add(fac);
+        }
+        this.#rebuildFields(plot);
+    }
+
+    #moveFacility(plot, fac, target) {
+        const dx = target.x - fac.x, dy = target.y - fac.y;
+        // the target may hold crops (reflow claims field ground) — clear them; the farmers replant elsewhere
+        for (let j = target.y; j < target.y + target.h; j++)
+            for (let i = target.x; i < target.x + target.w; i++) this.crops.delete(`${i},${j}`);
+        if (fac.type === 'pond') {   // re-carve the water
+            for (let j = fac.y; j < fac.y + fac.h; j++)
+                for (let i = fac.x; i < fac.x + fac.w; i++) if (this.get(i, j) === T.WATER) this.set(i, j, T.GRASS);
+            for (let j = target.y; j < target.y + target.h; j++)
+                for (let i = target.x; i < target.x + target.w; i++) this.set(i, j, T.WATER);
+        }
+        if (fac.struct) {
+            const TILE = { coop: T.COOP, barn: T.BARN, mill: T.MILL, hatchery: T.HATCH };
+            this.set(fac.struct.i, fac.struct.j, T.GRASS);
+            fac.struct.i = target.x; fac.struct.j = target.y;   // struct anchors the region corner, as built
+            this.set(fac.struct.i, fac.struct.j, TILE[fac.struct.kind] ?? T.STRUCT);
+        }
+        if (fac.trough) { fac.trough.i = target.x + target.w - 1; fac.trough.j = target.y + target.h - 1; }
+        fac.x = target.x; fac.y = target.y; fac.w = target.w; fac.h = target.h;   // legacy 3x3 pens grow to the roomier defs
+        const region = { x: fac.x, y: fac.y, w: fac.w, h: fac.h };
+        for (const pr of fac.producers) { pr.fx += dx; pr.fy += dy; pr.region = region; }
+        // anything now stranded on a blocked tile hops to valid ground inside its own pen
+        for (const pr of fac.producers) {
+            if (pr.kind === 'fish' || pr.kind === 'pad' || pr.inside) continue;
+            if (!this.#producerCanStand(plot, pr.fx, pr.fy)) {
+                const spot = this.#nearestYardTile(plot, pr.fx, pr.fy, pr.region);
+                if (spot) { pr.fx = spot.i + 0.5; pr.fy = spot.j + 0.5; pr.vx = 0; pr.vy = 0; }
+            }
+        }
+        this._tilesChanged = true;
     }
 
     #buildFacility(plot, sheet, type, region) {
+        // #farmyard the region may hold standing crops (the farmer makes room by the house) — clear them
+        for (let j = region.y; j < region.y + region.h; j++)
+            for (let i = region.x; i < region.x + region.w; i++) this.crops.delete(`${i},${j}`);
         const fac = { type, ...region, producers: [], struct: null, trough: null };
         const cx = region.x + region.w / 2, cy = region.y + region.h / 2;
         const rand = this.rand;
