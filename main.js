@@ -2434,28 +2434,26 @@ function drawStall(sx, sy) {
     ctx.fillStyle = '#c89830'; ctx.fillRect(Math.floor(sx - 1), ay - 8 + bob, 1, 2);
 }
 
-// #silo the humble START — a cluster of BARRELS (L1) growing to a fuller stack with a plank lid (L2),
-// before the guild hall rises at L3. Procedural, bottom-anchored on the silo tile; returns the top Y for
-// the LV tag. Render-only.
+// #silo the humble START — the SAME stacked-wooden-crates sprite the town uses for its build sites and
+// shared-well sites (crateSheet/CRATES_SRC), not a bespoke shape: one stack at L1, two side-by-side at L2,
+// before the guild hall rises at L3. Bottom-anchored on the silo tile; returns the top Y for the LV tag.
 function drawSiloBarrels(sx, footY, lvl) {
-    ctx.fillStyle = 'rgba(10,14,10,0.28)';
-    ctx.fillRect(Math.floor(sx - (lvl <= 1 ? 11 : 15)), footY - 2, lvl <= 1 ? 22 : 30, 3);   // ground shadow
-    const barrel = (bx, by, h) => {
-        const w = 9;
-        ctx.fillStyle = '#5a3a20'; ctx.fillRect(bx - 1, by - 1, w + 2, h + 1);      // dark outline
-        ctx.fillStyle = '#7a5230'; ctx.fillRect(bx, by, w, h);                       // staves
-        ctx.fillStyle = '#8c6438'; ctx.fillRect(bx + 1, by, 2, h);                   // lit stave
-        ctx.fillStyle = '#3a2414'; ctx.fillRect(bx, by + 2, w, 1); ctx.fillRect(bx, by + h - 3, w, 1);   // iron hoops
-        ctx.fillStyle = '#4a3018'; ctx.fillRect(bx, by, w, 1);                       // rim
-        ctx.fillStyle = '#a07a4a'; ctx.fillRect(bx + 2, by + 1, w - 4, 1);           // lid highlight
-    };
-    // a small y-sorted cluster (back row first) — 3 barrels at L1, 5 + a plank at L2
-    const rows = lvl <= 1
-        ? [[-3, -7, 11], [-8, 0, 13], [3, 0, 13]]
-        : [[-4, -9, 11], [5, -9, 11], [-11, 0, 14], [-1, 0, 14], [9, 0, 14]];
-    for (const [dx, dy, h] of rows) barrel(Math.floor(sx + dx), footY - h + dy, h);
-    if (lvl >= 2) { ctx.fillStyle = '#8a6a44'; ctx.fillRect(Math.floor(sx - 13), footY - 24, 26, 2); ctx.fillStyle = '#6a4e30'; ctx.fillRect(Math.floor(sx - 13), footY - 22, 26, 1); }   // a plank shelf over the stack
-    return footY - (lvl <= 1 ? 20 : 27);
+    if (crateReady && imageLoaded(crateSheet)) {
+        ctx.imageSmoothingEnabled = false;
+        const dw = Math.round(CRATES_SRC.w * ASSET_SCALE), dh = Math.round(CRATES_SRC.h * ASSET_SCALE);
+        const blit = (cx) => ctx.drawImage(crateSheet, CRATES_SRC.x, CRATES_SRC.y, CRATES_SRC.w, CRATES_SRC.h, Math.round(cx - dw / 2), footY - dh, dw, dh);
+        if (lvl <= 1) {
+            ctx.fillStyle = 'rgba(10,14,10,0.28)'; ctx.fillRect(Math.round(sx - dw / 2), footY - 2, dw, 3);
+            blit(sx);
+        } else {   // two stacks for a fuller store (back-left drawn first, front-right overlaps)
+            ctx.fillStyle = 'rgba(10,14,10,0.28)'; ctx.fillRect(Math.round(sx - dw + 3), footY - 2, dw * 2 - 6, 3);
+            ctx.drawImage(crateSheet, CRATES_SRC.x, CRATES_SRC.y, CRATES_SRC.w, CRATES_SRC.h, Math.round(sx - dw + 2), footY - dh - 2, dw, dh);
+            blit(sx + Math.round(dw * 0.45));
+        }
+        return footY - dh;
+    }
+    ctx.fillStyle = '#7a5230'; ctx.fillRect(Math.floor(sx - 8), footY - 16, 16, 16);   // stand-in until the sheet loads
+    return footY - 16;
 }
 
 // The town silo — a grain bin at the plaza where settlers donate surplus to level the town.
