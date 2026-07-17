@@ -6341,7 +6341,8 @@ export class World {
             const falls = k < out.felled;
             const target = falls && monSpots[k] ? { i: monSpots[k].i, j: monSpots[k].j } : { i: CENTER, j: CENTER };
             raiders.push({ kind: 'orc', def, i: CENTER + co * d, j: CENTER + si * d, facing: 1,
-                           hp: def.hp, foeName: out.felledNames[k] || null, falls, target });
+                           hp: def.hp, foeName: out.felledNames[k] || null, falls, target,
+                           art: k % 2 ? 3 : 2 });   // #orc-vs-orc raider sheet variant (render-only; used when the defenders are orcs too)
         }
         // #nemesis cast the NAMED foe into the band: he leads (first survivor if the seeded verdict lets one
         // away, else he falls with his band this raid — the war's end). His name shows on hover; the duel

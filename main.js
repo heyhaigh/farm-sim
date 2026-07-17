@@ -432,6 +432,14 @@ for (const [k, c] of Object.entries(THREAT_ART)) { const im = new Image(); im.sr
 // baked in a second blob). Separate from threatImg.orc (which stays with-shadow for wilderness foes).
 const orcFarmerImg = new Image();
 orcFarmerImg.src = './assets/craftpix-net-363992-free-top-down-orc-game-character-pixel-art/Tiled_files/orc1_idle_without_shadow.png';
+// #orc-vs-orc: when ORCS raid an ORC town, the raiders draw from the OTHER orc tribes' sheets (orc2/orc3,
+// with shadow like all foes) so attacker and defender never share a face. Human towns keep orc1 raiders.
+const orcVariantImg = {};
+for (const v of [2, 3]) {
+    const im = new Image();
+    im.src = `./assets/craftpix-net-363992-free-top-down-orc-game-character-pixel-art/Tiled_files/orc${v}_idle_with_shadow.png`;
+    orcVariantImg[v] = im;
+}
 
 // Roaming WILD PREY sprites (hunted for meat — see world.prey / #tickPrey). All 32x32, 4-frame idle
 // cycles; row 2 = side profile. Deer/hare side-frames face LEFT (srcFace -1), the turkey faces RIGHT.
@@ -940,7 +948,9 @@ function orcCharSets(f) {
     // (mirrored by facing in drawFarmer), ROW 3 = BACK view (up — orcs face away as they walk up). Crop the
     // body with the feet near the bottom edge so there's no empty gap (the orc foot-shadow is disabled anyway).
     const sx0 = 12, sy0 = 8, sw = 40, sh = 40;
-    const targetH = 26, scale = targetH / sh;
+    // #orc-scale player: orc TOWNSFOLK looked like children beside the raiders (26px vs the foes'
+    // ~35px). Orcs are big — draw them at raider scale so an orc town reads as an orc town.
+    const targetH = 34, scale = targetH / sh;
     const dw = Math.max(1, Math.round(sw * scale)), dh = Math.max(1, Math.round(sh * scale));
     const frameCol = (col, row) => {
         const c = Math.min(col, cols - 1);
@@ -1483,7 +1493,8 @@ function raidMusterFigures(pr) {
         const d = Math.max(minOut, Math.min(tx, ty) - 3) + 0.6 * Math.sin(t / 640 + k * 1.7);   // just inside the edge, restless
         const i = CENTER + co * d, j = CENTER + si * d;
         out.push({ kind: 'orc', def: { color: '#6f8f3f' }, i, j, facing: (i - j) > 0 ? -1 : 1,
-                   mvI: -co, mvJ: -si });   // face in toward the town (mv picks the 4-direction sheet row)
+                   mvI: -co, mvJ: -si,      // face in toward the town (mv picks the 4-direction sheet row)
+                   art: k % 2 ? 3 : 2 });   // #orc-vs-orc same variant parity as the real raiders they become
     }
     return out;
 }
@@ -2189,7 +2200,14 @@ function drawPrey(a, sx, sy) {
 }
 // A wilderness threat: one sliced side-profile frame of its real sprite (fallback: a menace blob).
 function drawThreat(e, sx, sy) {
-    const c = THREAT_ART[e.kind], img = threatImg[e.kind];
+    const c = THREAT_ART[e.kind];
+    let img = threatImg[e.kind];
+    // #orc-vs-orc raiders attacking an ORC town wear another tribe's colors (orc2/orc3, `art` stamped at
+    // spawn) so they read as invaders, not neighbors. Falls back to orc1 until the variant sheet loads.
+    if (e.kind === 'orc' && e.art && world && world.culture === 'orc') {
+        const vi = orcVariantImg[e.art];
+        if (vi && vi.complete && vi.naturalWidth > 0) img = vi;
+    }
     // #raid-feel duel lunge: a swinging raider snaps toward their opponent and eases back (display timer set
     // by #duelExchange); a FELLED raider sinks and darkens where the line stopped them.
     if (e._swingAt != null && world && world.time - e._swingAt < 0.32) {
