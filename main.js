@@ -5496,6 +5496,7 @@ function drawMoments() {
         // SuperMemory document actually landed. Synthesized display card; never enters the chronicle.
         const p = pendingInscription; pendingInscription = null;
         activeMoment = { e: { label: 'SET DOWN IN THE TOWN RECORD', kind: 'town', tone: 'neutral', color: '#9ad0e0',
+            icon: p.foe ? 'foe:orc:1' : 'town',
             text: p.text, why: p.why, day: world.day, season: world.season, year: world.year }, shownAt: nowMs };
         try { audio.moment('neutral'); } catch { /* audio not ready */ }
     }
@@ -6346,7 +6347,7 @@ function frame(now) {
         const foe = world.pendingRaid.e.foe, nem = world.nemesis;
         const sworn = foe.sworeAgainst != null ? world.farmers.find(x => x.sheet.seed === foe.sworeAgainst) : null;
         const last = nem && nem.lastOutcome === 'escaped' ? 'Last time he broke off and got away.' : '';
-        momentQueue.push({ label: 'THE WAR SO FAR', kind: 'raid', tone: 'somber', color: '#e0a040',
+        momentQueue.push({ label: 'THE WAR SO FAR', kind: 'raid', tone: 'somber', color: '#e0a040', icon: 'foe:orc:1',
             text: `${foe.name} has raided ${world.name} ${foe.raidCount - 1} time${foe.raidCount > 2 ? 's' : ''} before. ${last}${sworn ? ` He swore against ${sworn.sheet.name.split(' ')[0]} — and now he returns for them.` : ' Now he returns.'}`,
             why: 'read from the town\'s memory of his war', day: world.day, season: world.season, year: world.year });
     }
@@ -6378,6 +6379,7 @@ function frame(now) {
                     if (!ok || w !== world) return;
                     const rid = String(battle.rid).replace(/[^\w:.-]/g, '_').slice(0, 80);
                     pendingInscription = {
+                        foe: !!battle.nemesis,
                         text: battle.nemesis
                             ? `${battle.nemesis.name}'s raid - the battle of day ${battle.day}, year ${battle.year} - is set down in ${w.name}'s memory, blow by blow, as it happened.`
                             : `The battle of day ${battle.day}, year ${battle.year} is set down in ${w.name}'s memory, blow by blow, as it happened.`,
