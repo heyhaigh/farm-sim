@@ -239,7 +239,9 @@ class FarmAudio {
         const want = raidPhase | 0;
         if (want > 0) { this.raidPhase = want; this._raidStepAt = null; }
         else if ((this.raidPhase | 0) > 0) {
-            const now = (this.ctx && this.ctx.currentTime) || 0;
+            // #Codex36 P2: WALL clock, not AudioContext time — with no ctx yet, currentTime pinned the ladder
+            // at 0 and a late sound-enable replayed 13s of stale battle music after the raid was over.
+            const now = performance.now() / 1000;
             if (this._raidStepAt == null) this._raidStepAt = now + (this.raidPhase === 2 ? 7 : 4);
             if (now >= this._raidStepAt) { this.raidPhase -= 1; this._raidStepAt = this.raidPhase > 0 ? now + 6 : null; }
         } else this.raidPhase = 0;

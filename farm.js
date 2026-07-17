@@ -5959,7 +5959,9 @@ export class World {
                 nem.lastOutcome = 'escaped';
                 if (out.heroSeed != null && nem.sworeAgainst !== out.heroSeed) {
                     nem.sworeAgainst = out.heroSeed;
-                    this.addChronicle('raid', `${nem.name} broke off — and swore against ${hero ? shortName(hero) : 'the town'} as he ran.`,
+                    // #Codex36 P2: the name debuts on the RETURN (raid two) — raid one's oath is sworn by
+                    // "their warleader", so the dread of the name still lands with the second telegraph.
+                    this.addChronicle('raid', `${nem.raidCount >= 2 ? nem.name : 'their warleader'} broke off — and swore against ${hero ? shortName(hero) : 'the town'} as he ran.`,
                         hero, null, '#e05840', { tier: 'callout', tone: 'tense', why: 'a grudge sworn in retreat' });
                 }
             }
@@ -6369,7 +6371,9 @@ export class World {
                 const claimed = new Set();
                 // #nemesis the named foe picks FIRST — and he goes for the one he swore against, if that
                 // defender holds the line (the grudge made flesh); else nearest, like the rest of the band.
-                const order = [...re.raiders].sort((a, b) => (b.nemesis ? 1 : 0) - (a.nemesis ? 1 : 0));
+                // #Codex36 P2: assignment priority = nemesis (the story) then FALL-designated raiders (they
+                // NEED a duel to be felled in) — in a thin town an unpaired faller used to vanish unfelled.
+                const order = [...re.raiders].sort((a, b) => ((b.nemesis ? 2 : 0) + (b.falls ? 1 : 0)) - ((a.nemesis ? 2 : 0) + (a.falls ? 1 : 0)));
                 const sworn = re.e.foe ? re.e.foe.sworeAgainst : null;   // (rehearsal-safe: rides the event, not the arc)
                 order.forEach(r => {
                     const k = re.raiders.indexOf(r);
@@ -6472,7 +6476,16 @@ export class World {
             }
             re.timer -= dt;
             const settled = re.raiders.every(r => r.fell || ((!r.duel || r.duel.done) && r.lootAt != null && this.time - r.lootAt > 1.4));
-            if (re.timer <= 0 || settled) { re.raiders = re.raiders.filter(r => !r.fell && !r.falls); re.phase = 'flee'; re.timer = 2.8; }
+            if (re.timer <= 0 || settled) {
+                // #Codex36 P2: a fall-designated raider who never got a duel (thin town) still FALLS on screen
+                // — a scripted overrun at the transition — instead of silently vanishing from the field.
+                for (const r of re.raiders) if (r.falls && !r.fell) {
+                    r.fell = true;
+                    re.fx.push({ i: r.i, j: r.j, text: 'FELLED!', color: '#ff5a3c', who: `${r.foeName || 'a raider'} overrun`, at: this.time });
+                    if (re.fx.length > 64) re.fx.shift();
+                }
+                re.raiders = re.raiders.filter(r => !r.fell && !r.falls); re.phase = 'flee'; re.timer = 2.8;
+            }
         } else {   // flee — survivors run back out to the fog, then vanish
             for (const f of this.farmers) { f._skirmish = false; f._freed = false; }   // the clash is over — the line stands down (pursuers re-flag below until the runners are seen off)
             for (const r of re.raiders) {

@@ -4672,7 +4672,10 @@ async function submitWhisper() {
     chatThinking = true;
     chatScroll = 0;   // snap to newest
     try {
-        await whisper(world, f, text, () => { if (world) saveTown(world); });
+        // #Codex36 P1-2: capture the town the whisper belongs to — the callback fires up to 20s later, and a
+        // crossing in between would otherwise save the DESTINATION town and lose the whisper on the source.
+        const w = world;
+        await whisper(w, f, text, () => { if (w) saveTown(w); });
     } catch (err) {
         console.warn('ry-farms: whisper failed', err);
     } finally {
@@ -5420,6 +5423,7 @@ async function switchTown(seed, ang) {
         // reset every per-town lens in this module (anything keyed to the town we just left)
         selected = null; selectedSlotKey = null; followMode = false; followTarget = null;
         raidFocus = null; dramaSpotlight = null; _lastRaidEvent = null; _raidStruck = false; raidFx = null; raidShake = 0;
+        _battleWatch = null; pendingInscription = null; simAccumulator = 0;   // #Codex36 P1-1: no cross-town battle finalization, fresh sim clock
         chatFarmer = null; chatWidgetOpen = false; chatDropdownOpen = false; blurChatInput();
         momentQueue.length = 0; calloutQueue.length = 0; activeMoment = null; activeCallout = null; momentsPrimed = false;
         chronReadTotal = world._chronTotal || 0; lastChronLen = -1; recapSeq = -1;
@@ -6265,7 +6269,10 @@ function frame(now) {
         return;
     }
 
-    simAccumulator += dt * (world._speedMult || 1);
+    // #Codex36 P1-1: while a crossing is in flight the OUTGOING town has already been snapshotted — ticking
+    // it further would do work the save never sees (lost at 20x + slow IndexedDB). Freeze the sim; display
+    // still draws the last state under the crossing static.
+    simAccumulator += _switching ? 0 : dt * (world._speedMult || 1);
     let steps = 0;
     while (simAccumulator >= FIXED_DT && steps < 800) {
         for (const f of world.farmers) { f._riI = f.pos.i; f._riJ = f.pos.j; }   // #interp snapshot the PRE-tick pos as the "from"
