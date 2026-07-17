@@ -6879,6 +6879,7 @@ export class World {
                 raiderSwing();
                 if (out === 'HIT!' || out === 'STAGGERED!') {
                     moveFarmer(ux * 0.7, uy * 0.7); moveRaider(ux * 0.35, uy * 0.35);   // driven back; the raider presses
+                    f._hurtAt = this.time;   // #sprite the defender plays its hurt/red-flash frames (display-only)
                     if (out === 'STAGGERED!') d.skip = 'defender';
                     if (out === 'HIT!' && Array.isArray(re.out.woundSeeds) && re.out.woundSeeds.includes(f.sheet.seed) && !f._woundShown) {
                         f._woundShown = true;   // echo the resolver's wound where it visibly landed
@@ -7012,12 +7013,14 @@ export class World {
         // someone stands to fight: they + any adjacent helpers swing at the threat
         let landed = false;
         for (const ff of fighters) {
+            ff._swingAt = this.time; ff._swingI = e.i - ff.pos.i; ff._swingJ = e.j - ff.pos.j;   // #sprite the fighter swings at the foe
             const atk = d20(this.rand, ff.combatMod());
             if (atk.total >= def.diff || atk.crit) { e.hp -= atk.crit ? 2 : 1; ff.gainXP(2); landed = true; if (e.hp <= 0) break; }
         }
         if (e.hp <= 0) { this.#defeatThreat(e, fighters); return; }
         if (landed) fighters[0].say('hah!', '#e0d060');
         const victim = fighters[Math.floor(this.rand() * fighters.length)];   // the threat swings back at a FIGHTER (a fleeing quarry the guard shields is out of reach)
+        e._swingAt = this.time; e._swingI = victim.pos.i - e.i; e._swingJ = victim.pos.j - e.j;   // #sprite the foe swings back
         const dodge = d20(this.rand, mod(victim.sheet.stats.dex));
         if (dodge.total < def.diff && !dodge.crit) this.#threatHits(e, victim);
     }
@@ -7025,7 +7028,7 @@ export class World {
     #threatHits(e, f) {
         f.hp = Math.max(0, f.hp - (e.def.dmg + Math.floor(this.rand() * 2)));   // a solid blow bleeds HP
         f.energy = Math.max(0, f.energy - 0.05);                                 // and scuffling tires you
-        f.hurtFlash = 1; f.say('argh!', '#e05040');
+        f.hurtFlash = 1; f._hurtAt = this.time; f.say('argh!', '#e05040');
         if (e.def.loot === 'ore' && f.ore > 0 && this.rand() < 0.35) f.ore = Math.max(0, f.ore - 2);       // raider grabs loot
         else if (e.def.loot === 'goods' && this.rand() < 0.35) this.#stealGood(f);
         // a BEAST breaks you off before it kills — you flee at low HP; a FOE can put you DOWN at 0 HP.

@@ -448,12 +448,19 @@ for (const v of [2, 3]) {
 const orcAttackImg = {};
 const orcHurtImg = {};
 const orcWalkImg = {};
+const orcDeathImg = {};
+const ORC_TF = './assets/craftpix-net-363992-free-top-down-orc-game-character-pixel-art/Tiled_files/';
 for (const v of [1, 2, 3]) {
-    const a = new Image(); a.src = `./assets/craftpix-net-363992-free-top-down-orc-game-character-pixel-art/Tiled_files/orc${v}_attack_with_shadow.png`; orcAttackImg[v] = a;
-    const h = new Image(); h.src = `./assets/craftpix-net-363992-free-top-down-orc-game-character-pixel-art/Tiled_files/orc${v}_hurt_with_shadow.png`; orcHurtImg[v] = h;
-    const wk = new Image(); wk.src = `./assets/craftpix-net-363992-free-top-down-orc-game-character-pixel-art/Tiled_files/orc${v}_walk_with_shadow.png`; orcWalkImg[v] = wk;
+    const mk = (suf) => { const im = new Image(); im.src = `${ORC_TF}orc${v}_${suf}_with_shadow.png`; return im; };
+    orcAttackImg[v] = mk('attack'); orcHurtImg[v] = mk('hurt'); orcWalkImg[v] = mk('walk'); orcDeathImg[v] = mk('death');
 }
-const SWING_DUR = 0.36, HURT_DUR = 0.34;   // display windows for the attack/hurt animations
+// #sprite the assassin (lvl-3 swordsman) gets its own attack/hurt/death — a lone duelist that swings, flinches, falls
+const ASSN_TF = './assets/craftpix-net-180537-free-swordsman-1-3-level-pixel-top-down-sprite-character/Tiled_files/Swordsman3/';
+const mkA = (suf) => { const im = new Image(); im.src = ASSN_TF + suf; return { 0: im }; };
+const assassinAttackImg = mkA('Swordsman_lvl3_attack_with_shadow.png');
+const assassinHurtImg = mkA('Swordsman_lvl3_Hurt_with_shadow.png');
+const assassinDeathImg = mkA('Swordsman_lvl3_Death_with_shadow.png');
+const SWING_DUR = 0.36, HURT_DUR = 0.34, DEATH_DUR = 0.7;   // display windows for the attack/hurt/death animations
 const WALK_STRIDE = 0.42;   // tiles travelled per walk-frame step (drives the gait off DISTANCE, so it reads right at any speed)
 
 // Roaming WILD PREY sprites (hunted for meat — see world.prey / #tickPrey). All 32x32, 4-frame idle
@@ -955,7 +962,8 @@ function characterSprites(f) {
 // parts: body (clothing tint) + head (hair tint) + sword (untinted); the back-sword sits BEHIND the body
 // when facing away (up row). Same feet-anchored crop as the walk sprite, so the body stays aligned.
 const BATTLE_PARTS = {};
-['Idle_body', 'Idle_head', 'Idle_sword', 'Idle_sword_back', 'attack_body', 'attack_head', 'attack_sword', 'attack_sword_back']
+['Idle_body', 'Idle_head', 'Idle_sword', 'Idle_sword_back', 'attack_body', 'attack_head', 'attack_sword', 'attack_sword_back',
+ 'Hurt_red', 'Hurt_sword', 'Hurt_sword_back']
     .forEach(n => { const im = new Image(); im.src = CHAR_BASE + 'Swordsman_lvl1_' + n + '.png'; BATTLE_PARTS[n] = im; });
 function battleReady() { const b = BATTLE_PARTS; return b.attack_body.complete && b.attack_body.naturalWidth > 0 && b.Idle_body.complete && b.Idle_body.naturalWidth > 0; }
 let battleBox = null;
@@ -1007,10 +1015,22 @@ function buildBattleSets(f) {
         ox.drawImage(cell, bx.x, bx.y, bx.w, bx.h, 0, 0, dw, dh);
         return out;
     };
+    // the HURT flinch = the pre-reddened Hurt_red silhouette + the sword (the red flash, as a real pose)
+    const hurtFrameFor = (col, row) => {
+        const up = row === CHAR_DIRS.up, sword = up ? BATTLE_PARTS.Hurt_sword_back : BATTLE_PARTS.Hurt_sword;
+        const [cell, cx] = makeCanvas(CHAR_FW, CHAR_FW); cx.imageSmoothingEnabled = false;
+        const put = (part) => part && part.naturalWidth > 0 && cx.drawImage(part, col * CHAR_FW, row * CHAR_FW, CHAR_FW, CHAR_FW, 0, 0, CHAR_FW, CHAR_FW);
+        if (up) put(sword); put(BATTLE_PARTS.Hurt_red); if (!up) put(sword);
+        const [out, ox] = makeCanvas(dw, dh); ox.imageSmoothingEnabled = false;
+        ox.drawImage(cell, bx.x, bx.y, bx.w, bx.h, 0, 0, dw, dh);
+        return out;
+    };
     const setForRow = (row) => {
         const ac = Math.max(1, Math.round(BATTLE_PARTS.attack_body.naturalWidth / CHAR_FW));
         const atk = []; for (let c = 0; c < ac; c++) atk.push(frameFor('attack', c, row));
-        return { idle: frameFor('Idle', 0, row), atk };
+        const hc = BATTLE_PARTS.Hurt_red.naturalWidth > 0 ? Math.round(BATTLE_PARTS.Hurt_red.naturalWidth / CHAR_FW) : 1;
+        const hurt = []; for (let c = 0; c < Math.max(1, hc); c++) hurt.push(hurtFrameFor(c, row));
+        return { idle: frameFor('Idle', 0, row), atk, hurt };
     };
     return { down: setForRow(CHAR_DIRS.down), side: setForRow(CHAR_DIRS.side), up: setForRow(CHAR_DIRS.up) };
 }
@@ -1019,10 +1039,12 @@ function battleSprites(f) {
     if (!s) { s = buildBattleSets(f); battleCache.set(f, s); }
     return s[f.moveDir] || s.down;
 }
-// is this (human) farmer holding the line in a live battle? then they fight with a drawn sword.
+// is this (human) farmer fighting? then they draw their sword — a raid duel (mustered on a struck line) OR
+// a wilderness clash with a foe/beast (combatStance/fight).
 function farmerInBattle(f) {
-    return world.raidEvent && world.raidEvent.struck && f.sheet.culture !== 'orc'
-        && (f._skirmish || f.state === 'fight' || f.state === 'muster') && charReady() && battleReady();
+    if (f.sheet.culture === 'orc' || !charReady() || !battleReady()) return false;
+    if (world.raidEvent && world.raidEvent.struck && (f._skirmish || f.state === 'muster')) return true;
+    return f.state === 'fight' || f.combatStance === 'fight';
 }
 
 // #3.1 orc farmers wear the real ORC sprite (the DM's foe pack, already loaded as threatImg.orc) instead of
@@ -2304,26 +2326,41 @@ function drawThreat(e, sx, sy) {
     const swinging = e._swingAt != null && world && world.time - e._swingAt < SWING_DUR;
     const hurting = e._hurtAt != null && world && world.time - e._hurtAt < HURT_DUR;
     let sheet = img, frameCol = 0;
-    if (e.kind === 'orc') {
-        const v = (e.art && world && world.culture === 'orc') ? e.art : 1;
-        // #sprite distance travelled since the last frame drives the WALK cadence (display-only accumulator
-        // on the never-serialized raider) — so the gait matches the actual movement instead of floating.
+    // #sprite animation banks per foe kind: orc banks are per-variant ([1..3], for orc-vs-orc); the assassin
+    // is a single sheet under key 0. death > hurt > swing > walk > idle. Every entry falls back to the idle
+    // sheet (frame 0) until its animation sheet has loaded.
+    const banks = e.kind === 'orc'
+        ? { atk: orcAttackImg, hurt: orcHurtImg, walk: orcWalkImg, death: orcDeathImg, v: (e.art && world && world.culture === 'orc') ? e.art : 1 }
+        : e.kind === 'assassin'
+        ? { atk: assassinAttackImg, hurt: assassinHurtImg, death: assassinDeathImg, v: 0 }
+        : null;
+    if (banks && world) {
+        const v = banks.v;
+        // distance travelled drives the WALK cadence (display-only accumulator on the never-serialized foe)
         const moved = e._pi != null ? Math.hypot(e.i - e._pi, e.j - e._pj) : 0;
         e._pi = e.i; e._pj = e.j; e._walkPhase = (e._walkPhase || 0) + moved;
-        const walking = moved > 0.004 && !hurting && !swinging && !e.fell;
-        const bank = hurting ? orcHurtImg : swinging ? orcAttackImg : null;   // one-shot animations win
-        const dur = hurting ? HURT_DUR : SWING_DUR, at = hurting ? e._hurtAt : e._swingAt;
-        const im2 = bank && bank[v];
-        if (im2 && im2.complete && im2.naturalWidth > 0) {
+        const useAnim = (im2, at, dur, loop) => {
+            if (!im2 || !im2.complete || !im2.naturalWidth) return false;
             sheet = im2;
             const frames = Math.max(1, Math.round(im2.naturalWidth / c.fw));
-            frameCol = Math.min(frames - 1, Math.floor(((world.time - at) / dur) * frames));
-        } else if (walking) {
-            const wk = orcWalkImg[v];
-            if (wk && wk.complete && wk.naturalWidth > 0) {
-                sheet = wk;
-                const frames = Math.max(1, Math.round(wk.naturalWidth / c.fw));
-                frameCol = Math.floor(e._walkPhase / WALK_STRIDE) % frames;   // legs cycle as they cover ground
+            const raw = Math.floor(((world.time - at) / dur) * frames);
+            frameCol = loop ? (((raw % frames) + frames) % frames) : Math.min(frames - 1, raw);
+            return true;
+        };
+        if (e.fell && banks.death) {                                   // a FELLED foe plays its death animation, holds the corpse
+            if (e._fellAt == null) e._fellAt = world.time;
+            useAnim(banks.death[v], e._fellAt, DEATH_DUR, false);
+        } else if (!e.fell) {
+            const walking = moved > 0.004 && !hurting && !swinging;
+            if (hurting) useAnim((banks.hurt || {})[v], e._hurtAt, HURT_DUR, false);
+            else if (swinging) useAnim((banks.atk || {})[v], e._swingAt, SWING_DUR, false);
+            else if (walking && banks.walk) {
+                const wk = banks.walk[v];
+                if (wk && wk.complete && wk.naturalWidth) {
+                    sheet = wk;
+                    const frames = Math.max(1, Math.round(wk.naturalWidth / c.fw));
+                    frameCol = Math.floor(e._walkPhase / WALK_STRIDE) % frames;   // distance-driven gait
+                }
             }
         }
     }
@@ -2336,7 +2373,8 @@ function drawThreat(e, sx, sy) {
         sy += ((e._swingI + e._swingJ) / n) * 1.75 * k;
     }
     ctx.imageSmoothingEnabled = false;
-    if (e.fell) { ctx.save(); ctx.globalAlpha = 0.75; ctx.filter = 'brightness(0.55)'; sy += 3; }
+    // #sprite a felled foe plays its death animation in full colour, then settles into a darkened corpse
+    if (e.fell) { const done = e._fellAt == null || world.time - e._fellAt > DEATH_DUR; ctx.save(); ctx.globalAlpha = done ? 0.72 : 0.95; ctx.filter = done ? 'brightness(0.58)' : 'none'; sy += 3; }
     if (sheet && sheet.complete && sheet.naturalWidth > 0) {
         const fw = c.fw, rows = Math.max(1, Math.round(sheet.naturalHeight / fw));
         // #raid-feel 4-direction sheets pick their row from the last MOVEMENT, projected to screen space
@@ -2585,10 +2623,13 @@ function drawFarmer(f, sx, sy) {
     let frame;
     const battling = farmerInBattle(f);
     if (battling) {
-        // #sprite drawn sword: swing the 8-frame attack on the duel's _swingAt beat, else stand on guard
+        // #sprite drawn sword: HURT flinch (red flash) beats a SWING beats standing on guard
         const bset = battleSprites(f);
         const SW = 0.42;
-        if (f._swingAt != null && world.time - f._swingAt < SW) {
+        if (f._hurtAt != null && world.time - f._hurtAt < HURT_DUR && bset.hurt && bset.hurt.length) {
+            const p = Math.min(0.999, (world.time - f._hurtAt) / HURT_DUR);
+            frame = bset.hurt[Math.floor(p * bset.hurt.length)] || bset.idle;
+        } else if (f._swingAt != null && world.time - f._swingAt < SW) {
             const p = Math.min(0.999, (world.time - f._swingAt) / SW);
             frame = bset.atk[Math.floor(p * bset.atk.length)] || bset.idle;
         } else frame = bset.idle;
