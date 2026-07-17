@@ -950,6 +950,81 @@ function characterSprites(f) {
     return sets[f.moveDir] || sets.down;   // pick the row matching current facing
 }
 
+// #sprite THE FARMERS ARE SWORDSMEN with the blade stripped for peacetime (they hold a hoe by day). In
+// BATTLE we bring the sword BACK + the 8-frame attack swing, so a duel is a real exchange of blades. Layered
+// parts: body (clothing tint) + head (hair tint) + sword (untinted); the back-sword sits BEHIND the body
+// when facing away (up row). Same feet-anchored crop as the walk sprite, so the body stays aligned.
+const BATTLE_PARTS = {};
+['Idle_body', 'Idle_head', 'Idle_sword', 'Idle_sword_back', 'attack_body', 'attack_head', 'attack_sword', 'attack_sword_back']
+    .forEach(n => { const im = new Image(); im.src = CHAR_BASE + 'Swordsman_lvl1_' + n + '.png'; BATTLE_PARTS[n] = im; });
+function battleReady() { const b = BATTLE_PARTS; return b.attack_body.complete && b.attack_body.naturalWidth > 0 && b.Idle_body.complete && b.Idle_body.naturalWidth > 0; }
+let battleBox = null;
+function battleCellRaw(prefix, col, row) {   // untinted composite (for the shared bbox)
+    const [cv, cx] = makeCanvas(CHAR_FW, CHAR_FW); cx.imageSmoothingEnabled = false;
+    const up = row === CHAR_DIRS.up, sword = up ? BATTLE_PARTS[prefix + '_sword_back'] : BATTLE_PARTS[prefix + '_sword'];
+    const put = (part) => part && part.naturalWidth > 0 && cx.drawImage(part, col * CHAR_FW, row * CHAR_FW, CHAR_FW, CHAR_FW, 0, 0, CHAR_FW, CHAR_FW);
+    if (up) put(sword);
+    put(BATTLE_PARTS[prefix + '_body']); put(BATTLE_PARTS[prefix + '_head']);
+    if (!up) put(sword);
+    return cx;
+}
+function computeBattleBox() {
+    let x0 = 99, x1 = -1, y0 = 99, y1 = -1;
+    const rows = [CHAR_DIRS.down, CHAR_DIRS.side, CHAR_DIRS.up];
+    const scan = (prefix, cols) => { for (const row of rows) for (let col = 0; col < cols; col++) {
+        const d = battleCellRaw(prefix, col, row).getImageData(0, 0, CHAR_FW, CHAR_FW).data;
+        for (let y = 0; y < CHAR_FW; y++) for (let x = 0; x < CHAR_FW; x++)
+            if (d[(y * CHAR_FW + x) * 4 + 3] > 16) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    } };
+    scan('Idle', 1); scan('attack', 8);
+    battleBox = { x: x0, y: y0, w: Math.max(1, x1 - x0 + 1), h: Math.max(1, y1 - y0 + 1) };
+}
+function tintedBattleCell(prefix, col, row, hue) {
+    const up = row === CHAR_DIRS.up, sword = up ? BATTLE_PARTS[prefix + '_sword_back'] : BATTLE_PARTS[prefix + '_sword'];
+    const layer = (part, tint, hairOnly) => {
+        const [c, cx] = makeCanvas(CHAR_FW, CHAR_FW); cx.imageSmoothingEnabled = false;
+        if (part && part.naturalWidth > 0) cx.drawImage(part, col * CHAR_FW, row * CHAR_FW, CHAR_FW, CHAR_FW, 0, 0, CHAR_FW, CHAR_FW);
+        if (tint) tintPixels(cx, CHAR_FW, CHAR_FW, hue, hairOnly);
+        return c;
+    };
+    const [out, ox] = makeCanvas(CHAR_FW, CHAR_FW); ox.imageSmoothingEnabled = false;
+    if (up && sword) ox.drawImage(layer(sword, false, false), 0, 0);
+    ox.drawImage(layer(BATTLE_PARTS[prefix + '_body'], true, false), 0, 0);
+    ox.drawImage(layer(BATTLE_PARTS[prefix + '_head'], true, true), 0, 0);
+    if (!up && sword) ox.drawImage(layer(sword, false, false), 0, 0);
+    return out;
+}
+const battleCache = new Map();
+function buildBattleSets(f) {
+    if (!battleBox) computeBattleBox();
+    const bx = battleBox;
+    const hueSeed = f.sheet.seed != null ? f.sheet.seed : hashString((f.sheet.memory && f.sheet.memory.id) || f.sheet.name);
+    const hue = (hueSeed % 300) + 30;
+    const dw = Math.max(1, Math.round(bx.w * ASSET_SCALE)), dh = Math.max(1, Math.round(bx.h * ASSET_SCALE));
+    const frameFor = (prefix, col, row) => {
+        const cell = tintedBattleCell(prefix, col, row, hue);
+        const [out, ox] = makeCanvas(dw, dh); ox.imageSmoothingEnabled = false;
+        ox.drawImage(cell, bx.x, bx.y, bx.w, bx.h, 0, 0, dw, dh);
+        return out;
+    };
+    const setForRow = (row) => {
+        const ac = Math.max(1, Math.round(BATTLE_PARTS.attack_body.naturalWidth / CHAR_FW));
+        const atk = []; for (let c = 0; c < ac; c++) atk.push(frameFor('attack', c, row));
+        return { idle: frameFor('Idle', 0, row), atk };
+    };
+    return { down: setForRow(CHAR_DIRS.down), side: setForRow(CHAR_DIRS.side), up: setForRow(CHAR_DIRS.up) };
+}
+function battleSprites(f) {
+    let s = battleCache.get(f);
+    if (!s) { s = buildBattleSets(f); battleCache.set(f, s); }
+    return s[f.moveDir] || s.down;
+}
+// is this (human) farmer holding the line in a live battle? then they fight with a drawn sword.
+function farmerInBattle(f) {
+    return world.raidEvent && world.raidEvent.struck && f.sheet.culture !== 'orc'
+        && (f._skirmish || f.state === 'fight' || f.state === 'muster') && charReady() && battleReady();
+}
+
 // #3.1 orc farmers wear the real ORC sprite (the DM's foe pack, already loaded as threatImg.orc) instead of
 // the re-skinned human farmer. The pack is a 4x4 grid of 64px frames; we crop the character out of its padded
 // cell, scale it to a farmer-ish height (orcs a touch taller), and slice a few idle columns so it still has a
@@ -2507,14 +2582,26 @@ function drawIntentIcon(kind, cx, y) {
 }
 
 function drawFarmer(f, sx, sy) {
-    const frames = farmerSprites(f);
-    let frame = frames.idle;
-    if (f.state === 'walk' || f.state === 'flee') {
-        frame = Math.floor(f.animTime * (f.state === 'flee' ? 11 : 7)) % 2 ? frames.walk1 : frames.walk2;
-    } else if (f.state === 'work' || f.state === 'build' || f.state === 'coopbuild' || f.state === 'housebuild' || f.state === 'chop' || f.state === 'break' || f.state === 'forage' || f.state === 'mine' || f.state === 'fencepost' || f.state === 'scarecrow' || f.state === 'fight' || (f.state === 'muster' && f._skirmish)) {
-        frame = Math.floor(f.animTime * ((f.state === 'fight' || f._skirmish) ? 8 : 5)) % 2 ? frames.work : frames.idle;
-    } else if (f.state === 'sleep') {
-        frame = frames.sleep;
+    let frame;
+    const battling = farmerInBattle(f);
+    if (battling) {
+        // #sprite drawn sword: swing the 8-frame attack on the duel's _swingAt beat, else stand on guard
+        const bset = battleSprites(f);
+        const SW = 0.42;
+        if (f._swingAt != null && world.time - f._swingAt < SW) {
+            const p = Math.min(0.999, (world.time - f._swingAt) / SW);
+            frame = bset.atk[Math.floor(p * bset.atk.length)] || bset.idle;
+        } else frame = bset.idle;
+    } else {
+        const frames = farmerSprites(f);
+        frame = frames.idle;
+        if (f.state === 'walk' || f.state === 'flee') {
+            frame = Math.floor(f.animTime * (f.state === 'flee' ? 11 : 7)) % 2 ? frames.walk1 : frames.walk2;
+        } else if (f.state === 'work' || f.state === 'build' || f.state === 'coopbuild' || f.state === 'housebuild' || f.state === 'chop' || f.state === 'break' || f.state === 'forage' || f.state === 'mine' || f.state === 'fencepost' || f.state === 'scarecrow' || f.state === 'fight' || (f.state === 'muster' && f._skirmish)) {
+            frame = Math.floor(f.animTime * ((f.state === 'fight' || f._skirmish) ? 8 : 5)) % 2 ? frames.work : frames.idle;
+        } else if (f.state === 'sleep') {
+            frame = frames.sleep;
+        }
     }
 
     // #raid-feel duel lunge: a defender landing their swing snaps toward the raider and eases back (display
