@@ -640,6 +640,15 @@ const HP_SICK_DRAIN = 0.05;   // HP an untreated illness gnaws away per second o
 const MEAT_HEAL = { 'meat-s': 0.35, 'meat-m': 0.55, 'meat-l': 0.8, fowl: 0.45 };
 const MEAT_NAME = { 'meat-s': 'small game', 'meat-m': 'red meat', 'meat-l': 'prime cut', fowl: 'fowl' };
 const MEAT_GOODS = ['meat-s', 'meat-m', 'meat-l', 'fowl'];   // eaten smallest-first when healing
+// #health WOUND CARE (player: a hurt sentry bled forever with no drive to recover). A remedy applied to a
+// WOUND knits HP back (the base ladder's fraction of maxHp, or an invented mend-remedy's 0.3). Below
+// FRAGILE_HP a soul is too fragile to trek the wilds for meat (a fox/boar could finish them) — they craft
+// a salve, gather CLOSE herbs, or wait to be tended instead. Below SENTRY_STANDDOWN_HP a sentry hands the
+// beat to a fit relief and goes to mend (the Healer also comes to bind them at their post).
+const REMEDY_MENDHP = { tonic: 0.6, salve: 0.35, soup: 0.18 };
+const WOUND_TEND_HP = 0.4;        // the Healer bandages anyone below this, sick or not
+const FRAGILE_HP = 0.35;          // too hurt to hunt into danger
+const SENTRY_STANDDOWN_HP = 0.3;  // too hurt to hold the watch
 // Tending crops and animals is free — tilling a patch, sowing, watering, harvesting, collecting
 // eggs/milk, feeding. Only heavy construction (build) + a light till drains here; the rest is 0. Chopping,
 // mining, breaking stumps, fencing and raising scarecrows drain via the LABOR table below.
@@ -3066,7 +3075,7 @@ export class World {
     }
     // #watch a sentry has to be FIT to stand: not dead, not felled, and NOT sick (a sick watcher rests at home,
     // so they can't hold the line — the beat must hand off, not go dark). One predicate, used everywhere.
-    static #watchFit(f) { return f && f.health !== 'dead' && f.health !== 'sick' && !f.downed; }
+    static #watchFit(f) { return f && f.health !== 'dead' && f.health !== 'sick' && !f.downed && f.hp >= f.maxHp * SENTRY_STANDDOWN_HP; }   // #health a critically hurt sentry hands off + mends
     // #watch the founders' shared rotation-holder for TODAY, skipping anyone unfit (dead/sick/felled) to the next
     // on the roster. Election-agnostic — it's the STAND-IN pool the sentry falls back to when the seated Watch is
     // absent. Pure day-math + seed order, no rng, holds no digest state.
@@ -3867,6 +3876,42 @@ export class World {
         const grave = patient.sickDays >= 3 || patient.energy < 0.25;
         for (const id of (grave ? ['tonic', 'salve', 'soup'] : ['salve', 'soup'])) if (this.canCraft(healer, id)) return id;
         return null;
+    }
+    // #health the best HP-mending remedy `crafter` can afford: an invented mend-remedy they know first,
+    // then the base ladder (a grave wound reaches for the strongest). Same shape as bestRemedy, for wounds.
+    bestWoundRemedy(crafter, grave = false) {
+        for (const id of crafter.knownRecipes()) {
+            const r = this.recipeById(id);
+            if (r && !r.locked && r.effect === 'mendhp' && this.canCraft(crafter, id)) return id;
+        }
+        for (const id of (grave ? ['tonic', 'salve', 'soup'] : ['salve', 'soup'])) if (this.canCraft(crafter, id)) return id;
+        return null;
+    }
+    // #health apply a remedy to a WOUND (self-craft, or the Healer at the bedside/beat): consume the inputs
+    // from `healer` (self = healer === patient) and knit HP back. Deterministic — no rng.
+    mendWound(healer, patient, recipeId) {
+        if (!this.#consumeRecipe(healer, recipeId)) return false;
+        const r = this.recipeById(recipeId);
+        const frac = (r && r.effect === 'mendhp') ? 0.3 : (REMEDY_MENDHP[recipeId] || 0.2);
+        patient.hp = Math.min(patient.maxHp, patient.hp + Math.ceil(patient.maxHp * frac));
+        patient.tendedDay = this.day;
+        const nm = (RECIPES[recipeId] && RECIPES[recipeId].name) || (r && r.name) || 'remedy';
+        if (healer !== patient) {
+            patient.adjustOpinion(healer, 0.4, 'patched me up when I was hurt');
+            this.addBond(healer, patient); healer.adjustReputation(0.05); healer.gainXP(2);
+            if (this.roles) this.roles.healerApproval = Math.min(1, (this.roles.healerApproval || 0.6) + 0.03);
+            patient.say('MUCH BETTER...', '#7dd069'); healer.say(this.culture === 'orc' ? "STAND — IT'LL KNIT" : 'EASY NOW, FRIEND', '#7dd069');
+            this.addLog(`${healer.sheet.name} bound ${patient.sheet.name}'s wounds with a ${nm.toLowerCase()}`, '#7dd069');
+            this.addChronicle('bond', `${shortName(healer)} bound ${shortName(patient)}'s wounds with a ${nm.toLowerCase()}.`, healer, patient, '#7dd069');
+        } else {
+            patient.say(`+${nm.toUpperCase()}`, '#8fd0d0');
+        }
+        return true;
+    }
+    // #health is a wilderness threat within `rad` of a tile? (a red-health farmer routes AWAY from these)
+    nearEncounter(i, j, rad = 6) {
+        for (const e of this.encounters) { if (e.done) continue; if (Math.hypot(e.i - i, e.j - j) < rad) return true; }
+        return false;
     }
     // Brew + apply a remedy at the bedside: consume the inputs, act on the patient's illness, and let
     // the beat land (bond, gratitude, a chronicle line, the Healer's standing). Returns true if applied.
@@ -10390,11 +10435,22 @@ export class Farmer {
                 // #96 — the conscience check: mercy by default, but a hard healer with a grudge + a
                 // principle may turn an outcast away (a public choice the town judges).
                 if (this.healerRefusesCare(sick)) { w.healerRefuse(this, sick); this.visitedSick.add(sick.sheet.seed); return; }
-                this.careTarget = sick;
+                this.careTarget = sick; this.careKind = null;
                 const rem = w.bestRemedy(this, sick);
                 this.think(rem ? `${shortName(sick).toUpperCase()} IS ILL - A ${RECIPES[rem].name.toUpperCase()} WILL HELP` : `${shortName(sick).toUpperCase()} AILS - I NEED MORE HERBS`);
                 const cd = w.houseDoor(sick.plot);
                 this.#goTo(cd.i + 0.5, cd.j + 0.5, 'care'); return;
+            }
+            // #health the Healer BINDS WOUNDS too, not just illness — a badly hurt soul (incl. the sentry
+            // bleeding on the beat) is tended where they STAND (their live pos, not their house). Reuses
+            // tendedDay (one tend a day) + visitedSick (weighed once). Worst wound first.
+            const hurt = w.farmers.filter(o => o !== this && !o.downed && o.health !== 'sick' && o.hp < o.maxHp * WOUND_TEND_HP
+                    && o.tendedDay !== w.day && !this.visitedSick.has(o.sheet.seed))
+                .sort((a, b) => a.hp / a.maxHp - b.hp / b.maxHp)[0];
+            if (hurt && this.energy > 0.2) {
+                const rem = w.bestWoundRemedy(this, hurt.hp < hurt.maxHp * 0.25);
+                if (rem) { this.careTarget = hurt; this.careKind = 'wound'; this.think(`${shortName(hurt).toUpperCase()} IS HURT - I'LL BIND IT`); this.#goTo(hurt.pos.i + 0.5, hurt.pos.j + 0.5, 'care'); return; }
+                this.visitedSick.add(hurt.sheet.seed);   // no herbs to bind it now — weighed; restock below
             }
             if (this.grass < HEALER_HERB_LOW) {   // nobody to tend: restock herbs for the next outbreak
                 const wild = w.nearestForage(this.pos, 22);
@@ -10418,7 +10474,7 @@ export class Farmer {
             const sick = w.farmers.find(o => o !== this && o.health === 'sick' && o.tendedDay !== w.day && !this.visitedSick.has(o.sheet.seed) &&
                 Math.abs(o.pos.i - this.pos.i) + Math.abs(o.pos.j - this.pos.j) < 16);
             if (sick && this.rand() < (this.goal === 'good neighbor' ? 0.8 : 0.5)) {
-                this.visitedSick.add(sick.sheet.seed); this.careTarget = sick;
+                this.visitedSick.add(sick.sheet.seed); this.careTarget = sick; this.careKind = null;
                 this.think(this.#tr(`${sick.sheet.name.split(' ')[0].toUpperCase()} IS DOWN. I'LL LOOK IN.`, `${sick.sheet.name.split(' ')[0].toUpperCase()} IS SICK. I'LL LOOK IN.`));
                 const cd = w.houseDoor(sick.plot);
                 this.#goTo(cd.i + 0.5, cd.j + 0.5, 'care'); return;
@@ -10971,6 +11027,18 @@ export class Farmer {
         if (this.hp >= this.maxHp * 0.6 || this.health === 'sick' || w.isNight() || this.energy < 0.25) return false;
         if (this.healSeekCd > 0) return false;   // throttle: never re-scan/re-path every tick (perf + no thrash)
         this.healSeekCd = 2.5 + this.rand() * 2;
+        const grave = this.hp < this.maxHp * FRAGILE_HP;   // #health too fragile to trek the wilds for meat
+        // 0) SAFE FIRST — craft + apply a remedy from herbs on hand (a salve/poultice), no trek into danger
+        const wid = w.bestWoundRemedy(this, grave);
+        if (wid) { this.think(this.#tr("HURT — I'LL MEND MYSELF", 'WOUNDED — TIME TO PATCH UP')); w.mendWound(this, this, wid); return true; }
+        // a GRAVELY hurt soul does NOT hunt into the wilds — a fox or boar could finish them. Get clear of any
+        // prowling threat, gather CLOSE herbs if it's safe, else wait to be tended. Living to mend > chasing meat.
+        if (grave) {
+            if (w.nearEncounter(this.pos.i, this.pos.j, 10)) { this.think(this.#tr('GET AWAY FROM IT', 'TOO HURT — AWAY FROM THAT THING')); this.#goHome('rest'); return true; }
+            const near = w.nearestForage(this.pos, 8);
+            if (near && !w.nearEncounter(near.i, near.j, 6)) { this.think('GATHERING HERBS TO MEND'); this.forageTarget = near; this.#goTo(near.i + 0.5, near.j + 0.5, 'forage'); return true; }
+            this.think(this.#tr('BADLY HURT — I NEED TENDING', "TOO HURT TO HUNT — I'LL WAIT FOR THE HEALER")); this.#goHome('rest'); return true;
+        }
         // 1) barter a neighbour for a cut of meat (a motivator to leave the plot — over gardening)
         if (this.barterCooldown <= 0) {
             const deal = this.#findMeatBarter();
@@ -12070,6 +12138,14 @@ export class Farmer {
             case 'care': {
                 this.careTimer -= dt;
                 if (this.careTimer <= 0) {
+                    if (this.careKind === 'wound') {   // #health bound a WOUND (self or the Healer at the bedside/beat)
+                        const pt = this.careTarget;
+                        if (pt && !pt.downed && pt.hp < pt.maxHp && pt.tendedDay !== this.world.day) {
+                            const rem = this.world.bestWoundRemedy(this, pt.hp < pt.maxHp * 0.25);
+                            if (rem) this.world.mendWound(this, pt, rem);
+                        }
+                        this.careKind = null; this.careTarget = null; this.state = 'decide'; break;
+                    }
                     const sick = this.careTarget;
                     if (sick && sick.health === 'sick' && sick.tendedDay !== this.world.day) {   // one tend a day
                         // #97 Slice 1 — the HEALER brews + applies the best remedy their herbs allow
@@ -12086,7 +12162,7 @@ export class Farmer {
                             this.world.addLog(`${this.sheet.name} brought soup to ${sick.sheet.name}`, '#7dd069');
                         }
                     }
-                    this.careTarget = null; this.state = 'decide';
+                    this.careTarget = null; this.careKind = null; this.state = 'decide';
                 }
                 break;
             }
