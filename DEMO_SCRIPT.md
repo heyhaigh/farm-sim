@@ -5,13 +5,18 @@ scripted Krul the Howler — this town fought him three times, and both sides re
 
 ## Setup (before judges — 15 min)
 1. `launchctl` SuperMemory on :6767 is up; `node server.mjs 8013` running; Ollama up (`ollama serve`).
+1b. **Warm the model** (Kimi): a cold 3b makes the FIRST counsel line — the very line that proves "the LLM
+   reads the war" — arrive late. `curl :11434/api/generate -d '{"model":"llama3.2:3b","prompt":"hi"}'` once.
 2. Two browser tabs: **A** = the game (`localhost:8013/?seed=20260706`), **B** = the memory portal
    (`localhost:8013/memory-graph.html`). Optional tab C: a terminal with a `curl :6767/v3/documents/list`
    one-liner for the raw-API skeptic.
 3. Canon history already exists (Krul's war, 3 raids — done). If demoing on a FRESH seed instead: run
    `RYFARMS.raid()` twice, let both play out fully, ~5 min.
 4. **Rehearse the run once with the booth** (Settings → STAGE A RAID): full show, zero writes — the demo
-   itself uses a REAL raid so the write is real.
+   itself uses a REAL raid so the write is real. **Stopwatch it on the demo machine, audio ON** (Kimi:
+   battle length scales with band size — a 5-6 duel fight runs ~45-60s; if the rehearsal overruns the
+   budget, re-budget the script to 2 minutes rather than cutting the finale). **Screen-record this ghost
+   run as the fallback video** — the live demo depends on network + local LLM + audio + two tabs.
 5. Console ready with: `RYFARMS.demoRaid()` (real raid, compressed clock: alarm ~4s, lands ~14s).
 
 ## The 90 seconds
@@ -30,7 +35,9 @@ scripted Krul the Howler — this town fought him three times, and both sides re
 - **0:58–1:12 — the stand-down.** The line lingers; the debrief names the hurt; the aftermath cards
   sequence; then **"SET DOWN IN THE TOWN RECORD"** fires — that card appears only when the SuperMemory
   write has actually landed (point at the doc id on it).
-- **1:12–1:30 — the proof.** Tab B, reload: Krul's war node now holds **three** battles — the newest is the
+- **1:12–1:30 — the proof.** WAIT for the Inscription card ("SET DOWN IN THE TOWN RECORD") before touching
+  tab B — it fires only when the write has actually landed (Kimi: handing over early anti-proves the thesis;
+  the holding line is "the town is writing it down — watch for the card"). Then tab B, reload: Krul's war node now holds **three** battles — the newest is the
   fight the judge just watched, blow-for-blow identical. Then hand over the keyboard: "search the store
   yourself — try Krul."
 

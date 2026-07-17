@@ -1,9 +1,9 @@
 # Codex Review #38 — Ry Farms: THE PUSH GATE (final pre-deploy review, hackathon deadline in hours)
 
 **Repo:** `/Users/ryanhaigh/ry-farms` — the FULL absolute path (NOT `~/Documents/ry-farm`, which is a stale
-unrelated repo Codex has wandered into before). HEAD `0783ba7` on `main`, remote `github.com/heyhaigh/farm-sim`.
+unrelated repo Codex has wandered into before). HEAD `1d62f1c` on `main`, remote `github.com/heyhaigh/farm-sim`.
 
-**Scope:** `git diff 064977c..HEAD` — **24 commits**. #36 reviewed the first 13, #37 the next 5 and their
+**Scope:** `git diff 064977c..HEAD` — **26 commits**. #36 reviewed the first 13, #37 the next 5 and their
 fixes landed in `ec7c345`. **Focus on the SIX commits since:**
 - `e160322` ONE BEAT — a mid-fight authored moment in the focus duel (stunt shove/taunt + bark; LLM
   `phase:'beat'` via raidcouncil.js `requestDuelBeat`, enum-validated, authored BEAT_BARKS fallback;
@@ -38,13 +38,41 @@ fixes landed in `ec7c345`. **Focus on the SIX commits since:**
   ONLY when `world.culture === 'orc'`; muster figures carry the same parity; orc TOWNSFOLK scaled
   26px → 34px (`orcCharSets` targetH).
 
-**Intent: push all 24 to the live repo immediately after this review.** Rank ruthlessly: P0 =
+**Two commits landed AFTER this directive was first drafted — review them with the same weight:**
+- `aa09ab7` **Kimi-K3 review fixes + battle HP bars** — an independent Kimi-K3 model review found 4 P0s,
+  all verified against the full code and fixed: (1) `re.record` = an UNCAPPED battle log feeding the
+  SuperMemory doc (display `re.fx` keeps its 64-cap; compiler reads `re.record || re.fx`); (2) the march
+  timer is now COMPUTED from the initiative (`14 + totalExchanges * kick*3`, cap 80) — the flat 34s
+  decapitated 5-6-duel battles; (3) main.js `_battleWatch` compiles on raidEvent POINTER CHANGE (a second
+  raid landing over a live cinematic used to orphan the displaced record); (4) `startRaidRehearsal`
+  refuses while a real pendingRaid/raidEvent is live. Plus: displaced un-ended nemesis arcs archive as
+  'eclipsed'; duel rolls keyed per raider index; counsel lands only for its own telegraph (identity
+  check). HP BARS (player): defenders show their real hp bar force-visible while `raidEvent.struck` and
+  in muster/_skirmish; raiders carry `_dhp` (init 1 at duelsAssigned, chunked -0.28/-0.34 on
+  HIT!/STAGGERED! taken, floor 0.15, zeroed on FELLED incl. the overrun path) drawn in drawThreat.
+  CHECK: `_dhp`/`record` ride only the never-serialized raidEvent; the pointer-change compile can't
+  double-compile or compile a never-struck re; the booth-refusal return value (false) is handled by the
+  admin panel gracefully.
+- `1d62f1c` **THE FARMYARD** — player-reported: facilities were mashed mid-crops. `#findFacilityRegion`
+  now scores ALL candidates: adjacency to the farmstead cluster (house rect via `#houseRect` or an
+  existing facility, `#rectGap` <= 1) wins as a TIER, nearest-to-house first, cropped tiles claimable at
+  +0.6/crop score; `#buildFacility` clears claimed crops; `#rebuildFields` keeps crops a full tile off
+  every region; `yardV: 1` save marker + ONE-TIME `#reflowFacilities` migration on pre-yard loads
+  (`#moveFacility` moves struct/trough/producers, re-carves pond water, upgrades legacy 3x3 pens to the
+  new defs where they fit, falls back to current footprint on ribbon plots, re-seats stranded animals).
+  CHECK: reflow idempotence (a reflowed save re-saves with yardV and never reflows again); move
+  correctness for ponds (old water fully cleared, no orphan lily/fish regions); `this.crops.delete`
+  during restore can't corrupt the crops Map mid-iteration; determinism re-pinned
+  (`850c5016/43db4bf8/dbd713b3/eda6bec6`) — confirm same-twice; the migration was verified against a
+  copy of the live day-71 save (17 facilities clustered, 0 escapees, 0 crops within a tile of a pen).
+
+**Intent: push all 26 to the live repo immediately after this review.** Rank ruthlessly: P0 =
 determinism/ghost break or push-blocker; P1 = fix before push; P2 = note. Player has browser-verified:
 pens (chicken run + sheep fold, containment probes clean), orc-vs-orc raid on an orc town (distinct
 tribes), the full raid cycle, the portal war sheet.
 
-## Doctrines: determinism baselines now `b99cfce8 / cb7b50c8 / da0a209c / aebbd12e` (re-pinned in
-`b637134`, UNCHANGED by `0783ba7` — confirm both facts from the diffs); compile-don't-query;
+## Doctrines: determinism baselines now `850c5016 / 43db4bf8 / dbd713b3 / eda6bec6` (re-pinned in
+`b637134` then `1d62f1c` — confirm same-twice from the harness, and that `aa09ab7` left them unchanged); compile-don't-query;
 the booth's ghost contract.
 
 ## Priority checks
