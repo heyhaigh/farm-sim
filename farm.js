@@ -6268,6 +6268,18 @@ export class World {
         return best;
     }
 
+    // #P2 how far the town has actually SEEN (max revealed tile from the well) — the crossing thresholds key
+    // off this so the border sits beyond the explored world, not inside it. Cached per exploredTiles count.
+    revealRadius() {
+        const key = this.exploredTiles | 0;
+        if (this._revR && this._revR.key === key) return this._revR.val;
+        let best = 12;
+        for (let j = 0; j < GRID; j++) for (let i = 0; i < GRID; i++)
+            if (this.isRevealed(i, j)) { const d = Math.hypot(i - CENTER, j - CENTER); if (d > best) best = d; }
+        this._revR = { key, val: best };
+        return best;
+    }
+
     musterSpot(f) {
         const well = this.well, pr = this.pendingRaid;
         const base = pr ? pr.dir : 0, h = hashString(f.sheet.seed + ':muster');
@@ -6391,6 +6403,10 @@ export class World {
                     if (score > fscore) { fscore = score; focus = r; }
                 }
                 re.focus = focus;
+                // #raid-tempo (Kimi): the focus duel must RESOLVE LAST — the finale belongs to the story
+                // pairing, not whichever anonymous pair the seed left standing. Two extra exchanges outlast
+                // every other duel, and the fermata already holds the breath before its finishing blow.
+                if (focus && focus.duel) focus.duel.rounds += 2;
                 // #raid-initiative (designer direction) — D&D turn order: the whole battle resolves ONE
                 // exchange at a time, round-robin across the live duels on a global beat. Only one floating
                 // text is ever born at once, so the fight reads as TURNS, not four simultaneous tickers —
@@ -6422,8 +6438,18 @@ export class World {
             }
             // #raid-initiative — the global turn: on each beat, exactly ONE live duel (round-robin) resolves
             // ONE exchange. A pair still closing to blade range simply passes (their turn comes round again).
+            // #raid-tempo (council, unanimous): the beat ACCELERATES as duels resolve — the fight collapses
+            // toward the focus duel instead of ticking a flat metronome — and the focus duel's FINAL exchange
+            // takes a held breath first (the fermata) so the finishing blow lands as a beat, not a tick.
             if (re.initiative && re.initiative.length && this.time >= re.turnAt) {
-                let tries = re.initiative.length;
+                const liveDuels = re.initiative.filter(x => !x.fell && x.duel && !x.duel.done).length;
+                // #raid-tempo QUANTIZED to the battle score's kick grid (Kimi: 1.1s drifted against the
+                // 132bpm drums — clash SFX fought the kick). Kick = 60/132 ≈ 0.4545s; the accelerando steps
+                // 3 kicks -> 2 kicks -> 1.5 kicks as duels resolve, so every exchange lands ON the music.
+                const resolved = re.initiative.length - liveDuels;
+                const KICK = 60 / 132;
+                const beat = resolved <= 0 ? KICK * 3 : resolved === 1 ? KICK * 2 : KICK * 1.5;
+                let acted = false, tries = re.initiative.length;
                 while (tries-- > 0) {
                     const r = re.initiative[re.turnIdx % re.initiative.length];
                     re.turnIdx++;
@@ -6431,10 +6457,18 @@ export class World {
                     const f = r.duel.opp;
                     if (!f || !this.#holdsLine(f)) continue;                            // (disengage handled above)
                     if (Math.hypot(f.pos.i - r.i, f.pos.j - r.j) > 1.7) continue;       // still closing — passes
+                    if (r === re.focus && r.duel.round >= r.duel.rounds - 1 && !r.duel._fermata) {
+                        r.duel._fermata = true;                                          // the held breath
+                        re.turnIdx--;                                                    // same duel takes the next beat
+                        re.turnAt = this.time + (60 / 132) * 4;                          // a four-kick fermata, on the grid
+                        acted = true;
+                        break;
+                    }
                     this.#duelExchange(re, r);
+                    acted = true;
                     break;
                 }
-                re.turnAt = this.time + 1.1;
+                if (!acted || this.time >= re.turnAt) re.turnAt = this.time + beat;
             }
             re.timer -= dt;
             const settled = re.raiders.every(r => r.fell || ((!r.duel || r.duel.done) && r.lootAt != null && this.time - r.lootAt > 1.4));

@@ -5281,13 +5281,20 @@ function drawRaidFx() {
 // No farmers migrate; nothing crosses but the camera. Determinism: the sim can't tell this from a reload.
 // ============================================================================
 let _battleWatch = null;   // #nemesis last-seen raidEvent — its END triggers the battle-record writeback
+let pendingInscription = null;   // #inscription the write-receipt card, shown once the SuperMemory doc actually lands
 let crossFx = null;        // { t, phase:'out'|'in', name, seed, ang } — the channel-change static
 let crossHint = null;      // { seed, name, ang, k } — this frame's edge cue (rebuilt each frame)
 let _switching = false;    // one swap at a time
 
-const CROSS_HINT_R = 56;   // camera-distance (tiles from the well) where the cue appears
-const CROSS_R = 76;        // ...and where the crossing fires
 const CROSS_CONE = 0.6;    // radians of slack around a neighbour's bearing
+// #P2 three-stage consent (player: "way too sensitive — it surprises you every time"): the thresholds key
+// off how far the town has actually REVEALED, so the border always sits beyond the explored world:
+//   stage 1 (calm gray label + arrow) at the revealed frontier · stage 2 (amber KEEP GOING) deep in the
+//   dark · the crossing itself only well past that. Panning the explored circumference never crosses.
+function crossThresholds() {
+    const R = world && world.revealRadius ? world.revealRadius() : 40;
+    return { hint: Math.max(42, R - 4), warn: Math.max(66, R + 26), cross: Math.max(88, R + 46) };
+}
 
 // Known neighbours whose reach TOUCHES ours (the met/meeting pairs), with their world-plane bearing mapped
 // onto the local grid (i = plane-x, j = plane-y — the same mapping everywhere a bearing is drawn).
@@ -5315,7 +5322,8 @@ function updateCrossing() {
     if (world.pendingRaid || world.raidEvent || world.rehearsal) return;
     const c = screenToTile(GW / 2, GH / 2);
     const di = c.i - CENTER, dj = c.j - CENTER, r = Math.hypot(di, dj);
-    if (r < CROSS_HINT_R) return;
+    const T = crossThresholds();
+    if (r < T.hint) return;
     const ang = Math.atan2(dj, di);
     let best = null, bd = Infinity;
     for (const n of crossNeighbors()) {
@@ -5324,8 +5332,8 @@ function updateCrossing() {
         if (Math.abs(da) < bd) { bd = Math.abs(da); best = n; }
     }
     if (!best) return;
-    crossHint = { ...best, k: Math.min(1, (r - CROSS_HINT_R) / (CROSS_R - CROSS_HINT_R)) };
-    if (r >= CROSS_R) { crossFx = { t: 0, phase: 'out', name: best.name, seed: best.seed, ang: best.ang }; crossHint = null; }
+    crossHint = { ...best, stage: r >= T.warn ? 2 : 1, k: Math.min(1, Math.max(0, (r - T.warn) / (T.cross - T.warn))) };
+    if (r >= T.cross) { crossFx = { t: 0, phase: 'out', name: best.name, seed: best.seed, ang: best.ang }; crossHint = null; }
 }
 
 // The edge cue: a pulsing chevron + the neighbour's name, pinned toward the screen edge in its direction.
@@ -5336,10 +5344,15 @@ function drawCrossHint() {
     const n = Math.hypot(sdx, sdy) || 1;
     const ex = Math.max(30, Math.min(GW - 30, GW / 2 + (sdx / n) * (GW / 2 - 40)));
     const ey = Math.max(34, Math.min(GH - 30, GH / 2 + (sdy / n) * (GH / 2 - 40)));
-    const label = crossHint.k > 0.55 ? `KEEP GOING - CROSS INTO ${crossHint.name.toUpperCase()}` : `${crossHint.name.toUpperCase()} LIES THIS WAY`;
-    const col = crossHint.culture === 'orc' ? '#e07050' : '#7dd069';
+    // stage 1: a CALM STATIC gray heads-up at the revealed frontier (no pulse — informational, not a tripwire);
+    // stage 2: the pulsing warning that continuing WILL cross. (Three-stage consent — player direction.)
+    const stage2 = crossHint.stage === 2;
+    const label = stage2
+        ? (crossHint.k > 0.55 ? `KEEP GOING - CROSS INTO ${crossHint.name.toUpperCase()}` : `THE ${crossHint.name.toUpperCase()} BORDER - PRESS ON TO CROSS`)
+        : `${crossHint.name.toUpperCase()} LIES THIS WAY - BEYOND THE DARK`;
+    const col = stage2 ? (crossHint.culture === 'orc' ? '#e07050' : '#7dd069') : '#8a8f9c';
     const wpx = textWidth(label);
-    ctx.save(); ctx.globalAlpha = 0.55 + 0.45 * Math.abs(Math.sin(performance.now() / 320));
+    ctx.save(); ctx.globalAlpha = stage2 ? 0.55 + 0.45 * Math.abs(Math.sin(performance.now() / 320)) : 0.85;
     ctx.fillStyle = 'rgba(8,9,14,0.82)';
     ctx.fillRect(Math.round(ex - wpx / 2) - 4, Math.round(ey) - 3, wpx + 8, 12);
     drawText(ctx, label, Math.round(ex - wpx / 2), Math.round(ey), col);
@@ -5452,7 +5465,10 @@ function drawMoments() {
     // #raid-feel a HOT raid owns the screen (player: "way too many messages on top of one another"): while
     // the alarm is up or the warband is on the field, spotlights + toasts FREEZE exactly like under a modal —
     // they resume once the fight is over (the raid's own grand beats then land as the aftermath reading).
-    const raidHot = world.raidEvent || (world.pendingRaid && world.pendingRaid.detected);
+    // ...and the freeze HOLDS through the debrief (council: the counterfactual toast + grand card + debrief
+    // were three narrators claiming the same ten seconds). Order now: the line talks first, THEN the cards.
+    const raidHot = world.raidEvent || (world.pendingRaid && world.pendingRaid.detected) ||
+                    (world._debrief && world.time < world._debrief.until - 6);
     if (rosterOpen || chronOpen || boardOpen || settingsOpen || worldMapOpen || raidHot) {
         scanMoments();
         const now = performance.now();
@@ -5467,6 +5483,14 @@ function drawMoments() {
         const e = momentQueue.shift();
         activeMoment = { e, shownAt: nowMs };
         try { audio.moment(e.tone || 'triumph'); } catch { /* audio not ready */ }
+    } else if (!activeMoment && !momentQueue.length && !calloutQueue.length && pendingInscription) {
+        // #inscription LAST in the aftermath order (debrief -> counterfactual -> grand card -> THIS): the
+        // town visibly sets the battle down in its memory — the write-receipt, shown only once the
+        // SuperMemory document actually landed. Synthesized display card; never enters the chronicle.
+        const p = pendingInscription; pendingInscription = null;
+        activeMoment = { e: { label: 'SET DOWN IN THE TOWN RECORD', kind: 'town', tone: 'neutral', color: '#9ad0e0',
+            text: p.text, why: p.why, day: world.day, season: world.season, year: world.year }, shownAt: nowMs };
+        try { audio.moment('neutral'); } catch { /* audio not ready */ }
     }
     MOMENTS_HIT.w = 0;
     drawCallouts();               // non-blocking toasts (a grand modal, if active, draws over them below)
@@ -6270,6 +6294,18 @@ function frame(now) {
     // #raid-council a telegraphed raid asks the LLM (fire-and-forget, deduped per telegraph) to write the
     // muster counsel — the line's own urgent strategy talk. Offline/slow = the authored pools carry it.
     if (world.pendingRaid && !world.raidEvent) requestRaidCouncil(world);
+    // #nemesis THE WAR SO FAR (Kimi: put the memory READ at the telegraph, away from the aftermath pile-up):
+    // the frame a NAMED return telegraphs, one spotlight card recaps the war from the arc — raids weathered,
+    // the sworn grudge, how the last raid went — during the calm minute while the warband still gathers.
+    if (world.pendingRaid && world.pendingRaid.e && world.pendingRaid.e.foe && !world.pendingRaid.detected && !world.pendingRaid._warCard) {
+        world.pendingRaid._warCard = true;   // once per telegraph (transient display scratch on the raid)
+        const foe = world.pendingRaid.e.foe, nem = world.nemesis;
+        const sworn = foe.sworeAgainst != null ? world.farmers.find(x => x.sheet.seed === foe.sworeAgainst) : null;
+        const last = nem && nem.lastOutcome === 'escaped' ? 'Last time he broke off and got away.' : '';
+        momentQueue.push({ label: 'THE WAR SO FAR', kind: 'raid', tone: 'somber', color: '#e0a040',
+            text: `${foe.name} has raided ${world.name} ${foe.raidCount - 1} time${foe.raidCount > 2 ? 's' : ''} before. ${last}${sworn ? ` He swore against ${sworn.sheet.name.split(' ')[0]} — and now he returns for them.` : ' Now he returns.'}`,
+            why: 'read from the town\'s memory of his war', day: world.day, season: world.season, year: world.year });
+    }
     // #nemesis THE BATTLE RECORD → SuperMemory: the frame a REAL raid's show ends, compile the round-by-round
     // record from the fx stream + the verdict and persist it as one battle document. Side-channel only (the
     // show is display; dormant raids had no show and get no doc); rehearsals are ghosts and never fire this.
@@ -6289,7 +6325,22 @@ function frame(now) {
                 rounds: (re.fx || []).map(x => ({ who: x.who || null, text: x.text })),
             };
             requestRaidDebrief(world, battle);                    // the aftermath counsel (bubbles — ghosts included)
-            if (!re.rehearsal) persistBattle(world, battle);      // the record — REAL raids only (ghost contract)
+            if (!re.rehearsal) {
+                // #inscription the record — REAL raids only (ghost contract) — and when the write actually
+                // LANDS, the town says so on screen: the memory-loop's payoff made visible (council, unanimous:
+                // "your point is followed by silence"). The card queues BEHIND the aftermath cards.
+                const w = world;
+                persistBattle(w, battle).then(ok => {
+                    if (!ok || w !== world) return;
+                    const rid = String(battle.rid).replace(/[^\w:.-]/g, '_').slice(0, 80);
+                    pendingInscription = {
+                        text: battle.nemesis
+                            ? `${battle.nemesis.name}'s raid - the battle of day ${battle.day}, year ${battle.year} - is set down in ${w.name}'s memory, blow by blow, as it happened.`
+                            : `The battle of day ${battle.day}, year ${battle.year} is set down in ${w.name}'s memory, blow by blow, as it happened.`,
+                        why: `supermemory: ry-farms:battle:${w.seed}:${rid}`,
+                    };
+                });
+            }
         }
     }
     // at extreme speeds keep a bounded backlog (spread over coming frames) rather than dropping
@@ -6687,6 +6738,15 @@ function drawBootScreen(t) {
                 ? `raid ${ord} telegraphed from the ${world.pendingRaid.dirName} — lands in ~${Math.round(world.pendingRaid.landsAt - world.time)}s` +
                   (world.pendingRaid.e && world.pendingRaid.e.foe ? ` — ${world.pendingRaid.e.foe.name} RETURNS` : '')
                 : 'raid did not stage — check RYFARMS.pendingRaid / an active rehearsal';
+        },
+        // #demo the 90-second-window variant (Kimi: "demo arithmetic doesn't close" at 45s of telegraph):
+        // a REAL canon raid with a compressed clock — marquee + WAR SO FAR immediately, alarm at ~4s,
+        // the blow at ~14s. Same raid in every other respect.
+        demoRaid: (commit = 0.5) => {
+            const msg = RYFARMS.raid(commit);
+            const pr = world.pendingRaid;
+            if (pr) { pr.detectAt = world.time + 4; pr.landsAt = world.time + 14; }
+            return msg + ' (demo clock: alarm ~4s, lands ~14s)';
         },
         get pendingRaid() { return world.pendingRaid; },                                   // #131 inspect a telegraphed raid
         raidDetect: () => { const pr = world.pendingRaid; if (pr) world.time = pr.detectAt; return world.pendingRaid; },  // #131 jump to the sentry's alarm
