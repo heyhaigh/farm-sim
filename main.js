@@ -5293,13 +5293,13 @@ let crossHint = null;      // { seed, name, ang, k } — this frame's edge cue (
 let _switching = false;    // one swap at a time
 
 const CROSS_CONE = 0.6;    // radians of slack around a neighbour's bearing
-// #P2 three-stage consent (player: "way too sensitive — it surprises you every time"): the thresholds key
-// off how far the town has actually REVEALED, so the border always sits beyond the explored world:
-//   stage 1 (calm gray label + arrow) at the revealed frontier · stage 2 (amber KEEP GOING) deep in the
-//   dark · the crossing itself only well past that. Panning the explored circumference never crosses.
+// #P2 crossing consent v3 (player direction): the first sign of a neighbour is a WORLD-ANCHORED marker —
+// literal gray text + an arrow sitting OUT IN THE FOG along the neighbour's bearing, scrolling with the
+// map, never overlapping revealed ground. You only meet it by panning into the dark. The pulsing WARN
+// banner and the crossing itself sit progressively deeper beyond it.
 function crossThresholds() {
     const R = world && world.revealRadius ? world.revealRadius() : 40;
-    return { hint: Math.max(42, R - 4), warn: Math.max(66, R + 26), cross: Math.max(88, R + 46) };
+    return { marker: R + 10, warn: Math.max(70, R + 30), cross: Math.max(95, R + 52) };
 }
 
 // Known neighbours whose reach TOUCHES ours (the met/meeting pairs), with their world-plane bearing mapped
@@ -5329,12 +5329,11 @@ function updateCrossing() {
     const c = screenToTile(GW / 2, GH / 2);
     const di = c.i - CENTER, dj = c.j - CENTER, r = Math.hypot(di, dj);
     const T = crossThresholds();
-    if (r < T.hint) return;
-    // #Codex37 P2: the stage-1 hint belongs to the DARK — over still-revealed ground near the reveal maximum
-    // it read as noise. Show it only once the camera centre is over unrevealed tiles (or past the warn line).
+    // the pulsing WARN banner + the crossing require the camera centre DEEP in the dark (never over
+    // revealed ground — the fog markers below handle everything before this point, in the world itself)
     const ci2 = Math.round(c.i), cj2 = Math.round(c.j);
     const inDark = ci2 < 0 || cj2 < 0 || ci2 >= GRID || cj2 >= GRID || !world.isRevealed(ci2, cj2);
-    if (!inDark && r < T.warn) return;
+    if (!inDark || r < T.warn) return;
     const ang = Math.atan2(dj, di);
     let best = null, bd = Infinity;
     for (const n of crossNeighbors()) {
@@ -5343,11 +5342,42 @@ function updateCrossing() {
         if (Math.abs(da) < bd) { bd = Math.abs(da); best = n; }
     }
     if (!best) return;
-    crossHint = { ...best, stage: r >= T.warn ? 2 : 1, k: Math.min(1, Math.max(0, (r - T.warn) / (T.cross - T.warn))) };
+    crossHint = { ...best, stage: 2, k: Math.min(1, Math.max(0, (r - T.warn) / (T.cross - T.warn))) };
     if (r >= T.cross) { crossFx = { t: 0, phase: 'out', name: best.name, seed: best.seed, ang: best.ang }; crossHint = null; }
 }
 
 // The edge cue: a pulsing chevron + the neighbour's name, pinned toward the screen edge in its direction.
+// #P2 v3 — the FOG MARKERS: each met neighbour plants literal gray text + an arrow OUT IN THE DARK along
+// its bearing (world-anchored, scrolls with the map). Drawn only over unrevealed ground, so it never sits
+// on trees or farmland — you meet it by panning to the edge of what you've explored. Static, no pulse.
+function drawFogMarkers() {
+    if (crossFx || followMode || !worldMapIdx) return;
+    if (rosterOpen || chronOpen || boardOpen || settingsOpen || worldMapOpen) return;
+    const T = crossThresholds();
+    for (const n of crossNeighbors()) {
+        const wi = CENTER + Math.cos(n.ang) * T.marker, wj = CENTER + Math.sin(n.ang) * T.marker;
+        const ti = Math.round(wi), tj = Math.round(wj);
+        const dark = ti < 0 || tj < 0 || ti >= GRID || tj >= GRID || !world.isRevealed(ti, tj);
+        if (!dark) continue;   // reveal has swallowed the marker point — it re-plants farther out next frame
+        const sx = cam.x + isoX(wi, wj), sy = cam.y + isoY(wi, wj);
+        if (sx < 60 || sx > GW - 60 || sy < 30 || sy > GH - 24) continue;   // it lives in the world; find it there
+        const label = `${n.name.toUpperCase()} LIES THIS WAY`;
+        const wpx = textWidth(label);
+        ctx.save(); ctx.globalAlpha = 0.8;
+        drawText(ctx, label, Math.round(sx - wpx / 2), Math.round(sy - 4), '#6a7080');
+        // a small gray arrow beneath, pointing deeper into the dark (screen-space bearing)
+        const sdx = Math.cos(n.ang) - Math.sin(n.ang), sdy = (Math.cos(n.ang) + Math.sin(n.ang)) / 2;
+        const nn = Math.hypot(sdx, sdy) || 1, ax = sx, ay = sy + 8;
+        ctx.fillStyle = '#6a7080';
+        ctx.beginPath();
+        ctx.moveTo(ax + (sdx / nn) * 5, ay + (sdy / nn) * 5);
+        ctx.lineTo(ax - (sdy / nn) * 3.2, ay + (sdx / nn) * 3.2);
+        ctx.lineTo(ax + (sdy / nn) * 3.2, ay - (sdx / nn) * 3.2);
+        ctx.closePath(); ctx.fill();
+        ctx.restore();
+    }
+}
+
 function drawCrossHint() {
     if (!crossHint || crossFx) return;
     const sdx = Math.cos(crossHint.ang) - Math.sin(crossHint.ang);
@@ -5355,15 +5385,11 @@ function drawCrossHint() {
     const n = Math.hypot(sdx, sdy) || 1;
     const ex = Math.max(30, Math.min(GW - 30, GW / 2 + (sdx / n) * (GW / 2 - 40)));
     const ey = Math.max(34, Math.min(GH - 30, GH / 2 + (sdy / n) * (GH / 2 - 40)));
-    // stage 1: a CALM STATIC gray heads-up at the revealed frontier (no pulse — informational, not a tripwire);
-    // stage 2: the pulsing warning that continuing WILL cross. (Three-stage consent — player direction.)
-    const stage2 = crossHint.stage === 2;
-    const label = stage2
-        ? (crossHint.k > 0.55 ? `KEEP GOING - CROSS INTO ${crossHint.name.toUpperCase()}` : `THE ${crossHint.name.toUpperCase()} BORDER - PRESS ON TO CROSS`)
-        : `${crossHint.name.toUpperCase()} LIES THIS WAY - BEYOND THE DARK`;
-    const col = stage2 ? (crossHint.culture === 'orc' ? '#e07050' : '#7dd069') : '#8a8f9c';
+    // the WARN banner only (the calm first sign is the world-anchored fog marker, drawn separately)
+    const label = crossHint.k > 0.55 ? `KEEP GOING - CROSS INTO ${crossHint.name.toUpperCase()}` : `THE ${crossHint.name.toUpperCase()} BORDER - PRESS ON TO CROSS`;
+    const col = crossHint.culture === 'orc' ? '#e07050' : '#7dd069';
     const wpx = textWidth(label);
-    ctx.save(); ctx.globalAlpha = stage2 ? 0.55 + 0.45 * Math.abs(Math.sin(performance.now() / 320)) : 0.85;
+    ctx.save(); ctx.globalAlpha = 0.55 + 0.45 * Math.abs(Math.sin(performance.now() / 320));
     ctx.fillStyle = 'rgba(8,9,14,0.82)';
     ctx.fillRect(Math.round(ex - wpx / 2) - 4, Math.round(ey) - 3, wpx + 8, 12);
     drawText(ctx, label, Math.round(ex - wpx / 2), Math.round(ey), col);
@@ -6580,7 +6606,7 @@ function frame(now) {
     updateDramaSpotlight();
     if (booted && !rosterOpen && !chronOpen && !boardOpen) drawDramaCue();
     if (booted && !rosterOpen && !chronOpen && !boardOpen && !worldMapOpen && !settingsOpen) drawThreatTell();   // #131
-    updateCrossing(); drawCrossHint();   // #P2 the frontier cue + crossing trigger (no-ops in menus/drama)
+    updateCrossing(); drawFogMarkers(); drawCrossHint();   // #P2 fog markers + the warn banner + crossing trigger
 
     drawResumeCard();   // the "previously on" catch-up card sits above every panel (only the cursor tops it)
 
