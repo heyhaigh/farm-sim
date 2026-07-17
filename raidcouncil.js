@@ -62,7 +62,7 @@ export async function requestRaidCouncil(world) {
             if (seed != null && t.line) lines.push({ seed, line: String(t.line) });
         }
         // only hand the director a script if THIS telegraph is still live (it may have landed while we waited)
-        if (lines.length >= 4 && world.pendingRaid && !world.raidEvent) {
+        if (lines.length >= 4 && world.pendingRaid === pr && !world.raidEvent) {   // #Kimi THIS telegraph only — never a later one's
             world._raidScript = { lines, i: 0, headSince: null };
         }
     } catch { /* offline pools carry the scene */ }

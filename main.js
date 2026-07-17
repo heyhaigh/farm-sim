@@ -2244,6 +2244,15 @@ function drawThreat(e, sx, sy) {
         ctx.fillStyle = '#1a1414'; ctx.fillRect(Math.round(sx - 3), Math.round(sy - 9), 2, 2); ctx.fillRect(Math.round(sx + 1), Math.round(sy - 9), 2, 2);
     }
     if (e.fell) ctx.restore();
+    // #hp-bars a raider's display-HP (chunked by the exchanges it takes — farm.js #duelExchange) rides
+    // over its head from the UNDER RAID beat until it falls or flees off the field.
+    if (e._dhp != null && !e.fell && world && world.raidEvent && world.raidEvent.struck) {
+        const bw = 13, bh = 2, bx = Math.round(sx - bw / 2), byy = Math.round(sy - 34);
+        ctx.fillStyle = '#08080a'; ctx.fillRect(bx - 1, byy - 1, bw + 2, bh + 2);
+        ctx.fillStyle = '#3a1e1e'; ctx.fillRect(bx, byy, bw, bh);
+        ctx.fillStyle = e._dhp < 0.35 ? '#e83828' : e._dhp < 0.6 ? '#e0a83c' : '#5cc850';
+        ctx.fillRect(bx, byy, Math.max(1, Math.round(bw * e._dhp)), bh);
+    }
 }
 
 // the merchant's stall: the crate stack with a little striped awning + a coin banner above
@@ -2547,7 +2556,10 @@ function drawFarmer(f, sx, sy) {
     // matter) — not the constant 90%-and-below noise it used to be. Full/lightly-scuffed farmers show nothing;
     // you read exact HP on the sheet when you follow one. Hidden while fighting/fleeing (the "!" + hurt-flash
     // carry the danger) and while asleep. (#hud legibility — reduce always-on visual clutter over every head.)
-    if (hpFrac < 0.5 && f.state !== 'sleep' && f.state !== 'fight' && f.state !== 'flee') {
+    // #hp-bars (player): from the UNDER RAID beat every combatant fights under a visible bar — the whole
+    // line AND the warband — so the battle reads like the D&D encounter it is. Full bars show too.
+    const inBattle = world.raidEvent && world.raidEvent.struck && (f.state === 'muster' || f._skirmish);
+    if ((hpFrac < 0.5 || inBattle) && f.state !== 'sleep' && (inBattle || (f.state !== 'fight' && f.state !== 'flee'))) {
         const bw = 11, bh = 2, bx = Math.floor(sx - bw / 2), byy = py - 6;
         // a clearly-framed HEALTH bar: green (mending) -> amber (hurt) -> red (critical). The old gold-amber
         // fill read as a stray yellow icon over the head and the thin stroke washed out under the CRT; a full
@@ -6429,10 +6441,11 @@ function frame(now) {
     // #nemesis THE BATTLE RECORD → SuperMemory: the frame a REAL raid's show ends, compile the round-by-round
     // record from the fx stream + the verdict and persist it as one battle document. Side-channel only (the
     // show is display; dormant raids had no show and get no doc); rehearsals are ghosts and never fire this.
-    if (world.raidEvent) _battleWatch = world.raidEvent;
-    else if (_battleWatch) {
-        const re = _battleWatch; _battleWatch = null;
-        if (re.struck && re.out && re.e) {
+    // #Kimi P0-3: compile on POINTER CHANGE, not only the set->null edge — a second raid landing (or a
+    // rehearsal staged) over a live cinematic used to orphan the displaced battle's record forever.
+    if (world.raidEvent !== _battleWatch) {
+        const re = _battleWatch; _battleWatch = world.raidEvent;
+        if (re && re.struck && re.out && re.e) {
             const nameOf = seed => { const f = world.farmers.find(x => x.sheet.seed === seed); return f ? f.sheet.name.split(' ')[0] : null; };
             const battle = {
                 rid: re.e.id || `${re.e.pairKey}:${re.e.ordinal}`,
@@ -6442,7 +6455,7 @@ function frame(now) {
                 outcome: { felled: re.out.felled, n: re.out.n, harvestLost: re.out.harvestLost },
                 hero: re.out.heroSeed != null ? nameOf(re.out.heroSeed) : null,
                 wounded: (re.out.woundSeeds || []).map(nameOf).filter(Boolean),
-                rounds: (re.fx || []).map(x => ({ who: x.who || null, text: x.text })),
+                rounds: (re.record || re.fx || []).map(x => ({ who: x.who || null, text: x.text })),   // #Kimi P0-1 the uncapped record
             };
             requestRaidDebrief(world, battle);                    // the aftermath counsel (bubbles — ghosts included)
             if (!re.rehearsal) {

@@ -1878,6 +1878,9 @@ export class World {
                 // first raid founds it (silently — a name earns its dread by RETURNING), each return increments
                 // it, and from the second raid on the telegraph names him. Deterministic: pure pairKey hash for
                 // the name, inbox events for the count — the LLM never touches this state.
+                // #Kimi P1: a raid from a DIFFERENT faction used to silently erase an un-ended war (no Book
+                // of Wars entry; the old foe would later 'debut' again at raid 1). Archive the displaced arc.
+                if (this.nemesis && !this.nemesis.ended && this.nemesis.pairKey !== e.pairKey) this.#archiveNemesis('eclipsed');
                 if (!this.nemesis || this.nemesis.ended || this.nemesis.pairKey !== e.pairKey) {
                     const nh = hashString('nemname:' + e.pairKey);
                     this.nemesis = { pairKey: e.pairKey, name: `${NEM_FOE[nh % NEM_FOE.length]} ${NEM_EPI[(nh >>> 4) % NEM_EPI.length]}`,
@@ -6096,6 +6099,9 @@ export class World {
     // seeded stream is exactly where it would have been. The two rehearsals supersede one another.
     // ------------------------------------------------------------------------------------------------
     startRaidRehearsal(nonce = 1, by = null) {
+        // #Kimi P0-4: the booth used to eat a REAL telegraph (cancelRehearsal only clears rehearsals, then the
+        // assignment below clobbered whatever remained). A live real raid outranks the director — refuse.
+        if ((this.pendingRaid && !this.pendingRaid.rehearsal) || (this.raidEvent && !this.raidEvent.rehearsal)) return false;
         this.cancelRehearsal();
         const rid = 'rehearsal:' + (nonce >>> 0);
         const dir = (hashString('raiddir:' + rid) % 360) * Math.PI / 180;
@@ -6390,6 +6396,13 @@ export class World {
             if (!re.duelsAssigned) {
                 re.duelsAssigned = true;
                 re.fx = [];
+                // #Kimi P0-1: the display fx array is CAPPED (64, shift) but the SuperMemory battle doc was
+                // compiled from it — long battles silently dropped their oldest blows. The RECORD is uncapped.
+                re.record = [];
+                // #hp-bars every combatant fights under a visible display-HP bar from the UNDER RAID beat on;
+                // raider bars are chunked by the exchanges they take (display only — the resolver's verdict
+                // and the real wounds were applied at landing, untouched).
+                for (const r of re.raiders) r._dhp = 1;
                 const rid = re.e.id || `${re.e.pairKey}:${re.e.ordinal}`;
                 const defenders = this.farmers.filter(f => this.#holdsLine(f));
                 const claimed = new Set();
@@ -6444,7 +6457,11 @@ export class World {
                 re.turnIdx = 0;
                 re.turnAt = this.time + 0.9;
                 re.cryUntil = this.time + 3.5;   // war-cries at first contact, then the fight itself does the talking
-                re.timer = 34;   // room for the sequential exchanges, the pursuit, and the survivors' run on the stores
+                // #Kimi P0-2: the flat 34s cap DECAPITATED big battles (6 duels x ~5-7 rounds at the 3-kick
+                // cadence needs ~45s+ before the accelerando bites) — every unresolved faller got a generic
+                // overrun instead of the fermata finish. Compute the bound FROM the initiative it caps.
+                const totalEx = re.initiative.reduce((s, x) => s + x.duel.rounds, 0);
+                re.timer = Math.min(80, 14 + totalEx * (60 / 132) * 3);   // worst-case beat + pursuit/loot margin
             }
             for (const r of re.raiders) {
                 if (r.fell) continue;   // dropped in their duel — they lie where the line stopped them
@@ -6504,9 +6521,10 @@ export class World {
                 // #Codex36 P2: a fall-designated raider who never got a duel (thin town) still FALLS on screen
                 // — a scripted overrun at the transition — instead of silently vanishing from the field.
                 for (const r of re.raiders) if (r.falls && !r.fell) {
-                    r.fell = true;
+                    r.fell = true; r._dhp = 0;
                     re.fx.push({ i: r.i, j: r.j, text: 'FELLED!', color: '#ff5a3c', who: `${r.foeName || 'a raider'} overrun`, at: this.time });
                     if (re.fx.length > 64) re.fx.shift();
+                    if (re.record) re.record.push({ who: `${r.foeName || 'a raider'} overrun`, text: 'FELLED!' });
                 }
                 re.raiders = re.raiders.filter(r => !r.fell && !r.falls); re.phase = 'flee'; re.timer = 2.8;
             }
@@ -6552,6 +6570,7 @@ export class World {
                     r._harryAt = this.time + 1.5;
                     f._swingAt = this.time; f._swingI = r.i - f.pos.i; f._swingJ = r.j - f.pos.j;
                     const hr = hashString('harry:' + (r.foeName || 'r') + ':' + Math.floor(this.time * 2));
+                    if (re.record) re.record.push({ who: `${r.foeName || 'a raider'} harried`, text: (hr % 2) ? 'HIT!' : 'MISS' });
                     re.fx.push({ i: r.i, j: r.j, text: (hr % 2) ? 'HIT!' : 'MISS', color: (hr % 2) ? '#ffa040' : '#9a9a8a',
                                  who: `${shortName(f)} harries ${r.foeName || 'a raider'}`, at: this.time });
                     if (re.fx.length > 64) re.fx.shift();
@@ -6586,6 +6605,7 @@ export class World {
                         f._flankAt = this.time + 2.1;
                         f._swingAt = this.time; f._swingI = tgt.i - f.pos.i; f._swingJ = tgt.j - f.pos.j;
                         const hf = hashString('flank:' + f.sheet.seed + ':' + Math.floor(this.time * 2));
+                        if (re.record) re.record.push({ who: 'the flank', text: (hf % 3) ? 'HIT!' : 'PARRY!' });
                         re.fx.push({ i: tgt.i, j: tgt.j, text: (hf % 3) ? 'HIT!' : 'PARRY!', color: (hf % 3) ? '#ffa040' : '#9ad0e0',
                                      who: `${shortName(f)} flanks ${tgt.foeName || 'a raider'}`, at: this.time });
                         if (re.fx.length > 64) re.fx.shift();
@@ -6631,11 +6651,14 @@ export class World {
     #duelExchange(re, r) {
         const d = r.duel, f = d.opp;
         const rid = re.e.id || `${re.e.pairKey}:${re.e.ordinal}`;
-        const roll = mulberry32(hashString('raidduel:' + rid + ':' + (r.foeName || 'r') + ':' + d.round))();
+        const roll = mulberry32(hashString('raidduel:' + rid + ':' + re.raiders.indexOf(r) + ':' + (r.foeName || 'r') + ':' + d.round))();   // #Kimi keyed per raider — unnamed survivors used to roll in lockstep
         const last = d.round >= d.rounds - 1;
         // fx entries carry WHO for the battle record (the round-by-round tale persisted to SuperMemory)
         const vs = `${r.foeName || 'a raider'} vs ${shortName(f)}`;
-        const fx = (i, j, text, color, who = vs) => { re.fx.push({ i, j, text, color, who, at: this.time }); if (re.fx.length > 64) re.fx.shift(); };
+        const fx = (i, j, text, color, who = vs) => {
+            re.fx.push({ i, j, text, color, who, at: this.time }); if (re.fx.length > 64) re.fx.shift();
+            if (re.record) re.record.push({ who, text });   // #Kimi P0-1 the uncapped battle record
+        };
         const farmerSwing = () => { f._swingAt = this.time; f._swingI = r.i - f.pos.i; f._swingJ = r.j - f.pos.j; };
         const raiderSwing = () => { r._swingAt = this.time; r._swingI = f.pos.i - r.i; r._swingJ = f.pos.j - r.j; };
         // footwork: unit vector raider->defender (+ its perpendicular for sidesteps)
@@ -6671,7 +6694,7 @@ export class World {
             return;
         }
         if (last && r.falls) {          // the line holds: the defender's blow lands and the raider drops
-            farmerSwing(); r.fell = true; d.done = true;
+            farmerSwing(); r.fell = true; r._dhp = 0; d.done = true;
             f._freed = true;            // free to flank the nearest live duel (the gang-up)
             fx(r.i, r.j, 'FELLED!', '#ff5a3c');
         } else if (last) {              // the raider thinks better of it — and is CHASED for it
@@ -6706,6 +6729,7 @@ export class World {
                 if (out === 'HIT!' || out === 'STAGGERED!') {
                     moveRaider(-ux * 0.7, -uy * 0.7); moveFarmer(-ux * 0.35, -uy * 0.35);   // (moving AWAY from f = -u)
                     if (out === 'STAGGERED!') d.skip = 'raider';
+                    r._dhp = Math.max(0.15, (r._dhp ?? 1) - (out === 'STAGGERED!' ? 0.34 : 0.28));   // #hp-bars the blow shows on the bar
                     fx(r.i, r.j, out, col);
                 } else {
                     if (out === 'PARRY!') moveFarmer(ux * 0.4, uy * 0.4);
