@@ -2338,7 +2338,7 @@ function drawThreat(e, sx, sy) {
     // sheet (column 0) whenever an animation sheet isn't loaded. orc-vs-orc variants animate from their tribe.
     const swinging = e._swingAt != null && world && world.time - e._swingAt < SWING_DUR;
     const hurting = e._hurtAt != null && world && world.time - e._hurtAt < HURT_DUR;
-    let sheet = img, frameCol = 0;
+    let sheet = img, frameCol = 0, walkBob = 0;
     // #sprite animation banks per foe kind: orc banks are per-variant ([1..3], for orc-vs-orc); the assassin
     // is a single sheet under key 0. death > hurt > swing > walk > idle. Every entry falls back to the idle
     // sheet (frame 0) until its animation sheet has loaded.
@@ -2373,6 +2373,11 @@ function drawThreat(e, sx, sy) {
                     sheet = wk;
                     const frames = Math.max(1, Math.round(wk.naturalWidth / c.fw));
                     frameCol = Math.floor(e._walkPhase / WALK_STRIDE) % frames;   // distance-driven gait
+                    // #sprite a GAIT BOB — most visible for the BACK (up) view, where the legs hide behind the
+                    // body and the walk otherwise reads as FLOATING (player). Screen-up = negative screen-y.
+                    const sym = (e.mvI + e.mvJ) / 2, sxm = e.mvI - e.mvJ;
+                    const up = Math.abs(sym) > Math.abs(sxm) * 0.85 && sym < 0;
+                    walkBob = Math.abs(Math.sin(e._walkPhase / WALK_STRIDE * Math.PI)) * (up ? 2.4 : 0.8);
                 }
             }
         }
@@ -2415,7 +2420,7 @@ function drawThreat(e, sx, sy) {
         }
         const row = Math.min(dirRow, rows - 1);
         const disp = Math.round(fw * ASSET_SCALE * 1.15);
-        const dx = Math.round(sx - disp / 2), dy = Math.round(sy - disp * 0.82);
+        const dx = Math.round(sx - disp / 2), dy = Math.round(sy - disp * 0.82 - walkBob);
         if (c.side && e.facing > 0) {   // side-profile source frame faces LEFT; mirror it to face right
             ctx.save(); ctx.translate(dx + disp, dy); ctx.scale(-1, 1);
             ctx.drawImage(sheet, frameCol * fw, row * fw, fw, fw, 0, 0, disp, disp);
