@@ -1596,13 +1596,13 @@ function drawTerrainChunks() {
 // positions are a pure fn of the seeded bearing + a wall-clock idle sway (display only) — no world.rand touched.
 function raidMusterFigures(pr) {
     const dir = pr.dir, n = 6, t = performance.now(), out = [];
-    const minOut = (world.townRadius ? world.townRadius() : 26) + 14;   // stage well clear of the farms, however far they sprawl
+    // #fog-adaptive muster at the REVEALED FRONTIER in the threat bearing — on an explored map they mass at
+    // the far edge of known ground (where the player looks when they jump), not a fixed ring near the farms.
+    const frontier = world.frontierDist ? world.frontierDist(dir) : (world.townRadius ? world.townRadius() + 14 : 30);
     for (let k = 0; k < n; k++) {
         const ang = dir + (k - (n - 1) / 2) * 0.26;
-        const co = Math.cos(ang), si = Math.sin(ang), m = 4;
-        const tx = co > 0 ? (GRID - m - CENTER) / co : co < 0 ? (m - CENTER) / co : Infinity;
-        const ty = si > 0 ? (GRID - m - CENTER) / si : si < 0 ? (m - CENTER) / si : Infinity;
-        const d = Math.max(minOut, Math.min(tx, ty) - 3) + 0.6 * Math.sin(t / 640 + k * 1.7);   // just inside the edge, restless
+        const co = Math.cos(ang), si = Math.sin(ang);
+        const d = frontier - 2 + 0.6 * Math.sin(t / 640 + k * 1.7);   // right at the fog's edge, restless
         const i = CENTER + co * d, j = CENTER + si * d;
         out.push({ kind: 'orc', def: { color: '#6f8f3f' }, i, j, facing: (i - j) > 0 ? -1 : 1,
                    mvI: -co, mvJ: -si,      // face in toward the town (mv picks the 4-direction sheet row)
@@ -1632,8 +1632,13 @@ function drawRaidSeam() {
     const half = 0.85;   // fan half-angle (raiders fan ~±0.5; a touch wider so it reads as "their land", not a beam)
     // the seam stands OFF the farms however far they sprawl (player: "right on top of their plots"), ramps to
     // full, holds, then FADES BACK OUT toward the horizon (player: fade both directions, no hard outer line).
-    const rIn = Math.max(26, (world.townRadius ? world.townRadius() : 22) + 5);
-    const rFull = rIn + 18, rHorizon = rIn + 58;
+    // #fog-adaptive the danger band sits at the REVEALED FRONTIER in the bearing — densest at the fog's
+    // edge (where the warband masses) and fading toward town + on into the dark, so an explored map shows the
+    // red out where the threat actually is, not a fixed ring stranded in known ground.
+    const tRad = world.townRadius ? world.townRadius() : 22;
+    const frontier = world.frontierDist ? world.frontierDist(dir) : Math.max(26, tRad + 5);
+    const rIn = Math.max(tRad + 5, frontier - 40);
+    const rFull = Math.max(rIn + 8, frontier - 6), rHorizon = frontier + 28;
     const cs = [screenToTile(0, 0), screenToTile(GW, 0), screenToTile(GW, GH), screenToTile(0, GH)];
     let iMin = Infinity, iMax = -Infinity, jMin = Infinity, jMax = -Infinity;
     for (const c of cs) { iMin = Math.min(iMin, c.i); iMax = Math.max(iMax, c.i); jMin = Math.min(jMin, c.j); jMax = Math.max(jMax, c.j); }
@@ -2693,7 +2698,7 @@ function drawFarmer(f, sx, sy) {
     const orcFrame = f.sheet.culture === 'orc' && orcSpriteReady();
 
     // tiny foot-shadow — SKIPPED for orcs (the orc crop leaves the rect floating below the feet as a "drop shadow")
-    if (!orcFrame) { ctx.fillStyle = 'rgba(10,14,10,0.35)'; ctx.fillRect(px + 4, footY, fw - 8, 2); }
+    if (!orcFrame) { const shW = Math.min(fw - 8, 14); ctx.fillStyle = 'rgba(10,14,10,0.35)'; ctx.fillRect(Math.round(sx - shW / 2), footY, shW, 2); }   // #sprite cap width so a drawn sword doesn't stretch the shadow into a line
 
     // flip for left/right on the side view so they face their movement. Humans mirror when facing<0 (their
     // source faces right); the ORC side row faces LEFT, so mirror when facing>0. Front/back rows never mirror.
@@ -2732,7 +2737,7 @@ function drawFarmer(f, sx, sy) {
     // line AND the warband — so the battle reads like the D&D encounter it is. Full bars show too.
     const inBattle = world.raidEvent && world.raidEvent.struck && (f.state === 'muster' || f._skirmish);
     if ((hpFrac < 0.5 || inBattle) && f.state !== 'sleep' && (inBattle || (f.state !== 'fight' && f.state !== 'flee'))) {
-        const bw = 11, bh = 2, bx = Math.floor(sx - bw / 2), byy = py - 6;
+        const bw = 13, bh = 2, bx = Math.floor(sx - bw / 2), byy = py - 6;   // #sprite universal HP-bar width (matches the orc bar exactly)
         // a clearly-framed HEALTH bar: green (mending) -> amber (hurt) -> red (critical). The old gold-amber
         // fill read as a stray yellow icon over the head and the thin stroke washed out under the CRT; a full
         // dark frame + the green/red ramp make it unmistakably a health bar (fix: #110).

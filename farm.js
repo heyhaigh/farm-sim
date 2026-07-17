@@ -6469,6 +6469,23 @@ export class World {
         return best;
     }
 
+    // #fog-adaptive raid frontier — how far the map is REVEALED along a bearing (the last revealed tile
+    // before the fog, or the grid edge). The warband musters + the seam + the spawn all key off THIS, so on a
+    // heavily-explored map the threat masses at the far revealed edge (where the player looks), not at a fixed
+    // ring lost in the middle of known ground. Pure fog scan (isRevealed) — deterministic, draws no rng.
+    frontierDist(dir) {
+        const co = Math.cos(dir), si = Math.sin(dir);
+        const start = Math.round(this.townRadius() + 4);
+        let last = start;
+        for (let d = start; d < GRID; d++) {
+            const i = Math.round(CENTER + co * d), j = Math.round(CENTER + si * d);
+            if (i < 0 || j < 0 || i >= GRID || j >= GRID) break;   // reached the map edge in this bearing
+            if (this.isRevealed(i, j)) last = d; else break;        // fog begins — this is the frontier
+        }
+        // clamp so a barely-explored bearing still stages clear of the farms, and a fully-explored one stays on-grid
+        return Math.max(start, Math.min(last, GRID - CENTER - 4));
+    }
+
     musterSpot(f) {
         const well = this.well, pr = this.pendingRaid;
         const base = pr ? pr.dir : 0, h = hashString(f.sheet.seed + ':muster');
@@ -6501,12 +6518,14 @@ export class World {
         for (let k = 0; k < n; k++) {
             const ang = baseAng + (k - (n - 1) / 2) * 0.28;
             const co = Math.cos(ang), si = Math.sin(ang);
-            // #131b spawn out at the FOG/MAP edge along this bearing: the farthest the ray runs before leaving the
-            // grid (a margin in from the border), so the band walks in out of the unexplored dark, not a fixed ring.
+            // #131b/#fog-adaptive spawn just BEYOND the revealed frontier in this bearing, so the band walks
+            // in out of the unexplored dark right where it mustered — not from the far grid edge across acres
+            // of known ground on a heavily-explored map. Falls back to the map edge if the fog scan comes up short.
             const m = RAID_SPAWN_MARGIN;
             const tx = co > 0 ? (GRID - m - CENTER) / co : co < 0 ? (m - CENTER) / co : Infinity;
             const ty = si > 0 ? (GRID - m - CENTER) / si : si < 0 ? (m - CENTER) / si : Infinity;
-            const d = Math.max(WILD_RADIUS + 6, Math.min(tx, ty));   // out past the wilds, at the map edge
+            const edge = Math.min(tx, ty);
+            const d = Math.max(WILD_RADIUS + 6, Math.min(edge, this.frontierDist(ang) + 5));   // at the fog's edge, out past the wilds
             const falls = k < out.felled;
             const target = falls && monSpots[k] ? { i: monSpots[k].i, j: monSpots[k].j } : { i: CENTER, j: CENTER };
             raiders.push({ kind: 'orc', def, i: CENTER + co * d, j: CENTER + si * d, facing: 1,
