@@ -251,9 +251,9 @@ let worldMapKeyOpen = false;                        // legend overlay toggle (th
 let worldMapFoundOpen = false;                      // "found a town" culture picker toggle (human / orc)
 let worldMapUiHits = null;                          // { key, found, human, orc } world-map button rects
 const WORLD_BTN = { x: 0, y: 3, w: 0, h: 12 };     // top-bar toggle, positioned in drawUI
-let settingsHits = null;                           // { music, sfx, musicSlider, sfxSlider, newBtn, close } rects (game px)
+let settingsHits = null;                           // { music, sfx, musicSlider, sfxSlider, portalBtn, admRaid, admVote, close } rects (game px)
 let settingsDrag = null;                           // 'music' | 'sfx' while dragging a volume slider
-let newConfirmUntil = 0;                           // while now < this, the NEW button reads "SURE?" and a click wipes
+// (the settings NEW TOWN reset hatch is gone — founding lives on the world map; RYFARMS.wipeSave remains for QA)
 let lastSavedDay = 0;                              // last world.day autosaved (rollover-triggered)
 let saveFlashAt = -1e9;                            // brief "SAVED" tick in the top bar
 let resumeCard = null;                             // "PREVIOUSLY ON RY FARMS" catch-up card (shown once on resume)
@@ -3540,7 +3540,7 @@ function foundNewTown(culture) {
 // Settings menu — New Town + music/SFX volume. Opened by the top-bar gear cog.
 // ---------------------------------------------------------------------------
 function drawSettings() {
-    const PW = Math.min(GW - 24, 240), PH = 210;
+    const PW = Math.min(GW - 24, 240), PH = 168;
     const PX = Math.floor((GW - PW) / 2), PY = Math.floor((GH - PH) / 2) - 6;
     ctx.fillStyle = 'rgba(6,7,11,0.72)'; ctx.fillRect(0, 18, GW, GH - 18);
     uiPanel(PX, PY, PW, PH);
@@ -3583,23 +3583,12 @@ function drawSettings() {
     drawText(ctx, memoryCaption(), IX, PY + 82, '#5a5f6c');
 
     ctx.fillStyle = '#20242f'; ctx.fillRect(PX + 4, PY + 92, PW - 8, 1);
-
-    // NEW TOWN — the two-step reset hatch, moved here out of the top bar
-    const confirming = performance.now() < newConfirmUntil;
-    const nb = { x: IX, y: PY + 100, w: PW - 16, h: 14 };
-    ctx.fillStyle = confirming ? '#3a1010' : '#2a0e0e'; ctx.fillRect(nb.x, nb.y, nb.w, nb.h);
-    ctx.strokeStyle = '#e05040'; ctx.strokeRect(nb.x + 0.5, nb.y + 0.5, nb.w - 1, nb.h - 1);
-    const nlabel = confirming ? cultureWord(world.culture, 'boot.newTownConfirm') : cultureWord(world.culture, 'boot.newTown');
-    drawText(ctx, nlabel, nb.x + Math.floor((nb.w - textWidth(nlabel)) / 2), nb.y + 4, confirming ? '#ff9080' : '#e07868');
-    settingsHits.newBtn = nb;
-    drawText(ctx, 'A NEW TOWN GROWS A NEW CAST - THIS ONE IS SAVED, NOT LOST.', IX, PY + 120, '#5a5f6c');
-
-    ctx.fillStyle = '#20242f'; ctx.fillRect(PX + 4, PY + 130, PW - 8, 1);
+    // (NEW TOWN removed — founding lives on the world map's CREATE TOWN now; the wipe hatch stays as RYFARMS.wipeSave)
 
     // #admin THE DIRECTOR'S BOOTH — stage a ghost rehearsal (raid / the vote) for videos and stress-tests.
     // Nothing a rehearsal does is recorded (no chronicle, no roles, no SuperMemory, stripped from saves).
     const rh = world.rehearsal;
-    drawText(ctx, 'ADMIN - REHEARSALS (GHOST RUNS, NOTHING RECORDED)', IX, PY + 136, '#8a6fae');
+    drawText(ctx, 'ADMIN - REHEARSALS (GHOST RUNS, NOTHING RECORDED)', IX, PY + 98, '#8a6fae');
     const admRow = (y, key, live, liveLabel, idleLabel) => {
         const b = { x: IX, y, w: PW - 16, h: 14 };
         ctx.fillStyle = live ? '#2e2410' : '#141824'; ctx.fillRect(b.x, b.y, b.w, b.h);
@@ -3608,10 +3597,10 @@ function drawSettings() {
         drawText(ctx, label, b.x + Math.floor((b.w - textWidth(label)) / 2), b.y + 4, live ? '#f0c860' : '#9ab8e8');
         settingsHits[key] = b;
     };
-    admRow(PY + 146, 'admRaid', rh && rh.kind === 'raid', 'RAID REHEARSAL LIVE - CANCEL', 'STAGE A RAID');
-    admRow(PY + 164, 'admVote', rh && rh.kind === 'election', 'VOTE REHEARSAL LIVE - CANCEL', 'STAGE THE VOTE');
+    admRow(PY + 108, 'admRaid', rh && rh.kind === 'raid', 'RAID REHEARSAL LIVE - CANCEL', 'STAGE A RAID');
+    admRow(PY + 126, 'admVote', rh && rh.kind === 'election', 'VOTE REHEARSAL LIVE - CANCEL', 'STAGE THE VOTE');
 
-    drawText(ctx, 'ESC OR CLICK OUTSIDE TO CLOSE', IX, PY + 186, '#4a4f5c');
+    drawText(ctx, 'ESC OR CLICK OUTSIDE TO CLOSE', IX, PY + 148, '#4a4f5c');
     settingsHits.panel = { x: PX, y: PY, w: PW, h: PH };
 }
 
@@ -5848,12 +5837,6 @@ out.addEventListener('pointerup', (e) => {
         if (inRect(p, settingsHits.musicSlider)) { audio.setMusicVolume((p.x - settingsHits.musicSlider.x) / settingsHits.musicSlider.w); return; }
         if (inRect(p, settingsHits.sfxSlider)) { audio.setSfxVolume((p.x - settingsHits.sfxSlider.x) / settingsHits.sfxSlider.w); return; }
         if (inRect(p, settingsHits.portalBtn)) { window.open('/memory-graph.html', '_blank', 'noopener'); return; }
-        if (inRect(p, settingsHits.newBtn)) {
-            // NEW TOWN: first click arms ("SURE?"), a second within 3s wipes the save + reloads fresh
-            if (performance.now() < newConfirmUntil) { newConfirmUntil = 0; world._retired = true; wipeTown(world.seed).finally(() => { location.href = location.pathname + '?fresh=1'; }); }   // #Codex37 P1-2: retire BEFORE wiping — no late callback may resurrect the slot
-            else newConfirmUntil = performance.now() + 3000;
-            return;
-        }
         // #admin the director's booth: stage/cancel a ghost rehearsal (raid / the vote). The wall-clock nonce
         // is the rehearsal's ONLY randomness (farm.js keys pure hashes off it — the sim's rng is never touched).
         if (settingsHits.admRaid && inRect(p, settingsHits.admRaid)) {
