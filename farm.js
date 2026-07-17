@@ -2715,7 +2715,9 @@ export class World {
             inboxWatermark: { ...(this._inboxWatermark || {}) },    // Codex #22.2 durable per-pairKey ordinal watermark
             // #131 a telegraphed raid survives a reload (seeded, plain) — but an ADMIN REHEARSAL raid is a ghost:
             // it must never ride a save (a stray save mid-show would greet the next boot with a phantom warband).
-            pendingRaid: (this.pendingRaid && !this.pendingRaid.rehearsal) ? { ...this.pendingRaid, e: { ...this.pendingRaid.e } } : null,
+            pendingRaid: (this.pendingRaid && !this.pendingRaid.rehearsal)
+                ? (({ _warCard, ...pr }) => ({ ...pr, e: { ...pr.e } }))(this.pendingRaid)   // #Codex37 P2: display scratch never rides the save (a reload mid-telegraph was permanently eating WAR SO FAR)
+                : null,
             raidsSuffered: this.raidsSuffered || 0, learned: this.learned || null,   // #134 the learning arc rides the save
             nemesis: this.nemesis ? { ...this.nemesis } : null,   // #nemesis the named-war arc rides the save (plain, deterministic)
             nemesisLog: (this.nemesisLog || []).map(x => ({ ...x })),   // #nemesis the town's book of ENDED wars

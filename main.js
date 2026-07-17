@@ -4675,7 +4675,7 @@ async function submitWhisper() {
         // #Codex36 P1-2: capture the town the whisper belongs to — the callback fires up to 20s later, and a
         // crossing in between would otherwise save the DESTINATION town and lose the whisper on the source.
         const w = world;
-        await whisper(w, f, text, () => { if (w) saveTown(w); });
+        await whisper(w, f, text, () => { if (w && !w._retired) saveTown(w); });   // #Codex37 P1-2: a retired (wiped) town stays wiped
     } catch (err) {
         console.warn('ry-farms: whisper failed', err);
     } finally {
@@ -5330,6 +5330,11 @@ function updateCrossing() {
     const di = c.i - CENTER, dj = c.j - CENTER, r = Math.hypot(di, dj);
     const T = crossThresholds();
     if (r < T.hint) return;
+    // #Codex37 P2: the stage-1 hint belongs to the DARK — over still-revealed ground near the reveal maximum
+    // it read as noise. Show it only once the camera centre is over unrevealed tiles (or past the warn line).
+    const ci2 = Math.round(c.i), cj2 = Math.round(c.j);
+    const inDark = ci2 < 0 || cj2 < 0 || ci2 >= GRID || cj2 >= GRID || !world.isRevealed(ci2, cj2);
+    if (!inDark && r < T.warn) return;
     const ang = Math.atan2(dj, di);
     let best = null, bd = Infinity;
     for (const n of crossNeighbors()) {
@@ -5490,7 +5495,7 @@ function drawMoments() {
         const e = momentQueue.shift();
         activeMoment = { e, shownAt: nowMs };
         try { audio.moment(e.tone || 'triumph'); } catch { /* audio not ready */ }
-    } else if (!activeMoment && !momentQueue.length && !calloutQueue.length && pendingInscription) {
+    } else if (!activeMoment && !activeCallout && !momentQueue.length && !calloutQueue.length && pendingInscription) {   // #Codex37 P1-1: the LAST toast finishes before the Inscription takes the stage
         // #inscription LAST in the aftermath order (debrief -> counterfactual -> grand card -> THIS): the
         // town visibly sets the battle down in its memory — the write-receipt, shown only once the
         // SuperMemory document actually landed. Synthesized display card; never enters the chronicle.
@@ -5819,7 +5824,7 @@ out.addEventListener('pointerup', (e) => {
         if (inRect(p, settingsHits.portalBtn)) { window.open('/memory-graph.html', '_blank', 'noopener'); return; }
         if (inRect(p, settingsHits.newBtn)) {
             // NEW TOWN: first click arms ("SURE?"), a second within 3s wipes the save + reloads fresh
-            if (performance.now() < newConfirmUntil) { newConfirmUntil = 0; wipeTown(world.seed).finally(() => { location.href = location.pathname + '?fresh=1'; }); }
+            if (performance.now() < newConfirmUntil) { newConfirmUntil = 0; world._retired = true; wipeTown(world.seed).finally(() => { location.href = location.pathname + '?fresh=1'; }); }   // #Codex37 P1-2: retire BEFORE wiping — no late callback may resurrect the slot
             else newConfirmUntil = performance.now() + 3000;
             return;
         }
@@ -6710,7 +6715,7 @@ function drawBootScreen(t) {
     selected = null;
 
     // the town also saves itself whenever the tab hides or closes (the rollover autosave's backstop)
-    const saveOnHide = () => { if (booted && world) saveTown(world); };
+    const saveOnHide = () => { if (booted && world && !world._retired) saveTown(world); };
     const syncTabHidden = () => { if (world) world._tabHidden = document.hidden; };   // #101 sim reads this to pause the LLM chat
     document.addEventListener('visibilitychange', () => {
         syncTabHidden();
@@ -6839,7 +6844,7 @@ function drawBootScreen(t) {
         buildingUnder: (x, y) => buildingUnder(x ?? mouse.x, y ?? mouse.y),
         resumed,                                             // did this boot hydrate a save?
         saveNow: () => saveTown(world),                      // force an autosave (returns the saved day)
-        wipeSave: () => wipeTown(world.seed),                // retire this town's slot to backup (no reload)
+        wipeSave: () => { world._retired = true; return wipeTown(world.seed); },   // retire this town's slot to backup (no reload; late saves refused)
         undoWipe: () => undoWipe().then(seed => {            // resurrect the last wiped town + resume it
             if (seed == null) { console.log('no wiped town to restore'); return null; }
             location.href = location.pathname + '?seed=' + seed; return seed;
