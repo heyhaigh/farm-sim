@@ -42,15 +42,17 @@ function shuffled(n, rand) {
 // roll is still consumed so `life`/`yrs` are identical whether or not a real town is supplied, so a soul
 // "keeping the letters at Duskvale" carries the same trade whether Duskvale is invented flavour or a town
 // that truly stood in this world's history.
-export function generateMemory(seed, placeOverride) {
+export function generateMemory(seed) {
     const rand = mulberry32((seed >>> 0) || 1);
     const life = LIVES[Math.floor(rand() * LIVES.length)];
-    const rolledPlace = LIFE_PLACES[Math.floor(rand() * LIFE_PLACES.length)];
-    const place = placeOverride || rolledPlace;
+    const place = LIFE_PLACES[Math.floor(rand() * LIFE_PLACES.length)];
     const yrs = 3 + Math.floor(rand() * 15);
     const title = life.title(place);
+    // `place` is carried so the LIVE lineage layer (main.js) can re-site the DISPLAYED past life at a real
+    // remembered town by string-swap AFTER growth — never by regenerating (which would collapse identity)
+    // and never touching `content` (which classifyMemory reads for stats).
     return { id: 'life:' + (seed >>> 0), title: title[0].toUpperCase() + title.slice(1),
-        summary: `${yrs} years of ${title}, ${life.tail}.`, content: `${life.kw} ${place}` };
+        summary: `${yrs} years of ${title}, ${life.tail}.`, content: `${life.kw} ${place}`, place };
 }
 
 // A whole town's founding cast of invented lives — DISTINCT vocations + places spread across the crew so a
@@ -64,7 +66,7 @@ export function generateCrew(seed, count = 16) {
         const yrs = 3 + (hashString('life:' + seed + ':' + i) % 15);
         const title = life.title(place);
         out.push({ id: 'life:' + (seed >>> 0) + ':' + i, title: title[0].toUpperCase() + title.slice(1),
-            summary: `${yrs} years of ${title}, ${life.tail}.`, content: `${life.kw} ${place}` });
+            summary: `${yrs} years of ${title}, ${life.tail}.`, content: `${life.kw} ${place}`, place });
     }
     return out;
 }

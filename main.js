@@ -1,6 +1,6 @@
 // main.js — Ry Farms: rendering, camera, input, UI, boot.
 
-import { fetchMemories, generateCrew, generateMemory, mod, fmtMod, STAT_NAMES, TRAIT_NAMES, TRAIT_LABELS, hashString, mulberry32 } from './dna.js';
+import { fetchMemories, generateCrew, mod, fmtMod, STAT_NAMES, TRAIT_NAMES, TRAIT_LABELS, hashString, mulberry32 } from './dna.js';
 import { audio } from './audio.js';
 import { World, CHUNK, T, GRID, CENTER, DAY_LENGTH, NIGHT_LENGTH, ITEMS, CRAFTABLES, RECIPE_BY_ID, INVENTION_TABLE, RARE_NAME, xpForLevel, obstacleTier, treeVariant, treeIsFruit, SEASONS } from './farm.js';
 import {
@@ -6329,16 +6329,26 @@ function spawnFarmer(lineage = null) {
     // slots) — don't pre-guard on free slots or ring 2 can never open.
     const pick = pickMemory();
     // #lineage a soul hails from a REAL remembered town (their forebear's, if an heir; else a seeded pick).
-    // An invented past life is RE-SITED there before growth, so "keeping the letters at Duskvale" names a
-    // town that truly stood in this world — not flavour. Live path only; determinism-clean (seed hash, no rng).
     const origin = originFor(pick.memory, pick.mutation, lineage);
-    if (origin && typeof pick.memory.id === 'string' && pick.memory.id.startsWith('life:')) {
-        const s = parseInt(pick.memory.id.slice(5), 10);
-        if (Number.isFinite(s)) pick.memory = generateMemory(s, origin.name);   // same trade + years, real place
-    }
+    // Grow from the ORIGINAL memory — its id/seed/vocation/stats are untouched (#Codex40 P0: regenerating
+    // collapsed every founder to one identity; #Codex40 P1: classifyMemory reads content, so the place must
+    // not enter growth). AFTER growth we re-site only the DISPLAYED past life (title/summary) at the real
+    // town, on a COPY, so "keeping the letters at Duskvale" names a town that truly stood here — as flavour
+    // over an unchanged farmer. The real place still surfaces on the sheet + in memory echoes.
     const f = world.addFarmer(pick.memory, pick.mutation, lineage);
     if (f) {
-        if (origin) f.sheet.origin = { seed: origin.seed, name: origin.name };
+        if (origin) {
+            f.sheet.origin = { seed: origin.seed, name: origin.name };
+            const mem = f.sheet.memory;
+            if (mem && mem.place && mem.place !== origin.name && typeof mem.title === 'string') {
+                f.sheet.memory = {
+                    ...mem,
+                    title: mem.title.split(mem.place).join(origin.name),
+                    summary: typeof mem.summary === 'string' ? mem.summary.split(mem.place).join(origin.name) : mem.summary,
+                    place: origin.name,   // content stays ORIGINAL — stats/archetype never move
+                };
+            }
+        }
         terrainDirty = true; selected = f;
     } else world.addLog('No room left! The valley is full.', '#e0a03c');
 }
