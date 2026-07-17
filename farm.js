@@ -596,9 +596,11 @@ function tileNoise(i, j, scale, seed = 0) {
 
 const FACILITY_DEFS = {
     pond: { label: 'water garden', w: 3, h: 3, produce: 'lily & fish' },
-    coop: { label: 'chicken coop', w: 3, h: 3, produce: 'eggs' },
-    pen:  { label: 'livestock pen', w: 3, h: 3, produce: 'milk' },
-    sheeppen: { label: 'sheep pen', w: 3, h: 3, produce: 'wool' },
+    // #pens (player direction): livestock get REAL, roomier enclosures — a fenced run/pen/fold drawn around
+    // the region, animals contained inside (see #tickProducers), crops excluded (see #rebuildFields).
+    coop: { label: 'chicken run', w: 4, h: 4, produce: 'eggs', penned: true },
+    pen:  { label: 'livestock pen', w: 5, h: 4, produce: 'milk', penned: true },
+    sheeppen: { label: 'sheep fold', w: 4, h: 4, produce: 'wool', penned: true },
     mill: { label: 'mill', w: 3, h: 3, produce: null, workstation: true },   // #99b: grinds wheat -> grain (chicken/fish feed)
     hatchery: { label: 'hatch house', w: 3, h: 3, produce: null, workstation: true },   // #100: hatches eggs -> chickens
 };
@@ -4031,6 +4033,8 @@ export class World {
         for (const key of plot.cells) {
             const c = key.indexOf(','), i = +key.slice(0, c), j = +key.slice(c + 1);
             if (this.#inHouse(plot, i, j) || !this.#interiorCell(plot, i, j)) continue;
+            // #pens facility regions are the animals' designated ground — crops stay OUT of the enclosures
+            if (plot.facilities.some(fc => i >= fc.x && i < fc.x + fc.w && j >= fc.y && j < fc.y + fc.h)) continue;
             const t = this.get(i, j);
             if (t === T.GRASS || t === T.TILLED) plot.fields.push({ i, j });
         }
@@ -4572,6 +4576,10 @@ export class World {
                     for (let i = x; i < x + def.w; i++) {
                         const t = this.get(i, j);
                         if (!this.#hasCell(plot, i, j) || this.#inHouse(plot, i, j) || (t !== T.GRASS && t !== T.TILLED) || this.cropAt(i, j)) { ok = false; break; }
+                        // #pens never overlap an existing facility's region — only the struct tile is
+                        // solid, so grassy pen interiors used to pass this scan and mills/hatcheries
+                        // ended up INSIDE the chicken run (invisible at 3x3; ugly with drawn fences)
+                        if (plot.facilities.some(fc => i >= fc.x && i < fc.x + fc.w && j >= fc.y && j < fc.y + fc.h)) { ok = false; break; }
                     }
                 }
                 // the 1-tile border must not be water / a building / the house
@@ -4631,7 +4639,7 @@ export class World {
         for (const otherFac of plot.facilities) for (const pr of otherFac.producers) {
             if (pr.kind === 'fish' || pr.kind === 'pad') continue;   // pond life belongs on the water
             if (!this.#producerCanStand(plot, pr.fx, pr.fy)) {
-                const spot = this.#nearestYardTile(plot, pr.fx, pr.fy);
+                const spot = this.#nearestYardTile(plot, pr.fx, pr.fy, pr.region);
                 if (spot) { pr.fx = spot.i + 0.5; pr.fy = spot.j + 0.5; pr.vx = 0; pr.vy = 0; }
             }
         }
@@ -5424,7 +5432,7 @@ export class World {
                         // tile — the doorway where a tucked-in animal is parked is itself valid, so
                         // sleeping animals are left alone (Codex #2, Opus Area 4).
                         if (!p.inside && !this.#producerCanStand(plot, p.fx, p.fy)) {
-                            const spot = this.#nearestYardTile(plot, p.fx, p.fy);
+                            const spot = this.#nearestYardTile(plot, p.fx, p.fy, p.region);
                             if (spot) { p.fx = spot.i + 0.5; p.fy = spot.j + 0.5; p.vx = 0; p.vy = 0; }
                         }
                         if (night && fac.struct) {
@@ -5466,8 +5474,12 @@ export class World {
                             }
                             const px = p.fx, py = p.fy;
                             p.fx += p.vx * dt; p.fy += p.vy * dt;
-                            // stay inside the fenced yard, off water/buildings/rocks
-                            const bx0 = plot.x + 0.4, bx1 = plot.x + plot.w - 0.4, by0 = plot.y + 0.4, by1 = plot.y + plot.h - 0.4;
+                            // #pens stay INSIDE the animal's own enclosure (the pond-life treatment, at last
+                            // applied to the land animals too — they no longer roam the crops); producers
+                            // from an old save without a region fall back to the whole fenced yard.
+                            const rr = p.region, pad = 0.4;
+                            const bx0 = rr ? rr.x + pad : plot.x + pad, bx1 = rr ? rr.x + rr.w - pad : plot.x + plot.w - pad;
+                            const by0 = rr ? rr.y + pad : plot.y + pad, by1 = rr ? rr.y + rr.h - pad : plot.y + plot.h - pad;
                             if (p.fx < bx0) { p.fx = bx0; p.vx = Math.abs(p.vx); }
                             if (p.fx > bx1) { p.fx = bx1; p.vx = -Math.abs(p.vx); }
                             if (p.fy < by0) { p.fy = by0; p.vy = Math.abs(p.vy); }
@@ -5503,12 +5515,14 @@ export class World {
         const i = Math.floor(fx), j = Math.floor(fy);
         return plot.cells.has(pkey(i, j)) && !this.pathBlocked(i, j);
     }
-    // nearest owned, walkable yard tile — where a stranded animal (on a coop/barn tile) hops to
-    #nearestYardTile(plot, fx, fy) {
+    // nearest owned, walkable yard tile — where a stranded animal (on a coop/barn tile) hops to.
+    // #pens with a region, the rescue stays INSIDE the animal's own enclosure.
+    #nearestYardTile(plot, fx, fy, region = null) {
         let best = null, bd = Infinity;
         for (const key of plot.cells) {
             const c = key.indexOf(','), i = +key.slice(0, c), j = +key.slice(c + 1);
             if (this.pathBlocked(i, j)) continue;
+            if (region && (i < region.x || i >= region.x + region.w || j < region.y || j >= region.y + region.h)) continue;
             const d = Math.abs(i + 0.5 - fx) + Math.abs(j + 0.5 - fy);
             if (d < bd) { bd = d; best = { i, j }; }
         }

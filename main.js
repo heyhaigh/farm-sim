@@ -1733,6 +1733,46 @@ function collectDrawables() {
         for (let k = 0; k < nPosts * 2; k += 2) list.push(post(o.posts[k], o.posts[k + 1]));
         for (let k = 0; k < nRails * 4; k += 4) list.push(rail(o.rails[k], o.rails[k + 1], o.rails[k + 2], o.rails[k + 3]));
     }
+
+    // #pens dedicated livestock enclosures — an inner fence around each animal facility's region,
+    // with a gate gap on the house-facing side, plus a trampled-ground wash. Render-only (draw math
+    // uses no world.rand); the sim-side containment lives in farm.js #tickProducers.
+    const PEN_WASH = { coop: 'rgba(196,168,90,0.16)', pen: 'rgba(122,88,56,0.18)', sheeppen: 'rgba(214,206,178,0.16)' };
+    for (const plot of world.plots) {
+        if (!plot.built.fence) continue;
+        for (const fac of plot.facilities) {
+            const wash = PEN_WASH[fac.type];
+            if (!wash) continue;   // pond/mill/hatchery aren't pens
+            const { x, y, w, h } = fac;
+            // ground wash first (sorted far behind everything local, i.e. on the ground)
+            const topSy = cam.y + isoY(x, y);
+            list.push({
+                y: topSy - 999,
+                draw: () => {
+                    ctx.fillStyle = wash;
+                    for (let j = y; j < y + h; j++) for (let i = x; i < x + w; i++) {
+                        const cxp = cam.x + isoX(i + 0.5, j + 0.5), cyp = cam.y + isoY(i + 0.5, j + 0.5);
+                        ctx.beginPath();
+                        ctx.moveTo(cxp, cyp - TILE_H / 2); ctx.lineTo(cxp + TILE_W / 2, cyp);
+                        ctx.lineTo(cxp, cyp + TILE_H / 2); ctx.lineTo(cxp - TILE_W / 2, cyp);
+                        ctx.closePath(); ctx.fill();
+                    }
+                },
+            });
+            // gate on the side facing the house: skip that side's middle rail segment
+            const hc = plot.house ? { x: plot.house.i + 2.5, y: plot.house.j + 2.5 } : { x: plot.x + plot.w / 2, y: plot.y + plot.h / 2 };
+            const dx = hc.x - (x + w / 2), dy = hc.y - (y + h / 2);
+            const gateSide = Math.abs(dx) >= Math.abs(dy) ? (dx < 0 ? 'W' : 'E') : (dy < 0 ? 'N' : 'S');
+            const gateAt = { N: x + (w >> 1), S: x + (w >> 1), W: y + (h >> 1), E: y + (h >> 1) }[gateSide];
+            const seg = (i0, j0, i1, j1, side, pos) => {
+                if (!(side === gateSide && pos === gateAt)) list.push(rail(i0, j0, i1, j1));
+            };
+            for (let i = x; i < x + w; i++) { seg(i, y, i + 1, y, 'N', i); seg(i, y + h, i + 1, y + h, 'S', i); }
+            for (let j = y; j < y + h; j++) { seg(x, j, x, j + 1, 'W', j); seg(x + w, j, x + w, j + 1, 'E', j); }
+            for (let i = x; i <= x + w; i++) { list.push(post(i, y)); list.push(post(i, y + h)); }
+            for (let j = y + 1; j < y + h; j++) { list.push(post(x, j)); list.push(post(x + w, j)); }
+        }
+    }
     function post(i, j) {
         const sx = cam.x + isoX(i, j), sy = cam.y + isoY(i, j);
         return { y: sy, draw: () => ctx.drawImage(fencePost, Math.floor(sx - 2), Math.floor(sy - 8)) };

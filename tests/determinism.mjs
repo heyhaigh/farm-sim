@@ -55,10 +55,12 @@ const BASELINE = {
     // rolls — illness needs a STREAK (`roughStreak>=2`), roofless exposure past the grace, or a rough night in
     // inclement weather (storm/blizzard), always a CON save whose DC scales with the streak/exposure/weather. New
     // serialized farmer fields `roughStreak`/`nightsExposed`. Changes the day-2+ dawn-check trajectory; same-twice held.
-    20260706: 'b9fdb11b',
-    42: '49314834',
-    7: '246728a5',
-    3: '640f109e',
+    // re-pinned 2026-07-16: #pens (livestock enclosures — bigger facility footprints,
+    // region-clamped animals, crops excluded from pens) legitimately shifts the trajectory
+    20260706: 'b99cfce8',
+    42: 'cb7b50c8',
+    7: 'da0a209c',
+    3: 'aebbd12e',
 };
 
 function boot(seed, culture) {
