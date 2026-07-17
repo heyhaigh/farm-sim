@@ -21,3 +21,16 @@ assets/
 
 # SuperMemory local self-hosted store (encrypted data + embedding models)
 .supermemory/
+
+# 1-bit icon reference pack (browsed in component-library/index.html) — NOT a runtime
+# dependency of the game; 1.6k reference PNGs that don't belong in the shipped repo
+component-library/
+
+# personal Claude Code skill/config files — never belong in the project repo
+.agents/
+.claude/
+skills-lock.json
+
+# council/kimi/review scratch output + review packets (workflow scratch, not deliverables)
+.council-*.md
+KIMI_REVIEW_PACKET.md

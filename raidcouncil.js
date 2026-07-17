@@ -151,8 +151,13 @@ export async function requestDuelBeat(world) {
         if (!data || data.fallback || !data.beat) throw new Error(data?.error || 'no beat');
         const b = data.beat;
         if ((b.stunt === 'shove' || b.stunt === 'taunt') && (b.by === 'foe' || b.by === 'defender') && b.bark) {
-            // only hand it over while THIS raid is still on its way (or on the field)
-            if (world.pendingRaid === pr || world.raidEvent) world._duelBeat = { stunt: b.stunt, by: b.by, bark: String(b.bark).slice(0, 90) };
+            // #Codex38 P1-4: STAMP the beat with the raid it was written for and only hand it over if THAT
+            // raid is still the current one — `|| world.raidEvent` used to accept ANY active raid, so a late
+            // response for raid A could bark at raid B's focus duel. farm.js re-checks the id at consume.
+            const rid = pr.e && (pr.e.id || (pr.e.pairKey + ':' + pr.e.ordinal));
+            const cur = world.pendingRaid || world.raidEvent;
+            const curRid = cur && cur.e && (cur.e.id || (cur.e.pairKey + ':' + cur.e.ordinal));
+            if (rid && rid === curRid) world._duelBeat = { stunt: b.stunt, by: b.by, bark: String(b.bark).slice(0, 90), rid };
         }
     } catch { /* the seeded house beat carries the moment */ }
     finally { clearTimeout(timer); beatInflight = false; }

@@ -39,6 +39,10 @@ function idbReq(mode, fn) {
 // transaction: read the stored snapshot; if another tab has advanced past our rev, REFUSE the write (don't
 // clobber a newer snapshot with our stale state and regress the town's day). On success, advance our rev.
 export async function saveTown(world) {
+    // #Codex38 P0-1 — a WIPED town must never be recreated by ANY save path (autosave, saveNow(),
+    // a late whisper/debrief callback). The guard is centralized here so every caller is covered, and
+    // re-checked inside the transaction so a wipe landing mid-write can't slip a put past it.
+    if (world._retired) return null;
     try {
         const data = world.serialize();               // data._rev = world._rev
         const key = 'town:' + world.seed, myRev = data._rev || 0;
@@ -46,19 +50,21 @@ export async function saveTown(world) {
         const committed = await new Promise((resolve, reject) => {
             const tx = db.transaction(STORE, 'readwrite');
             const store = tx.objectStore(STORE);
-            let ahead = false;
+            let ahead = false, retired = false;
             const g = store.get(key);
             g.onsuccess = () => {
+                if (world._retired) { retired = true; return; }   // wiped after we began — do not recreate the slot
                 const stored = g.result;
                 if (stored && (stored._rev || 0) > myRev) { ahead = true; return; }   // another tab is ahead — don't put
                 data._rev = myRev + 1;
                 store.put(data, key);
             };
             g.onerror = () => reject(g.error);
-            tx.oncomplete = () => resolve(!ahead);
+            tx.oncomplete = () => resolve(!ahead && !retired);
             tx.onerror = () => reject(tx.error);
             tx.onabort = () => reject(tx.error || new Error('save txn aborted'));
         });
+        if (world._retired) return null;
         if (!committed) { console.warn('ry-farms: save refused — another tab holds a newer snapshot of this town (reload to catch up)'); return null; }
         world._rev = data._rev;                        // adopt the advanced rev in memory
         await idbReq('readwrite', s => s.put({ seed: world.seed, day: data.day, season: data.season, year: data.year, savedAt: Date.now() }, 'latest'));

@@ -14,7 +14,7 @@ scripted Krul the Howler — this town fought him three times, and both sides re
    `RYFARMS.raid()` twice, let both play out fully, ~5 min.
 4. **Rehearse the run once with the booth** (Settings → STAGE A RAID): full show, zero writes — the demo
    itself uses a REAL raid so the write is real. **Stopwatch it on the demo machine, audio ON** (Kimi:
-   battle length scales with band size — a 5-6 duel fight runs ~45-60s; if the rehearsal overruns the
+   battle length scales with band size — a full 4-raider fight runs ~40s (the party caps at 4); if the rehearsal overruns the
    budget, re-budget the script to 2 minutes rather than cutting the finale). **Screen-record this ghost
    run as the fallback video** — the live demo depends on network + local LLM + audio + two tabs.
 5. Console ready with: `RYFARMS.demoRaid()` (real raid, compressed clock: alarm ~4s, lands ~14s).

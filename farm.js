@@ -4646,15 +4646,21 @@ export class World {
                 if (World.#rectGap(f, hr) <= 2 || plot.facilities.some(o => home.has(o) && World.#rectGap(f, o) <= 1)) { home.add(f); grew = true; }
             }
         }
+        // #Codex38 P1-3: a facility is only left where it stands if it is a PROPER part of the yard —
+        // home, at its current (non-legacy) def size, AND not overlapping a sibling. A home-but-legacy or
+        // home-but-overlapping facility (e.g. a 3x3 coop sitting on a mill near the house) still relocates,
+        // else yardV:1 would freeze the overlap forever.
+        const defSize = t => FACILITY_DEFS[t] || null;
+        const isLegacy = f => { const d = defSize(f.type); return !!d && (f.w !== d.w || f.h !== d.h); };
+        const overlaps = f => plot.facilities.some(o => o !== f && !(f.x + f.w <= o.x || o.x + o.w <= f.x || f.y + f.h <= o.y || o.y + o.h <= f.y));
         for (const fac of plot.facilities) {
-            if (home.has(fac)) continue;
+            if (home.has(fac) && !isLegacy(fac) && !overlaps(fac)) continue;   // already a clean, right-sized part of the yard
             // try the roomier def size first (legacy pens upgrade as they come home); on a plot too
             // tight for that (thin ribbon farms), retry at the facility's CURRENT footprint
             const target = this.#findFacilityRegion(plot, fac.type, { ignore: fac })
                 || this.#findFacilityRegion(plot, fac.type, { ignore: fac, size: { w: fac.w, h: fac.h } });
             if (!target) continue;   // no room by the house — it stays where it stood (graceful)
             this.#moveFacility(plot, fac, target);
-            home.add(fac);
         }
         this.#rebuildFields(plot);
     }
@@ -6424,6 +6430,7 @@ export class World {
     // watched raid draws zero sim rng and touches zero authoritative state. The felled raiders (first
     // `out.felled`) march to their monument spots and drop there; survivors press the centre, then flee.
     #stageRaidCinematic(out, e, monSpots, dir) {
+        this._duelBeat = null;   // #Codex38 P1-4: a beat left over from a prior raid never carries into this one
         const rr = mulberry32(hashString('raidfx:' + (e.id || `${e.pairKey}:${e.ordinal}`) + ':' + this.seed));
         const def = ENCOUNTER_DEFS.orc, n = out.n;
         // #131 march the warband in from the SAME seeded flank the threat tell pointed at (so "gathers to the
@@ -6768,7 +6775,10 @@ export class World {
         // untouched). Ghost raids stage it too — a beat is a performance, not a record.
         if (r === re.focus && d.round === Math.floor(d.rounds / 2) && !d.beatDone && !last) {
             d.beatDone = true;
-            const beat = this._duelBeat; this._duelBeat = null;
+            // #Codex38 P1-4: only a beat STAMPED for THIS raid may play — a late arrival for a prior raid
+            // (its rid won't match) is dropped and the seeded house beat carries the moment instead.
+            const beat = (this._duelBeat && this._duelBeat.rid === rid) ? this._duelBeat : null;
+            this._duelBeat = null;
             const hb = hashString('beat:' + rid);
             const stunt = (beat && (beat.stunt === 'taunt' || beat.stunt === 'shove')) ? beat.stunt : 'shove';
             const by = (beat && (beat.by === 'foe' || beat.by === 'defender')) ? beat.by : ((hb % 2) ? 'foe' : 'defender');

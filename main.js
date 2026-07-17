@@ -252,6 +252,7 @@ let worldMapFoundOpen = false;                      // "found a town" culture pi
 let worldMapUiHits = null;                          // { key, found, human, orc } world-map button rects
 const WORLD_BTN = { x: 0, y: 3, w: 0, h: 12 };     // top-bar toggle, positioned in drawUI
 let settingsHits = null;                           // { music, sfx, musicSlider, sfxSlider, portalBtn, admRaid, admVote, close } rects (game px)
+let adminNote = null;                               // #Codex38 P2-5 transient booth feedback { text, until } (ms)
 let settingsDrag = null;                           // 'music' | 'sfx' while dragging a volume slider
 // (the settings NEW TOWN reset hatch is gone — founding lives on the world map; RYFARMS.wipeSave remains for QA)
 let lastSavedDay = 0;                              // last world.day autosaved (rollover-triggered)
@@ -3670,7 +3671,9 @@ function drawSettings() {
     admRow(PY + 108, 'admRaid', rh && rh.kind === 'raid', 'RAID REHEARSAL LIVE - CANCEL', 'STAGE A RAID');
     admRow(PY + 126, 'admVote', rh && rh.kind === 'election', 'VOTE REHEARSAL LIVE - CANCEL', 'STAGE THE VOTE');
 
-    drawText(ctx, 'ESC OR CLICK OUTSIDE TO CLOSE', IX, PY + 148, '#4a4f5c');
+    // #Codex38 P2-5: the booth REFUSES to stage over a real raid — say so, instead of silently closing
+    if (adminNote && performance.now() < adminNote.until) drawText(ctx, adminNote.text, IX, PY + 142, '#e0a850');
+    else drawText(ctx, 'ESC OR CLICK OUTSIDE TO CLOSE', IX, PY + 148, '#4a4f5c');
     settingsHits.panel = { x: PX, y: PY, w: PW, h: PH };
 }
 
@@ -5911,7 +5914,10 @@ out.addEventListener('pointerup', (e) => {
         // is the rehearsal's ONLY randomness (farm.js keys pure hashes off it — the sim's rng is never touched).
         if (settingsHits.admRaid && inRect(p, settingsHits.admRaid)) {
             if (world.rehearsal && world.rehearsal.kind === 'raid') world.cancelRehearsal();
-            else { world.startRaidRehearsal((performance.now() * 31) >>> 0 || 1, adminFoeName()); settingsOpen = false; }
+            // #Codex38 P2-5: only close on success; a refusal (a real raid is under way) keeps the panel
+            // open with a reason instead of closing as though the rehearsal staged.
+            else if (world.startRaidRehearsal((performance.now() * 31) >>> 0 || 1, adminFoeName())) settingsOpen = false;
+            else adminNote = { text: 'A REAL RAID IS UNDER WAY - REHEARSAL HELD', until: performance.now() + 3000 };
             return;
         }
         if (settingsHits.admVote && inRect(p, settingsHits.admVote)) {
