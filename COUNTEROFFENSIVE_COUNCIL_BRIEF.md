@@ -70,6 +70,31 @@ own hands.*
    counter-offensive deepen the loop meaningfully (the town's turn from victim to actor, chronicled and
    persisted), or is it spectacle that doesn't touch memory? What's the ONE beat that makes it land?
 
+## RESOLVED CALLS (post-council + Fable, user-approved 2026-07-17)
+Council (GPT-5.6-sol, Kimi-K3, DeepSeek, Gemini, Grok) + Fable synthesized; user ratified:
+1. **Trigger** — grievance threshold = deterministic ELIGIBILITY (accrual/decay/**consume+cooldown**, one-shot);
+   a **FAILABLE, seeded, LLM-free VOTE** = authorization (Fable+Kimi's human beat, per user); the **sworn-against
+   hero calls it**. The vote authorizes an already-eligible proposal — it is NOT the trigger itself.
+2. **Spoils** — **RECLAIMED from recorded `harvestLost`** (the grievance ledger), capped. NEVER fabricated
+   (Kimi's doctrine violation: faked spoils chronicled to SuperMemory = the system's first dishonest memory).
+3. **Nemesis** — **DEEPEN in v1** (Fable's better common case: victory with the foe ESCAPED = escalation you
+   chose). The rare, somber **gate-ending waits for P3's real cross-town hand-off** (per user).
+4. **Stakes** — ≤1 downed behind a minimum-viable-workforce FLOOR; **the hero is NOT exempt** (per user);
+   cost legible in crops. **Kimi's gem (per user): an inbound raid landing while the party is AWAY leaves the
+   town undefended** — the real stakes mechanic.
+5. **Town change** — resilience default + a doctrine SCAR + **the vote remembered** (can cost an election);
+   the victim-becomes-raider arc only as a RARE EMERGENT tip, never scripted.
+6. **Determinism** — the telegraph/render phase is render-only (zero re-pin); the **sim-side sortie is a
+   DELIBERATE re-pin** (like #131) + a **watched-vs-dormant determinism TEST GATE**, not just doctrine.
+7. **The beat** — the **reversed telegraph** ("FOR THE FIRST TIME, IT IS {TOWN} THAT CLOSES FROM THE {DIR}")
+   + the **grievance ledger read aloud as the declaration** (memory made CAUSAL, not write-only).
+
+**BUILD ORDER (approved):** **Phase 0 (build now)** — the booth-staged war-party STAGECRAFT alone
+(muster → march out through the fog → reversed-telegraph marquee → return → debrief), render-only, zero
+consequence-web — delivers most demo value at near-zero risk (Kimi+GPT's foreclosed finding, per user).
+**Phase 1** — deterministic trigger + failable vote. **Phase 2** — sim-side sortie (accept re-pin + test
+gate, reclaimed spoils, away-party stakes). **Phase 3 (deferred)** — real cross-town hand-off + gate-ending.
+
 ## Deliverable
 Ranked findings on the 7 questions, a phased build order (render-first → sim-side → cross-town), and the
 hard-decision calls (trigger mechanism, nemesis coupling, downing-vs-wounding, town-change yes/no). A clean

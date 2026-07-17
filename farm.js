@@ -892,6 +892,7 @@ export class World {
                                    // seeded facts (inbox events + the resolver's verdict); the LLM merely VOICES it.
                                    // Rides the save. "Two Kruls is zero Kruls" — one arc at a time, ever.
         this.rehearsal = null;     // #admin the director's booth: an ADMIN-TRIGGERED ghost run of a raid or the vote
+        this.sortie = null;        // #counteroffensive PHASE 0 the OUTBOUND war party (booth ghost, render-only, never serialized)
                                    // (live-only, never serialized). The show plays in full; NOTHING is recorded — no
                                    // chronicle/log, no stores docked, no wounds, no monuments, no role changes, no
                                    // SuperMemory. See startRaidRehearsal / startElectionRehearsal / cancelRehearsal.
@@ -5906,6 +5907,7 @@ export class World {
         }
         this.#tickFounding();   // #106 drive the day-10 gathering -> dusk ballot across the day
         this.#tickPendingRaid(); // #131 drive a telegraphed raid across its lead window (no-op unless one is pending)
+        this.#tickSortie();      // #counteroffensive drive the ghost war party (no-op unless one is staged; no rng)
         this.#tickRaidEvent(dt); // #Slice3 drive the watched raid choreography (no-op unless a raid is staged)
         this.#tickRehearsal(dt); // #admin drive an election REHEARSAL's phases (no-op unless the booth staged one)
         this.weatherTimer -= dt;
@@ -6334,6 +6336,34 @@ export class World {
         return true;
     }
 
+    // #counteroffensive PHASE 0 — the OUTBOUND war party, staged by the booth as a GHOST (render-only, never
+    // recorded, never serialized). The town's own expedition: muster at the frontier in an outbound bearing,
+    // ride out THROUGH the fog toward a remembered town, hold (gone), then return. Zero consequence-web — the
+    // witnessed stagecraft only (the reversed telegraph is the beat). The phase runs on the monotonic
+    // this.time deadline, draws NO world.rand, and the whole `sortie` is stripped from saves — so a fresh/
+    // headless world never has one and determinism is untouched. (The real trigger + stakes are Phase 1/2.)
+    startSortieRehearsal(nonce = 1, targetName = null) {
+        if ((this.pendingRaid && !this.pendingRaid.rehearsal) || (this.raidEvent && !this.raidEvent.rehearsal)) return false;
+        this.cancelRehearsal();
+        const rid = 'sortie:' + (nonce >>> 0);
+        const roster = this.rememberedTowns || [];
+        const target = targetName || (roster.length ? roster[hashString('sortietgt:' + rid) % roster.length].name
+            : (this.nemesis && this.nemesis.name && !this.nemesis.ended ? `${this.nemesis.name}'s people` : "the warband's camp"));
+        const dir = (hashString('sortiedir:' + rid) % 360) * Math.PI / 180;
+        this.sortie = { rehearsal: true, rid, dir, dirName: screenCompass(dir), target, phase: 'muster', at: this.time, n: 4 };
+        this.rehearsal = { kind: 'sortie', rid };
+        return true;
+    }
+    // Drive the ghost war party across its phases on the monotonic clock (no-op unless one is staged; no rng).
+    #tickSortie() {
+        const s = this.sortie; if (!s) return;
+        const el = this.time - s.at, to = (next, hold) => { if (el >= hold) { s.phase = next; s.at = this.time; } };
+        if (s.phase === 'muster') to('march', 4);
+        else if (s.phase === 'march') to('gone', 8);
+        else if (s.phase === 'gone') to('return', 5);
+        else if (s.phase === 'return' && el >= 7) { this.sortie = null; if (this.rehearsal && this.rehearsal.kind === 'sortie') this.rehearsal = null; }
+    }
+
     // #nemesis close the arc + write it into the town's book of wars (one place, all three endings route here).
     // Deterministic: called only from seeded sites (applyInbox 'reconciled', #applyRaidOutcome war-end).
     #archiveNemesis(outcome) {
@@ -6348,6 +6378,7 @@ export class World {
     cancelRehearsal() {
         if (this.pendingRaid && this.pendingRaid.rehearsal) { this.pendingRaid = null; this._raidScript = null; }
         if (this.raidEvent && this.raidEvent.rehearsal) this.raidEvent = null;
+        if (this.sortie && this.sortie.rehearsal) this.sortie = null;
         this.rehearsal = null;
         // farmers hijacked into 'muster'/'assemble' release on their own next check (their hold conditions
         // read pendingRaid / foundingGathering, both false again now) — no stuck states.

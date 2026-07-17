@@ -3863,7 +3863,7 @@ function foundNewTown(culture) {
 // Settings menu — New Town + music/SFX volume. Opened by the top-bar gear cog.
 // ---------------------------------------------------------------------------
 function drawSettings() {
-    const PW = Math.min(GW - 24, 240), PH = 168;
+    const PW = Math.min(GW - 24, 240), PH = 184;   // #counteroffensive taller for the STAGE A WAR PARTY row
     const PX = Math.floor((GW - PW) / 2), PY = Math.floor((GH - PH) / 2) - 6;
     ctx.fillStyle = 'rgba(6,7,11,0.72)'; ctx.fillRect(0, 18, GW, GH - 18);
     uiPanel(PX, PY, PW, PH);
@@ -3922,10 +3922,11 @@ function drawSettings() {
     };
     admRow(PY + 108, 'admRaid', rh && rh.kind === 'raid', 'RAID REHEARSAL LIVE - CANCEL', 'STAGE A RAID');
     admRow(PY + 126, 'admVote', rh && rh.kind === 'election', 'VOTE REHEARSAL LIVE - CANCEL', 'STAGE THE VOTE');
+    admRow(PY + 144, 'admSortie', rh && rh.kind === 'sortie', 'WAR PARTY LIVE - CANCEL', 'STAGE A WAR PARTY');   // #counteroffensive
 
     // #Codex38 P2-5: the booth REFUSES to stage over a real raid — say so, instead of silently closing
-    if (adminNote && performance.now() < adminNote.until) drawText(ctx, adminNote.text, IX, PY + 142, '#e0a850');
-    else drawText(ctx, 'ESC OR CLICK OUTSIDE TO CLOSE', IX, PY + 148, '#4a4f5c');
+    if (adminNote && performance.now() < adminNote.until) drawText(ctx, adminNote.text, IX, PY + 160, '#e0a850');
+    else drawText(ctx, 'ESC OR CLICK OUTSIDE TO CLOSE', IX, PY + 164, '#4a4f5c');
     settingsHits.panel = { x: PX, y: PY, w: PW, h: PH };
 }
 
@@ -6177,6 +6178,12 @@ out.addEventListener('pointerup', (e) => {
             else if (world.startElectionRehearsal((performance.now() * 31) >>> 0 || 1)) settingsOpen = false;
             return;
         }
+        if (settingsHits.admSortie && inRect(p, settingsHits.admSortie)) {   // #counteroffensive
+            if (world.rehearsal && world.rehearsal.kind === 'sortie') world.cancelRehearsal();
+            else if (world.startSortieRehearsal((performance.now() * 31) >>> 0 || 1)) settingsOpen = false;
+            else adminNote = { text: 'A REAL RAID IS UNDER WAY - WAR PARTY HELD', until: performance.now() + 3000 };
+            return;
+        }
         if (!inRect(p, settingsHits.panel)) { settingsOpen = false; return; }   // click outside closes
         return;   // click inside the panel, no-op
     }
@@ -6424,6 +6431,85 @@ function drawCueEmblem(kind, x, y) {
 // arrow at the screen edge pointing to the flank the warband comes from. Two beats: "A WARBAND GATHERS" while
 // the town still has slack (the player's intel edge — you saw it coming), then a hotter "RAIDERS CLOSING —
 // RALLY!" once the sentry's alarm has sounded. Pure display over sim-produced state (null→set edge only).
+// #counteroffensive PHASE 0 — the OUTBOUND war party stagecraft (booth ghost, render-only). Cosmetic human
+// figures muster at the frontier, ride OUT through the fog toward the target, hold (abroad), then return; the
+// marquee carries the beat (the town, for once, on the attack). The figures live nowhere in the sim.
+let sortieFigs = null, sortieFigsRid = null;
+function sortiePartyFigures(s) {
+    if (sortieFigsRid !== s.rid) {
+        sortieFigsRid = s.rid; sortieFigs = [];
+        for (let k = 0; k < s.n; k++) {
+            const seed = hashString('sortiefig:' + s.rid + ':' + k) >>> 0;
+            sortieFigs.push({ sheet: { seed, culture: 'human' }, moveDir: 'up', facing: 1, animTime: 0, state: 'walk', off: k - (s.n - 1) / 2 });
+        }
+    }
+    return sortieFigs;
+}
+function drawSortieFigure(fig, sx, sy, fogA) {
+    const frames = characterSprites(fig);
+    const frame = fig.state === 'walk' ? (Math.floor(fig.animTime * 7) % 2 ? frames.walk1 : frames.walk2) : frames.idle;
+    const fw = frame.width, fh = frame.height;
+    const px = Math.floor(sx - fw / 2), py = Math.floor(sy + TILE_H / 2 - fh + 2), footY = py + fh - 2;
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    if (fogA < 1) ctx.globalAlpha = fogA;
+    const shW = Math.min(fw - 8, 14); ctx.fillStyle = 'rgba(10,14,10,0.35)'; ctx.fillRect(Math.round(sx - shW / 2), footY, shW, 2);
+    const flip = fig.facing < 0 && fig.moveDir === 'side';
+    if (flip) { ctx.translate(px + fw, py); ctx.scale(-1, 1); ctx.drawImage(frame, 0, 0); }
+    else ctx.drawImage(frame, px, py);
+    // they ride ARMED — the sword layer over the body (reuses BATTLE_PARTS, aligned to the char rig)
+    if (battleReady() && charBox) {
+        const row = CHAR_DIRS[fig.moveDir] ?? CHAR_DIRS.down, up = row === CHAR_DIRS.up;
+        const part = up ? BATTLE_PARTS.Idle_sword_back : BATTLE_PARTS.Idle_sword;
+        if (part && part.naturalWidth) {
+            const sc = ASSET_SCALE, cellD = Math.round(CHAR_FW * sc), ox = Math.round(charBox.x * sc), oy = Math.round(charBox.y * sc);
+            if (flip) ctx.drawImage(part, 0, row * CHAR_FW, CHAR_FW, CHAR_FW, -ox, -oy, cellD, cellD);
+            else ctx.drawImage(part, 0, row * CHAR_FW, CHAR_FW, CHAR_FW, px - ox, py - oy, cellD, cellD);
+        }
+    }
+    ctx.restore();
+}
+function drawSortie() {
+    const s = world.sortie; if (!s) return;
+    const dir = s.dir, el = world.time - s.at;
+    const frontier = world.frontierDist ? world.frontierDist(dir) : 40;
+    let baseD = null, moving = true;
+    if (s.phase === 'muster') { baseD = frontier - 5; moving = false; }
+    else if (s.phase === 'march') baseD = (frontier - 5) + Math.min(1, el / 8) * 26;   // ride OUT past the fog
+    else if (s.phase === 'gone') baseD = null;                                          // abroad — off-field
+    else if (s.phase === 'return') baseD = (frontier + 21) - Math.min(1, el / 7) * 26;  // ride back IN
+    if (baseD != null && charReady()) {
+        const returning = s.phase === 'return';
+        for (const fig of sortiePartyFigures(s)) {
+            const ang = dir + fig.off * 0.13, co = Math.cos(ang), si = Math.sin(ang);
+            const i = CENTER + co * baseD, j = CENTER + si * baseD;
+            const mvI = returning ? -co : co, mvJ = returning ? -si : si;   // out = away from town; home = toward it
+            const sxm = mvI - mvJ, sym = (mvI + mvJ) / 2;
+            fig.moveDir = Math.abs(sym) > Math.abs(sxm) * 0.85 ? (sym > 0 ? 'down' : 'up') : 'side';
+            fig.facing = sxm >= 0 ? 1 : -1;
+            fig.state = moving ? 'walk' : 'idle';
+            if (moving) fig.animTime += 0.016;
+            let fogA = 1;
+            if (!world.isRevealed(Math.round(i), Math.round(j))) {
+                const ci = CENTER - i, cj = CENTER - j, nn = Math.hypot(ci, cj) || 1;
+                let depth = 12; for (let st = 1; st <= 12; st++) { if (world.isRevealed(Math.round(i + ci / nn * st), Math.round(j + cj / nn * st))) { depth = st; break; } }
+                fogA = Math.max(0.08, 0.24 - depth * 0.013);   // a touch brighter than raiders — they're OUR people
+            }
+            drawSortieFigure(fig, cam.x + isoX(i, j), cam.y + isoY(i, j), fogA);
+        }
+    }
+    // the marquee — the town, for once, on the attack (the reversed telegraph is the march-phase beat)
+    const T = (world.name || 'THE TOWN').toUpperCase(), TG = (s.target || 'THE CAMP').toUpperCase(), D = (s.dirName || 'dark').toUpperCase();
+    const line = s.phase === 'muster' ? `A WAR PARTY MUSTERS — ${T} RIDES ON ${TG}`
+        : s.phase === 'march' ? `FOR THE FIRST TIME, ${T} CLOSES ON ${TG} FROM THE ${D}`
+        : s.phase === 'gone' ? `THE WAR PARTY IS ABROAD — ${T} HOLDS ITS BREATH`
+        : `THE WAR PARTY RIDES HOME`;
+    const tw = textWidth(line), bx = Math.round(GW / 2 - tw / 2), by = 22, pulse = 0.6 + 0.4 * Math.sin(performance.now() / 300);
+    ctx.fillStyle = 'rgba(20,14,8,0.74)'; ctx.fillRect(bx - 5, by - 2, tw + 10, 11);
+    ctx.fillStyle = `rgba(224,160,64,${0.5 + 0.5 * pulse})`; ctx.fillRect(bx - 5, by - 2, tw + 10, 1); ctx.fillRect(bx - 5, by + 8, tw + 10, 1);
+    drawText(ctx, line, bx, by, '#f0c060');
+}
+
 function drawThreatTell() {
     const pr = world.pendingRaid; if (!pr) return;
     const hot = pr.detected;
@@ -6952,7 +7038,7 @@ function frame(now) {
     // B4: nudge the player toward a fresh off-screen story beat (drawn above the world, below the cursor)
     updateDramaSpotlight();
     if (booted && !rosterOpen && !chronOpen && !boardOpen) drawDramaCue();
-    if (booted && !rosterOpen && !chronOpen && !boardOpen && !worldMapOpen && !settingsOpen) drawThreatTell();   // #131
+    if (booted && !rosterOpen && !chronOpen && !boardOpen && !worldMapOpen && !settingsOpen) { drawSortie(); drawThreatTell(); }   // #131 / #counteroffensive
     updateCrossing(); drawFogMarkers(); drawCrossHint();   // #P2 fog markers + the warn banner + crossing trigger
 
     drawResumeCard();   // the "previously on" catch-up card sits above every panel (only the cursor tops it)
@@ -7207,6 +7293,7 @@ function drawBootScreen(t) {
         admin: {
             raid: () => world.startRaidRehearsal((performance.now() * 31) >>> 0 || 1, adminFoeName()),
             election: () => world.startElectionRehearsal((performance.now() * 31) >>> 0 || 1),
+            sortie: (target) => world.startSortieRehearsal((performance.now() * 31) >>> 0 || 1, target || null),   // #counteroffensive
             cancel: () => world.cancelRehearsal(),
             get active() { return world.rehearsal; },
         },
