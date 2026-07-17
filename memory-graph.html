@@ -44,7 +44,7 @@ addEventListener('resize', resize); resize();
 const C = { bg:'#0a0b0e', title:'#7dd069', sub:'#c9a45a', dim:'#6a6456', label:'#cfc6b0',
             creed:'#c8a0e0', belief:'#8fc7e8', mem:'#7dd069', rift:'#e0584a', bond:'#7dd069',
             wood:'#6d5334', woodHi:'#8a6b44', woodLo:'#4a3824', woodEdge:'#231a10', panelIn:'#191410', rivet:'#c9a45a' };
-const KIND_COL = { creed:C.creed, belief:C.belief, mem:C.mem, invention:'#e0a848' };
+const KIND_COL = { creed:C.creed, belief:C.belief, mem:C.mem, invention:'#e0a848', battle:'#ff6a50' };
 function kindOf(m){ if(/\bcreed|lives by|taught them|drilled|raised (them|to)/i.test(m)) return 'creed';
                    if(/belief|come to believe|earned belief|no longer/i.test(m)) return 'belief'; return 'mem'; }
 const RIFT = /chiselled|wronged|fell out|feud/;
@@ -67,7 +67,7 @@ function wrap(str, maxW) { const words=String(str).split(' '), out=[]; let cur='
 
 // ---- state ----
 const view = { x:0, y:0, z:1 };
-let nodes=[], links=[], farmerNodes=[], townNodes=[], selected=null, hover=null, alpha=1;
+let nodes=[], links=[], farmerNodes=[], townNodes=[], warNodes=[], selected=null, hover=null, alpha=1;
 let panelX=GW, sheetLines=[], sheetScroll=0, sheetH=0;
 function reheat(a=0.5){ alpha=Math.max(alpha,a); }
 
@@ -140,6 +140,25 @@ async function load() {
       nodes.push({ type:'mem', kind:'invention', text, parent:tn, mass:0.3,
         x:hx+Math.cos(a)*26, y:hy+Math.sin(a)*26, vx:0, vy:0, r:3, col:KIND_COL.invention });
       links.push({ a:tn, b:nodes[nodes.length-1], sat:true }); });
+    // #nemesis THE WARS: battle documents grouped by foe -> a red war hub off the town, each battle a
+    // satellite, and a 'fought' thread to every farmer the record names. The judged loop, drawn.
+    const wars = new Map();
+    (t.battles||[]).forEach(b => { const k = b.foe || 'A WARBAND'; if (!wars.has(k)) wars.set(k, []); wars.get(k).push(b); });
+    let wi = 0;
+    wars.forEach((batts, foe) => {
+      batts.sort((x,y)=> (String(x.year)+String(x.day).padStart(4,'0')).localeCompare(String(y.year)+String(y.day).padStart(4,'0')));
+      const wa = ((wi++)/Math.max(1,wars.size))*Math.PI*2 + 0.9;
+      const wn = { type:'war', name: foe, first: foe.split(' ')[0], battles: batts, town: tn, mass: 1.6,
+                   x:hx+Math.cos(wa)*70, y:hy+Math.sin(wa)*70, vx:0, vy:0, r:9, col:'#e05840' };
+      nodes.push(wn); warNodes.push(wn);
+      links.push({ a:tn, b:wn, hub:true });
+      batts.forEach((b,j)=>{ const ba = wa + (j - batts.length/2)*0.55;
+        nodes.push({ type:'mem', kind:'battle', text:b.text, parent:wn, mass:0.32,
+          x:wn.x+Math.cos(ba)*24, y:wn.y+Math.sin(ba)*24, vx:0, vy:0, r:3.2, col:KIND_COL.battle });
+        links.push({ a:wn, b:nodes[nodes.length-1], sat:true }); });
+      byName.forEach((fn, full)=>{ const first = full.split(' ')[0];
+        if (batts.some(b => new RegExp('\\b'+first+'\\b').test(b.text))) links.push({ a:wn, b:fn, label:'fought' }); });
+    });
   });
   requestAnimationFrame(tick);
 }
@@ -207,6 +226,14 @@ function draw() {
     drawText(sctx,'TOWN', Math.round(n.x-textWidth('TOWN')/2), n.y-2, '#3a2c10');
     const nm=n.name.toUpperCase(); drawText(sctx, nm, Math.round(n.x-textWidth(nm)/2), Math.round(n.y+r+3), C.sub);
   }
+  // #nemesis the WAR hubs — blood-red diamonds, the named foe below (click for the battle documents)
+  for (const n of warNodes){ const sel=n===selected, hov=n===hover, r=n.r;
+    sctx.fillStyle=n.col; sctx.beginPath();
+    sctx.moveTo(n.x,n.y-r); sctx.lineTo(n.x+r,n.y); sctx.lineTo(n.x,n.y+r); sctx.lineTo(n.x-r,n.y); sctx.closePath(); sctx.fill();
+    sctx.strokeStyle=(sel||hov)?'#fff':'#7a2a20'; sctx.lineWidth=1.5; sctx.stroke();
+    drawText(sctx,'WAR', Math.round(n.x-textWidth('WAR')/2), n.y-2, '#2a0c08');
+    const nm=n.first.toUpperCase(); drawText(sctx, nm, Math.round(n.x-textWidth(nm)/2), Math.round(n.y+r+3), '#ff8a70');
+  }
   sctx.restore();
   if (hover && hover.type==='mem') tip(hover);
   chrome();
@@ -240,6 +267,15 @@ function tip(n) {
 
 function buildSheet(n) {
   const L=[];
+  if (n.type==='war') {   // #nemesis a WAR: its battle documents, oldest first, straight from SuperMemory
+    L.push({t:n.name.toUpperCase(), c:'#ff8a70', s:2});
+    L.push({t:`${n.battles.length} ${n.battles.length===1?'BATTLE':'BATTLES'} IN SUPERMEMORY`, c:C.dim, s:1}); L.push({gap:4});
+    n.battles.forEach(b => {
+      String(b.text).split('\n').forEach((raw,i)=>{ const line=raw.trim(); if(!line) return;
+        wrap(line, PW-16).forEach((ln,k)=> L.push({t:ln, c: i===0 ? C.sub : C.label, bar: (i===0&&k===0) ? '#e05840' : null})); });
+      L.push({gap:5}); });
+    sheetLines=L; sheetScroll=0; sheetH=L.reduce((a,l)=>a+(l.gap||(l.s===2?12:7)),0); return;
+  }
   if (n.type==='town') {   // the civic record: the town's political history, as SuperMemory holds it
     L.push({t:n.name.toUpperCase(), c:C.sub, s:2}); L.push({t:"THE TOWN'S CIVIC RECORD", c:C.dim, s:1}); L.push({gap:4});
     const fc=(n.farmers||[]).length; if(fc) L.push({t:`${fc} ${fc===1?'SETTLER':'SETTLERS'} REMEMBERED`, c:C.dim, s:1});
@@ -281,6 +317,7 @@ function world(e){ const p=ptr(e); return { x:(p.x-view.x)/view.z, y:(p.y-view.y
 function overSheet(e){ return panelX<GW-1 && ptr(e).x>panelX; }
 function hit(e){ const p=world(e);
   for (const n of farmerNodes) if(Math.hypot(n.x-p.x,n.y-p.y)<=n.r+2) return n;
+  for (const n of warNodes) if(Math.hypot(n.x-p.x,n.y-p.y)<=n.r+2) return n;
   for (const n of townNodes) if(Math.hypot(n.x-p.x,n.y-p.y)<=n.r+2) return n;
   for (const n of nodes) if(n.type==='mem' && Math.hypot(n.x-p.x,n.y-p.y)<=n.r+2) return n;
   return null; }

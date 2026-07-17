@@ -85,7 +85,7 @@ module.exports = async function handler(req, res) {
     // partition every farmer-life row by townSeed and key farmers by (townSeed + name) — grouping stays
     // town-scoped and never merges two towns' same-named settlers into one inflated node.
     const townsMap = new Map();   // townSeed -> { seed, name, byName, civic[], inventions[] }
-    const getTown = (ts) => { let t = townsMap.get(ts); if (!t) { t = { seed: ts, name: null, byName: new Map(), civic: [], inventions: [] }; townsMap.set(ts, t); } return t; };
+    const getTown = (ts) => { let t = townsMap.get(ts); if (!t) { t = { seed: ts, name: null, byName: new Map(), civic: [], inventions: [], battles: [] }; townsMap.set(ts, t); } return t; };
     for (const row of allRows) {
         const m = row.metadata || {};
         if (m.kind !== 'farmer-life') continue;
@@ -118,13 +118,45 @@ module.exports = async function handler(req, res) {
         const t = getTown(String(m.townSeed ?? ''));
         const text = String(row.memory || '').trim(); if (text && !t.inventions.includes(text)) t.inventions.push(text);
     }
+    // #nemesis THE BATTLE RECORDS: search chunks battle docs into fragments and GET-by-rootMemoryId 404s
+    // on this self-host build, so discovery goes through the LIST api (metadata intact, ids GET-able), then
+    // each battle document is fetched WHOLE. Bounded (2 pages, 24 docs) + best-effort throughout.
+    const battleMetas = [];
+    try {
+        for (let page = 1; page <= 2; page++) {
+            const controller = new AbortController(); const t = setTimeout(() => controller.abort(), DEADLINE_MS);
+            let listed = null;
+            try {
+                const r = await fetch(`${base}/v3/documents/list`, { method: 'POST', headers, signal: controller.signal,
+                    body: JSON.stringify({ limit: 100, page, containerTags: ['ry-farms'], sort: 'createdAt', order: 'desc' }) });
+                listed = r.ok ? await r.json() : null;
+            } finally { clearTimeout(t); }
+            if (!listed) break;
+            for (const m of (listed.memories || [])) if ((m.metadata || {}).kind === 'battle') battleMetas.push(m);
+            const pg = listed.pagination || {}; if (!pg.totalPages || page >= pg.totalPages) break;
+        }
+    } catch { /* best-effort */ }
+    const battleFull = await Promise.all(battleMetas.slice(0, 24).map(async m => {
+        const controller = new AbortController(); const t = setTimeout(() => controller.abort(), DEADLINE_MS);
+        try {
+            const r = await fetch(`${base}/v3/documents/${encodeURIComponent(m.id)}`, { headers, signal: controller.signal });
+            return r.ok ? await r.json() : null;
+        } catch { return null; }
+        finally { clearTimeout(t); }
+    }));
+    battleFull.forEach((doc, k) => {
+        const meta = (doc && doc.metadata) || battleMetas[k].metadata || {};
+        const t = getTown(String(meta.townSeed ?? ''));
+        const text = String((doc && doc.content) || '').trim();
+        if (text && !t.battles.some(b => b.text === text)) t.battles.push({ foe: meta.foe || null, day: meta.day || '', year: meta.year || '', text });
+    });
 
     // shape each town: farmers (with memories), intra-town relationship edges, civic record, inventions.
     let totalFarmers = 0;
     const townsOut = [];
     for (const t of townsMap.values()) {
         const farmers = [...t.byName.values()].filter(f => f.memories.length);
-        if (!farmers.length && !t.civic.length && !t.inventions.length) continue;
+        if (!farmers.length && !t.civic.length && !t.inventions.length && !t.battles.length) continue;
         totalFarmers += farmers.length;
         const firsts = new Map(farmers.map(f => [f.name.split(' ')[0], f.name]));   // "Mercurial" -> "Mercurial Ry"
         // edges: a memory of A that names another farmer B (by first name) -> an A—B edge labelled by verb
@@ -143,7 +175,7 @@ module.exports = async function handler(req, res) {
             }
         }
         townsOut.push({ seed: t.seed, name: t.name, farmers, links,
-            townHistory: t.civic.length ? t.civic.join('\n') : null, inventions: t.inventions });
+            townHistory: t.civic.length ? t.civic.join('\n') : null, inventions: t.inventions, battles: t.battles });
     }
     // biggest towns first, deterministic tie-break by seed (display order only)
     townsOut.sort((a, b) => (b.farmers.length - a.farmers.length) || String(a.seed).localeCompare(String(b.seed)));
