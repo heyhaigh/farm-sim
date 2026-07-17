@@ -447,11 +447,14 @@ for (const v of [2, 3]) {
 // the sheet hasn't loaded. Display-only — no sim/determinism impact.
 const orcAttackImg = {};
 const orcHurtImg = {};
+const orcWalkImg = {};
 for (const v of [1, 2, 3]) {
     const a = new Image(); a.src = `./assets/craftpix-net-363992-free-top-down-orc-game-character-pixel-art/Tiled_files/orc${v}_attack_with_shadow.png`; orcAttackImg[v] = a;
     const h = new Image(); h.src = `./assets/craftpix-net-363992-free-top-down-orc-game-character-pixel-art/Tiled_files/orc${v}_hurt_with_shadow.png`; orcHurtImg[v] = h;
+    const wk = new Image(); wk.src = `./assets/craftpix-net-363992-free-top-down-orc-game-character-pixel-art/Tiled_files/orc${v}_walk_with_shadow.png`; orcWalkImg[v] = wk;
 }
 const SWING_DUR = 0.36, HURT_DUR = 0.34;   // display windows for the attack/hurt animations
+const WALK_STRIDE = 0.42;   // tiles travelled per walk-frame step (drives the gait off DISTANCE, so it reads right at any speed)
 
 // Roaming WILD PREY sprites (hunted for meat — see world.prey / #tickPrey). All 32x32, 4-frame idle
 // cycles; row 2 = side profile. Deer/hare side-frames face LEFT (srcFace -1), the turkey faces RIGHT.
@@ -2228,13 +2231,25 @@ function drawThreat(e, sx, sy) {
     let sheet = img, frameCol = 0;
     if (e.kind === 'orc') {
         const v = (e.art && world && world.culture === 'orc') ? e.art : 1;
-        const bank = hurting ? orcHurtImg : swinging ? orcAttackImg : null;
+        // #sprite distance travelled since the last frame drives the WALK cadence (display-only accumulator
+        // on the never-serialized raider) — so the gait matches the actual movement instead of floating.
+        const moved = e._pi != null ? Math.hypot(e.i - e._pi, e.j - e._pj) : 0;
+        e._pi = e.i; e._pj = e.j; e._walkPhase = (e._walkPhase || 0) + moved;
+        const walking = moved > 0.004 && !hurting && !swinging && !e.fell;
+        const bank = hurting ? orcHurtImg : swinging ? orcAttackImg : null;   // one-shot animations win
         const dur = hurting ? HURT_DUR : SWING_DUR, at = hurting ? e._hurtAt : e._swingAt;
         const im2 = bank && bank[v];
         if (im2 && im2.complete && im2.naturalWidth > 0) {
             sheet = im2;
             const frames = Math.max(1, Math.round(im2.naturalWidth / c.fw));
             frameCol = Math.min(frames - 1, Math.floor(((world.time - at) / dur) * frames));
+        } else if (walking) {
+            const wk = orcWalkImg[v];
+            if (wk && wk.complete && wk.naturalWidth > 0) {
+                sheet = wk;
+                const frames = Math.max(1, Math.round(wk.naturalWidth / c.fw));
+                frameCol = Math.floor(e._walkPhase / WALK_STRIDE) % frames;   // legs cycle as they cover ground
+            }
         }
     }
     // #raid-feel duel lunge: a swinging raider snaps toward their opponent and eases back (display timer set
