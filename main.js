@@ -258,6 +258,8 @@ let settingsDrag = null;                           // 'music' | 'sfx' while drag
 let lastSavedDay = 0;                              // last world.day autosaved (rollover-triggered)
 let saveFlashAt = -1e9;                            // brief "SAVED" tick in the top bar
 let resumeCard = null;                             // "PREVIOUSLY ON RY FARMS" catch-up card (shown once on resume)
+let faceoff = null;                                // #faceoff the VS card after a struck raid resolves (render-only)
+let faceoffSeenAt = -1;                            // sim-time of the last _debrief we've turned into a faceoff (change-detector)
 const BOARD_CLOSE = { x: 0, y: 0, w: 0, h: 0 };
 const BOARD_RECT = { x: 0, y: 0, w: 0, h: 0 };
 
@@ -462,6 +464,16 @@ const assassinHurtImg = mkA('Swordsman_lvl3_Hurt_with_shadow.png');
 const assassinDeathImg = mkA('Swordsman_lvl3_Death_with_shadow.png');
 const SWING_DUR = 0.36, HURT_DUR = 0.34, DEATH_DUR = 0.7;   // display windows for the attack/hurt/death animations
 const WALK_STRIDE = 0.42;   // tiles travelled per walk-frame step (drives the gait off DISTANCE, so it reads right at any speed)
+
+// #faceoff the VS-card PORTRAITS — big illustrated busts (transparent cutouts) for the fighting-game-style
+// face-off shown after a struck raid resolves. The human faces RIGHT and the orc faces LEFT, so placed on the
+// left/right they look AT each other. Purely a display card (drawFaceoff), no sim/determinism impact.
+const humanPortraitImg = new Image(); let humanPortraitReady = false;
+humanPortraitImg.onload = () => { humanPortraitReady = true; }; humanPortraitImg.onerror = () => {};
+humanPortraitImg.src = './assets/portraits/human-farmer.png';
+const orcPortraitImg = new Image(); let orcPortraitReady = false;
+orcPortraitImg.onload = () => { orcPortraitReady = true; }; orcPortraitImg.onerror = () => {};
+orcPortraitImg.src = './assets/portraits/orc-raider.png';
 
 // Roaming WILD PREY sprites (hunted for meat — see world.prey / #tickPrey). All 32x32, 4-frame idle
 // cycles; row 2 = side profile. Deer/hare side-frames face LEFT (srcFace -1), the turkey faces RIGHT.
@@ -1615,15 +1627,17 @@ function raidMusterFigures(pr) {
 const RAID_TINT = { A: '224,72,56', B: '196,56,44' };   // a danger RED, keyed to the "RAIDERS CLOSING" toast
 const seamHash = (i, j) => { let h = (i * 374761393 + j * 668265263) | 0; h = (h ^ (h >>> 13)) * 1274126177; return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };   // pure position hash, 0..1
 function drawRaidSeam() {
-    const pr = world.pendingRaid, re = world.raidEvent;
-    if (!pr && !re) return;
-    let dir;
-    if (pr) dir = pr.dir;
-    else { const r0 = re.raiders && re.raiders[0]; if (!r0) return; dir = Math.atan2(r0.j - CENTER, r0.i - CENTER); }
-    // a low ember while a warband merely GATHERS; brighter once the alarm has sounded (detected) or it has landed.
+    // #seam-warning-only the red danger seam belongs to the INITIAL RAID WARNING alone — the telegraph phase,
+    // while a warband gathers past the fog and closes on the town. The moment it LANDS (world.raidEvent) the
+    // fight itself is the drama; NO red wash over the battlefield. So we key off pendingRaid only and bail once
+    // the raid has arrived.
+    const pr = world.pendingRaid;
+    if (!pr) return;
+    const dir = pr.dir;
+    // a low ember while a warband merely GATHERS; brighter once the alarm has sounded (detected).
     // kept SEMI-TRANSPARENT (the terrain reads through) so it's a danger overlay, like the toast — not a repaint.
-    const hot = (pr && pr.detected) || !!re;
-    const base = hot ? 0.48 : 0.3;
+    const hot = !!pr.detected;
+    const base = hot ? 0.34 : 0.2;
     // the ALARM PULSE: while merely gathering the seam barely breathes; once the alarm sounds it throbs —
     // a sharp heartbeat (fast attack, slow decay) rather than a sine shimmer, so it reads as the alarm itself.
     const tNow = performance.now();
@@ -1657,19 +1671,20 @@ function drawRaidSeam() {
             // this tile's LOCAL fog frontier (interp the per-angle samples), + this tile's DEPTH past it
             const idx = (da + half) / (2 * half) * SAMP, i0 = Math.max(0, Math.min(SAMP - 1, Math.floor(idx)));
             const frA = fr[i0] + (fr[i0 + 1] - fr[i0]) * (idx - i0);
-            const depth = r - frA + (h - 0.5) * 3;                    // >0 = fog side; +grain for a ragged shoreline
-            // density peaks AT the boundary: a short lip on the revealed side (-5..0), fading a little way
-            // into the fog (0..+18) — a red wall at the edge of sight, not a wash across the whole dark.
+            const depth = r - frA + (h - 0.5) * 4;                    // >0 = fog side; +grain for a ragged shoreline
+            // centered on the boundary but FEATHERED both ways (the old faded look), not a dense wall: a gentle
+            // fade into the fog and a soft, longer taper back across the revealed side toward town.
             let prox;
-            if (depth >= 0) prox = smooth(1 - depth / 18);            // fog side
-            else prox = smooth(1 + depth / 5);                        // revealed lip
-            if (prox <= 0.03) continue;
+            if (depth >= 0) prox = smooth(1 - depth / 24);            // fog side — gentle fade into the dark
+            else prox = smooth(1 + depth / 16);                       // revealed side — soft, longer taper
+            if (prox <= 0.02) continue;
             const inGrid = i >= 0 && j >= 0 && i < GRID && j < GRID;
             const fog = !inGrid || !world.isRevealed(i, j);
             const edge = smooth(1 - Math.abs(da) / hj);
-            const grain = 0.75 + h * 0.5;
-            const a = Math.max(0, Math.min(1, (base + pulse) * edge * prox * grain * (fog ? 1 : 0.6)));
-            if (a < 0.03) continue;
+            const grain = 0.8 + h * 0.4;
+            // hard cap keeps it a translucent overlay — the terrain always reads through (never a repaint)
+            const a = Math.max(0, Math.min(0.34, (base + pulse) * edge * prox * grain * (fog ? 1 : 0.6)));
+            if (a < 0.02) continue;
             const sx = cam.x + isoX(i, j) - TILE_W / 2, sy = cam.y + isoY(i, j);
             ctx.save(); ctx.globalAlpha = a;
             fillDiamond(ctx, sx, sy, `rgb(${h < 0.5 ? RAID_TINT.A : RAID_TINT.B})`);
@@ -5965,6 +5980,87 @@ function drawResumeCard() {
     ctx.restore();
 }
 
+// #faceoff — the fighting-game VS card raised the moment a struck raid resolves: the town's defender bust
+// squared off against the orc that led the raid, the aggressor's NAME centred between them. Reads ONLY
+// world._debrief (set in farm.js on a WATCHED raid's resolution, never serialized, never in the digest), so
+// it cannot touch the sim or determinism. One-shot per raid via the sim-time change-detector.
+function maybeFaceoff() {
+    const d = world && world._debrief;
+    if (!d || d.at === faceoffSeenAt) return;
+    faceoffSeenAt = d.at;
+    if (world.time >= d.until) return;                       // a stale stamp (e.g. resumed long-dormant) — don't ambush
+    const raw = (d.foe && d.foe.name) || d.foeName || 'an orc warband';
+    faceoff = { at: performance.now(), name: String(raw).toUpperCase(),
+                raidCount: (d.foe && d.foe.raidCount) | 0, felled: d.felled | 0, harvestLost: d.harvestLost | 0 };
+}
+
+const faceoffOrdinal = (n) => { const s = ['TH', 'ST', 'ND', 'RD'], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); };
+
+// draw one illustrated bust. side=-1 sits it to the LEFT with its INNER (right) edge at anchorX; side=+1 to
+// the RIGHT with its inner (left) edge at anchorX. `flip` mirrors it horizontally (an orc-town defender uses
+// the orc art turned to face inward). xoff slides it during the entrance. Smoothing ON: these are detailed
+// 1024px illustrations, so a nearest-neighbour 0.25x downscale would shimmer — the CRT pass re-pixelates anyway.
+function drawFaceoffBust(img, ready, flip, anchorX, cy, h, side, xoff) {
+    if (!ready || !img.naturalWidth) return;
+    const w = h * (img.naturalWidth / img.naturalHeight);
+    const x = (side < 0 ? anchorX - w : anchorX) + xoff;
+    const y = Math.floor(cy - h / 2);
+    ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    if (flip) { ctx.translate(Math.floor(x + w), y); ctx.scale(-1, 1); ctx.drawImage(img, 0, 0, Math.floor(w), Math.floor(h)); }
+    else ctx.drawImage(img, Math.floor(x), y, Math.floor(w), Math.floor(h));
+    ctx.restore();
+}
+
+function drawFaceoff() {
+    if (!faceoff || !booted) return;
+    const f = faceoff;
+    const el = performance.now() - f.at;
+    const HOLD = 6200, FADE = 700;
+    if (el > HOLD + FADE) { faceoff = null; return; }         // auto-dismiss (a click/key closes it sooner)
+    const inA = Math.min(1, el / 320);
+    const outA = el > HOLD ? Math.max(0, 1 - (el - HOLD) / FADE) : 1;
+    ctx.save();
+    ctx.globalAlpha = inA * outA;
+    ctx.fillStyle = 'rgba(5,6,10,0.94)'; ctx.fillRect(0, 0, GW, GH);   // near-opaque: the busts are the whole stage (no world tooltips bleeding through)
+
+    const cx = Math.floor(GW / 2), cy = Math.floor(GH / 2);
+    const PHt = Math.min(272, GH - 18);                       // bust height
+    const slide = (1 - inA) * 42;                             // busts glide in from their own sides
+    const gap = 38;                                           // clear centre column for the VS text
+    const orcTown = world.culture === 'orc';                  // an orc town fields an orc defender (mirrored to face inward)
+    const defImg = orcTown ? orcPortraitImg : humanPortraitImg;
+    const defReady = orcTown ? orcPortraitReady : humanPortraitReady;
+    drawFaceoffBust(defImg, defReady, orcTown, cx - gap, cy, PHt, -1, -slide);   // defender, LEFT, faces right/inward
+    drawFaceoffBust(orcPortraitImg, orcPortraitReady, false, cx + gap, cy, PHt, +1, +slide);  // raider, RIGHT, faces left/inward
+
+    // a soft dark column down the middle so the VS text reads cleanly over the two faces
+    const grad = ctx.createLinearGradient(cx - 98, 0, cx + 98, 0);
+    grad.addColorStop(0, 'rgba(6,7,12,0)'); grad.addColorStop(0.5, 'rgba(6,7,12,0.9)'); grad.addColorStop(1, 'rgba(6,7,12,0)');
+    ctx.fillStyle = grad; ctx.fillRect(cx - 98, 0, 196, GH);
+
+    const town = (world.name || 'the town').toUpperCase();
+    const title = `RAID ON ${town}`;
+    drawText(ctx, title, cx - Math.floor(textWidth(title) / 2), 20, '#e8c860', 1);
+
+    const vs = 'VS';
+    drawText(ctx, vs, cx - Math.floor(textWidth(vs, 4) / 2), cy - 42, '#f4d868', 4);   // big gold VS
+
+    let ns = 2;                                               // the aggressor's NAME — the centrepiece, danger red
+    if (textWidth(f.name, 2) > GW - 44 || f.name.length > 15) ns = 1;
+    drawText(ctx, f.name, cx - Math.floor(textWidth(f.name, ns) / 2), cy + 2, '#e8483a', ns);
+
+    const bits = [];
+    if (f.raidCount >= 2) bits.push(`${faceoffOrdinal(f.raidCount)} RAID OF THE WAR`);
+    bits.push(f.harvestLost > 0 ? `${f.harvestLost} TAKEN FROM THE STORES` : (f.felled > 0 ? `${f.felled} RAIDER${f.felled === 1 ? '' : 'S'} FELLED` : 'THE LINE HELD'));
+    const sub = bits.join('    ');
+    drawText(ctx, sub, cx - Math.floor(textWidth(sub) / 2), cy + 2 + ns * 5 + 6, '#9aa0ac', 1);
+
+    const cue = 'CLICK TO CONTINUE';
+    drawText(ctx, cue, cx - Math.floor(textWidth(cue) / 2), GH - 15, performance.now() % 1000 < 620 ? '#c8ccd8' : '#6a6f7c', 1);
+    ctx.restore();
+}
+
 // Autosave (#88): the town writes itself to IndexedDB at every day rollover, plus whenever the
 // tab hides/closes. Fire-and-forget — a failed write never touches the sim (save.js swallows).
 function maybeAutosave() {
@@ -6136,6 +6232,8 @@ out.addEventListener('pointerup', (e) => {
 
     // the "previously on" catch-up card swallows the first click (any click dismisses it)
     if (resumeCard) { resumeCard = null; return; }
+    // #faceoff the post-raid VS card swallows a click too (dismiss and return to the aftermath)
+    if (faceoff) { faceoff = null; return; }
 
     // #legibility Slice 2 — the WHISPER widget (bottom-left): open from the minimized button, and while open
     // handle its own chat interactions (minimize, [NAME v] picker, input focus) so it works off the roster.
@@ -6573,6 +6671,7 @@ window.addEventListener('keydown', (e) => {
     if (chatFocused) return;   // #93: typing a whisper — never fire world shortcuts (W/F/T/arrows)
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     if (resumeCard) { resumeCard = null; return; }   // any key dismisses the catch-up card
+    if (faceoff) { faceoff = null; return; }          // #faceoff any key dismisses the post-raid VS card
     if ((e.key === 't' || e.key === 'T') && world) {
         followMode = false; followTarget = null;
         cam.x = GW / 2 - isoX(world.well.i, world.well.j);
@@ -6779,6 +6878,7 @@ function frame(now) {
         for (const f of world.farmers) { f._riI = f.pos.i; f._riJ = f.pos.j; }   // #interp snapshot the PRE-tick pos as the "from"
         world.tick(FIXED_DT); simAccumulator -= FIXED_DT; steps++;
     }
+    maybeFaceoff();   // #faceoff raise the VS card if a struck raid just resolved (reads the display-only debrief stamp)
     // #interp — the sim ticks at 30Hz (FIXED_DT) but we render at 60/120Hz, so a farmer's pos only advances every
     // 2nd/4th frame → its motion (and the follow camera tracking it) STUTTERS. Fix: render each farmer BETWEEN its
     // last two sim positions by the leftover-accumulator fraction. Display-only — we stash the TRUE pos, draw at
@@ -7041,6 +7141,7 @@ function frame(now) {
     if (booted && !rosterOpen && !chronOpen && !boardOpen && !worldMapOpen && !settingsOpen) { drawSortie(); drawThreatTell(); }   // #131 / #counteroffensive
     updateCrossing(); drawFogMarkers(); drawCrossHint();   // #P2 fog markers + the warn banner + crossing trigger
 
+    drawFaceoff();      // #faceoff the post-raid VS card sits above the world/panels (resume card + cursor top it)
     drawResumeCard();   // the "previously on" catch-up card sits above every panel (only the cursor tops it)
 
     // custom pixel hand cursor, on top of everything (dragging = pressed/gold too)
@@ -7318,6 +7419,11 @@ function drawBootScreen(t) {
             location.href = location.pathname + '?seed=' + seed; return seed;
         }),
         dismissCard: () => { resumeCard = null; },
+        // #faceoff (debug) force the post-raid VS card with a chosen foe name / outcome, no raid needed
+        demoFaceoff: (name = 'Krul the Howler', raidCount = 2, felled = 2, harvestLost = 0) => {
+            faceoffSeenAt = -999; faceoff = { at: performance.now(), name: String(name).toUpperCase(), raidCount: raidCount | 0, felled: felled | 0, harvestLost: harvestLost | 0 };
+            return `faceoff card: ${name}`;
+        },
         enrich: tryEnrich,                                   // ask the LLM chronicler now (debug)
         NEW_BTN,                                             // (debug) reset-hatch hitbox, for UI tests
     };
