@@ -2378,8 +2378,23 @@ function drawThreat(e, sx, sy) {
         sy += ((e._swingI + e._swingJ) / n) * 1.75 * k;
     }
     ctx.imageSmoothingEnabled = false;
+    // #fog a foe is FAINT in the fog of war — ~5% opacity deep in the dark, brightening toward the revealed
+    // edge (max ~15%), and only FULLY solid once it steps onto revealed land. They loom out of the dark as
+    // they cross the frontier. (Depth = tiles to the nearest revealed ground toward town — cheap inward scan.)
+    let fogA = 1;
+    if (world && world.isRevealed && !world.isRevealed(Math.round(e.i), Math.round(e.j))) {
+        const ci = CENTER - e.i, cj = CENTER - e.j, nn = Math.hypot(ci, cj) || 1;
+        let depth = 12;
+        for (let st = 1; st <= 12; st++) {
+            if (world.isRevealed(Math.round(e.i + ci / nn * st), Math.round(e.j + cj / nn * st))) { depth = st; break; }
+        }
+        fogA = Math.max(0.05, 0.16 - depth * 0.011);   // ~0.15 one tile out, floors at 0.05 deep in
+    }
+    const dimmed = e.fell || fogA < 1;
     // #sprite a felled foe plays its death animation in full colour, then settles into a darkened corpse
-    if (e.fell) { const done = e._fellAt == null || world.time - e._fellAt > DEATH_DUR; ctx.save(); ctx.globalAlpha = done ? 0.72 : 0.95; ctx.filter = done ? 'brightness(0.58)' : 'none'; sy += 3; }
+    if (dimmed) ctx.save();
+    if (e.fell) { const done = e._fellAt == null || world.time - e._fellAt > DEATH_DUR; ctx.globalAlpha = (done ? 0.72 : 0.95) * fogA; ctx.filter = done ? 'brightness(0.58)' : 'none'; sy += 3; }
+    else if (fogA < 1) ctx.globalAlpha = fogA;
     if (sheet && sheet.complete && sheet.naturalWidth > 0) {
         const fw = c.fw, rows = Math.max(1, Math.round(sheet.naturalHeight / fw));
         // #raid-feel 4-direction sheets pick their row from the last MOVEMENT, projected to screen space
@@ -2405,7 +2420,7 @@ function drawThreat(e, sx, sy) {
         ctx.beginPath(); ctx.ellipse(sx, sy - 6, 7, 9, 0, 0, Math.PI * 2); ctx.fill();
         ctx.fillStyle = '#1a1414'; ctx.fillRect(Math.round(sx - 3), Math.round(sy - 9), 2, 2); ctx.fillRect(Math.round(sx + 1), Math.round(sy - 9), 2, 2);
     }
-    if (e.fell) ctx.restore();
+    if (dimmed) ctx.restore();
     // #hp-bars a raider's display-HP (chunked by the exchanges it takes — farm.js #duelExchange) rides
     // over its head from the UNDER RAID beat until it falls or flees off the field.
     if (e._dhp != null && !e.fell && world && world.raidEvent && world.raidEvent.struck) {
@@ -2460,6 +2475,15 @@ function drawSiloBarrels(sx, footY, lvl) {
 // Procedural (no asset): tan cylinder + hooped bands + conical roof, with a floating TOWN LV tag.
 function drawSilo(sx, sy) {
     const footY = Math.floor(sy + TILE_H);
+    // #silo LEVEL 0 — the humble START: a raw crate stockpile (both cultures). The silo HOUSE (human guild
+    // hall / orc war-hoard) rises at level 1, once the first donations have grown the town.
+    if (world.townLevel <= 0) {
+        const topY = drawSiloBarrels(sx, footY, 0);
+        const tag = 'LV 0', tw = textWidth(tag), ty = topY - 12;
+        ctx.fillStyle = 'rgba(20,16,8,0.78)'; ctx.fillRect(Math.floor(sx - tw / 2) - 2, ty, tw + 4, 9);
+        drawText(ctx, tag, Math.floor(sx - tw / 2), ty + 1, '#f0d060');
+        return;
+    }
     if (world.culture === 'orc') {   // #94 the WAR-HOARD: ent-idol totem, or the living-tree gazebo at LV5+
         const big = world.townLevel >= 5;
         const img = big ? orcSilo5 : orcSilo, ready = big ? orcSilo5Ready : orcSiloReady;
@@ -2479,12 +2503,8 @@ function drawSilo(sx, sy) {
         drawText(ctx, tag, Math.floor(sx - tw / 2), ty + 1, '#f0d060');
         return;
     }
-    // #silo the town STARTS humble (player: a level-1 guild hall was too fancy) — a cluster of barrels at
-    // L1, a fuller stack + a plank bin at L2, THEN the hall rises at L3 and gains its wings at L5. The
-    // build-up is earned: donations of wood/ore/crops level the town (addTownXP), so the silo grows visibly.
-    if (world.townLevel <= 2) {
-        var topY = drawSiloBarrels(sx, footY, world.townLevel);
-    } else if (!guildExtReady || !guildExtSheet.naturalWidth) {   // sheet not loaded — a small stand-in
+    // the human silo HOUSE — the guild hall, from level 1 (barrels were the level-0 start, handled above)
+    if (!guildExtReady || !guildExtSheet.naturalWidth) {   // sheet not loaded — a small stand-in
         ctx.fillStyle = '#c9a24e'; ctx.fillRect(Math.floor(sx - 8), footY - 20, 16, 20);
     } else {
         const sc = ASSET_SCALE * 0.9, blit = (r, dx, dy, s = sc) => {

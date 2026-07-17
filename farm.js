@@ -255,7 +255,7 @@ function facilityUnlocked(type, houseLevel, farmerLevel) {
 // The TOWN levels like a farmer, but on DONATED surplus rather than personal graft — and steeper,
 // so a thriving town is a long communal haul. townXpForLevel(L) = XP to go from town level L→L+1.
 const TOWN_XP_BASE = 170, TOWN_XP_GROWTH = 1.5;
-export function townXpForLevel(level) { return Math.round(TOWN_XP_BASE * Math.pow(TOWN_XP_GROWTH, Math.max(0, level - 1))); }
+export function townXpForLevel(level) { return level <= 0 ? Math.round(TOWN_XP_BASE * 0.4) : Math.round(TOWN_XP_BASE * Math.pow(TOWN_XP_GROWTH, level - 1)); }   // #silo L0->L1 is quick
 const TOWN_MAX_LEVEL = 10;                       // the town is "built out" here; donations ease off
 // Town XP per donated unit — the town grows on EVERYTHING a farm makes, not just timber. Livestock
 // and facility produce (eggs/milk/wool/truffles/fish/lilies) are worth more than raw wood/forage
@@ -932,7 +932,7 @@ export class World {
         // donations are the town's XP. A level-1 town is a ghost town — just a well — and its
         // level (exponentially harder each rung) is what unlocks communal builds and draws a
         // merchant, so nobody throws up a board + windmill + toolshed on day one.
-        this.townLevel = 1;
+        this.townLevel = 0;   // #silo a town STARTS at level 0 (a raw crate stockpile); the silo house rises at L1
         this.townXP = 0;
         this.coffers = { wood: 0, crops: 0, ore: 0 };     // lifetime donations to the silo (accounting + flavor)
         this.townLevelFlash = 0;                          // brief UI pulse on a town level-up
