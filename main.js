@@ -16,7 +16,7 @@ import { saveTown, loadTown, wipeTown, undoWipe, loadWorldIndex, registerTownInW
 import { computeLayout, detectEncounters, encounterLine, townPos, townReach, townTint } from './worldmap.js';
 import { enrichStories } from './dm.js';
 import { requestCongregation } from './congregation.js';
-import { requestRaidCouncil } from './raidcouncil.js';
+import { requestRaidCouncil, requestRaidDebrief } from './raidcouncil.js';
 import { persistLives, persistTownHistory, persistBattle } from './memory-writeback.js';
 import { enrichInventions, persistTownInventions } from './memory-invent.js';
 import { whisper } from './conscience.js';
@@ -420,7 +420,10 @@ const THREAT_ART = {
     // so they face the camera front-on (side:false — always menacing, never mis-facing).
     fox:      { base: './assets/craftpix-net-789196-free-top-down-hunt-animals-pixel-sprite-pack/Tiled/', file: 'Fox_Idle_with_shadow',  fw: 32, row: 2, side: true },
     boar:     { base: './assets/craftpix-net-789196-free-top-down-hunt-animals-pixel-sprite-pack/Tiled/', file: 'Boar_Idle_with_shadow', fw: 32, row: 2, side: true },
-    orc:      { base: './assets/craftpix-net-363992-free-top-down-orc-game-character-pixel-art/Tiled_files/', file: 'orc1_idle_with_shadow', fw: 64, row: 2, side: false },
+    // #raid-feel the orc sheet is a FULL 4-direction set (measured: row0 = front/down, row1 = back/up,
+    // row2 = left, row3 = right) — we'd only ever drawn row 2, so orcs faced screen-left forever (player:
+    // "I've never seen the upward sprite"). rows4 lets drawThreat pick by movement.
+    orc:      { base: './assets/craftpix-net-363992-free-top-down-orc-game-character-pixel-art/Tiled_files/', file: 'orc1_idle_with_shadow', fw: 64, row: 2, side: false, rows4: { down: 0, up: 1, left: 2, right: 3 } },
     assassin: { base: './assets/craftpix-net-180537-free-swordsman-1-3-level-pixel-top-down-sprite-character/Tiled_files/Swordsman3/', file: 'Swordsman_lvl3_Idle_without_shadow', fw: 64, row: 0, side: false },
 };
 const threatImg = {};
@@ -1471,14 +1474,16 @@ function drawTerrainChunks() {
 // positions are a pure fn of the seeded bearing + a wall-clock idle sway (display only) — no world.rand touched.
 function raidMusterFigures(pr) {
     const dir = pr.dir, n = 6, t = performance.now(), out = [];
+    const minOut = (world.townRadius ? world.townRadius() : 26) + 14;   // stage well clear of the farms, however far they sprawl
     for (let k = 0; k < n; k++) {
         const ang = dir + (k - (n - 1) / 2) * 0.26;
         const co = Math.cos(ang), si = Math.sin(ang), m = 4;
         const tx = co > 0 ? (GRID - m - CENTER) / co : co < 0 ? (m - CENTER) / co : Infinity;
         const ty = si > 0 ? (GRID - m - CENTER) / si : si < 0 ? (m - CENTER) / si : Infinity;
-        const d = Math.max(40, Math.min(tx, ty)) - 3 + 0.6 * Math.sin(t / 640 + k * 1.7);   // just inside the edge, restless
+        const d = Math.max(minOut, Math.min(tx, ty) - 3) + 0.6 * Math.sin(t / 640 + k * 1.7);   // just inside the edge, restless
         const i = CENTER + co * d, j = CENTER + si * d;
-        out.push({ kind: 'orc', def: { color: '#6f8f3f' }, i, j, facing: (i - j) > 0 ? -1 : 1 });   // face in toward the town
+        out.push({ kind: 'orc', def: { color: '#6f8f3f' }, i, j, facing: (i - j) > 0 ? -1 : 1,
+                   mvI: -co, mvJ: -si });   // face in toward the town (mv picks the 4-direction sheet row)
     }
     return out;
 }
@@ -1502,25 +1507,32 @@ function drawRaidSeam() {
         ? 0.14 * Math.pow(0.5 + 0.5 * Math.sin(tNow / 260), 3)   // ~1.6s heartbeat, spiky
         : 0.04 * Math.sin(tNow / 700);                            // faint slow breathing
     const half = 0.85;   // fan half-angle (raiders fan ~±0.5; a touch wider so it reads as "their land", not a beam)
-    const rIn = 26, rFull = 46;   // the seam ramps grass→desert from the town's edge (rIn, faint) out to the horizon (rFull, full)
+    // the seam stands OFF the farms however far they sprawl (player: "right on top of their plots"), ramps to
+    // full, holds, then FADES BACK OUT toward the horizon (player: fade both directions, no hard outer line).
+    const rIn = Math.max(26, (world.townRadius ? world.townRadius() : 22) + 5);
+    const rFull = rIn + 18, rHorizon = rIn + 58;
     const cs = [screenToTile(0, 0), screenToTile(GW, 0), screenToTile(GW, GH), screenToTile(0, GH)];
     let iMin = Infinity, iMax = -Infinity, jMin = Infinity, jMax = -Infinity;
     for (const c of cs) { iMin = Math.min(iMin, c.i); iMax = Math.max(iMax, c.i); jMin = Math.min(jMin, c.j); jMax = Math.max(jMax, c.j); }
-    iMin = Math.max(0, Math.floor(iMin)); iMax = Math.min(GRID - 1, Math.ceil(iMax));
-    jMin = Math.max(0, Math.floor(jMin)); jMax = Math.min(GRID - 1, Math.ceil(jMax));
+    // NO grid clamp: the wild past the grid renders (position-hash terrain), so stopping the wash at the
+    // grid border drew a razor diagonal against untinted ground — paint everything the camera sees.
+    iMin = Math.floor(iMin); iMax = Math.ceil(iMax); jMin = Math.floor(jMin); jMax = Math.ceil(jMax);
     for (let j = jMin; j <= jMax; j++) {
         for (let i = iMin; i <= iMax; i++) {
             const di = i - CENTER, dj = j - CENTER, r = Math.hypot(di, dj);
             const h = seamHash(i, j);                                 // per-tile grain: mottles the wash + raggs the borders
-            if (r < rIn - 2 + h * 4) continue;                        // ragged inner shoreline, not a clean arc
+            if (r < rIn - 2 + h * 4 || r > rHorizon + h * 4) continue;   // ragged shorelines BOTH sides
             let da = Math.atan2(dj, di) - dir; da = Math.atan2(Math.sin(da), Math.cos(da));   // wrap to [-pi, pi]
             const hj = half + (h - 0.5) * 0.14;                       // ragged fan sides
             if (Math.abs(da) > hj) continue;
-            // gradient: faint at the town's edge (grass shows through), full desert toward the horizon; softer at the fan sides.
-            const edge = smooth(1 - Math.abs(da) / hj), ramp = smooth(Math.min(1, (r - rIn) / (rFull - rIn)));
-            const fog = !world.isRevealed(i, j);                      // strongest over the unknown dark; a lighter wash over revealed ground
+            // gradient: faint at the town's edge, full over the middle band, faint again toward the horizon.
+            const edge = smooth(1 - Math.abs(da) / hj);
+            const ramp = smooth(Math.min(1, (r - rIn) / (rFull - rIn)));
+            const fall = smooth(Math.max(0, Math.min(1, (rHorizon - r) / 22)));
+            const inGrid = i >= 0 && j >= 0 && i < GRID && j < GRID;
+            const fog = !inGrid || !world.isRevealed(i, j);           // strongest over the unknown dark; lighter over revealed ground
             const grain = 0.75 + h * 0.5;                             // organic mottle (±25%) — replaces the old checkerboard parity
-            const a = Math.max(0, Math.min(1, (base + pulse) * edge * ramp * grain * (fog ? 1 : 0.8)));
+            const a = Math.max(0, Math.min(1, (base + pulse) * edge * ramp * fall * grain * (fog ? 1 : 0.8)));
             if (a < 0.03) continue;
             const sx = cam.x + isoX(i, j) - TILE_W / 2, sy = cam.y + isoY(i, j);
             ctx.save(); ctx.globalAlpha = a;
@@ -2150,7 +2162,15 @@ function drawThreat(e, sx, sy) {
     if (e.fell) { ctx.save(); ctx.globalAlpha = 0.75; ctx.filter = 'brightness(0.55)'; sy += 3; }
     if (img && img.complete && img.naturalWidth > 0) {
         const fw = c.fw, rows = Math.max(1, Math.round(img.naturalHeight / fw));
-        const row = Math.min(c.row ?? 2, rows - 1);
+        // #raid-feel 4-direction sheets pick their row from the last MOVEMENT, projected to screen space
+        // (mvI/mvJ set wherever the sim moves the threat): walking screen-up shows the BACK of the orc.
+        let dirRow = c.row ?? 2;
+        if (c.rows4 && (e.mvI || e.mvJ)) {
+            const sxm = e.mvI - e.mvJ, sym = (e.mvI + e.mvJ) / 2;
+            if (Math.abs(sym) > Math.abs(sxm) * 0.85) dirRow = sym > 0 ? c.rows4.down : c.rows4.up;
+            else dirRow = sxm >= 0 ? c.rows4.right : c.rows4.left;
+        }
+        const row = Math.min(dirRow, rows - 1);
         const disp = Math.round(fw * ASSET_SCALE * 1.15);
         const dx = Math.round(sx - disp / 2), dy = Math.round(sy - disp * 0.82);
         if (c.side && e.facing > 0) {   // side-profile source frame faces LEFT; mirror it to face right
@@ -5429,7 +5449,11 @@ function drawMoments() {
     }
     // A full-screen modal is ON TOP: don't draw the spotlight/toasts over it — but FREEZE the active ones (bump
     // their shownAt each frame) so they don't expire behind the modal; they resume, viewable, once it's dismissed.
-    if (rosterOpen || chronOpen || boardOpen || settingsOpen || worldMapOpen) {
+    // #raid-feel a HOT raid owns the screen (player: "way too many messages on top of one another"): while
+    // the alarm is up or the warband is on the field, spotlights + toasts FREEZE exactly like under a modal —
+    // they resume once the fight is over (the raid's own grand beats then land as the aftermath reading).
+    const raidHot = world.raidEvent || (world.pendingRaid && world.pendingRaid.detected);
+    if (rosterOpen || chronOpen || boardOpen || settingsOpen || worldMapOpen || raidHot) {
         scanMoments();
         const now = performance.now();
         if (activeMoment) activeMoment.shownAt = now;
@@ -6252,18 +6276,20 @@ function frame(now) {
     if (world.raidEvent) _battleWatch = world.raidEvent;
     else if (_battleWatch) {
         const re = _battleWatch; _battleWatch = null;
-        if (!re.rehearsal && re.struck && re.out && re.e) {
+        if (re.struck && re.out && re.e) {
             const nameOf = seed => { const f = world.farmers.find(x => x.sheet.seed === seed); return f ? f.sheet.name.split(' ')[0] : null; };
-            persistBattle(world, {
+            const battle = {
                 rid: re.e.id || `${re.e.pairKey}:${re.e.ordinal}`,
                 day: world.day, year: world.year,
                 clan: (re.out && re.out.clan) || (re.e.by || 'a warband'),
-                nemesis: re.e.foe ? { name: re.e.foe.name, raidCount: re.e.foe.raidCount } : null,
+                nemesis: re.e.foe ? { name: re.e.foe.name, raidCount: re.e.foe.raidCount, sworeAgainst: re.e.foe.sworeAgainst != null ? nameOf(re.e.foe.sworeAgainst) : null } : null,
                 outcome: { felled: re.out.felled, n: re.out.n, harvestLost: re.out.harvestLost },
                 hero: re.out.heroSeed != null ? nameOf(re.out.heroSeed) : null,
                 wounded: (re.out.woundSeeds || []).map(nameOf).filter(Boolean),
                 rounds: (re.fx || []).map(x => ({ who: x.who || null, text: x.text })),
-            });
+            };
+            requestRaidDebrief(world, battle);                    // the aftermath counsel (bubbles — ghosts included)
+            if (!re.rehearsal) persistBattle(world, battle);      // the record — REAL raids only (ghost contract)
         }
     }
     // at extreme speeds keep a bounded backlog (spread over coming frames) rather than dropping

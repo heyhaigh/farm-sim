@@ -410,6 +410,14 @@ const WATCH_POSTS = 6, WATCH_SCAN = 3.2;
 const RAID_LEAD = 45, RAID_RALLY = 30;
 // #131 seeded bearing -> a plain-word compass label for the tell; index = round(dir / 45deg) % 8, dir 0 = +i.
 const COMPASS = ['east', 'south-east', 'south', 'south-west', 'west', 'north-west', 'north', 'north-east'];
+// #raid-feel the label must match what the EYE sees: the map is an iso projection, so a grid-space angle
+// reads mirrored east<->west on screen (player report: "says south-east, shows up south-west"). Project the
+// bearing to screen space (x = cos-sin, y = (cos+sin)/2, y-down = south) and label THAT.
+function screenCompass(dir) {
+    const sx = Math.cos(dir) - Math.sin(dir), sy = (Math.cos(dir) + Math.sin(dir)) / 2;
+    let a = Math.atan2(sy, sx); if (a < 0) a += Math.PI * 2;
+    return COMPASS[Math.round(a / (Math.PI / 4)) % 8];
+}
 // #nemesis the warleader name tables (same voice as the DM's encounter names) — a nemesis name is a PURE
 // HASH of the faction pair, so "Krul the Howler" is Krul in every retelling, on every machine, forever.
 const NEM_FOE = ['Gruk', 'Morg', 'Tharg', 'Uzka', 'Drek', 'Snaga', 'Krul', 'Bolg'];
@@ -442,6 +450,27 @@ const MUSTER_TALK = {
 const RAID_CRIES = {
     human: ['HOLD THE LINE!', 'DRIVE THEM OFF!', 'STAND! STAND!', 'NOT OUR HARVEST!', 'PUSH THEM BACK!'],
     orc: ['BLOOD AND IRON!', 'BREAK THEM!', 'NONE PASS!', 'FOR THE BAND!', 'TEETH OUT!'],
+};
+// #raid-feel the AFTERMATH counsel — the line lingers after the fight, takes stock, and drifts off one by
+// one (authored fallback; the LLM debrief script replaces these when it lands). '{dir}' unused here.
+const DEBRIEF_TALK = {
+    human: [
+        'is anyone hurt? sing out.',
+        'get the wounded inside - go slow with them.',
+        'count the stores. i want to know what they took.',
+        'we held. that matters more than what we lost.',
+        "next time we meet them further out - past the fences.",
+        'someone stay with the watch tonight. no one stands alone.',
+        'deep breath. then back to work - the fields will not wait.',
+    ],
+    orc: [
+        'WHO BLEEDS? SPEAK.',
+        'DRAG THE HURT TO THE FIRE.',
+        'COUNT WHAT THEY TOOK. EVERY GRAIN.',
+        'WE HELD. THE BAND HOLDS.',
+        'NEXT TIME WE MEET THEM AT THE TREELINE.',
+        'DOUBLE THE WATCH TONIGHT.',
+    ],
 };
 const STUMP_LINES = {
     human: [
@@ -1835,7 +1864,7 @@ export class World {
                 if (this.pendingRaid) { const p = this.pendingRaid; this.pendingRaid = null; this.#landRaid(p.e, p.dir, p.dirName); }
                 const rid = e.id || `${e.pairKey}:${e.ordinal}`;
                 const dir = (hashString('raiddir:' + rid) % 360) * Math.PI / 180;   // seeded flank they come from (cosmetic, but consistent across tell/muster/cinematic)
-                const dirName = COMPASS[Math.round(dir / (Math.PI / 4)) % 8];
+                const dirName = screenCompass(dir);   // #raid-feel label the SCREEN direction, not the grid angle
                 // #nemesis — the war gets a NAME. Every raid from the same faction pair advances ONE arc: the
                 // first raid founds it (silently — a name earns its dread by RETURNING), each return increments
                 // it, and from the second raid on the telegraph names him. Deterministic: pure pairKey hash for
@@ -1861,11 +1890,11 @@ export class World {
                     if (foe) {   // #nemesis the return is the dread: the telegraph lands like a bell
                         const sworn = foe.sworeAgainst != null ? this.farmers.find(x => x.sheet.seed === foe.sworeAgainst) : null;
                         this.addChronicle('raid', `${foe.name} returns — the ${NTH[Math.min(foe.raidCount - 1, NTH.length - 1)]} raid of his war on ${this.name}, massing to the ${dirName}${sworn ? ` — and he comes for ${shortName(sworn)}` : ''}.`,
-                            sworn || null, null, '#e05840', { tier: 'callout', tone: 'tense', label: `${foe.name.toUpperCase()} RETURNS`, why: 'the named foe is back' });
+                            sworn || null, null, '#e05840', { tone: 'tense', label: `${foe.name.toUpperCase()} RETURNS`, why: 'the named foe is back' });
                         this.addLog(`${foe.name} masses to the ${dirName} — the ${NTH[Math.min(foe.raidCount - 1, NTH.length - 1)]} raid of his war.`, '#e05840');
                     } else {
                         this.addChronicle('raid', `Word reached ${this.name}: a warband is massing to the ${dirName}, bound for the town — the watch has a little time.`,
-                            null, null, '#e0a040', { tier: 'callout', tone: 'tense', label: 'A WARBAND GATHERS', why: 'raiders on the move' });
+                            null, null, '#e0a040', { tone: 'tense', label: 'A WARBAND GATHERS', why: 'raiders on the move' });
                         this.addLog(`A warband masses to the ${dirName} — ${this.name} has a little time.`, '#e0a040');
                     }
                     n++;
@@ -6045,7 +6074,7 @@ export class World {
         this.cancelRehearsal();
         const rid = 'rehearsal:' + (nonce >>> 0);
         const dir = (hashString('raiddir:' + rid) % 360) * Math.PI / 180;
-        const dirName = COMPASS[Math.round(dir / (Math.PI / 4)) % 8];
+        const dirName = screenCompass(dir);   // #raid-feel label the SCREEN direction, not the grid angle
         // #nemesis the booth can rehearse the NAMED war (read-only: the ghost stages Krul, never advances him)
         const nem = (this.nemesis && !this.nemesis.ended && this.nemesis.raidCount >= 1) ? this.nemesis : null;
         const e = { id: rid, by: by || (nem ? `${nem.name}'s warband` : 'a warband out of the dark'), commit: 0.5, rehearsal: true,
@@ -6214,7 +6243,7 @@ export class World {
             if (!pr.rehearsal) {   // #admin a ghost run keeps the full alarm SHOW (cry, muster, seam) but writes no record
                 this.addLog(`${sentry ? shortName(sentry) : 'The watch'} sounds the alarm — raiders closing from the ${pr.dirName}!`, '#e05040');
                 this.addChronicle('raid', `The watch caught a warband closing on ${this.name} from the ${pr.dirName} — the alarm went up and the town rallied to meet it.`,
-                    sentry, null, '#e0a040', { tier: 'callout', tone: 'tense', why: 'a raid seen coming — the tripwire earned its keep' });
+                    sentry, null, '#e0a040', { tone: 'tense', why: 'a raid seen coming — the tripwire earned its keep' });
             }
         }
         if (this.time >= pr.landsAt) { const { e, dir, dirName } = pr; this.pendingRaid = null; this.#landRaid(e, dir, dirName); }
@@ -6225,11 +6254,26 @@ export class World {
     // where it's coming from, rather than letting it reach the well while the hands out there are cut off alone.
     // Fanned by a seeded per-farmer offset (a loose line, not a stack). If it turns against them they still fall
     // back (the flee/regroup path), but the muster is a stand at the gate. Pure geometry + seeded spread, no rng.
+    // #raid-feel how far the town actually SPRAWLS (max plot cell from the well, cheap + cached briefly) —
+    // the muster line, the seam, and the warband staging all stand OUTSIDE this, however big the farms grow.
+    // Deterministic (plots are sim state); cached on this.time so per-frame display reads are free.
+    townRadius() {
+        if (this._townRad && this.time - this._townRad.at < 5) return this._townRad.val;
+        let best = 14;
+        for (const p of this.plots) for (const k of p.cells) {
+            const c = k.indexOf(','), d = Math.hypot(+k.slice(0, c) - CENTER, +k.slice(c + 1) - CENTER);
+            if (d > best) best = d;
+        }
+        this._townRad = { at: this.time, val: best };
+        return best;
+    }
+
     musterSpot(f) {
         const well = this.well, pr = this.pendingRaid;
         const base = pr ? pr.dir : 0, h = hashString(f.sheet.seed + ':muster');
         const spread = (((h % 100) / 100) - 0.5) * 1.4;   // fan across the threat-facing arc (a line abreast)
-        const ang = base + spread, rad = 16 + (h % 6);     // a forward line at the frontier, out toward the threat (was 4-6 = the square)
+        const rad = Math.max(16, this.townRadius() + 3) + (h % 6);   // the frontier sits OUTSIDE the farms, however far they sprawl
+        const ang = base + spread;
         const ti = Math.round(well.i + Math.cos(ang) * rad), tj = Math.round(well.j + Math.sin(ang) * rad);
         const open = this.nearestOpenTile({ i: ti, j: tj }) || { i: ti, j: tj };
         return { i: open.i + 0.5, j: open.j + 0.5 };
@@ -6289,7 +6333,7 @@ export class World {
             for (const r of re.raiders) {
                 const dx = CENTER - r.i, dy = CENTER - r.j, dist = Math.hypot(dx, dy) || 1;
                 r.i += dx / dist * RAID_APPROACH_SPEED * dt; r.j += dy / dist * RAID_APPROACH_SPEED * dt;
-                r.facing = (dx - dy) >= 0 ? 1 : -1;
+                r.facing = (dx - dy) >= 0 ? 1 : -1; r.mvI = dx; r.mvJ = dy;
                 nearest = Math.min(nearest, dist);
                 // #raid-feel the slam fires at CONTACT: the muster line stands OUTSIDE the old struck radius,
                 // so raiders were walking straight past the defenders a beat before the transition hit (user
@@ -6365,15 +6409,15 @@ export class World {
                     if (!f || !this.#holdsLine(f)) { r.duel.done = true; continue; }   // opponent gone — disengage
                     const dx = f.pos.i - r.i, dy = f.pos.j - r.j, dist = Math.hypot(dx, dy);
                     if (dist > 1.7) {   // close to blade range (exchanges fire from the initiative beat below)
-                        r.i += dx / dist * 3.4 * dt; r.j += dy / dist * 3.4 * dt; r.facing = (dx - dy) >= 0 ? 1 : -1;
+                        r.i += dx / dist * 3.4 * dt; r.j += dy / dist * 3.4 * dt; r.facing = (dx - dy) >= 0 ? 1 : -1; r.mvI = dx; r.mvJ = dy;
                         continue;
                     }
-                    r.facing = (dx - dy) >= 0 ? 1 : -1;
+                    r.facing = (dx - dy) >= 0 ? 1 : -1; r.mvI = dx; r.mvJ = dy;   // squared up — face the duel
                     continue;
                 }
                 // no duel left: press on to the stores, take, and be ready to run
                 const dx = r.target.i - r.i, dy = r.target.j - r.j, dist = Math.hypot(dx, dy);
-                if (dist > 0.6) { r.i += dx / dist * 3.4 * dt; r.j += dy / dist * 3.4 * dt; r.facing = (dx - dy) >= 0 ? 1 : -1; }
+                if (dist > 0.6) { r.i += dx / dist * 3.4 * dt; r.j += dy / dist * 3.4 * dt; r.facing = (dx - dy) >= 0 ? 1 : -1; r.mvI = dx; r.mvJ = dy; }
                 else if (r.lootAt == null) r.lootAt = this.time;   // pausing at the stores — the grab
             }
             // #raid-initiative — the global turn: on each beat, exactly ONE live duel (round-robin) resolves
@@ -6400,12 +6444,16 @@ export class World {
             for (const r of re.raiders) {
                 const dx = r.i - CENTER, dy = r.j - CENTER, dist = Math.hypot(dx, dy) || 1;
                 // same screen-x rule fleeing outward: moving toward greater (i - j) reads as running RIGHT.
-                r.i += dx / dist * 5.5 * dt; r.j += dy / dist * 5.5 * dt; r.facing = (dx - dy) >= 0 ? 1 : -1;
+                r.i += dx / dist * 5.5 * dt; r.j += dy / dist * 5.5 * dt; r.facing = (dx - dy) >= 0 ? 1 : -1; r.mvI = dx; r.mvJ = dy;
             }
             re.timer -= dt;
             if (re.timer <= 0) {
                 this.raidEvent = null;
                 if (re.rehearsal && this.rehearsal && this.rehearsal.kind === 'raid') this.rehearsal = null;   // #admin curtain
+                // #raid-feel THE DEBRIEF: the line lingers for a spell — who's hurt, what was taken, what next —
+                // before drifting back to their lives (bubbles only; transient, never serialized; ghosts included,
+                // since spoken words write no record). The LLM debrief script slots in via world._raidScript.
+                if (re.struck) this._debrief = { at: this.time, until: this.time + 24 };
             }
         }
         // #raid-feel THE PURSUIT + THE GANG-UP (display motion; runs march AND flee so runners are seen off).
@@ -6600,6 +6648,7 @@ export class World {
         }
         const dx = f.pos.i - e.i, dy = f.pos.j - e.j, dist = Math.hypot(dx, dy) || 1;
         if (Math.abs(dx) > 0.08) e.facing = dx < 0 ? -1 : 1;   // face the way it moves
+        e.mvI = dx; e.mvJ = (typeof dy === 'number' ? dy : 0);
         // #watch-P1 (Codex #32) a standing DEFENDER (sentry/rallier) who reaches the foe brings it to BAY — the clash
         // fires against whoever's adjacent, so a guard body-blocking a FLEEING farmer actually trades blows and can
         // drive the foe off. Before, the clash only fired when the foe caught the fleeing TARGET (which, at matched
@@ -11819,19 +11868,30 @@ export class Farmer {
             // cadence — no rng, no record); the clash-time war-cries + skirmish flags come from #tickRaidEvent.
             case 'muster': {
                 const w = this.world, pr = w.pendingRaid;
-                if (!(pr && pr.detected) && !w.raidEvent) { this.state = 'decide'; this._skirmish = false; break; }
+                if (!(pr && pr.detected) && !w.raidEvent) {
+                    // #raid-feel STAND DOWN SLOWLY (player: "they all scatter at once — feels fake"): the line
+                    // breaks up over seconds on a seeded stagger — longer while the DEBRIEF is running, so they
+                    // linger, take stock of the fight, and drift back to their lives one by one.
+                    if (this._standAt == null) {
+                        const spanIdx = (w._debrief && w.time < w._debrief.until) ? 170 : 55;
+                        this._standAt = w.time + 1.2 + (hashString('stand:' + this.sheet.seed) % spanIdx) / 10;
+                    }
+                    if (w.time >= this._standAt) { this._standAt = null; this.state = 'decide'; this._skirmish = false; break; }
+                } else this._standAt = null;
                 // one voice at a time (the speech floor, like the congregation) and ONE line per time-bucket
                 // per farmer (a bubble that expired mid-bucket must NOT re-say the same line — looked like a loop).
-                if (pr && !w.raidEvent && !(this.bubble && this.bubble.t > 0) && w.floorFree()) {
-                    const bucket = Math.floor(w.time / 7);
+                const debrief = !pr && !w.raidEvent && w._debrief && w.time < w._debrief.until;
+                if ((debrief || (pr && !w.raidEvent)) && !(this.bubble && this.bubble.t > 0) && w.floorFree()) {
+                    const bucket = Math.floor(w.time / (debrief ? 5 : 7));
                     if (bucket !== this._musterBucket) {
                         const h = hashString('mustertalk:' + this.sheet.seed + ':' + bucket);
-                        if ((h % 7) === 0) {
+                        if ((h % (debrief ? 5 : 7)) === 0) {
                             this._musterBucket = bucket;
                             const scripted = w.nextRaidCouncilLine ? w.nextRaidCouncilLine(this) : null;   // #raid-council LLM script first
-                            const pool = w.culture === 'orc' ? MUSTER_TALK.orc : MUSTER_TALK.human;
-                            const line = scripted || pool[h % pool.length].replace('{dir}', pr.dirName || 'dark');
-                            this.say(line, '#e0c078');
+                            const pool = debrief ? (w.culture === 'orc' ? DEBRIEF_TALK.orc : DEBRIEF_TALK.human)
+                                                 : (w.culture === 'orc' ? MUSTER_TALK.orc : MUSTER_TALK.human);
+                            const line = scripted || pool[h % pool.length].replace('{dir}', (pr && pr.dirName) || 'dark');
+                            this.say(line, debrief ? '#c8d0a8' : '#e0c078');
                             w.holdFloor((this.bubble ? this.bubble.t0 : 2.2) + 0.7);   // finish before the next voice
                         }
                     }

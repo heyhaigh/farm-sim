@@ -232,7 +232,17 @@ class FarmAudio {
     update({ isNight, weather, flash, season = 0, culture = 'human', hasRooster = false, building = false, raidPhase = 0 }) {
         this.hasRooster = hasRooster;
         this.culture = culture === 'orc' ? 'orc' : 'human';   // #3.1 orc warbands get their own dark score
-        this.raidPhase = raidPhase | 0;   // #raid-score 0 = peace · 1 = warband APPROACHING (telegraph) · 2 = BATTLE (raid landed)
+        // #raid-score 0 = peace · 1 = warband APPROACHING (telegraph) · 2 = BATTLE (raid landed).
+        // The EXIT is a LADDER, not a cliff (player: "the music harshly turns back to the happy music"):
+        // when the raid ends, battle steps down to the low-drone comedown for ~7s, THEN the season theme —
+        // and the gain floor eases out with it, so the war score fades instead of snapping.
+        const want = raidPhase | 0;
+        if (want > 0) { this.raidPhase = want; this._raidStepAt = null; }
+        else if ((this.raidPhase | 0) > 0) {
+            const now = (this.ctx && this.ctx.currentTime) || 0;
+            if (this._raidStepAt == null) this._raidStepAt = now + (this.raidPhase === 2 ? 7 : 4);
+            if (now >= this._raidStepAt) { this.raidPhase -= 1; this._raidStepAt = this.raidPhase > 0 ? now + 6 : null; }
+        } else this.raidPhase = 0;
         if (!this.ctx) { this.wasNight = isNight; this.season = season; return; }
         const t = this.ctx.currentTime;
         // (structure-raising hammer is now emitted PER FARMER by the renderer via workSfx(), so it's

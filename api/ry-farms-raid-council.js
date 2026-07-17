@@ -80,7 +80,28 @@ async function generate(body) {
         raidCount: Math.max(1, body.nemesis.raidCount | 0),
         sworeAgainst: body.nemesis.sworeAgainst ? String(body.nemesis.sworeAgainst).slice(0, 30) : null,
     } : null;
-    const system = [
+    // #raid-feel two phases share this endpoint: 'muster' (the pre-battle counsel, default) and 'debrief'
+    // (the aftermath — the fight just ended; take stock, then strategy).
+    const debrief = body.phase === 'debrief';
+    const b = debrief && body.battle && typeof body.battle === 'object' ? {
+        felled: body.battle.felled | 0, n: body.battle.n | 0, harvestLost: body.battle.harvestLost | 0,
+        hero: body.battle.hero ? String(body.battle.hero).slice(0, 30) : null,
+        wounded: Array.isArray(body.battle.wounded) ? body.battle.wounded.slice(0, 6).map(x => String(x).slice(0, 30)) : [],
+    } : null;
+    const system = (debrief ? [
+        `You write the AFTERMATH DEBRIEF in RY FARMS, a pixel farming sim. The raid is OVER: ${foe} struck ${town} minutes ago and the fight has just ended. The ${orc ? 'orcs of the hold' : 'farmer-neighbours'} are still standing on the field where they held the line, catching their breath.`,
+        b ? `What actually happened: ${b.felled} of ${b.n} raiders were felled at the line; ${Math.max(0, b.n - b.felled)} broke off and fled${b.harvestLost > 0 ? `; the raiders carried off ${b.harvestLost} measures of the harvest` : '; the stores were held'}.${b.hero ? ` ${b.hero} was the one who held the line - the fight turned on them.` : ''}${b.wounded.length ? ` WOUNDED: ${b.wounded.join(', ')} - they are hurt and standing right there.` : ' No one was badly hurt.'}` : null,
+        nem ? `THIS IS A NAMED WAR: the warleader is ${nem.name}, raid number ${nem.raidCount} of his war on ${town}.${nem.sworeAgainst ? ` He has sworn against ${nem.sworeAgainst}.` : ''} He got away - they all know he will come again. The talk should turn to what THAT means: guard the one he swore against, meet him further out next time, or find a way to end this war.` : 'This was a NEW band, not a known foe. The talk should turn to defenses: the wall, the watch, meeting them further from the fields next time.',
+        'Write their exchange as they stand down: first the HUMAN part (who is hurt - name them, get them inside; the reckoning - what was taken or held; a beat of relief or grief), then the STRATEGY part. Turn-taking, BY NAME, distinct voices - the shaken one, the practical one, the angry one.',
+        'Rules:',
+        '- 8 to 12 short turns total. Most of the cast should speak.',
+        '- Each line is ONE short sentence, under ~14 words, first person, tired and real. A complete sentence.',
+        '- speaker MUST be exactly one of the names given (match spelling).',
+        '- No greetings, no small talk, no weather. They just fought.',
+        orc ? '- These are orcs who defended their own hold: blunt, martial, proud of the stand.' : '- These are farmers, not soldiers: shaken, practical, protective of each other.',
+        '- Plain ASCII only. No markdown, no em dashes (use " - "), straight quotes, no emojis, no stage directions, no narration.',
+        'Return JSON only: { "script": [ { "speaker": "<name>", "line": "<what they say>" }, ... ] }.',
+    ] : [
         `You write the MUSTER COUNSEL in RY FARMS, a pixel farming sim. ${foe} has been sighted massing to the ${dir} of ${town}; the alarm is up and these ${orc ? 'orcs of the hold' : 'farmer-neighbours'} have formed a defensive line at the frontier with only moments before the raiders reach them.`,
         nem ? `THIS IS A NAMED WAR: the warleader is ${nem.name}, and this is raid number ${nem.raidCount} of his war on ${town}. They know him by name now.${nem.sworeAgainst ? ` Last time he broke off he SWORE against ${nem.sworeAgainst} - everyone on the line knows he is coming for ${nem.sworeAgainst}, and ${nem.sworeAgainst} knows it too. Let that hang over the exchange: some want to shield ${nem.sworeAgainst}, and ${nem.sworeAgainst} refuses to be shielded.` : ''}` : null,
         'Write their urgent exchange while they wait: real, flowing, turn-taking — they set STRATEGY (who holds the middle, who takes the flank, fall back to the well if the line gives, protect the stores/the sick), steady each other\'s NERVE, and speak to each other BY NAME. Distinct voices — each sounds like their own personality; a bold one is eager, a timid one is scared and says so, a wise one thinks two steps ahead.',
@@ -92,7 +113,7 @@ async function generate(body) {
         orc ? '- These are orcs defending their own hold: blunt, martial, eager. Not villains - a people defending home.' : '- These are farmers, not soldiers: brave but scared, practical, protective of each other.',
         '- Plain ASCII only. No markdown, no em dashes (use " - "), straight quotes, no emojis, no stage directions, no narration.',
         'Return JSON only: { "script": [ { "speaker": "<name>", "line": "<what they say>" }, ... ] }.',
-    ].filter(Boolean).join('\n');
+    ]).filter(Boolean).join('\n');
     const view = cast.map(f => ({
         name: f.name,
         trade: f.archetype || null,

@@ -68,3 +68,53 @@ export async function requestRaidCouncil(world) {
     } catch { /* offline pools carry the scene */ }
     finally { clearTimeout(timer); inflight = false; }
 }
+
+// #raid-feel THE DEBRIEF (player: "no summation, no review of what just occurred") — the fight just ended;
+// the line lingers. Given the cast + what actually happened (who fell, who broke off, who's hurt, whose war
+// it is), the model writes the aftermath exchange: check the hurt, count the stores, then STRATEGY — a
+// returning named foe means "he'll come again, keep {sworn} guarded"; a new band means walls and watches.
+// Same contract as the muster counsel: display bubbles only, DEBRIEF_TALK pools carry it offline.
+let debriefInflight = false;
+let debriefDoneFor = null;
+export async function requestRaidDebrief(world, battle) {
+    if (!world || !battle || debriefInflight || debriefDoneFor === battle.rid) return;
+    const cast = world.farmers.filter(f => !f.downed && f.health !== 'sick').slice(0, 8);
+    if (cast.length < 2) return;
+    debriefInflight = true; debriefDoneFor = battle.rid;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), COUNCIL_TIMEOUT_MS);
+    try {
+        const res = await fetch(COUNCIL_ENDPOINT, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                phase: 'debrief',
+                culture: world.culture, town: world.name,
+                foe: battle.clan || 'a warband', dir: 'the dark',
+                nemesis: battle.nemesis || null,
+                battle: {
+                    felled: battle.outcome && battle.outcome.felled, n: battle.outcome && battle.outcome.n,
+                    harvestLost: battle.outcome && battle.outcome.harvestLost,
+                    hero: battle.hero || null, wounded: battle.wounded || [],
+                },
+                cast: cast.map(f => castView(world, f)),
+            }),
+            signal: controller.signal,
+        });
+        if (!res.ok) throw new Error(`debrief endpoint ${res.status}`);
+        const data = await res.json();
+        if (!data || data.fallback || !Array.isArray(data.script)) throw new Error(data?.error || 'no script');
+        const byName = new Map(cast.map(f => [shortNameOf(f).toLowerCase(), f.sheet.seed]));
+        const lines = [];
+        for (const t of data.script) {
+            const seed = byName.get(String(t.speaker || '').toLowerCase());
+            if (seed != null && t.line) lines.push({ seed, line: String(t.line) });
+        }
+        // only hand it over while the debrief window is still open (they may have all drifted off)
+        if (lines.length >= 3 && world._debrief && world.time < world._debrief.until) {
+            world._raidScript = { lines, i: 0, headSince: null };
+            world._debrief.until = Math.max(world._debrief.until, world.time + lines.length * 4 + 6);   // let the scene finish
+        }
+    } catch { /* the authored DEBRIEF_TALK pool carries the scene */ }
+    finally { clearTimeout(timer); debriefInflight = false; }
+}
