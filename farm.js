@@ -823,6 +823,10 @@ export class World {
         // the same origin, so grievances/reconciliations compound. A fresh town is its own root; an heir town
         // inherits its forebear's root (resolved from the world index at founding, in main.js).
         this.lineageRoot = String(this.seed);
+        // #lineage the OTHER towns this world remembers ([{seed,name}], set at founding from the world index
+        // in main.js) — souls are grown "out of" them, so a farmer's past life can be sited at a town that
+        // truly stood here (see spawnFarmer). Empty for a first/headless world, so determinism is untouched.
+        this.rememberedTowns = [];
         this.name = generateTownName(this.seed, this.culture);   // each town's own name (seeded, dedicated stream)
         this.tiles = new Uint8Array(GRID * GRID).fill(T.GRASS);
         this.rockWork = new Map();   // tilekey -> mining shifts landed on a big rock (persists till it breaks)
@@ -2668,7 +2672,13 @@ export class World {
         // the moment a working acquaintance becomes a real friendship, note it (once per pair)
         if (v >= 4 && !this._chronBonds.has(key)) {
             this._chronBonds.add(key);
-            this.addChronicle('bond', `${a.sheet.name.split(' ')[0]} and ${b.sheet.name.split(' ')[0]} ${this.culture === 'orc' ? 'swore a blood-bond' : 'have grown close'}.`, a, b, '#7dd069', { tier: 'callout', tone: 'triumph' });
+            // #lineage two souls out of the SAME remembered town recognise it — the friendship is a thread
+            // back to a place that stood before this valley (a bond the memory loop itself authored).
+            const shared = a.sheet.origin && b.sheet.origin && String(a.sheet.origin.seed) === String(b.sheet.origin.seed) ? a.sheet.origin.name : null;
+            this.addChronicle('bond', shared
+                ? `${a.sheet.name.split(' ')[0]} and ${b.sheet.name.split(' ')[0]} found they were both out of ${shared} — a town gone, remembered between them.`
+                : `${a.sheet.name.split(' ')[0]} and ${b.sheet.name.split(' ')[0]} ${this.culture === 'orc' ? 'swore a blood-bond' : 'have grown close'}.`, a, b, '#7dd069', { tier: 'callout', tone: 'triumph' });
+            if (shared) a.say(this.culture === 'orc' ? `OUT OF ${shared.toUpperCase()}, LIKE ME` : `YOU'RE OUT OF ${shared.toUpperCase()} TOO?`, '#c8b0e0');
             a.surfaceMemory('bond'); b.surfaceMemory('bond');   // #legibility Slice 1 — a friendship stirs a memory of people once known
         }
     }
@@ -2716,6 +2726,7 @@ export class World {
         const snap = {
             v: World.SAVE_VERSION, seed: this.seed, name: this.name, culture: this.culture, lineageRoot: this.lineageRoot,
             yardV: 1,   // #farmyard facilities live in the farmstead cluster; pre-yard saves reflow once on load
+            rememberedTowns: (this.rememberedTowns || []).map(t => ({ seed: t.seed, name: t.name })),   // #lineage the prior towns souls hail from
             _rev: this._rev || 0,   // Codex #22.1 monotonic save revision (CAS in saveTown rejects a stale overwrite)
             inboxApplied: (this._inboxApplied || []).slice(-200),   // #reconciliation exactly-once inbox ledger
             inboxWatermark: { ...(this._inboxWatermark || {}) },    // Codex #22.2 durable per-pairKey ordinal watermark
@@ -2878,6 +2889,7 @@ export class World {
             used: new Set(d.congState.used || []), spokenSet: new Set(d.congState.spokenSet || []), scriptUsed: new Set(d.congState.scriptUsed || []),
         } : null;
         this.lineageRoot = d.lineageRoot != null ? String(d.lineageRoot) : String(this.seed);   // #reconciliation lineage root
+        this.rememberedTowns = Array.isArray(d.rememberedTowns) ? d.rememberedTowns.map(t => ({ seed: t.seed, name: t.name })) : [];   // #lineage prior towns
         this.name = d.name || generateTownName(this.seed, this.culture);   // (pre-name saves regenerate deterministically)
         this.rand = mulberry32(d.randSeed >>> 0);
         this.time = d.time; this.day = d.day; this.clock = d.clock;

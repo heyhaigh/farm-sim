@@ -1,6 +1,6 @@
 // main.js — Ry Farms: rendering, camera, input, UI, boot.
 
-import { fetchMemories, generateCrew, mod, fmtMod, STAT_NAMES, TRAIT_NAMES, TRAIT_LABELS, hashString, mulberry32 } from './dna.js';
+import { fetchMemories, generateCrew, generateMemory, mod, fmtMod, STAT_NAMES, TRAIT_NAMES, TRAIT_LABELS, hashString, mulberry32 } from './dna.js';
 import { audio } from './audio.js';
 import { World, CHUNK, T, GRID, CENTER, DAY_LENGTH, NIGHT_LENGTH, ITEMS, CRAFTABLES, RECIPE_BY_ID, INVENTION_TABLE, RARE_NAME, xpForLevel, obstacleTier, treeVariant, treeIsFruit, SEASONS } from './farm.js';
 import {
@@ -6328,9 +6328,34 @@ function spawnFarmer(lineage = null) {
     // addFarmer is the authority on room (it lazily opens ring 2 and collision-checks
     // slots) — don't pre-guard on free slots or ring 2 can never open.
     const pick = pickMemory();
+    // #lineage a soul hails from a REAL remembered town (their forebear's, if an heir; else a seeded pick).
+    // An invented past life is RE-SITED there before growth, so "keeping the letters at Duskvale" names a
+    // town that truly stood in this world — not flavour. Live path only; determinism-clean (seed hash, no rng).
+    const origin = originFor(pick.memory, pick.mutation, lineage);
+    if (origin && typeof pick.memory.id === 'string' && pick.memory.id.startsWith('life:')) {
+        const s = parseInt(pick.memory.id.slice(5), 10);
+        if (Number.isFinite(s)) pick.memory = generateMemory(s, origin.name);   // same trade + years, real place
+    }
     const f = world.addFarmer(pick.memory, pick.mutation, lineage);
-    if (f) { terrainDirty = true; selected = f; }
-    else world.addLog('No room left! The valley is full.', '#e0a03c');
+    if (f) {
+        if (origin) f.sheet.origin = { seed: origin.seed, name: origin.name };
+        terrainDirty = true; selected = f;
+    } else world.addLog('No room left! The valley is full.', '#e0a03c');
+}
+
+// #lineage which remembered town a founder hails from: their forebear's town if they're an heir (real
+// descent), else a per-seed deterministic pick from the roster. null when the world remembers nothing.
+function originFor(memory, mutation, lineage) {
+    const roster = world.rememberedTowns;
+    if (!roster || !roster.length) return null;
+    if (lineage && lineage.ofTownSeed != null) {
+        const t = roster.find(x => String(x.seed) === String(lineage.ofTownSeed));
+        if (t) return t;
+        if (lineage.ofTownName) return { seed: lineage.ofTownSeed, name: lineage.ofTownName };
+    }
+    // key on id + mutation so reused memories (a thin offline corpus) don't all hail from one town
+    const key = ((memory && (memory.id || memory.title)) || 'anon') + ':' + (mutation || 0);
+    return roster[hashString('origin:' + key) % roster.length];
 }
 
 // #1.1 Generational founding — deterministically decide which of the founding cast are HEIRS of a forebear
@@ -6779,8 +6804,16 @@ function drawBootScreen(t) {
     } else {
         lastSavedDay = world.day;
         world.addLog(`Ry Farms — seed ${worldSeed}`, '#5a6672');
+        // #lineage the roster of towns this world remembers — every OTHER town the index has seen. Set
+        // BEFORE the founders spawn so each can be grown "out of" one (their past life sited at a town that
+        // truly stood here). Deterministic (the index is persisted); empty on a first world, so nothing changes.
+        world.rememberedTowns = Object.values((worldMapIdx && worldMapIdx.towns) || {})
+            .filter(t => t && t.name && String(t.seed) !== String(world.seed))
+            .map(t => ({ seed: t.seed, name: t.name }))
+            .sort((a, b) => String(a.seed).localeCompare(String(b.seed)));   // stable order, index-independent
         const heirPlan = planHeirs(worldSeed, 8, lineagePool);   // #1.1 which founders descend from a past town's lives
         for (let i = 0; i < 8; i++) spawnFarmer(heirPlan.get(i) || null);   // start with the full founding eight
+        if (world.rememberedTowns.length) world.addLog(`This valley remembers ${world.rememberedTowns.length} town${world.rememberedTowns.length > 1 ? 's' : ''} that came before.`, '#c8b0e0');
         if (heirPlan.size) world.addLog(`${heirPlan.size} of the founders are heirs of a remembered town.`, '#c8b0e0');
         world.ensureFounderVariety();                // guarantee a chaos-agent + a moody farmer among them
         // #reconciliation (Codex r20 P1): this town's lineage ROOT = the earliest origin its heirs descend from

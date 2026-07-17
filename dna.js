@@ -37,11 +37,16 @@ function shuffled(n, rand) {
     return a;
 }
 
-// One invented past-life memory, seeded (same seed -> same life).
-export function generateMemory(seed) {
+// One invented past-life memory, seeded (same seed -> same life). `placeOverride` (a REAL remembered
+// town's name — #lineage) re-sites the life there without touching the vocation or the seed stream: the
+// roll is still consumed so `life`/`yrs` are identical whether or not a real town is supplied, so a soul
+// "keeping the letters at Duskvale" carries the same trade whether Duskvale is invented flavour or a town
+// that truly stood in this world's history.
+export function generateMemory(seed, placeOverride) {
     const rand = mulberry32((seed >>> 0) || 1);
     const life = LIVES[Math.floor(rand() * LIVES.length)];
-    const place = LIFE_PLACES[Math.floor(rand() * LIFE_PLACES.length)];
+    const rolledPlace = LIFE_PLACES[Math.floor(rand() * LIFE_PLACES.length)];
+    const place = placeOverride || rolledPlace;
     const yrs = 3 + Math.floor(rand() * 15);
     const title = life.title(place);
     return { id: 'life:' + (seed >>> 0), title: title[0].toUpperCase() + title.slice(1),
