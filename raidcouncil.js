@@ -118,3 +118,42 @@ export async function requestRaidDebrief(world, battle) {
     } catch { /* the authored DEBRIEF_TALK pool carries the scene */ }
     finally { clearTimeout(timer); debriefInflight = false; }
 }
+
+// #one-beat (council Phase 3) — THE DM'S BEAT: one bespoke stunt + bark for the marquee duel, written
+// during the telegraph. Tiny schema (stunt/by/bark), so even the 3B model is reliable; the seeded house
+// beat carries the moment when this never arrives. Display-only, like every script here.
+let beatInflight = false;
+let beatDoneFor = null;
+export async function requestDuelBeat(world) {
+    const pr = world && world.pendingRaid;
+    if (!pr || !pr.e || !pr.e.foe || beatInflight) return;
+    const key = world.seed + ':' + (pr.e.id || pr.landsAt);
+    if (beatDoneFor === key) return;
+    beatInflight = true; beatDoneFor = key;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), COUNCIL_TIMEOUT_MS);
+    try {
+        const sworn = pr.e.foe.sworeAgainst != null ? world.farmers.find(x => x.sheet.seed === pr.e.foe.sworeAgainst) : null;
+        const res = await fetch(COUNCIL_ENDPOINT, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                phase: 'beat',
+                culture: world.culture, town: world.name,
+                foe: pr.e.foe.name, dir: pr.dirName || 'the dark',
+                nemesis: { name: pr.e.foe.name, raidCount: pr.e.foe.raidCount,
+                           sworeAgainst: sworn ? shortNameOf(sworn) : null },
+            }),
+            signal: controller.signal,
+        });
+        if (!res.ok) throw new Error(`beat endpoint ${res.status}`);
+        const data = await res.json();
+        if (!data || data.fallback || !data.beat) throw new Error(data?.error || 'no beat');
+        const b = data.beat;
+        if ((b.stunt === 'shove' || b.stunt === 'taunt') && (b.by === 'foe' || b.by === 'defender') && b.bark) {
+            // only hand it over while THIS raid is still on its way (or on the field)
+            if (world.pendingRaid === pr || world.raidEvent) world._duelBeat = { stunt: b.stunt, by: b.by, bark: String(b.bark).slice(0, 90) };
+        }
+    } catch { /* the seeded house beat carries the moment */ }
+    finally { clearTimeout(timer); beatInflight = false; }
+}

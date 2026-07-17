@@ -451,6 +451,13 @@ const RAID_CRIES = {
     human: ['HOLD THE LINE!', 'DRIVE THEM OFF!', 'STAND! STAND!', 'NOT OUR HARVEST!', 'PUSH THEM BACK!'],
     orc: ['BLOOD AND IRON!', 'BREAK THEM!', 'NONE PASS!', 'FOR THE BAND!', 'TEETH OUT!'],
 };
+// #one-beat (council Phase 3) — the authored house beats for the marquee duel's single staged moment, used
+// whenever the DM's bespoke beat didn't arrive. '{name}' = the sworn defender, '{foe}' = the named raider.
+const BEAT_BARKS = {
+    foe: ['DOWN. STAY DOWN.', 'YOUR FIELDS ARE MINE, {name}.', 'YOU SHOULD HAVE RUN, {name}.', 'I SWORE THIS, {name}.'],
+    defender: ['THIS IS OUR LAND!', 'NOT ONE STEP MORE!', 'YOU END HERE, {foe}!', 'I TOLD YOU I WOULD BE WAITING.'],
+};
+
 // #raid-feel the AFTERMATH counsel — the line lingers after the fight, takes stock, and drifts off one by
 // one (authored fallback; the LLM debrief script replaces these when it lands). '{dir}' unused here.
 const DEBRIEF_TALK = {
@@ -6496,6 +6503,7 @@ export class World {
             re.timer -= dt;
             if (re.timer <= 0) {
                 this.raidEvent = null;
+                this._duelBeat = null;   // #one-beat a stale beat never carries into a later raid's duel
                 if (re.rehearsal && this.rehearsal && this.rehearsal.kind === 'raid') this.rehearsal = null;   // #admin curtain
                 // #raid-feel THE DEBRIEF: the line lingers for a spell — who's hurt, what was taken, what next —
                 // before drifting back to their lives (bubbles only; transient, never serialized; ghosts included,
@@ -6619,6 +6627,32 @@ export class World {
         const side = (roll * 997 | 0) % 2 ? 1 : -1;
         const moveRaider = (di, dj) => { r.i += di; r.j += dj; };
         const moveFarmer = (di, dj) => { f.pos.i += di; f.pos.j += dj; };
+        // #one-beat (council Phase 3): the marquee duel gets ONE authored moment at its midpoint — a stunt +
+        // a bark, DM-written during the telegraph when the model answered (world._duelBeat), the seeded house
+        // beat otherwise. It REPLACES this round's roll (display-only: motion + words; the scripted ending is
+        // untouched). Ghost raids stage it too — a beat is a performance, not a record.
+        if (r === re.focus && d.round === Math.floor(d.rounds / 2) && !d.beatDone && !last) {
+            d.beatDone = true;
+            const beat = this._duelBeat; this._duelBeat = null;
+            const hb = hashString('beat:' + rid);
+            const stunt = (beat && (beat.stunt === 'taunt' || beat.stunt === 'shove')) ? beat.stunt : 'shove';
+            const by = (beat && (beat.by === 'foe' || beat.by === 'defender')) ? beat.by : ((hb % 2) ? 'foe' : 'defender');
+            const fname = shortName(f), oname = (r.foeName || 'the raider').split(' ')[0];
+            const bark = ((beat && beat.bark) ||
+                BEAT_BARKS[by][(hb >>> 3) % BEAT_BARKS[by].length]).replace('{name}', fname).replace('{foe}', oname);
+            if (by === 'foe') {
+                raiderSwing();
+                if (stunt === 'shove') { moveFarmer(ux * 1.5, uy * 1.5); moveRaider(ux * 0.5, uy * 0.5); fx(f.pos.i, f.pos.j, 'SHOVED!', '#f0c860'); }
+                fx(r.i, r.j - 0.6, bark, '#ffd090');   // the foe speaks through the field (raiders have no bubbles)
+                if (re.fx.length) re.fx[re.fx.length - 1].dur = 2.8;
+            } else {
+                farmerSwing();
+                if (stunt === 'shove') { moveRaider(-ux * 1.5, -uy * 1.5); moveFarmer(-ux * 0.5, -uy * 0.5); fx(r.i, r.j, 'SHOVED!', '#f0c860'); }
+                f.say(bark, '#f0c860');
+            }
+            d.round++;
+            return;
+        }
         if (last && r.falls) {          // the line holds: the defender's blow lands and the raider drops
             farmerSwing(); r.fell = true; d.done = true;
             f._freed = true;            // free to flank the nearest live duel (the gang-up)

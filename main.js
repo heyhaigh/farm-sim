@@ -16,7 +16,7 @@ import { saveTown, loadTown, wipeTown, undoWipe, loadWorldIndex, registerTownInW
 import { computeLayout, detectEncounters, encounterLine, townPos, townReach, townTint } from './worldmap.js';
 import { enrichStories } from './dm.js';
 import { requestCongregation } from './congregation.js';
-import { requestRaidCouncil, requestRaidDebrief } from './raidcouncil.js';
+import { requestRaidCouncil, requestRaidDebrief, requestDuelBeat } from './raidcouncil.js';
 import { persistLives, persistTownHistory, persistBattle } from './memory-writeback.js';
 import { enrichInventions, persistTownInventions } from './memory-invent.js';
 import { whisper } from './conscience.js';
@@ -6338,7 +6338,10 @@ function frame(now) {
         raidPhase: world.raidEvent ? 2 : world.pendingRaid ? 1 : 0 });   // #raid-score 1 = buildup from the moment a warband gathers · 2 = battle once it lands (rehearsals included)
     // #raid-council a telegraphed raid asks the LLM (fire-and-forget, deduped per telegraph) to write the
     // muster counsel — the line's own urgent strategy talk. Offline/slow = the authored pools carry it.
-    if (world.pendingRaid && !world.raidEvent) requestRaidCouncil(world);
+    if (world.pendingRaid && !world.raidEvent) {
+        requestRaidCouncil(world);
+        requestDuelBeat(world);   // #one-beat the DM's single staged moment for the marquee duel (named foes only)
+    }
     // #nemesis THE WAR SO FAR (Kimi: put the memory READ at the telegraph, away from the aftermath pile-up):
     // the frame a NAMED return telegraphs, one spotlight card recaps the war from the arc — raids weathered,
     // the sworn grudge, how the last raid went — during the calm minute while the warband still gathers.
@@ -6496,11 +6499,11 @@ function frame(now) {
     // rises and fades over ~1.2s of sim time; also the trigger for the clash SFX (each new entry plays once).
     if (world.raidEvent && Array.isArray(world.raidEvent.fx)) {
         for (const x of world.raidEvent.fx) {
-            const age = world.time - x.at;
-            if (age < 0 || age > 1.2) continue;
+            const age = world.time - x.at, dur = x.dur || 1.2;   // #one-beat barks linger longer than combat text
+            if (age < 0 || age > dur) continue;
             if (!x._heard) { x._heard = true; if (audio.clash) audio.clash(x.text); }
-            const sx2 = cam.x + isoX(x.i, x.j), sy2 = cam.y + isoY(x.i, x.j) - 24 - age * 8;
-            ctx.save(); ctx.globalAlpha = Math.max(0, 1 - Math.max(0, age - 0.6) / 0.6);
+            const sx2 = cam.x + isoX(x.i, x.j), sy2 = cam.y + isoY(x.i, x.j) - 24 - age * (10 / dur);
+            ctx.save(); ctx.globalAlpha = Math.max(0, 1 - Math.max(0, age - dur * 0.5) / (dur * 0.5));
             const wpx = textWidth(x.text);
             ctx.fillStyle = 'rgba(8,9,14,0.72)'; ctx.fillRect(Math.round(sx2 - wpx / 2) - 2, Math.round(sy2) - 2, wpx + 4, 9);
             drawText(ctx, x.text, Math.round(sx2 - wpx / 2), Math.round(sy2), x.color || '#e8ecf5');

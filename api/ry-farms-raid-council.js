@@ -66,7 +66,58 @@ const scriptSchema = {
     },
 };
 
+// #one-beat the DM's single staged moment for the marquee duel — a tiny, enum-locked schema a 3B model can
+// hit reliably (the DeepSeek gate would cancel a full beat-sheet; ONE beat with two enums is a different risk).
+const beatSchema = {
+    type: 'object',
+    additionalProperties: false,
+    required: ['beat'],
+    properties: {
+        beat: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['stunt', 'by', 'bark'],
+            properties: {
+                stunt: { type: 'string', enum: ['shove', 'taunt'] },
+                by: { type: 'string', enum: ['foe', 'defender'] },
+                bark: { type: 'string', maxLength: 90 },
+            },
+        },
+    },
+};
+
+async function generateBeat(body) {
+    const orc = body.culture === 'orc';
+    const town = String(body.town || (orc ? 'the hold' : 'the town')).slice(0, 40);
+    const nem = body.nemesis && body.nemesis.name ? {
+        name: String(body.nemesis.name).slice(0, 40),
+        raidCount: Math.max(1, body.nemesis.raidCount | 0),
+        sworeAgainst: body.nemesis.sworeAgainst ? String(body.nemesis.sworeAgainst).slice(0, 30) : null,
+    } : null;
+    if (!nem) throw new Error('no named foe - no beat');
+    const system = [
+        `You direct ONE dramatic moment in a pixel-farm-sim raid duel. ${nem.name} is raiding ${town} (raid ${nem.raidCount} of his war)${nem.sworeAgainst ? `, and he has sworn against ${nem.sworeAgainst} — this duel is the two of them, the grudge made flesh` : ''}.`,
+        'Choose ONE beat for the middle of their duel:',
+        '- stunt: "shove" (the actor drives the other back hard) or "taunt" (words only, no motion).',
+        `- by: "foe" (${nem.name} does it) or "defender"${nem.sworeAgainst ? ` (${nem.sworeAgainst} does it)` : ''}.`,
+        '- bark: ONE short line the actor says as they do it. Under 12 words, first person, in character, plain ASCII, no emojis, no em dashes.',
+        orc ? 'The defenders are orcs of the hold; the raiders are a rival band.' : `The foe is an orc warleader; the defender is a farmer with a hoe and a grudge.`,
+        'Return JSON only: { "beat": { "stunt": "...", "by": "...", "bark": "..." } }.',
+    ].join('\n');
+    const out = await callLLM({
+        system,
+        user: JSON.stringify({ culture: orc ? 'orc' : 'human', nemesis: nem }),
+        schema: beatSchema, schemaName: 'ry_farms_duel_beat', maxTokens: 120, temperature: 0.9,
+    });
+    const b = out && out.beat;
+    if (!b || (b.stunt !== 'shove' && b.stunt !== 'taunt') || (b.by !== 'foe' && b.by !== 'defender')) throw new Error('bad beat');
+    const bark = cleanLine(b.bark);
+    if (!bark || bark.length < 2) throw new Error('empty bark');
+    return { beat: { stunt: b.stunt, by: b.by, bark } };
+}
+
 async function generate(body) {
+    if (body.phase === 'beat') return generateBeat(body);
     const orc = body.culture === 'orc';
     const cast = (Array.isArray(body.cast) ? body.cast : []).slice(0, 8);
     const names = cast.map(f => f.name).filter(Boolean);
