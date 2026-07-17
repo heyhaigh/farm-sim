@@ -441,6 +441,17 @@ for (const v of [2, 3]) {
     im.src = `./assets/craftpix-net-363992-free-top-down-orc-game-character-pixel-art/Tiled_files/orc${v}_idle_with_shadow.png`;
     orcVariantImg[v] = im;
 }
+// #sprite the 8-frame ATTACK-SWING sheets (same 64px 4-directional-row layout as idle) — drawn while a
+// raider is mid-swing in a duel (e._swingAt), so they actually SWING a blade instead of lunging in an idle
+// pose. orc1 for human-town raids; orc2/orc3 for the orc-vs-orc variant raiders. Falls back to idle if
+// the sheet hasn't loaded. Display-only — no sim/determinism impact.
+const orcAttackImg = {};
+const orcHurtImg = {};
+for (const v of [1, 2, 3]) {
+    const a = new Image(); a.src = `./assets/craftpix-net-363992-free-top-down-orc-game-character-pixel-art/Tiled_files/orc${v}_attack_with_shadow.png`; orcAttackImg[v] = a;
+    const h = new Image(); h.src = `./assets/craftpix-net-363992-free-top-down-orc-game-character-pixel-art/Tiled_files/orc${v}_hurt_with_shadow.png`; orcHurtImg[v] = h;
+}
+const SWING_DUR = 0.36, HURT_DUR = 0.34;   // display windows for the attack/hurt animations
 
 // Roaming WILD PREY sprites (hunted for meat — see world.prey / #tickPrey). All 32x32, 4-frame idle
 // cycles; row 2 = side profile. Deer/hare side-frames face LEFT (srcFace -1), the turkey faces RIGHT.
@@ -2209,18 +2220,35 @@ function drawThreat(e, sx, sy) {
         const vi = orcVariantImg[e.art];
         if (vi && vi.complete && vi.naturalWidth > 0) img = vi;
     }
+    // #sprite pick the animation STATE + frame. hurt (took a blow) beats swing (dealing one) beats idle;
+    // each advances through its own sheet's frame columns over its display window. Falls back to the idle
+    // sheet (column 0) whenever an animation sheet isn't loaded. orc-vs-orc variants animate from their tribe.
+    const swinging = e._swingAt != null && world && world.time - e._swingAt < SWING_DUR;
+    const hurting = e._hurtAt != null && world && world.time - e._hurtAt < HURT_DUR;
+    let sheet = img, frameCol = 0;
+    if (e.kind === 'orc') {
+        const v = (e.art && world && world.culture === 'orc') ? e.art : 1;
+        const bank = hurting ? orcHurtImg : swinging ? orcAttackImg : null;
+        const dur = hurting ? HURT_DUR : SWING_DUR, at = hurting ? e._hurtAt : e._swingAt;
+        const im2 = bank && bank[v];
+        if (im2 && im2.complete && im2.naturalWidth > 0) {
+            sheet = im2;
+            const frames = Math.max(1, Math.round(im2.naturalWidth / c.fw));
+            frameCol = Math.min(frames - 1, Math.floor(((world.time - at) / dur) * frames));
+        }
+    }
     // #raid-feel duel lunge: a swinging raider snaps toward their opponent and eases back (display timer set
     // by #duelExchange); a FELLED raider sinks and darkens where the line stopped them.
-    if (e._swingAt != null && world && world.time - e._swingAt < 0.32) {
-        const k = Math.sin(Math.PI * Math.min(1, (world.time - e._swingAt) / 0.32));
+    if (swinging) {
+        const k = Math.sin(Math.PI * Math.min(1, (world.time - e._swingAt) / SWING_DUR));
         const n = Math.hypot(e._swingI || 0, e._swingJ || 0) || 1;
         sx += ((e._swingI - e._swingJ) / n) * 3.5 * k;
         sy += ((e._swingI + e._swingJ) / n) * 1.75 * k;
     }
     ctx.imageSmoothingEnabled = false;
     if (e.fell) { ctx.save(); ctx.globalAlpha = 0.75; ctx.filter = 'brightness(0.55)'; sy += 3; }
-    if (img && img.complete && img.naturalWidth > 0) {
-        const fw = c.fw, rows = Math.max(1, Math.round(img.naturalHeight / fw));
+    if (sheet && sheet.complete && sheet.naturalWidth > 0) {
+        const fw = c.fw, rows = Math.max(1, Math.round(sheet.naturalHeight / fw));
         // #raid-feel 4-direction sheets pick their row from the last MOVEMENT, projected to screen space
         // (mvI/mvJ set wherever the sim moves the threat): walking screen-up shows the BACK of the orc.
         let dirRow = c.row ?? 2;
@@ -2234,10 +2262,10 @@ function drawThreat(e, sx, sy) {
         const dx = Math.round(sx - disp / 2), dy = Math.round(sy - disp * 0.82);
         if (c.side && e.facing > 0) {   // side-profile source frame faces LEFT; mirror it to face right
             ctx.save(); ctx.translate(dx + disp, dy); ctx.scale(-1, 1);
-            ctx.drawImage(img, 0, row * fw, fw, fw, 0, 0, disp, disp);
+            ctx.drawImage(sheet, frameCol * fw, row * fw, fw, fw, 0, 0, disp, disp);
             ctx.restore();
         } else {
-            ctx.drawImage(img, 0, row * fw, fw, fw, dx, dy, disp, disp);
+            ctx.drawImage(sheet, frameCol * fw, row * fw, fw, fw, dx, dy, disp, disp);
         }
     } else {
         ctx.fillStyle = e.def.color;

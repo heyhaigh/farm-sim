@@ -6896,6 +6896,7 @@ export class World {
                     moveRaider(-ux * 0.7, -uy * 0.7); moveFarmer(-ux * 0.35, -uy * 0.35);   // (moving AWAY from f = -u)
                     if (out === 'STAGGERED!') d.skip = 'raider';
                     r._dhp = Math.max(0.15, (r._dhp ?? 1) - (out === 'STAGGERED!' ? 0.34 : 0.28));   // #hp-bars the blow shows on the bar
+                    r._hurtAt = this.time;   // #sprite the raider plays its hurt frames where the blow landed (display-only)
                     fx(r.i, r.j, out, col);
                 } else {
                     if (out === 'PARRY!') moveFarmer(ux * 0.4, uy * 0.4);
