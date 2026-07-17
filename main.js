@@ -2434,6 +2434,30 @@ function drawStall(sx, sy) {
     ctx.fillStyle = '#c89830'; ctx.fillRect(Math.floor(sx - 1), ay - 8 + bob, 1, 2);
 }
 
+// #silo the humble START — a cluster of BARRELS (L1) growing to a fuller stack with a plank lid (L2),
+// before the guild hall rises at L3. Procedural, bottom-anchored on the silo tile; returns the top Y for
+// the LV tag. Render-only.
+function drawSiloBarrels(sx, footY, lvl) {
+    ctx.fillStyle = 'rgba(10,14,10,0.28)';
+    ctx.fillRect(Math.floor(sx - (lvl <= 1 ? 11 : 15)), footY - 2, lvl <= 1 ? 22 : 30, 3);   // ground shadow
+    const barrel = (bx, by, h) => {
+        const w = 9;
+        ctx.fillStyle = '#5a3a20'; ctx.fillRect(bx - 1, by - 1, w + 2, h + 1);      // dark outline
+        ctx.fillStyle = '#7a5230'; ctx.fillRect(bx, by, w, h);                       // staves
+        ctx.fillStyle = '#8c6438'; ctx.fillRect(bx + 1, by, 2, h);                   // lit stave
+        ctx.fillStyle = '#3a2414'; ctx.fillRect(bx, by + 2, w, 1); ctx.fillRect(bx, by + h - 3, w, 1);   // iron hoops
+        ctx.fillStyle = '#4a3018'; ctx.fillRect(bx, by, w, 1);                       // rim
+        ctx.fillStyle = '#a07a4a'; ctx.fillRect(bx + 2, by + 1, w - 4, 1);           // lid highlight
+    };
+    // a small y-sorted cluster (back row first) — 3 barrels at L1, 5 + a plank at L2
+    const rows = lvl <= 1
+        ? [[-3, -7, 11], [-8, 0, 13], [3, 0, 13]]
+        : [[-4, -9, 11], [5, -9, 11], [-11, 0, 14], [-1, 0, 14], [9, 0, 14]];
+    for (const [dx, dy, h] of rows) barrel(Math.floor(sx + dx), footY - h + dy, h);
+    if (lvl >= 2) { ctx.fillStyle = '#8a6a44'; ctx.fillRect(Math.floor(sx - 13), footY - 24, 26, 2); ctx.fillStyle = '#6a4e30'; ctx.fillRect(Math.floor(sx - 13), footY - 22, 26, 1); }   // a plank shelf over the stack
+    return footY - (lvl <= 1 ? 20 : 27);
+}
+
 // The town silo — a grain bin at the plaza where settlers donate surplus to level the town.
 // Procedural (no asset): tan cylinder + hooped bands + conical roof, with a floating TOWN LV tag.
 function drawSilo(sx, sy) {
@@ -2457,7 +2481,12 @@ function drawSilo(sx, sy) {
         drawText(ctx, tag, Math.floor(sx - tw / 2), ty + 1, '#f0d060');
         return;
     }
-    if (!guildExtReady || !guildExtSheet.naturalWidth) {   // sheet not loaded — a small stand-in
+    // #silo the town STARTS humble (player: a level-1 guild hall was too fancy) — a cluster of barrels at
+    // L1, a fuller stack + a plank bin at L2, THEN the hall rises at L3 and gains its wings at L5. The
+    // build-up is earned: donations of wood/ore/crops level the town (addTownXP), so the silo grows visibly.
+    if (world.townLevel <= 2) {
+        var topY = drawSiloBarrels(sx, footY, world.townLevel);
+    } else if (!guildExtReady || !guildExtSheet.naturalWidth) {   // sheet not loaded — a small stand-in
         ctx.fillStyle = '#c9a24e'; ctx.fillRect(Math.floor(sx - 8), footY - 20, 16, 20);
     } else {
         const sc = ASSET_SCALE * 0.9, blit = (r, dx, dy, s = sc) => {
@@ -2627,24 +2656,16 @@ function drawIntentIcon(kind, cx, y) {
 function drawFarmer(f, sx, sy) {
     let frame;
     const battling = farmerInBattle(f);
-    if (battling) {
-        // #sprite drawn sword: HURT flinch (red flash) beats a SWING beats standing on guard
-        const bset = battleSprites(f);
-        const SW = 0.42;
-        if (f._hurtAt != null && world.time - f._hurtAt < HURT_DUR && bset.hurt && bset.hurt.length) {
-            const p = Math.min(0.999, (world.time - f._hurtAt) / HURT_DUR);
-            frame = bset.hurt[Math.floor(p * bset.hurt.length)] || bset.idle;
-        } else if (f._swingAt != null && world.time - f._swingAt < SW) {
-            const p = Math.min(0.999, (world.time - f._swingAt) / SW);
-            frame = bset.atk[Math.floor(p * bset.atk.length)] || bset.idle;
-        } else frame = bset.idle;
-    } else {
+    {
+        // #sprite always the NORMAL body sprite (walk cycle + alignment + foot-shadow all intact) — the sword
+        // is a separate LAYER overlaid on top when battling (drawn below), so bringing the blade back never
+        // costs the walk animation or plants a stray shadow line.
         const frames = farmerSprites(f);
         frame = frames.idle;
         if (f.state === 'walk' || f.state === 'flee') {
             frame = Math.floor(f.animTime * (f.state === 'flee' ? 11 : 7)) % 2 ? frames.walk1 : frames.walk2;
-        } else if (f.state === 'work' || f.state === 'build' || f.state === 'coopbuild' || f.state === 'housebuild' || f.state === 'chop' || f.state === 'break' || f.state === 'forage' || f.state === 'mine' || f.state === 'fencepost' || f.state === 'scarecrow' || f.state === 'fight' || (f.state === 'muster' && f._skirmish)) {
-            frame = Math.floor(f.animTime * ((f.state === 'fight' || f._skirmish) ? 8 : 5)) % 2 ? frames.work : frames.idle;
+        } else if (f.state === 'work' || f.state === 'build' || f.state === 'coopbuild' || f.state === 'housebuild' || f.state === 'chop' || f.state === 'break' || f.state === 'forage' || f.state === 'mine' || f.state === 'fencepost' || f.state === 'scarecrow' || f.state === 'fight' || battling || (f.state === 'muster' && f._skirmish)) {
+            frame = Math.floor(f.animTime * ((f.state === 'fight' || f._skirmish || battling) ? 8 : 5)) % 2 ? frames.work : frames.idle;
         } else if (f.state === 'sleep') {
             frame = frames.sleep;
         }
@@ -2712,6 +2733,30 @@ function drawFarmer(f, sx, sy) {
         ctx.restore();
     } else {
         ctx.drawImage(frame, px, dy);
+    }
+
+    // #sprite BATTLE SWORD — the blade as a LAYER over the normal body, aligned to its rig (so the walk
+    // cycle + shadow are untouched). Swings through the attack-sword frames on the duel beat (f._swingAt),
+    // else an idle guard; the back-sword when facing away. Untinted — it's steel.
+    if (battling && charReady() && battleReady() && charBox) {
+        const row = CHAR_DIRS[f.moveDir] ?? CHAR_DIRS.down, up = row === CHAR_DIRS.up;
+        const SW = 0.42, swinging = f._swingAt != null && world.time - f._swingAt < SW;
+        const part = swinging ? (up ? BATTLE_PARTS.attack_sword_back : BATTLE_PARTS.attack_sword)
+                              : (up ? BATTLE_PARTS.Idle_sword_back : BATTLE_PARTS.Idle_sword);
+        if (part && part.naturalWidth) {
+            const cols = Math.max(1, Math.round(part.naturalWidth / CHAR_FW));
+            const col = swinging ? Math.min(cols - 1, Math.floor(((world.time - f._swingAt) / SW) * cols)) : 0;
+            const sc = ASSET_SCALE, cellD = Math.round(CHAR_FW * sc);
+            const ox = Math.round(charBox.x * sc), oy = Math.round(charBox.y * sc);
+            ctx.imageSmoothingEnabled = false;
+            if (flip) {
+                ctx.save(); ctx.translate(px + fw, dy); ctx.scale(-1, 1);
+                ctx.drawImage(part, col * CHAR_FW, row * CHAR_FW, CHAR_FW, CHAR_FW, -ox, -oy, cellD, cellD);
+                ctx.restore();
+            } else {
+                ctx.drawImage(part, col * CHAR_FW, row * CHAR_FW, CHAR_FW, CHAR_FW, px - ox, dy - oy, cellD, cellD);
+            }
+        }
     }
 
     // sick tint overlay

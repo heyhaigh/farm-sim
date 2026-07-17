@@ -6932,15 +6932,21 @@ export class World {
                 if (d.skip === (raiderTurn ? 'raider' : 'defender')) raiderTurn = !raiderTurn;
                 d.skip = null;
             }
-            const out = roll < 0.28 ? 'MISS' : roll < 0.50 ? 'PARRY!' : roll < 0.62 ? 'DODGE!' : roll < 0.88 ? 'HIT!' : 'STAGGERED!';
-            const col = out === 'HIT!' ? '#ffa040' : out === 'PARRY!' ? '#9ad0e0' : out === 'DODGE!' ? '#a0e0b0' : out === 'STAGGERED!' ? '#f0c860' : '#9a9a8a';
+            // #crit a natural-20 CRITICAL HIT (top ~4.5% of the roll) — the strongest outcome, driving
+            // harder, staggering, and landing a bright CRITICAL! callout. Deterministic (keyed hash).
+            const crit = roll > 0.955;
+            const out = crit ? 'CRIT!' : roll < 0.28 ? 'MISS' : roll < 0.50 ? 'PARRY!' : roll < 0.60 ? 'DODGE!' : roll < 0.86 ? 'HIT!' : 'STAGGERED!';
+            const lands = out === 'HIT!' || out === 'STAGGERED!' || crit;
+            const col = crit ? '#ffe14a' : out === 'HIT!' ? '#ffa040' : out === 'PARRY!' ? '#9ad0e0' : out === 'DODGE!' ? '#a0e0b0' : out === 'STAGGERED!' ? '#f0c860' : '#9a9a8a';
+            const kb = crit ? 1.35 : 1;   // a crit drives the blow home harder
             if (raiderTurn) {           // raider's swing at the defender
                 raiderSwing();
-                if (out === 'HIT!' || out === 'STAGGERED!') {
-                    moveFarmer(ux * 0.7, uy * 0.7); moveRaider(ux * 0.35, uy * 0.35);   // driven back; the raider presses
+                if (lands) {
+                    moveFarmer(ux * 0.7 * kb, uy * 0.7 * kb); moveRaider(ux * 0.35, uy * 0.35);   // driven back; the raider presses
                     f._hurtAt = this.time;   // #sprite the defender plays its hurt/red-flash frames (display-only)
-                    if (out === 'STAGGERED!') d.skip = 'defender';
-                    if (out === 'HIT!' && Array.isArray(re.out.woundSeeds) && re.out.woundSeeds.includes(f.sheet.seed) && !f._woundShown) {
+                    if (out === 'STAGGERED!' || crit) d.skip = 'defender';
+                    if (crit) { fx(f.pos.i, f.pos.j - 0.3, 'CRITICAL!', col); f.hurtFlash = Math.max(f.hurtFlash || 0, 1); }
+                    else if (out === 'HIT!' && Array.isArray(re.out.woundSeeds) && re.out.woundSeeds.includes(f.sheet.seed) && !f._woundShown) {
                         f._woundShown = true;   // echo the resolver's wound where it visibly landed
                         fx(f.pos.i, f.pos.j, 'WOUNDED!', '#ff4030');
                     } else fx(f.pos.i, f.pos.j, out, col);
@@ -6952,12 +6958,12 @@ export class World {
                 }
             } else {                    // defender's swing back
                 farmerSwing();
-                if (out === 'HIT!' || out === 'STAGGERED!') {
-                    moveRaider(-ux * 0.7, -uy * 0.7); moveFarmer(-ux * 0.35, -uy * 0.35);   // (moving AWAY from f = -u)
-                    if (out === 'STAGGERED!') d.skip = 'raider';
-                    r._dhp = Math.max(0.15, (r._dhp ?? 1) - (out === 'STAGGERED!' ? 0.34 : 0.28));   // #hp-bars the blow shows on the bar
+                if (lands) {
+                    moveRaider(-ux * 0.7 * kb, -uy * 0.7 * kb); moveFarmer(-ux * 0.35, -uy * 0.35);   // (moving AWAY from f = -u)
+                    if (out === 'STAGGERED!' || crit) d.skip = 'raider';
+                    r._dhp = Math.max(0.1, (r._dhp ?? 1) - (crit ? 0.5 : out === 'STAGGERED!' ? 0.34 : 0.28));   // #hp-bars a crit takes a bigger bite
                     r._hurtAt = this.time;   // #sprite the raider plays its hurt frames where the blow landed (display-only)
-                    fx(r.i, r.j, out, col);
+                    fx(r.i, r.j, crit ? 'CRITICAL!' : out, col);
                 } else {
                     if (out === 'PARRY!') moveFarmer(ux * 0.4, uy * 0.4);
                     if (out === 'DODGE!') moveRaider(px * side * 0.6, py * side * 0.6);
@@ -7070,14 +7076,19 @@ export class World {
             return;
         }
         // someone stands to fight: they + any adjacent helpers swing at the threat
-        let landed = false;
+        let landed = false, critFf = null;
         for (const ff of fighters) {
             ff._swingAt = this.time; ff._swingI = e.i - ff.pos.i; ff._swingJ = e.j - ff.pos.j;   // #sprite the fighter swings at the foe
             const atk = d20(this.rand, ff.combatMod());
-            if (atk.total >= def.diff || atk.crit) { e.hp -= atk.crit ? 2 : 1; ff.gainXP(2); landed = true; if (e.hp <= 0) break; }
+            if (atk.total >= def.diff || atk.crit) {
+                e.hp -= atk.crit ? 2 : 1; ff.gainXP(2); landed = true;
+                if (atk.crit) { critFf = ff; e._hurtAt = this.time; }   // #crit a natural 20 — the double blow, made visible
+                if (e.hp <= 0) break;
+            }
         }
-        if (e.hp <= 0) { this.#defeatThreat(e, fighters); return; }
-        if (landed) fighters[0].say('hah!', '#e0d060');
+        if (e.hp <= 0) { if (critFf) critFf.say('CRITICAL!', '#ffe14a'); this.#defeatThreat(e, fighters); return; }
+        if (critFf) critFf.say('CRITICAL!', '#ffe14a');
+        else if (landed) fighters[0].say('hah!', '#e0d060');
         const victim = fighters[Math.floor(this.rand() * fighters.length)];   // the threat swings back at a FIGHTER (a fleeing quarry the guard shields is out of reach)
         e._swingAt = this.time; e._swingI = victim.pos.i - e.i; e._swingJ = victim.pos.j - e.j;   // #sprite the foe swings back
         const dodge = d20(this.rand, mod(victim.sheet.stats.dex));
@@ -7085,9 +7096,10 @@ export class World {
     }
 
     #threatHits(e, f) {
-        f.hp = Math.max(0, f.hp - (e.def.dmg + Math.floor(this.rand() * 2)));   // a solid blow bleeds HP
+        const crit = d20(this.rand, 0).crit;   // #crit the foe can land a CRIPPLING blow (a natural 20) — double bite
+        f.hp = Math.max(0, f.hp - (e.def.dmg + Math.floor(this.rand() * 2)) * (crit ? 2 : 1));   // a solid blow bleeds HP
         f.energy = Math.max(0, f.energy - 0.05);                                 // and scuffling tires you
-        f.hurtFlash = 1; f._hurtAt = this.time; f.say('argh!', '#e05040');
+        f.hurtFlash = 1; f._hurtAt = this.time; f.say(crit ? 'CRITICAL!' : 'argh!', crit ? '#ffe14a' : '#e05040');
         if (e.def.loot === 'ore' && f.ore > 0 && this.rand() < 0.35) f.ore = Math.max(0, f.ore - 2);       // raider grabs loot
         else if (e.def.loot === 'goods' && this.rand() < 0.35) this.#stealGood(f);
         // a BEAST breaks you off before it kills — you flee at low HP; a FOE can put you DOWN at 0 HP.

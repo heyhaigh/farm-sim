@@ -55,14 +55,15 @@ const BASELINE = {
     // rolls — illness needs a STREAK (`roughStreak>=2`), roofless exposure past the grace, or a rough night in
     // inclement weather (storm/blizzard), always a CON save whose DC scales with the streak/exposure/weather. New
     // serialized farmer fields `roughStreak`/`nightsExposed`. Changes the day-2+ dawn-check trajectory; same-twice held.
-    // re-pinned 2026-07-17b: #health wound-recovery (Healer binds wounds incl. the sentry at post;
+    // re-pinned 2026-07-17c: #crit (foe critical hits in wilderness clashes — a nat-20 double blow)
+    // shifts the encounter trajectory. Prior: #health wound-recovery (Healer binds wounds incl. the sentry at post;
     // self-salve mends hp; red-health farmers don't hunt into danger; sentry stands down when critically
     // hurt) legitimately shifts the trajectory. Prior: #farmyard (facilities cluster at the house, crops buffered a tile
     // off every pen, yardV save marker) legitimately shifts placement + the serialized shape
-    20260706: 'c4b916f3',
-    42: 'd0ef5909',
-    7: 'ba3d8e3e',
-    3: '19d369e2',
+    20260706: 'cfbeed81',
+    42: 'dd3140d9',
+    7: 'a5042a5e',
+    3: 'faed9420',
 };
 
 function boot(seed, culture) {
