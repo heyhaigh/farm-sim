@@ -5159,6 +5159,9 @@ let CALLOUT_MS = 5700;        // #callout longer still (1900 -> 3800 -> 5700, +1
 const CALLOUT_CLOSE = { x: 0, y: 0, w: 0, h: 0 };   // the toast's X hit-rect (set each frame one is up; cleared otherwise)
 function drawCallouts() {
     const nowMs = performance.now();
+    // ONE narrator at a time (player: "too much stuff to keep up with and dismiss"): while a spotlight CARD
+    // is up, the toast channel holds — the active toast freezes and the queue waits its turn.
+    if (activeMoment) { if (activeCallout) activeCallout.shownAt = nowMs; CALLOUT_CLOSE.w = 0; return; }
     if (activeCallout && nowMs - activeCallout.shownAt > CALLOUT_MS) activeCallout = null;
     if (!activeCallout && calloutQueue.length) {
         activeCallout = { e: calloutQueue.shift(), shownAt: nowMs };
@@ -5525,8 +5528,31 @@ function drawMoments() {
     // inventory-style beveled slot (kept clear of the text on the right). Town-wide beats have no farmer.
     const f = world.farmers.find(x => x.sheet.seed === e.whoSeed);
     const hasObject = e.icon && e.icon.indexOf('rare:') === 0;
-    const hasLeft = !!f || hasObject;
+    // #card-art (player: "show that foe, along with who raided with him") — raid cards carry the warband:
+    // the foe front-and-center with his band ranked small beside him; town beats carry the gold TOWN diamond.
+    const foeM = /^foe:orc(?::(\d+))?$/.exec(e.icon || '');
+    const hasTownIcon = e.icon === 'town';
+    const hasLeft = !!f || hasObject || !!foeM || hasTownIcon;
     const colCX = PX + 38;
+    if (foeM && !f) {
+        const img = threatImg.orc;
+        if (img && img.complete && img.naturalWidth > 0) {
+            ctx.imageSmoothingEnabled = false;
+            ctx.drawImage(img, 0, 0, 64, 64, Math.round(colCX - 22), Math.round(PY + 22), 44, 44);   // row 0 = facing the camera
+            const band = Math.max(0, Math.min(4, (parseInt(foeM[1] || '1', 10) || 1) - 1));
+            for (let k = 0; k < band; k++)
+                ctx.drawImage(img, 0, 0, 64, 64, Math.round(colCX - (band * 18) / 2 + k * 18 - 9), Math.round(PY + 64), 20, 20);
+        }
+    }
+    if (hasTownIcon && !f) {   // the gold TOWN diamond, same mark as the world map + the memory portal
+        const r = 13, tcx = colCX, tcy = PY + 46;
+        ctx.fillStyle = '#e8c860'; ctx.beginPath();
+        ctx.moveTo(tcx, tcy - r); ctx.lineTo(tcx + r, tcy); ctx.lineTo(tcx, tcy + r); ctx.lineTo(tcx - r, tcy); ctx.closePath(); ctx.fill();
+        ctx.strokeStyle = '#8a6b44'; ctx.lineWidth = 1.5; ctx.stroke();
+        drawText(ctx, 'TOWN', Math.round(tcx - textWidth('TOWN') / 2), tcy - 2, '#3a2c10');
+        const nm2 = (world.name || '').toUpperCase().slice(0, 10);
+        if (nm2) drawText(ctx, nm2, Math.round(tcx - textWidth(nm2) / 2), tcy + r + 4, '#e8c860');
+    }
     if (f) {
         const fr = farmerSprites(f);
         const spr = (Math.floor(performance.now() / 1000 * 7) % 2) ? fr.walk1 : fr.walk2;   // 2-frame walk cycle
@@ -6061,9 +6087,9 @@ function drawThreatTell() {
     const pulse = 0.6 + 0.4 * Math.sin(performance.now() / (hot ? 120 : 260));
     // #nemesis a NAMED return lands like a bell — the marquee carries the war, not just the weather
     const foe = pr.e && pr.e.foe;
-    const label = foe
+    const label = (foe
         ? (hot ? `${foe.name.toUpperCase()} CLOSES FROM THE ${pr.dirName.toUpperCase()} - RALLY` : `${foe.name.toUpperCase()} RETURNS - RAID ${foe.raidCount} OF HIS WAR`)
-        : (hot ? `RAIDERS CLOSING FROM THE ${pr.dirName.toUpperCase()} - RALLY` : `A WARBAND GATHERS TO THE ${pr.dirName.toUpperCase()}`);
+        : (hot ? `RAIDERS CLOSING FROM THE ${pr.dirName.toUpperCase()} - RALLY` : `A WARBAND GATHERS TO THE ${pr.dirName.toUpperCase()}`)) + ' [W]';   // W jumps the camera there
     const tw = textWidth(label), bx = Math.round(GW / 2 - tw / 2), by = 22;
     ctx.fillStyle = `rgba(20,10,8,${0.7 + 0.15 * pulse})`;
     ctx.fillRect(bx - 5, by - 2, tw + 10, 11);
@@ -6135,9 +6161,20 @@ window.addEventListener('keydown', (e) => {
     if ((e.key === 'w' || e.key === 'W') && world && booted) {
         // a live raid outranks the spotlight — W snaps (or re-snaps) the camera to the warband
         if (world.raidEvent) {
-            const re = world.raidEvent.e || {};
-            const spot = (re.i != null && re.j != null) ? { i: re.i, j: re.j } : (world.well ? { i: world.well.i, j: world.well.j } : null);
+            const rr = world.raidEvent.raiders || [];
+            const fr = (world.raidEvent.focus && !world.raidEvent.focus.fell) ? world.raidEvent.focus : rr[0];
+            const spot = fr ? { i: fr.i, j: fr.j } : (world.well ? { i: world.well.i, j: world.well.j } : null);
             if (spot) { raidFocus = spot; followMode = false; followTarget = null; rosterOpen = false; chronOpen = false; boardOpen = false; }
+        } else if (world.pendingRaid) {
+            // #raid-feel the TELEGRAPH answers W too (player: "hit W to go there"): jump to where the
+            // warband is gathering — the seeded edge point in pr.dir the muster figures stand on.
+            const pr = world.pendingRaid, co = Math.cos(pr.dir), si = Math.sin(pr.dir), m = 4;
+            const tx = co > 0 ? (GRID - m - CENTER) / co : co < 0 ? (m - CENTER) / co : Infinity;
+            const ty = si > 0 ? (GRID - m - CENTER) / si : si < 0 ? (m - CENTER) / si : Infinity;
+            const d = Math.max(40, Math.min(tx, ty)) - 6;
+            followMode = false; followTarget = null; rosterOpen = false; chronOpen = false; boardOpen = false;
+            cam.x = GW / 2 - isoX(CENTER + co * d, CENTER + si * d);
+            cam.y = GH / 2 - isoY(CENTER + co * d, CENTER + si * d);
         } else {
             const target = spotlightFarmer();
             if (target) { followMode = true; followTarget = target; selected = target; sheetScroll = 0; sheetTab = 0; rosterOpen = false; chronOpen = false; boardOpen = false; dramaSpotlight = null; }
@@ -6364,6 +6401,14 @@ function frame(now) {
         _raidStruck = false;
         raidFocus = world.well ? { i: world.well.i, j: world.well.j } : { i: 55, j: 55 };   // frame the town; raiders walk in from off-screen
         followMode = false; followTarget = null;   // the raid outranks any farmer we were trailing
+    }
+    // #raid-feel THE CAMERA RIDES THE FOCUS DUEL (player: "they ran to the treeline and I couldn't see any
+    // of the exchanges"): once struck, the lens tracks the story pairing wherever the line formed — not the
+    // well. (A manual pan still breaks the lock, and W re-snaps it.)
+    if (world.raidEvent && world.raidEvent.struck && raidFocus) {
+        const fr = (world.raidEvent.focus && !world.raidEvent.focus.fell) ? world.raidEvent.focus
+                 : (world.raidEvent.raiders || []).find(r => !r.fell);
+        if (fr) { raidFocus.i = fr.i; raidFocus.j = fr.j; }
     }
     if (world.raidEvent && world.raidEvent.struck && !_raidStruck) {
         _raidStruck = true;

@@ -1905,7 +1905,7 @@ export class World {
                     const named = this.nemesis.raidCount >= 2, nm = this.nemesis.name, nth = NTH[Math.min(this.nemesis.raidCount - 1, NTH.length - 1)];
                     this.#archiveNemesis('peace');
                     if (named) this.addChronicle('lineage', `${nm}'s war on ${this.name} ends at the parley table — ${nth} raid and last.`,
-                        envoy, null, '#c8b0e0', { tier: 'grand', tone: 'triumph', label: 'THE WAR ENDS IN PEACE', why: 'the named foe chose the open hand' });
+                        envoy, null, '#c8b0e0', { tier: 'grand', tone: 'triumph', label: 'THE WAR ENDS IN PEACE', why: 'the named foe chose the open hand', icon: 'town' });
                 }
                 // Slice C: the envoy EARNS a cross-faction belief that begins to overwrite their raid-creed.
                 if (envoy) envoy.earnCrossFaction(e.withName, e.pairKey, +1);
@@ -5954,7 +5954,7 @@ export class World {
                 const named = nem.raidCount >= 2, nm = nem.name;
                 this.#archiveNemesis('fell');
                 if (named) this.addChronicle('legend', `${nm}'s war on ${this.name} ends at ${hero ? shortName(hero) : 'the town'}'s feet — the whole band broken on the line.`,
-                    hero, null, '#f0d060', { tier: 'grand', tone: 'triumph', label: 'THE WAR ENDS', why: 'the named foe fell with his band' });
+                    hero, null, '#f0d060', { tier: 'grand', tone: 'triumph', label: 'THE WAR ENDS', why: 'the named foe fell with his band', icon: 'foe:orc:1' });
             } else {
                 nem.lastOutcome = 'escaped';
                 if (out.heroSeed != null && nem.sworeAgainst !== out.heroSeed) {
@@ -6010,10 +6010,10 @@ export class World {
                 if (m.felled > 0) parts.push(`${m.felled} raider${m.felled > 1 ? 's' : ''} would have gotten away unscathed`);
                 if (m.lost > 0) parts.push(`${out.clan} would have carried off ${m.lost} more`);
                 this.addChronicle('legend', `Had ${gn} not kept the watch, ${parts.join(' and ')} — the alarm turned the raid.`,
-                    gu, null, '#e0c060', { tier: 'callout', tone: 'triumph', why: 'the watch measurably changed the raid' });
+                    gu, null, '#e0c060', { tone: 'triumph', why: 'the watch measurably changed the raid' });   // chronicle-only: the aftermath cards carry the moment (player: no top toast)
             } else {
                 this.addChronicle('raid', `${gn} kept the watch, but ${out.clan} would have been met the same either way — the town's strength turned them, not one lookout.`,
-                    gu, null, '#b0b8c8', { tier: 'callout', tone: 'somber', why: 'the watch made no measurable difference this time' });
+                    gu, null, '#b0b8c8', { tone: 'somber', why: 'the watch made no measurable difference this time' });
             }
         }
         return monSpots;
@@ -6039,10 +6039,10 @@ export class World {
         this.learned = collab >= 0.5 ? 'truce' : 'defense';
         if (this.learned === 'defense') {
             this.addChronicle('town', `After ${this.raidsSuffered} raids, ${this.name} resolved to make itself too costly to raid — it turns to the wall and keeps a hard watch.`,
-                null, null, '#c8a860', { tier: 'grand', tone: 'somber', label: 'THE TOWN LEARNED: HOLD THE WALL', why: 'battered into a defensive resolve' });
+                null, null, '#c8a860', { tier: 'grand', tone: 'somber', label: 'THE TOWN LEARNED: HOLD THE WALL', why: 'battered into a defensive resolve', icon: 'town' });
         } else {
             this.addChronicle('town', `After ${this.raidsSuffered} raids, ${this.name} grew weary of the bloodshed — it resolved to seek a truce at the frontier, not another fight.`,
-                null, null, '#c8b0e0', { tier: 'grand', tone: 'triumph', label: 'THE TOWN LEARNED: SUE FOR PEACE', why: 'weary of raids, reaching for peace' });
+                null, null, '#c8b0e0', { tier: 'grand', tone: 'triumph', label: 'THE TOWN LEARNED: SUE FOR PEACE', why: 'weary of raids, reaching for peace', icon: 'town' });
         }
     }
 
@@ -6054,7 +6054,7 @@ export class World {
         this.harvestTotal = Math.max(0, harvest - out.harvestLost);
         this.#townLearns();   // #134 remember this raid; learn a response once battered enough
         this.addChronicle('raid', `${out.clan} fell upon ${this.name}, carrying off ${out.harvestLost} of its stored harvest — and the town rose to meet them.`,
-            null, null, '#e05840', { tier: 'grand', tone: 'somber', label: 'RAIDERS AT THE GATE', why: `raided by ${out.clan}` });
+            null, null, '#e05840', { tier: 'grand', tone: 'somber', label: 'RAIDERS AT THE GATE', why: `raided by ${out.clan}`, icon: `foe:orc:${out.n}` });
         this.addLog(`${out.clan} descends on ${this.name} — raiders at the fence!`, '#e05040');
         const monSpots = this.#applyRaidOutcome(out, e);
         if (this._live) this.#stageRaidCinematic(out, e, monSpots, dir);
@@ -6286,7 +6286,7 @@ export class World {
         const well = this.well, pr = this.pendingRaid;
         const base = pr ? pr.dir : 0, h = hashString(f.sheet.seed + ':muster');
         const spread = (((h % 100) / 100) - 0.5) * 1.4;   // fan across the threat-facing arc (a line abreast)
-        const rad = Math.max(16, this.townRadius() + 3) + (h % 6);   // the frontier sits OUTSIDE the farms, however far they sprawl
+        const rad = Math.max(16, Math.min(this.townRadius() + 3, 26)) + (h % 6);   // at the town's edge but CAPPED — the battle must happen where the camera lives, not the treeline
         const ang = base + spread;
         const ti = Math.round(well.i + Math.cos(ang) * rad), tj = Math.round(well.j + Math.sin(ang) * rad);
         const open = this.nearestOpenTile({ i: ti, j: tj }) || { i: ti, j: tj };
