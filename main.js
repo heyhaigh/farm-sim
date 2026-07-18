@@ -466,15 +466,20 @@ const assassinDeathImg = mkA('Swordsman_lvl3_Death_with_shadow.png');
 const SWING_DUR = 0.36, HURT_DUR = 0.34, DEATH_DUR = 0.7;   // display windows for the attack/hurt/death animations
 const WALK_STRIDE = 0.42;   // tiles travelled per walk-frame step (drives the gait off DISTANCE, so it reads right at any speed)
 
-// #faceoff the VS-card PORTRAITS — big illustrated busts (transparent cutouts) for the fighting-game-style
-// face-off shown after a struck raid resolves. The human faces RIGHT and the orc faces LEFT, so placed on the
-// left/right they look AT each other. Purely a display card (drawFaceoff), no sim/determinism impact.
+// #faceoff the VS-card PORTRAITS — big illustrated busts (transparent cutouts, all 1300x1300, all facing LEFT)
+// for the fighting-game face-off. The DEFENDER (townsfolk) sits LEFT and is FLIPPED to face right; the RAIDER
+// sits RIGHT facing left (no flip). human-farmer = a human town's defender; orc-raider = the orc raider on a
+// human town AND the orc-town DEFENDER (orc farmers look the same); orc-raider-2 = the warband that raids an
+// orc town. Purely a display card (drawFaceoff), no sim/determinism impact.
 const humanPortraitImg = new Image(); let humanPortraitReady = false;
 humanPortraitImg.onload = () => { humanPortraitReady = true; }; humanPortraitImg.onerror = () => {};
-humanPortraitImg.src = './assets/portraits/human-farmer.png';
+humanPortraitImg.src = './assets/human-farmer.png';
 const orcPortraitImg = new Image(); let orcPortraitReady = false;
 orcPortraitImg.onload = () => { orcPortraitReady = true; }; orcPortraitImg.onerror = () => {};
-orcPortraitImg.src = './assets/portraits/orc-raider.png';
+orcPortraitImg.src = './assets/orc-raider.png';
+const orcRaider2Img = new Image(); let orcRaider2Ready = false;
+orcRaider2Img.onload = () => { orcRaider2Ready = true; }; orcRaider2Img.onerror = () => {};
+orcRaider2Img.src = './assets/orc-raider-2.png';
 
 // Roaming WILD PREY sprites (hunted for meat — see world.prey / #tickPrey). All 32x32, 4-frame idle
 // cycles; row 2 = side profile. Deer/hare side-frames face LEFT (srcFace -1), the turkey faces RIGHT.
@@ -6091,11 +6096,16 @@ function drawFaceoff() {
     const PHt = Math.min(272, GH - 18);                       // bust height
     const slide = (1 - inA) * 42;                             // busts glide in from their own sides
     const gap = 58;                                           // wider clear centre column so text never runs onto the faces
-    const orcTown = world.culture === 'orc';                  // an orc town fields an orc defender (mirrored to face inward)
+    const orcTown = world.culture === 'orc';
+    // DEFENDER (townsfolk, LEFT): a human town fields human-farmer; an orc town fields orc-raider (orc farmers look
+    // the same). RAIDER (RIGHT): an orc-raider warband hits a human town; orc-raider-2 hits an orc town. All busts
+    // face LEFT as authored, so the defender is FLIPPED to face right and the raider is drawn as-is (faces left).
     const defImg = orcTown ? orcPortraitImg : humanPortraitImg;
     const defReady = orcTown ? orcPortraitReady : humanPortraitReady;
-    drawFaceoffBust(defImg, defReady, orcTown, cx - gap, cy, PHt, -1, -slide);   // defender, LEFT, faces right/inward
-    drawFaceoffBust(orcPortraitImg, orcPortraitReady, false, cx + gap, cy, PHt, +1, +slide);  // raider, RIGHT, faces left/inward
+    const raiderImg = orcTown ? orcRaider2Img : orcPortraitImg;
+    const raiderReady = orcTown ? orcRaider2Ready : orcPortraitReady;
+    drawFaceoffBust(defImg, defReady, true, cx - gap, cy, PHt, -1, -slide);          // defender, LEFT, FLIPPED → faces right/inward
+    drawFaceoffBust(raiderImg, raiderReady, false, cx + gap, cy, PHt, +1, +slide);   // raider, RIGHT, faces left/inward
 
     // a soft dark column down the middle so the VS text reads cleanly over the two faces
     const grad = ctx.createLinearGradient(cx - 112, 0, cx + 112, 0);
