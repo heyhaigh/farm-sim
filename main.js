@@ -260,7 +260,7 @@ let lastSavedDay = 0;                              // last world.day autosaved (
 let saveFlashAt = -1e9;                            // brief "SAVED" tick in the top bar
 let resumeCard = null;                             // "PREVIOUSLY ON RY FARMS" catch-up card (shown once on resume)
 let faceoff = null;                                // #faceoff the pre-battle VS card raised when the warband lands (render-only)
-let faceoffSeenRid = null;                         // rid of the last raid we've raised a faceoff for (one card per raid)
+let faceoffSeenEvent = null;                       // the raidEvent object we've raised a faceoff for (one card per raid; identity-keyed)
 const BOARD_CLOSE = { x: 0, y: 0, w: 0, h: 0 };
 const BOARD_RECT = { x: 0, y: 0, w: 0, h: 0 };
 
@@ -1626,6 +1626,7 @@ function raidMusterFigures(pr) {
 }
 
 const RAID_TINT = { A: '224,72,56', B: '196,56,44' };   // a danger RED, keyed to the "RAIDERS CLOSING" toast
+const SEAM_BLEED = 3;   // #seam how many tiles the danger red bleeds INTO the fog past the revealed edge (the band's thickness)
 const seamHash = (i, j) => { let h = (i * 374761393 + j * 668265263) | 0; h = (h ^ (h >>> 13)) * 1274126177; return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };   // pure position hash, 0..1
 function drawRaidSeam() {
     // #seam-warning-only the red danger seam belongs to the INITIAL RAID WARNING alone — the telegraph phase,
@@ -1638,7 +1639,7 @@ function drawRaidSeam() {
     // a low ember while a warband merely GATHERS; brighter once the alarm has sounded (detected).
     // kept SEMI-TRANSPARENT (the terrain reads through) so it's a danger overlay, like the toast — not a repaint.
     const hot = !!pr.detected;
-    const base = hot ? 0.34 : 0.2;
+    const base = hot ? 0.36 : 0.22;   // #seam clearly-visible danger band once the alarm sounds (a low ember while it merely gathers)
     // the ALARM PULSE: while merely gathering the seam barely breathes; once the alarm sounds it throbs —
     // a sharp heartbeat (fast attack, slow decay) rather than a sine shimmer, so it reads as the alarm itself.
     const tNow = performance.now();
@@ -1646,22 +1647,27 @@ function drawRaidSeam() {
         ? 0.14 * Math.pow(0.5 + 0.5 * Math.sin(tNow / 260), 3)   // ~1.6s heartbeat, spiky
         : 0.04 * Math.sin(tNow / 700);                            // faint slow breathing
     const half = 0.85;   // fan half-angle (raiders fan ~±0.5; a touch wider so it reads as "their land", not a beam)
-    // #seam-boundary the red marks ONLY the fog/revealed BOUNDARY in the bearing — the tiles where known ground
-    // meets the dark. NOT a radial band: the old band chased the per-angle frontier deep into a scouted corridor
-    // (a red smear far out in the black) AND its inner taper crept back across revealed ground toward town. Here
-    // we paint a revealed EDGE tile (one that borders fog) at full and its immediate fog neighbour at a fraction,
-    // so it's a thin rim hugging the ACTUAL reveal shape — never in the open interior near the square, never
-    // stranded in deep fog. A ROBUST median reveal radius (sampled around the WHOLE circle, so a single long
-    // corridor can't skew it) fades out any boundary that lies far past the town's normal edge — e.g. the thin
-    // scouted path toward a neighbour, which otherwise lit up as the confusing "deep fog" red.
+    // #seam a clean, thick danger BAND at the town's OUTER fog frontier in the bearing. It's placed RADIALLY at
+    // the per-angle revealed frontier (so it follows the disc's rim), but every sample is CLAMPED near the median
+    // reveal radius so a scouted corridor can't drag the band deep into the black (the old "region 2"), and it's
+    // kept TIGHT so it never tapers back over open ground to the square (the old "region 3"). Being radial around
+    // the rim — not per-tile edge detection — interior fog pockets in a well-explored town DON'T light up into a
+    // red wash (the bug that painted the whole screen). The median is sampled around the WHOLE circle so one long
+    // corridor can't skew it.
     let medR = 26;
     if (world.frontierDist) {
-        const samp = [];
-        for (let a = 0; a < 6.2832; a += 6.2832 / 16) samp.push(world.frontierDist(a));
-        samp.sort((x, y) => x - y);
-        medR = samp[Math.floor(samp.length / 2)] || 26;
+        const s2 = [];
+        for (let a = 0; a < 6.2832; a += 6.2832 / 16) s2.push(world.frontierDist(a));
+        s2.sort((x, y) => x - y);
+        medR = s2[Math.floor(s2.length / 2)] || 26;
     }
-    const rev = (i, j) => i >= 0 && j >= 0 && i < GRID && j < GRID && world.isRevealed(i, j);
+    const capR = medR + 8;                                        // the band never sits further out than this (corridor guard)
+    const SAMP = 24;
+    const fr = new Float32Array(SAMP + 1);                        // per-angle frontier across the fan, each clamped to capR
+    for (let s = 0; s <= SAMP; s++) {
+        const a = dir - half + (2 * half) * (s / SAMP);
+        fr[s] = Math.min(world.frontierDist ? world.frontierDist(a) : medR, capR);
+    }
     const cs = [screenToTile(0, 0), screenToTile(GW, 0), screenToTile(GW, GH), screenToTile(0, GH)];
     let iMin = Infinity, iMax = -Infinity, jMin = Infinity, jMax = -Infinity;
     for (const c of cs) { iMin = Math.min(iMin, c.i); iMax = Math.max(iMax, c.i); jMin = Math.min(jMin, c.j); jMax = Math.max(jMax, c.j); }
@@ -1673,23 +1679,18 @@ function drawRaidSeam() {
             const h = seamHash(i, j);
             const hj = half + (h - 0.5) * 0.14;                       // ragged fan sides
             if (Math.abs(da) > hj) continue;                          // outside the threat bearing
-            // a boundary tile is a REVEALED tile touching fog (full), or the FOG lip just past it (a soft bleed).
-            const here = rev(i, j);
-            const anyNbrRev = rev(i + 1, j) || rev(i - 1, j) || rev(i, j + 1) || rev(i, j - 1);
-            let side;
-            if (here) {
-                if (rev(i + 1, j) && rev(i - 1, j) && rev(i, j + 1) && rev(i, j - 1)) continue;   // open interior (incl. the square) → never
-                side = 1;                                             // a revealed edge tile — the boundary itself
-            } else {
-                if (!anyNbrRev) continue;                            // deep fog with no revealed neighbour → never
-                side = 0.5;                                          // the fog lip a single tile past the edge
-            }
-            // fade any boundary that sits far past the town's TYPICAL reveal radius (a scouted corridor's walls)
-            const distFade = smooth((medR + 14 - r) / 12);
-            if (distFade <= 0.02) continue;
+            // this tile's DEPTH past the (clamped) local frontier: a tight band straddling the rim — a short lip
+            // on the revealed side, fading SEAM_BLEED tiles into the fog. That's the whole band; nothing else paints.
+            const idx = (da + half) / (2 * half) * SAMP, i0 = Math.max(0, Math.min(SAMP - 1, Math.floor(idx)));
+            const frA = fr[i0] + (fr[i0 + 1] - fr[i0]) * (idx - i0);
+            const depth = r - frA + (h - 0.5) * 2;                    // >0 = fog side; +grain for a ragged shoreline
+            let prox;
+            if (depth >= 0) prox = 1 - depth / (SEAM_BLEED + 0.5);    // fade into the dark
+            else prox = 1 + depth / 2.5;                              // a short lip back onto revealed ground
+            if (prox <= 0.03) continue;
             const ang = smooth(1 - Math.abs(da) / hj);                // soften toward the fan's sides
-            const grain = 0.8 + h * 0.4;
-            const a = Math.max(0, Math.min(0.38, (base + pulse) * ang * distFade * grain * side));
+            const grain = 0.82 + h * 0.36;
+            const a = Math.max(0, Math.min(0.42, (base + pulse) * ang * prox * grain));
             if (a < 0.02) continue;
             const sx = cam.x + isoX(i, j) - TILE_W / 2, sy = cam.y + isoY(i, j);
             ctx.save(); ctx.globalAlpha = a;
@@ -5801,7 +5802,7 @@ async function switchTown(seed, ang) {
         // reset every per-town lens in this module (anything keyed to the town we just left)
         selected = null; selectedSlotKey = null; followMode = false; followTarget = null;
         raidFocus = null; dramaSpotlight = null; _lastRaidEvent = null; _raidStruck = false; _raidDetected = false; raidFx = null; raidShake = 0;
-        faceoff = null; faceoffSeenRid = null;
+        faceoff = null; faceoffSeenEvent = null;
         _battleWatch = null; pendingInscription = null; simAccumulator = 0;   // #Codex36 P1-1: no cross-town battle finalization, fresh sim clock
         chatFarmer = null; chatWidgetOpen = false; chatDropdownOpen = false; blurChatInput();
         momentQueue.length = 0; calloutQueue.length = 0; activeMoment = null; activeCallout = null; momentsPrimed = false;
@@ -6002,10 +6003,9 @@ function drawResumeCard() {
 // (never serialized, never in the digest) — no sim/determinism reach. One-shot per raid via the rid.
 function maybeFaceoff() {
     const re = world && world.raidEvent;
-    if (!re || re.rehearsal) return;                         // no raid, or a booth ghost — no card
-    const rid = re.e ? (re.e.id || `${re.e.pairKey}:${re.e.ordinal}`) : 'raid';
-    if (rid === faceoffSeenRid) return;                      // already raised for THIS raid
-    faceoffSeenRid = rid;
+    if (!re) return;                                         // no raid on the field
+    if (re === faceoffSeenEvent) return;                     // already raised for THIS raidEvent (object identity —
+    faceoffSeenEvent = re;                                   // robust for real AND booth-rehearsed raids alike)
     const e = re.e || {}, foe = e.foe;
     const name = (foe && foe.name) || e.foeName || 'an orc warband';
     let swornName = null;
@@ -7489,7 +7489,7 @@ function drawBootScreen(t) {
         dismissCard: () => { resumeCard = null; },
         // #faceoff (debug) force the pre-battle VS card with a chosen foe name / war context, no raid needed
         demoFaceoff: (name = 'Krul the Howler', raidCount = 4, escaped = true, swornName = null) => {
-            faceoffSeenRid = '__demo'; faceoff = { at: performance.now(), name: String(name).toUpperCase(), raidCount: raidCount | 0, escaped: !!escaped, swornName };
+            faceoffSeenEvent = world && world.raidEvent; faceoff = { at: performance.now(), name: String(name).toUpperCase(), raidCount: raidCount | 0, escaped: !!escaped, swornName };
             return `faceoff card: ${name}`;
         },
         enrich: tryEnrich,                                   // ask the LLM chronicler now (debug)

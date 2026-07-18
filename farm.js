@@ -6304,7 +6304,11 @@ export class World {
         const nem = (this.nemesis && !this.nemesis.ended && this.nemesis.raidCount >= 1) ? this.nemesis : null;
         const e = { id: rid, by: by || (nem ? `${nem.name}'s warband` : 'a warband out of the dark'), commit: 0.5, rehearsal: true,
                     foe: nem ? { name: nem.name, raidCount: nem.raidCount + 1, sworeAgainst: nem.sworeAgainst } : null };
-        this.pendingRaid = { e, landsAt: this.time + RAID_LEAD, detectAt: this.time + RAID_LEAD - RAID_RALLY,
+        // #admin an admin-STAGED raid is NOTICED at once — the "INCOMING RAID" shader must hit the instant the
+        // button is pressed, not after the natural gather-before-detection window. So detect NOW and land on a
+        // short demo clock (a beat to muster, then the VS card + the blow). Display-only; a rehearsal telegraph
+        // is never serialized, so this timing never touches determinism or the real-gameplay telegraph path.
+        this.pendingRaid = { e, landsAt: this.time + 12, detectAt: this.time,
                              dir, dirName, detected: false, rehearsal: true };
         this.rehearsal = { kind: 'raid', rid };
         return true;
