@@ -34,3 +34,6 @@ skills-lock.json
 # council/kimi/review scratch output + review packets (workflow scratch, not deliverables)
 .council-*.md
 KIMI_REVIEW_PACKET.md
+
+# generated Codex review patch (scratch, not a deliverable)
+review.diff
