@@ -1,12 +1,12 @@
-# Propogate
+# Propagate
 
 > ### 🧠 Built on SuperMemory
 > A living world where every inhabitant is **grown from a real memory** — and every
-> life they go on to live is **written back as a new one**. Propogate closes the loop
+> life they go on to live is **written back as a new one**. Propagate closes the loop
 > on a **self-hosted [SuperMemory](https://github.com/supermemoryai/supermemory)**
 > instance: *memories in, a society out, lives back in.*
 
-Propogate is a fullscreen, isometric **pixel-art farming simulation** where every
+Propagate is a fullscreen, isometric **pixel-art farming simulation** where every
 farmer is procedurally grown from a document in a self-hosted
 SuperMemory knowledge graph. Each gets a D&D-style character sheet, its own thoughts,
 relationships, and the drive to build a farm; together they raise a town that grows,
@@ -16,7 +16,7 @@ no build step — pure ES modules + Canvas 2D + a WebGL post-process.
 ## SuperMemory, end to end
 
 The substrate is a **self-hosted SuperMemory** instance (`npx supermemory local`,
-`http://localhost:6767`) — local-first, never the cloud. Ry Farms uses it as a full
+`http://localhost:6767`) — local-first, never the cloud. Propagate uses it as a full
 **read → compile → write → re-read loop**, not a one-time data dump:
 
 1. **Grow from memory (read).** `api/knowledge-graph.js` lists the instance's
