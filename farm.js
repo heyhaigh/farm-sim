@@ -424,6 +424,8 @@ const SORTIE_PARTY_MAX = 4;         // at most this many ride out
 const SORTIE_WORKFORCE_FLOOR = 3;   // this many able hands MUST stay behind (a town can't empty itself)
 const SORTIE_MAX_DAYS = 3;          // the away window is 1..this, scaled by (hashed) distance to the foe
 const SORTIE_SPOILS_CAP = 0.6;      // a win RECLAIMS up to this share of the loot the nemesis carried off
+const SORTIE_HOLD_SEC = 3;          // after the vote carries, HOLD this long (read the announcement) before the party moves
+const SORTIE_MUSTER_MAX = 14;       // the party marches to the frontier rally and departs by here at the latest (anti-stall)
 // #131 seeded bearing -> a plain-word compass label for the tell; index = round(dir / 45deg) % 8, dir 0 = +i.
 const COMPASS = ['east', 'south-east', 'south', 'south-west', 'west', 'north-west', 'north', 'north-east'];
 // #raid-feel the label must match what the EYE sees: the map is an iso projection, so a grid-space angle
@@ -2781,7 +2783,7 @@ export class World {
             counterVote: this.counterVote ? { ...this.counterVote, foe: { ...this.counterVote.foe } } : null,
             counterAuthorized: this.counterAuthorized ? { ...this.counterAuthorized, foe: { ...this.counterAuthorized.foe } } : null,
             counterCooldownUntil: this.counterCooldownUntil || 0,
-            counterSortie: this.counterSortie ? { ...this.counterSortie, foe: { ...this.counterSortie.foe }, party: [...this.counterSortie.party] } : null,
+            counterSortie: this.counterSortie ? { ...this.counterSortie, foe: { ...this.counterSortie.foe }, party: [...this.counterSortie.party], rally: this.counterSortie.rally ? { ...this.counterSortie.rally } : null } : null,
             nemesis: this.nemesis ? { ...this.nemesis } : null,   // #nemesis the named-war arc rides the save (plain, deterministic)
             nemesisLog: (this.nemesisLog || []).map(x => ({ ...x })),   // #nemesis the town's book of ENDED wars
             // #Codex30 P1 — the DAY-1 congregation director's coverage state survives a reload (Sets flattened to
@@ -2900,7 +2902,7 @@ export class World {
                 wantExpand: f.wantExpand, wantFacility: f.wantFacility, wantUpgrade: f.wantUpgrade,
                 birdLosses: f.birdLosses, stormLosses: f.stormLosses, donateCooldown: f.donateCooldown,
                 nextExpand: f.nextExpand, nextFacility: f.nextFacility, exploreCooldown: f.exploreCooldown,
-                goal: f.goal, downed: f.downed, reviveDay: f.reviveDay, downFrom: f.downFrom, onSortie: f.onSortie || false,   // #counteroffensive PHASE 2 away-with-the-war-party
+                goal: f.goal, downed: f.downed, reviveDay: f.reviveDay, downFrom: f.downFrom, onSortie: f.onSortie || false, mustering: f.mustering || false,   // #counteroffensive PHASE 2
                 threatWary: { ...f.threatWary }, dangerZones: f.dangerZones.map(z => ({ ...z })),
                 jobStats: { ...f.jobStats },
                 journal: f.journal.map(e => ({ ...e })), gossip: f.gossip.map(g => ({ ...g })),
@@ -3050,7 +3052,7 @@ export class World {
             f.wantExpand = fd.wantExpand; f.wantFacility = fd.wantFacility; f.wantUpgrade = fd.wantUpgrade;
             f.birdLosses = fd.birdLosses; f.stormLosses = fd.stormLosses; f.donateCooldown = fd.donateCooldown;
             f.nextExpand = fd.nextExpand; f.nextFacility = fd.nextFacility; f.exploreCooldown = fd.exploreCooldown;
-            f.goal = fd.goal; f.downed = fd.downed; f.reviveDay = fd.reviveDay; f.downFrom = fd.downFrom; f.onSortie = fd.onSortie || false;   // #counteroffensive PHASE 2
+            f.goal = fd.goal; f.downed = fd.downed; f.reviveDay = fd.reviveDay; f.downFrom = fd.downFrom; f.onSortie = fd.onSortie || false; f.mustering = fd.mustering || false;   // #counteroffensive PHASE 2
             f.threatWary = { ...fd.threatWary }; f.dangerZones = fd.dangerZones.map(z => ({ ...z }));
             f.jobStats = { ...fd.jobStats };
             f.journal = fd.journal.map(e => ({ ...e })); f.gossip = fd.gossip.map(g => ({ ...g }));
@@ -6534,10 +6536,20 @@ export class World {
         return score + jit * 0.5 > 0;
     }
 
+    // a frontier RALLY point in the foe's bearing (where the war party forms up before it rides out). Sits at the
+    // edge of the settled ground toward the foe, capped so the muster-march is a few seconds, not a trek. Seeded.
+    #sortieRally(dir) {
+        const rr = this.revealRadius ? this.revealRadius() : 15;
+        const d = Math.max(9, Math.min(rr - 1, 18));
+        const p = { i: Math.round(CENTER + Math.cos(dir) * d), j: Math.round(CENTER + Math.sin(dir) * d) };
+        return (this.nearestOpenTile && this.nearestOpenTile(p)) || p;
+    }
+
     // #counteroffensive PHASE 2 — LAUNCH the war party. The wronged HERO leads (not exempt), then the strongest
-    // HALE hands, always leaving a minimum workforce at home. They go OFF-FIELD (onSortie); the away window is
-    // 1..SORTIE_MAX_DAYS scaled by a seeded distance to the foe; spoils are pre-figured from the loot the nemesis
-    // carried off (capped, never fabricated). Deterministic + seeded; rides the save.
+    // HALE hands, always leaving a minimum workforce at home. They start in the MUSTER phase (still ON-FIELD): after
+    // a hold to read the announcement they march to the frontier rally, form up, and only THEN ride off-field into
+    // the dark (#tickCounterSortie). The away window (1..SORTIE_MAX_DAYS, seeded by distance) is timed from DEPARTURE.
+    // Spoils are pre-figured from the loot the nemesis carried off (capped, never fabricated). Deterministic; save-safe.
     #launchCounterSortie(cv, hero) {
         if (!hero || hero.downed || hero.health === 'sick') { this.counterAuthorized = null; return; }
         const hale = this.farmers.filter(f => !f.downed && f.health !== 'sick' && !f.onSortie);
@@ -6550,24 +6562,35 @@ export class World {
             if (hale.length - (party.length + 1) < SORTIE_WORKFORCE_FLOOR) break;   // keep the workforce floor at home
             party.push(f);
         }
-        for (const f of party) { f.onSortie = true; f.state = 'decide'; f.path = null; f.combatStance = null; f.threatAlert = 0; this.clearHelp(f); }
+        for (const f of party) { f.mustering = true; f.state = 'decide'; f.path = null; f.combatStance = null; f.threatAlert = 0; this.clearHelp(f); }
         const days = 1 + (hashString('sortiedist:' + cv.foe.pairKey) % SORTIE_MAX_DAYS);
         const nem = this.nemesis;
         const spoils = Math.round(((nem && nem.harvestLost) || 0) * SORTIE_SPOILS_CAP);
-        this.counterSortie = { phase: 'out', foe: { pairKey: cv.foe.pairKey, name: cv.foe.name }, dir: cv.dir, dirName: cv.dirName,
-                               party: party.map(f => f.sheet.seed), heroSeed: hero.sheet.seed,
-                               leftAt: this.time, returnAt: this.time + days * (DAY_LENGTH + NIGHT_LENGTH), days, spoils, resolved: false };
+        this.counterSortie = { phase: 'muster', foe: { pairKey: cv.foe.pairKey, name: cv.foe.name }, dir: cv.dir, dirName: cv.dirName,
+                               party: party.map(f => f.sheet.seed), heroSeed: hero.sheet.seed, rally: this.#sortieRally(cv.dir),
+                               tallyAt: this.time, leftAt: 0, returnAt: 0, days, spoils, resolved: false };
         this.counterAuthorized = null;   // the mandate is now being EXECUTED
-        this.addChronicle('raid', `${party.length} of ${this.name} ride out on ${cv.foe.name} — ${days > 1 ? days + " days'" : "a day's"} hard road, and the town holds thin until they return.`,
-            hero, null, '#e0a040', { tier: 'callout', tone: 'tense', why: 'the war party leaves — home stands exposed' });
-        if (this._live) this.sortie = { rehearsal: false, oneWay: true, rid: 'counterout:' + this.day, dir: cv.dir, dirName: cv.dirName, target: `${cv.foe.name}'s camp`, phase: 'muster', at: this.time, n: party.length };
+        this.addChronicle('raid', `${party.length} of ${this.name} muster to ride out on ${cv.foe.name} — ${days > 1 ? days + " days'" : "a day's"} hard road, and home will hold thin until they return.`,
+            hero, null, '#e0a040', { tier: 'callout', tone: 'tense', why: 'the war party musters — home stands exposed' });
     }
 
-    // drive the away war party — resolve it the moment it's due home (a monotonic deadline; identical watched
-    // or dormant, no rng). Called each tick.
+    // drive the war party across its phases (no rng): MUSTER (hold → march to the rally → DEPART off-field) →
+    // AWAY (until the monotonic returnAt) → resolve. Identical watched or dormant. Called each tick.
     #tickCounterSortie() {
         const s = this.counterSortie;
-        if (s && !s.resolved && this.time >= s.returnAt) this.#resolveCounterSortie(s);
+        if (!s || s.resolved) return;
+        if (s.phase === 'muster') {
+            if (this.time - s.tallyAt < SORTIE_HOLD_SEC) return;   // hold — the announcement beat, before anyone moves
+            const riders = s.party.map(seed => this.farmers.find(f => f.sheet.seed === seed)).filter(Boolean);
+            const atRally = riders.length > 0 && riders.every(f => !f.mustering || Math.hypot(f.pos.i - s.rally.i, f.pos.j - s.rally.j) < 2.6);
+            if (atRally || this.time - s.tallyAt > SORTIE_MUSTER_MAX) {
+                // DEPART — the party crosses into the dark (off-field); the away clock starts NOW
+                for (const f of riders) { f.mustering = false; f.onSortie = true; f.state = 'decide'; f.path = null; }
+                s.phase = 'away'; s.leftAt = this.time; s.returnAt = this.time + s.days * (DAY_LENGTH + NIGHT_LENGTH);
+            }
+            return;
+        }
+        if (s.phase === 'away' && this.time >= s.returnAt) this.#resolveCounterSortie(s);
     }
 
     // THEY RETURN. Deterministic verdict: party strength vs the foe → a WIN reclaims the capped spoils; a hard
@@ -8191,6 +8214,7 @@ export class Farmer {
         this.watchPost = 0; this.watchScanT = 0;   // #watch perimeter-beat post index + scan hold (transient; not serialized)
         this.combatStance = null; // 'fight' | 'flee' while facing a wilderness threat (see #handleCombat)
         this.onSortie = false;    // #counteroffensive PHASE 2 — true while away with the counter-offensive war party (off-field)
+        this.mustering = false;   // #counteroffensive PHASE 2 — true while marching to the frontier rally to DEPART (still on-field)
         this.threatAlert = 0;     // render pulse when a threat appears / while in danger
         this.hurtFlash = 0;       // render pulse when struck
         this.emote = null;        // transient social tell ('grudge' | 'bond') shown over the head (B3)
@@ -10628,6 +10652,9 @@ export class Farmer {
         if (this.#handleCombat()) return;
         // wounded and carrying meat? eat to mend — rest alone won't get you fight-fit anymore.
         if (this.#maybeEatMeat()) return;
+        // #counteroffensive PHASE 2 — a rider MUSTERING to ride out drops everything: the 'sortie' state holds them
+        // through the announcement then marches them to the frontier rally, until the world flips them off-field.
+        if (this.mustering) { this.state = 'sortie'; return; }
 
         // a lived lesson made AUDIBLE: memory shaping visible behavior, not a hidden journal entry.
         // Standing on the very ground a foe once cut them down, they shun it aloud.
@@ -12603,6 +12630,18 @@ export class Farmer {
                             w.holdFloor((this.bubble ? this.bubble.t0 : 2.2) + 0.7);   // finish before the next voice
                         }
                     }
+                }
+                break;
+            }
+            // #counteroffensive PHASE 2 — a rider MUSTERING to ride out: HOLD (through the announcement beat) then
+            // march to the frontier rally and wait there. The world flips them off-field at depart (#tickCounterSortie).
+            case 'sortie': {
+                const w = this.world, s = w.counterSortie;
+                if (!this.mustering || !s || s.phase !== 'muster') { this.state = 'decide'; break; }
+                if (w.time - s.tallyAt >= SORTIE_HOLD_SEC && Math.hypot(this.pos.i - s.rally.i, this.pos.j - s.rally.j) > 2) {
+                    this.#goTo(s.rally.i, s.rally.j, 'sortie');   // march to the frontier rally (else hold, formed up)
+                    if ((hashString('mustcry:' + this.sheet.seed + ':' + Math.floor(w.time / 4)) >>> 0) % 5 === 0)
+                        this.think(w.culture === 'orc' ? 'FOR THE BAND' : 'FOR THE FALLEN');
                 }
                 break;
             }

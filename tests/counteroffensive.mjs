@@ -71,17 +71,21 @@ console.log('#counteroffensive — determinism + watched-vs-dormant');
     }
 }
 
-console.log('#counteroffensive PHASE 2 — the sortie: launch, away, return');
+console.log('#counteroffensive PHASE 2 — the sortie: muster, away, return');
 {
     const w = primed(555, HAWK, 1.8);   // hawks ride
     runVote(w);
     const s = w.counterSortie;
-    ok(!!s && s.phase === 'out', 'a PASS launches the war party (counterSortie set)');
+    ok(!!s, 'a PASS launches the war party (counterSortie set)');
     ok(w.counterAuthorized === null, 'the mandate is consumed (being executed, not left pending)');
     ok(s && s.days >= 1 && s.days <= 3, `away window is 1..3 days (got ${s && s.days})`);
     ok(s && s.party.length >= 1 && s.party.includes(w.farmers[0].sheet.seed), 'the wronged hero rides with the party');
+    ok(s && !!s.rally, 'a frontier rally point is set (the muster marches there)');
     const away = s.party.map(seed => w.farmers.find(f => f.sheet.seed === seed));
-    ok(away.every(f => f.onSortie), 'every rider is OFF-FIELD (onSortie) while away');
+    // run until they DEPART (off-field) — the muster (hold → march → depart) completes on its own
+    let g0 = 0; while (w.counterSortie && w.counterSortie.phase === 'muster' && g0++ < 30) advDay(w);
+    ok(w.counterSortie && w.counterSortie.phase === 'away', 'the muster completes and the party DEPARTS (phase away)');
+    ok(away.every(f => f.onSortie && !f.mustering), 'every rider is OFF-FIELD (onSortie) while away');
     ok(w.farmers.filter(f => !f.onSortie && !f.downed && f.health !== 'sick').length >= 3, 'the workforce floor stays home');
     // the town is UNDEFENDED while away — the raid defender pool excludes the riders
     const raidDefenders = w.farmers.filter(f => !f.downed && f.health !== 'sick' && !f.onSortie).length;
@@ -90,7 +94,7 @@ console.log('#counteroffensive PHASE 2 — the sortie: launch, away, return');
     const before = w.harvestTotal || 0;
     let guard = 0; while (w.counterSortie && guard++ < 60) advDay(w);
     ok(w.counterSortie === null, 'the sortie resolves at its deadline (counterSortie cleared)');
-    ok(away.every(f => !f.onSortie), 'every survivor is back on-field (onSortie cleared)');
+    ok(away.every(f => !f.onSortie && !f.mustering), 'every survivor is back on-field');
     const gainedOrCasualty = (w.harvestTotal || 0) > before || away.some(f => f.downed);
     ok(gainedOrCasualty, 'the return had CONSEQUENCE — reclaimed spoils and/or a casualty');
 }
@@ -99,7 +103,8 @@ console.log('#counteroffensive PHASE 2 — the sortie rides the save');
 {
     const w = primed(42, HAWK, 1.8);
     runVote(w);
-    ok(!!w.counterSortie, 'a war party is out');
+    let g0 = 0; while (w.counterSortie && w.counterSortie.phase === 'muster' && g0++ < 30) advDay(w);   // let them depart (away)
+    ok(!!w.counterSortie && w.counterSortie.phase === 'away', 'a war party is out (away)');
     const w2 = World.fromSave(structuredClone(w.serialize()));
     ok(JSON.stringify(w2.counterSortie) === JSON.stringify(w.counterSortie), 'the away war party round-trips a save');
     const riders = w.counterSortie.party;
