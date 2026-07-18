@@ -93,7 +93,7 @@ with or without them (the LLM decorates, it never decides).
 
 ## A living world on a reproducible substrate
 
-Ry Farms is **a living world** first — towns that grow, remember, and (soon) find
+Propagate is **a living world** first — towns that grow, remember, and (soon) find
 each other. Underneath that world is a **reproducible substrate**: a single town's
 *founding and sim* are deterministic — same seed ⇒ the same town, twice — so the
 whole thing stays testable and honest. That reproducibility is a substrate property,
