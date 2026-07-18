@@ -2905,7 +2905,10 @@ export class World {
         this.time = d.time; this.day = d.day; this.clock = d.clock;
         this.season = d.season; this.seasonDay = d.seasonDay; this.year = d.year;
         this.harvestTotal = d.harvestTotal; this._dayHarvestStart = d.dayHarvestStart;
-        this.weather = d.weather; this.weatherTimer = d.weatherTimer; this.lightningTimer = d.lightningTimer ?? 0;   // #Codex25-5
+        // #robust self-heal an invalid weather key (an errant console-set value could persist a display LABEL like
+        // 'sunny' instead of the 'sun' key → WEATHER_STATES[bad] undefined → crash-loop in #rollWeather on load).
+        this.weather = WEATHER_STATES[d.weather] ? d.weather : 'sun';
+        this.weatherTimer = d.weatherTimer; this.lightningTimer = d.lightningTimer ?? 0;   // #Codex25-5
         this.dmCooldown = d.dmCooldown; this.preyCooldown = d.preyCooldown; this.foeCooldown = d.foeCooldown || 0;
         this.townCollab = d.townCollab; this.townCompete = d.townCompete; this.townVolatile = d.townVolatile;
         this.stormLosses = d.stormLosses;
@@ -5501,6 +5504,7 @@ export class World {
     // ---- weather -----------------------------------------------------------------
 
     #rollWeather() {
+        if (!WEATHER_STATES[this.weather]) this.weather = 'sun';   // #robust never let an unknown state crash the roll
         const table = WEATHER_STATES[this.weather].next;
         const seasonBias = this.seasonDef.weather;
         const blended = {}; let sum = 0;
@@ -5524,7 +5528,7 @@ export class World {
         this.addLog(`Weather: ${WEATHER_STATES[state].label}`, colors[state]);
     }
 
-    get weatherLabel() { return WEATHER_STATES[this.weather].label; }
+    get weatherLabel() { return (WEATHER_STATES[this.weather] || WEATHER_STATES.sun).label; }
 
     // ---- crops -------------------------------------------------------------------
 
