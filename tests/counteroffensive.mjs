@@ -25,8 +25,9 @@ function primed(seed, traits, grievance, opts = {}) {
 }
 // advance exactly one day rollover (where #tickCounterOffensive runs)
 function advDay(w) { const d0 = w.day; let g = 0; while (w.day === d0 && g++ < 400000) w.tick(0.05); }
-// call the vote (rollover 1) then tally it (rollover 2); return { called, passed }
-function runVote(w) { advDay(w); const called = !!w.counterVote; advDay(w); return { called, passed: !!w.counterAuthorized }; }
+// call the vote (rollover 1) then tally it (rollover 2); a PASS launches the sortie (counterSortie set + the
+// mandate consumed), so "passed" = the war party actually rode. return { called, passed }
+function runVote(w) { advDay(w); const called = !!w.counterVote; advDay(w); return { called, passed: !!w.counterSortie }; }
 
 const DOVE = { competitiveness: 0.2, collaboration: 0.8, honesty: 0.85 };
 const HAWK = { competitiveness: 0.85, collaboration: 0.4, honesty: 0.3 };
@@ -62,12 +63,50 @@ console.log('#counteroffensive — determinism + watched-vs-dormant');
     for (const seed of [555, 42, 7]) {
         const a = primed(seed, null, 1.6), b = primed(seed, null, 1.6);
         runVote(a); runVote(b);
-        ok(JSON.stringify(a.counterAuthorized) === JSON.stringify(b.counterAuthorized), `seed ${seed}: same seed+config → identical verdict`);
-        // WATCHED (_live) must produce the byte-identical sim outcome as DORMANT
+        ok(JSON.stringify(a.counterSortie) === JSON.stringify(b.counterSortie), `seed ${seed}: same seed+config → identical war party (party, days, spoils, returnAt)`);
+        // WATCHED (_live) must produce the byte-identical SIM state as DORMANT (only display differs)
         const live = primed(seed, null, 1.6, { live: true });
         runVote(live);
-        ok(JSON.stringify(live.counterAuthorized) === JSON.stringify(a.counterAuthorized), `seed ${seed}: watched (_live) === dormant`);
+        ok(JSON.stringify(live.counterSortie) === JSON.stringify(a.counterSortie), `seed ${seed}: watched (_live) === dormant`);
     }
+}
+
+console.log('#counteroffensive PHASE 2 — the sortie: launch, away, return');
+{
+    const w = primed(555, HAWK, 1.8);   // hawks ride
+    runVote(w);
+    const s = w.counterSortie;
+    ok(!!s && s.phase === 'out', 'a PASS launches the war party (counterSortie set)');
+    ok(w.counterAuthorized === null, 'the mandate is consumed (being executed, not left pending)');
+    ok(s && s.days >= 1 && s.days <= 3, `away window is 1..3 days (got ${s && s.days})`);
+    ok(s && s.party.length >= 1 && s.party.includes(w.farmers[0].sheet.seed), 'the wronged hero rides with the party');
+    const away = s.party.map(seed => w.farmers.find(f => f.sheet.seed === seed));
+    ok(away.every(f => f.onSortie), 'every rider is OFF-FIELD (onSortie) while away');
+    ok(w.farmers.filter(f => !f.onSortie && !f.downed && f.health !== 'sick').length >= 3, 'the workforce floor stays home');
+    // the town is UNDEFENDED while away — the raid defender pool excludes the riders
+    const raidDefenders = w.farmers.filter(f => !f.downed && f.health !== 'sick' && !f.onSortie).length;
+    ok(raidDefenders === w.farmers.length - away.length, 'the away riders are excluded from the raid defence (town holds thin)');
+    // ride it out to the return
+    const before = w.harvestTotal || 0;
+    let guard = 0; while (w.counterSortie && guard++ < 60) advDay(w);
+    ok(w.counterSortie === null, 'the sortie resolves at its deadline (counterSortie cleared)');
+    ok(away.every(f => !f.onSortie), 'every survivor is back on-field (onSortie cleared)');
+    const gainedOrCasualty = (w.harvestTotal || 0) > before || away.some(f => f.downed);
+    ok(gainedOrCasualty, 'the return had CONSEQUENCE — reclaimed spoils and/or a casualty');
+}
+
+console.log('#counteroffensive PHASE 2 — the sortie rides the save');
+{
+    const w = primed(42, HAWK, 1.8);
+    runVote(w);
+    ok(!!w.counterSortie, 'a war party is out');
+    const w2 = World.fromSave(structuredClone(w.serialize()));
+    ok(JSON.stringify(w2.counterSortie) === JSON.stringify(w.counterSortie), 'the away war party round-trips a save');
+    const riders = w.counterSortie.party;
+    ok(riders.every(seed => w2.farmers.find(f => f.sheet.seed === seed).onSortie), 'the riders are still off-field after a reload');
+    // both resolve to the same place
+    let g = 0; while ((w.counterSortie || w2.counterSortie) && g++ < 60) { advDay(w); advDay(w2); }
+    ok((w.counterSortie === null) && (w2.counterSortie === null), 'saved-then-loaded sortie resolves the same');
 }
 
 console.log('#counteroffensive — save round-trip');

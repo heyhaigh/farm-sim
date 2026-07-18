@@ -419,6 +419,11 @@ const GRIEVANCE_THRESHOLD = 0.9;    // grievance must reach this to make a count
 const COUNTER_MIN_RAIDS = 2;        // a PATTERN, not one raid's bad luck
 const COUNTER_MIN_TOWN = 4;         // a town this small or smaller can't spare a war party
 const COUNTER_COOLDOWN = 20;        // days after a vote (pass OR fail) before another may be called
+// #counteroffensive PHASE 2 — the SORTIE (the real war party rides out). All deterministic + seeded.
+const SORTIE_PARTY_MAX = 4;         // at most this many ride out
+const SORTIE_WORKFORCE_FLOOR = 3;   // this many able hands MUST stay behind (a town can't empty itself)
+const SORTIE_MAX_DAYS = 3;          // the away window is 1..this, scaled by (hashed) distance to the foe
+const SORTIE_SPOILS_CAP = 0.6;      // a win RECLAIMS up to this share of the loot the nemesis carried off
 // #131 seeded bearing -> a plain-word compass label for the tell; index = round(dir / 45deg) % 8, dir 0 = +i.
 const COMPASS = ['east', 'south-east', 'south', 'south-west', 'west', 'north-west', 'north', 'north-east'];
 // #raid-feel the label must match what the EYE sees: the map is an iso projection, so a grid-space angle
@@ -918,6 +923,11 @@ export class World {
         this.counterVote = null;        // an in-flight war vote: { phase:'called', foe:{pairKey,name,raidCount}, heroSeed, calledDay, dir, dirName, grievanceAt, yes, no }
         this.counterAuthorized = null;  // a PASSED mandate awaiting Phase 2: { foe:{pairKey,name}, dir, dirName, heroSeed, at }
         this.counterCooldownUntil = 0;  // day until which no new war vote may be called (set when one is called, pass or fail)
+        // #counteroffensive PHASE 2 — the war party ACTUALLY on the march (rides the save). While it's out, its
+        // members are OFF-FIELD (f.onSortie) — they don't work, don't defend (the town is exposed), until they
+        // return at a monotonic deadline and the spoils/cost land. { phase, foe, dir, dirName, party:[seeds],
+        // heroSeed, leftAt, returnAt, days, spoils, resolved }.
+        this.counterSortie = null;
         this.dmCooldown = 90;      // a grace period before the first threat stalks the young town
         this.foeCooldown = 240;    // #foe-cadence the FIRST lethal foe (orc/assassin) holds off ~1+ day past the grace
         this._live = false;        // #108 true only while this town is the one being WATCHED (set by main.js on
@@ -2771,6 +2781,7 @@ export class World {
             counterVote: this.counterVote ? { ...this.counterVote, foe: { ...this.counterVote.foe } } : null,
             counterAuthorized: this.counterAuthorized ? { ...this.counterAuthorized, foe: { ...this.counterAuthorized.foe } } : null,
             counterCooldownUntil: this.counterCooldownUntil || 0,
+            counterSortie: this.counterSortie ? { ...this.counterSortie, foe: { ...this.counterSortie.foe }, party: [...this.counterSortie.party] } : null,
             nemesis: this.nemesis ? { ...this.nemesis } : null,   // #nemesis the named-war arc rides the save (plain, deterministic)
             nemesisLog: (this.nemesisLog || []).map(x => ({ ...x })),   // #nemesis the town's book of ENDED wars
             // #Codex30 P1 — the DAY-1 congregation director's coverage state survives a reload (Sets flattened to
@@ -2889,7 +2900,7 @@ export class World {
                 wantExpand: f.wantExpand, wantFacility: f.wantFacility, wantUpgrade: f.wantUpgrade,
                 birdLosses: f.birdLosses, stormLosses: f.stormLosses, donateCooldown: f.donateCooldown,
                 nextExpand: f.nextExpand, nextFacility: f.nextFacility, exploreCooldown: f.exploreCooldown,
-                goal: f.goal, downed: f.downed, reviveDay: f.reviveDay, downFrom: f.downFrom,
+                goal: f.goal, downed: f.downed, reviveDay: f.reviveDay, downFrom: f.downFrom, onSortie: f.onSortie || false,   // #counteroffensive PHASE 2 away-with-the-war-party
                 threatWary: { ...f.threatWary }, dangerZones: f.dangerZones.map(z => ({ ...z })),
                 jobStats: { ...f.jobStats },
                 journal: f.journal.map(e => ({ ...e })), gossip: f.gossip.map(g => ({ ...g })),
@@ -2920,6 +2931,7 @@ export class World {
         this.counterVote = d.counterVote || null;
         this.counterAuthorized = d.counterAuthorized || null;
         this.counterCooldownUntil = d.counterCooldownUntil || 0;
+        this.counterSortie = d.counterSortie || null;
         this.nemesis = d.nemesis || null;   // #nemesis the named-war arc (old saves: no arc yet — the next raid founds one)
         this.nemesisLog = Array.isArray(d.nemesisLog) ? d.nemesisLog.map(x => ({ ...x })) : [];
         // #Codex30 P1 restore the congregation director's coverage state (rebuild the Sets), so a reload mid-scene
@@ -3038,7 +3050,7 @@ export class World {
             f.wantExpand = fd.wantExpand; f.wantFacility = fd.wantFacility; f.wantUpgrade = fd.wantUpgrade;
             f.birdLosses = fd.birdLosses; f.stormLosses = fd.stormLosses; f.donateCooldown = fd.donateCooldown;
             f.nextExpand = fd.nextExpand; f.nextFacility = fd.nextFacility; f.exploreCooldown = fd.exploreCooldown;
-            f.goal = fd.goal; f.downed = fd.downed; f.reviveDay = fd.reviveDay; f.downFrom = fd.downFrom;
+            f.goal = fd.goal; f.downed = fd.downed; f.reviveDay = fd.reviveDay; f.downFrom = fd.downFrom; f.onSortie = fd.onSortie || false;   // #counteroffensive PHASE 2
             f.threatWary = { ...fd.threatWary }; f.dangerZones = fd.dangerZones.map(z => ({ ...z }));
             f.jobStats = { ...fd.jobStats };
             f.journal = fd.journal.map(e => ({ ...e })); f.gossip = fd.gossip.map(g => ({ ...g }));
@@ -5943,6 +5955,7 @@ export class World {
         this.#tickFounding();   // #106 drive the day-10 gathering -> dusk ballot across the day
         this.#tickPendingRaid(); // #131 drive a telegraphed raid across its lead window (no-op unless one is pending)
         this.#tickSortie();      // #counteroffensive drive the ghost war party (no-op unless one is staged; no rng)
+        this.#tickCounterSortie();   // #counteroffensive PHASE 2 bring the REAL war party home when its deadline lands (no rng)
         this.#tickRaidEvent(dt); // #Slice3 drive the watched raid choreography (no-op unless a raid is staged)
         this.#tickRehearsal(dt); // #admin drive an election REHEARSAL's phases (no-op unless the booth staged one)
         this.weatherTimer -= dt;
@@ -6133,7 +6146,7 @@ export class World {
     // display side-channel: its own fresh stream, never applied, so it can't perturb the authoritative outcome.
     #resolveRaid(e, harvest) {
         const rid = e.id || `${e.pairKey}:${e.ordinal}`;
-        const defenders = this.farmers.filter(f => !f.downed && f.health !== 'sick');
+        const defenders = this.farmers.filter(f => !f.downed && f.health !== 'sick' && !f.onSortie);   // #counteroffensive PHASE 2 the away war party can't defend home — the town holds thin
         const g = this.currentSentry();   // the one on the exposed line: rotation-holder / elected Watch / whisper-posted
         const guard = (g && !g.downed && g.health !== 'sick' && defenders.includes(g)) ? g : null;
         const out = this.#scoreRaid(e, rid, harvest, defenders, guard, 'raidres');
@@ -6205,6 +6218,9 @@ export class World {
         // and he swears against the defender who bested his band (the hero) — next telegraph names the grudge.
         const nem = this.nemesis;
         if (nem && !nem.ended && e.pairKey && nem.pairKey === e.pairKey) {
+            // #counteroffensive PHASE 2 — tally the LOOT this nemesis has carried off across the war; a successful
+            // strike back RECLAIMS a capped share of it (spoils are never fabricated — only what was truly taken).
+            nem.harvestLost = (nem.harvestLost || 0) + (out.harvestLost || 0);
             if (out.felled >= out.n) {
                 const named = nem.raidCount >= 2, nm = nem.name;
                 this.#archiveNemesis('fell');
@@ -6401,7 +6417,7 @@ export class World {
         const s = this.sortie; if (!s) return;
         const el = this.time - s.at, to = (next, hold) => { if (el >= hold) { s.phase = next; s.at = this.time; } };
         if (s.phase === 'muster') to('march', 4);
-        else if (s.phase === 'march') to('gone', 8);
+        else if (s.phase === 'march') { if (s.oneWay && el >= 8) { this.sortie = null; return; } to('gone', 8); }   // #P2 a REAL departure rides out and vanishes (gone for days); the return is staged on arrival home
         else if (s.phase === 'gone') to('return', 5);
         else if (s.phase === 'return' && el >= 7) { this.sortie = null; if (this.rehearsal && this.rehearsal.kind === 'sortie') this.rehearsal = null; }
     }
@@ -6476,11 +6492,8 @@ export class World {
             this.counterAuthorized = { foe: { pairKey: cv.foe.pairKey, name: cv.foe.name }, dir: cv.dir, dirName: cv.dirName, heroSeed: cv.heroSeed, at: this.day };
             this.addChronicle('legend', `${this.name} resolves to strike back at ${cv.foe.name} — the vote carries, ${yes} to ${no}. The town turns from prey to hunter.`,
                 hero, null, '#f0d060', { tier: 'grand', tone: 'triumph', label: 'THE TOWN RIDES', why: 'prey resolves to become the hunter', icon: 'foe:orc:1' });
-            // #counteroffensive PHASE 1.5 — the visible payoff: on a WATCHED town the war party RIDES OUT toward the
-            // foe (render-only stagecraft, reusing the Phase 0 sortie display; never serialized, draws no rng, and
-            // #tickSortie clears it). The real spoils / stakes / downing are Phase 2 — this is the seen "they ride".
-            if (this._live) this.sortie = { rehearsal: false, rid: 'counter:' + this.day, dir: cv.dir, dirName: cv.dirName,
-                                            target: `${cv.foe.name}'s camp`, phase: 'muster', at: this.time, n: Math.min(4, this.farmers.length) };
+            // #counteroffensive PHASE 2 — the war party ACTUALLY rides out (real farmers leave the field).
+            this.#launchCounterSortie(cv, hero);
         } else {
             this.addChronicle('town', `${this.name} weighed a strike on ${cv.foe.name} and chose to hold the wall — the vote fails, ${no} to ${yes}.`,
                 hero, null, '#9ad0e0', { tier: 'callout', tone: 'somber', why: 'the town stays its hand' });
@@ -6504,6 +6517,76 @@ export class World {
         if ((f.energy ?? 1) < 0.35) score -= 0.3;               // the weary aren't up for a march
         const jit = ((hashString('counterballot:' + this.seed + ':' + f.sheet.seed + ':' + cv.calledDay) >>> 0) % 1000) / 1000 - 0.5;
         return score + jit * 0.5 > 0;
+    }
+
+    // #counteroffensive PHASE 2 — LAUNCH the war party. The wronged HERO leads (not exempt), then the strongest
+    // HALE hands, always leaving a minimum workforce at home. They go OFF-FIELD (onSortie); the away window is
+    // 1..SORTIE_MAX_DAYS scaled by a seeded distance to the foe; spoils are pre-figured from the loot the nemesis
+    // carried off (capped, never fabricated). Deterministic + seeded; rides the save.
+    #launchCounterSortie(cv, hero) {
+        if (!hero || hero.downed || hero.health === 'sick') { this.counterAuthorized = null; return; }
+        const hale = this.farmers.filter(f => !f.downed && f.health !== 'sick' && !f.onSortie);
+        if (hale.length - 1 < SORTIE_WORKFORCE_FLOOR) { this.counterAuthorized = null; return; }   // can't spare even the hero over the floor
+        const others = hale.filter(f => f !== hero).sort((a, b) =>
+            (mod(b.sheet.stats.str) + (b.sheet.level || 1) * 0.2) - (mod(a.sheet.stats.str) + (a.sheet.level || 1) * 0.2) || a.sheet.seed - b.sheet.seed);
+        const party = [hero];
+        for (const f of others) {
+            if (party.length >= SORTIE_PARTY_MAX) break;
+            if (hale.length - (party.length + 1) < SORTIE_WORKFORCE_FLOOR) break;   // keep the workforce floor at home
+            party.push(f);
+        }
+        for (const f of party) { f.onSortie = true; f.state = 'decide'; f.path = null; f.combatStance = null; f.threatAlert = 0; this.clearHelp(f); }
+        const days = 1 + (hashString('sortiedist:' + cv.foe.pairKey) % SORTIE_MAX_DAYS);
+        const nem = this.nemesis;
+        const spoils = Math.round(((nem && nem.harvestLost) || 0) * SORTIE_SPOILS_CAP);
+        this.counterSortie = { phase: 'out', foe: { pairKey: cv.foe.pairKey, name: cv.foe.name }, dir: cv.dir, dirName: cv.dirName,
+                               party: party.map(f => f.sheet.seed), heroSeed: hero.sheet.seed,
+                               leftAt: this.time, returnAt: this.time + days * (DAY_LENGTH + NIGHT_LENGTH), days, spoils, resolved: false };
+        this.counterAuthorized = null;   // the mandate is now being EXECUTED
+        this.addChronicle('raid', `${party.length} of ${this.name} ride out on ${cv.foe.name} — ${days > 1 ? days + " days'" : "a day's"} hard road, and the town holds thin until they return.`,
+            hero, null, '#e0a040', { tier: 'callout', tone: 'tense', why: 'the war party leaves — home stands exposed' });
+        if (this._live) this.sortie = { rehearsal: false, oneWay: true, rid: 'counterout:' + this.day, dir: cv.dir, dirName: cv.dirName, target: `${cv.foe.name}'s camp`, phase: 'muster', at: this.time, n: party.length };
+    }
+
+    // drive the away war party — resolve it the moment it's due home (a monotonic deadline; identical watched
+    // or dormant, no rng). Called each tick.
+    #tickCounterSortie() {
+        const s = this.counterSortie;
+        if (s && !s.resolved && this.time >= s.returnAt) this.#resolveCounterSortie(s);
+    }
+
+    // THEY RETURN. Deterministic verdict: party strength vs the foe → a WIN reclaims the capped spoils; a hard
+    // fight DOWNS one rider (the hero NOT exempt; the workforce floor was kept at launch). The nemesis DEEPENS in
+    // v1 (the foe escaped even when bested — the war escalates). No display gating; all rolls are pure hashes.
+    #resolveCounterSortie(s) {
+        s.resolved = true;
+        const party = s.party.map(seed => this.farmers.find(f => f.sheet.seed === seed)).filter(Boolean);
+        const hero = this.farmers.find(f => f.sheet.seed === s.heroSeed) || party[0] || null;
+        for (const f of party) if (f.onSortie) { f.onSortie = false; f.state = 'decide'; f.threatAlert = 0; }
+        const strength = party.reduce((a, f) => a + 1 + Math.max(0, mod(f.sheet.stats.str)) * 0.5 + (f.sheet.level || 1) * 0.15, 0);
+        const roll = mulberry32(hashString('sortieres:' + this.seed + ':' + s.foe.pairKey + ':' + Math.round(s.leftAt)) >>> 0)();
+        const won = party.length > 0 && strength * (0.7 + roll * 0.6) > party.length * 1.15;
+        // a casualty (deterministic): a hard sortie downs ONE rider
+        let casualty = null;
+        const downRoll = mulberry32(hashString('sortiedown:' + this.seed + ':' + s.foe.pairKey + ':' + Math.round(s.leftAt)) >>> 0)();
+        if (party.length && downRoll < (won ? 0.25 : 0.5)) {
+            const wi = Math.floor(mulberry32(hashString('sortiewho:' + this.seed + ':' + Math.round(s.leftAt)) >>> 0)() * party.length);
+            casualty = party[Math.min(party.length - 1, wi)];
+            casualty.downed = true; casualty.downFrom = this.day; casualty.reviveDay = this.day + 3; casualty.state = 'downed'; casualty.hp = 0; casualty.combatStance = null;
+        }
+        const nem = this.nemesis;
+        if (won && s.spoils > 0) {
+            this.harvestTotal = (this.harvestTotal || 0) + s.spoils;
+            if (nem && !nem.ended && nem.pairKey === s.foe.pairKey) nem.harvestLost = Math.max(0, (nem.harvestLost || 0) - s.spoils);
+        }
+        if (nem && !nem.ended && nem.pairKey === s.foe.pairKey) nem.lastOutcome = 'escaped';   // v1: the war DEEPENS (the foe slips away even bested)
+        const cas = casualty ? ` ${shortName(casualty)} did not come home whole.` : '';
+        if (won) this.addChronicle('legend', `The war party returns from ${s.foe.name}'s camp bloodied but unbowed — ${s.spoils > 0 ? `${s.spoils} of the plundered harvest reclaimed.` : 'the raiders scattered before them.'}${cas}`,
+            hero, null, '#f0d060', { tier: 'grand', tone: 'triumph', label: 'THEY RETURN', why: 'the town struck back and held', icon: 'foe:orc:1' });
+        else this.addChronicle('raid', `The war party limps home from ${s.foe.name}'s camp with little to show — the foe was not where they struck, or struck back harder.${cas}`,
+            hero, null, '#e05840', { tier: 'callout', tone: 'somber', why: 'the strike back fell short' });
+        if (this._live) this.sortie = { rehearsal: false, rid: 'counterret:' + this.day, dir: s.dir, dirName: s.dirName, target: this.name, phase: 'return', at: this.time, n: party.length };
+        this.counterSortie = null;
     }
 
     cancelRehearsal() {
@@ -8092,6 +8175,7 @@ export class Farmer {
         this.scoutIdx = 0; this.scoutTimer = 0;
         this.watchPost = 0; this.watchScanT = 0;   // #watch perimeter-beat post index + scan hold (transient; not serialized)
         this.combatStance = null; // 'fight' | 'flee' while facing a wilderness threat (see #handleCombat)
+        this.onSortie = false;    // #counteroffensive PHASE 2 — true while away with the counter-offensive war party (off-field)
         this.threatAlert = 0;     // render pulse when a threat appears / while in danger
         this.hurtFlash = 0;       // render pulse when struck
         this.emote = null;        // transient social tell ('grudge' | 'bond') shown over the head (B3)
@@ -12101,6 +12185,9 @@ export class Farmer {
 
     tick(dt) {
         this.animTime += dt;
+        // #counteroffensive PHASE 2 — away with the war party: this farmer is OFF-FIELD (they don't work, wander,
+        // speak, drain energy, or defend). Fully frozen until they return (#resolveCounterSortie clears the flag).
+        if (this.onSortie) { if (this.bubble && this.bubble.t > 0) this.bubble.t = 0; return; }
         if (this.downed) {
             this.hurtFlash = Math.max(0, this.hurtFlash - dt * 2.5);
             // #fix a downed farmer used to early-return BEFORE the bubble timer below, so a cry set as they went

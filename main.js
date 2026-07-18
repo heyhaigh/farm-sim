@@ -2258,6 +2258,7 @@ function collectDrawables() {
     // farmers (skip anyone tucked inside their house)
     for (const f of world.farmers) {
         if (isIndoors(f)) continue;
+        if (f.onSortie) continue;   // #counteroffensive PHASE 2 — away with the war party, off-field (not drawn at home)
         const sx = cam.x + isoX(f.pos.i, f.pos.j);
         const sy = cam.y + isoY(f.pos.i, f.pos.j);
         maybeWorkSfx(f, sx, sy);
