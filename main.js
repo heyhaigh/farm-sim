@@ -100,6 +100,7 @@ let raidShake = 0;                // decaying screen-shake magnitude
 let raidFocus = null;             // { i, j } the camera eases to while a raid is on (the fence/well the warband hits)
 let _lastRaidEvent = null;        // dedupe the camera snap (fire once per staged raid)
 let _raidStruck = false;          // #131b fire the UNDER RAID beat once, when the warband crosses into town
+let _raidDetected = false;        // #incoming fire the "INCOMING RAID" shader once, at the sentry's alarm (detection edge)
 let chronReadTotal = 0;           // world._chronTotal at last view — the badge shows only for UNREAD beats
 let chronScroll = 0;
 let followMode = false;           // camera tracks followTarget (F/crosshair toggles; drag/Esc cancels)
@@ -258,8 +259,8 @@ let settingsDrag = null;                           // 'music' | 'sfx' while drag
 let lastSavedDay = 0;                              // last world.day autosaved (rollover-triggered)
 let saveFlashAt = -1e9;                            // brief "SAVED" tick in the top bar
 let resumeCard = null;                             // "PREVIOUSLY ON RY FARMS" catch-up card (shown once on resume)
-let faceoff = null;                                // #faceoff the VS card after a struck raid resolves (render-only)
-let faceoffSeenAt = -1;                            // sim-time of the last _debrief we've turned into a faceoff (change-detector)
+let faceoff = null;                                // #faceoff the pre-battle VS card raised when the warband lands (render-only)
+let faceoffSeenRid = null;                         // rid of the last raid we've raised a faceoff for (one card per raid)
 const BOARD_CLOSE = { x: 0, y: 0, w: 0, h: 0 };
 const BOARD_RECT = { x: 0, y: 0, w: 0, h: 0 };
 
@@ -5593,18 +5594,19 @@ function drawRaidFx() {
         }
     }
 
-    // C — the "UNDER RAID" callout: punch in early, HOLD through the covered stretch, fade with the reveal
+    // C — the "INCOMING RAID..." callout: punch in early, HOLD through the covered stretch, fade with the reveal.
+    // (This shader now fires at the SENTRY'S ALARM — the warband has been spotted closing, not yet arrived.)
     if (p > 0.12 && p < 0.95) {
         const q = Math.min(1, (p - 0.12) / 0.05);                 // punch-in 0→1
         const fade = p > 0.86 ? Math.max(0, 1 - (p - 0.86) / 0.09) : 1;
-        const scale = Math.round(3 + q);                          // 3 → 4
-        const big = (world.culture === 'orc') ? 'UNDER SIEGE' : 'UNDER RAID';
+        const big = 'INCOMING RAID...';
+        let scale = 4; while (scale > 2 && textWidth(big, scale) > GW * 0.9) scale--;   // fit the longer headline
         const bw = textWidth(big, scale);
         const bx = Math.floor((GW - bw) / 2), by = Math.floor(GH / 2 - scale * 5);
         ctx.save(); ctx.globalAlpha = fade;
         drawText(ctx, big, bx + 1, by + 1, '#1a0605', scale);     // drop shadow
         drawText(ctx, big, bx, by, q < 1 ? '#ffe6b0' : '#ff5a3c', scale);
-        const sub = `${(world.name || 'THE TOWN').toUpperCase()} — HOLD THE LINE`;
+        const sub = `${(world.name || 'THE TOWN').toUpperCase()} — TO ARMS`;
         const sx = Math.floor((GW - textWidth(sub, 1)) / 2);
         drawText(ctx, sub, sx, by + scale * 6 + 4, '#e8c9a0', 1);
         ctx.restore();
@@ -5798,7 +5800,8 @@ async function switchTown(seed, ang) {
         lastSavedDay = world.day;
         // reset every per-town lens in this module (anything keyed to the town we just left)
         selected = null; selectedSlotKey = null; followMode = false; followTarget = null;
-        raidFocus = null; dramaSpotlight = null; _lastRaidEvent = null; _raidStruck = false; raidFx = null; raidShake = 0;
+        raidFocus = null; dramaSpotlight = null; _lastRaidEvent = null; _raidStruck = false; _raidDetected = false; raidFx = null; raidShake = 0;
+        faceoff = null; faceoffSeenRid = null;
         _battleWatch = null; pendingInscription = null; simAccumulator = 0;   // #Codex36 P1-1: no cross-town battle finalization, fresh sim clock
         chatFarmer = null; chatWidgetOpen = false; chatDropdownOpen = false; blurChatInput();
         momentQueue.length = 0; calloutQueue.length = 0; activeMoment = null; activeCallout = null; momentsPrimed = false;
@@ -5992,18 +5995,24 @@ function drawResumeCard() {
     ctx.restore();
 }
 
-// #faceoff — the fighting-game VS card raised the moment a struck raid resolves: the town's defender bust
-// squared off against the orc that led the raid, the aggressor's NAME centred between them. Reads ONLY
-// world._debrief (set in farm.js on a WATCHED raid's resolution, never serialized, never in the digest), so
-// it cannot touch the sim or determinism. One-shot per raid via the sim-time change-detector.
+// #faceoff — the fighting-game VS card raised the moment the warband LANDS and starts moving inward (the
+// raidEvent's birth), BEFORE the clash: the town's defender bust squared off against the orc leading the raid,
+// the aggressor's NAME centred between them, and the WAR CONTEXT (raid count + how the last one went — the
+// memory read that used to live in the removed "WAR SO FAR" card). Reads the display-only world.raidEvent
+// (never serialized, never in the digest) — no sim/determinism reach. One-shot per raid via the rid.
 function maybeFaceoff() {
-    const d = world && world._debrief;
-    if (!d || d.at === faceoffSeenAt) return;
-    faceoffSeenAt = d.at;
-    if (world.time >= d.until) return;                       // a stale stamp (e.g. resumed long-dormant) — don't ambush
-    const raw = (d.foe && d.foe.name) || d.foeName || 'an orc warband';
-    faceoff = { at: performance.now(), name: String(raw).toUpperCase(),
-                raidCount: (d.foe && d.foe.raidCount) | 0, felled: d.felled | 0, harvestLost: d.harvestLost | 0 };
+    const re = world && world.raidEvent;
+    if (!re || re.rehearsal) return;                         // no raid, or a booth ghost — no card
+    const rid = re.e ? (re.e.id || `${re.e.pairKey}:${re.e.ordinal}`) : 'raid';
+    if (rid === faceoffSeenRid) return;                      // already raised for THIS raid
+    faceoffSeenRid = rid;
+    const e = re.e || {}, foe = e.foe;
+    const name = (foe && foe.name) || e.foeName || 'an orc warband';
+    let swornName = null;
+    if (foe && foe.sworeAgainst != null) { const s = world.farmers.find(x => x.sheet.seed === foe.sworeAgainst); if (s) swornName = s.sheet.name.split(' ')[0]; }
+    faceoff = { at: performance.now(), name: String(name).toUpperCase(),
+                raidCount: (foe && foe.raidCount) | 0,
+                escaped: !!(world.nemesis && world.nemesis.lastOutcome === 'escaped'), swornName };
 }
 
 const faceoffOrdinal = (n) => { const s = ['TH', 'ST', 'ND', 'RD'], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); };
@@ -6024,22 +6033,35 @@ function drawFaceoffBust(img, ready, flip, anchorX, cy, h, side, xoff) {
     ctx.restore();
 }
 
+// wrap `str` into lines that each fit `maxW` at `scale` (greedy on spaces; a lone over-long word rides alone)
+function faceoffWrap(str, scale, maxW) {
+    const words = String(str).split(' '), lines = [];
+    let cur = '';
+    for (const w of words) {
+        const t = cur ? cur + ' ' + w : w;
+        if (!cur || textWidth(t, scale) <= maxW) cur = t;
+        else { lines.push(cur); cur = w; }
+    }
+    if (cur) lines.push(cur);
+    return lines;
+}
+
 function drawFaceoff() {
     if (!faceoff || !booted) return;
     const f = faceoff;
     const el = performance.now() - f.at;
-    const HOLD = 6200, FADE = 700;
-    if (el > HOLD + FADE) { faceoff = null; return; }         // auto-dismiss (a click/key closes it sooner)
-    const inA = Math.min(1, el / 320);
+    const HOLD = 10000, FADE = 600;                          // generous safety auto-continue; a click/key closes it sooner
+    if (el > HOLD + FADE) { faceoff = null; return; }
+    const inA = Math.min(1, el / 340);
     const outA = el > HOLD ? Math.max(0, 1 - (el - HOLD) / FADE) : 1;
     ctx.save();
     ctx.globalAlpha = inA * outA;
-    ctx.fillStyle = 'rgba(5,6,10,0.94)'; ctx.fillRect(0, 0, GW, GH);   // near-opaque: the busts are the whole stage (no world tooltips bleeding through)
+    ctx.fillStyle = 'rgba(5,6,10,0.94)'; ctx.fillRect(0, 0, GW, GH);   // near-opaque stage — the busts are the whole show
 
     const cx = Math.floor(GW / 2), cy = Math.floor(GH / 2);
     const PHt = Math.min(272, GH - 18);                       // bust height
     const slide = (1 - inA) * 42;                             // busts glide in from their own sides
-    const gap = 38;                                           // clear centre column for the VS text
+    const gap = 58;                                           // wider clear centre column so text never runs onto the faces
     const orcTown = world.culture === 'orc';                  // an orc town fields an orc defender (mirrored to face inward)
     const defImg = orcTown ? orcPortraitImg : humanPortraitImg;
     const defReady = orcTown ? orcPortraitReady : humanPortraitReady;
@@ -6047,29 +6069,47 @@ function drawFaceoff() {
     drawFaceoffBust(orcPortraitImg, orcPortraitReady, false, cx + gap, cy, PHt, +1, +slide);  // raider, RIGHT, faces left/inward
 
     // a soft dark column down the middle so the VS text reads cleanly over the two faces
-    const grad = ctx.createLinearGradient(cx - 98, 0, cx + 98, 0);
-    grad.addColorStop(0, 'rgba(6,7,12,0)'); grad.addColorStop(0.5, 'rgba(6,7,12,0.9)'); grad.addColorStop(1, 'rgba(6,7,12,0)');
-    ctx.fillStyle = grad; ctx.fillRect(cx - 98, 0, 196, GH);
+    const grad = ctx.createLinearGradient(cx - 112, 0, cx + 112, 0);
+    grad.addColorStop(0, 'rgba(6,7,12,0)'); grad.addColorStop(0.5, 'rgba(6,7,12,0.92)'); grad.addColorStop(1, 'rgba(6,7,12,0)');
+    ctx.fillStyle = grad; ctx.fillRect(cx - 112, 0, 224, GH);
 
+    // #faceoff-layout everything centred within a hard MAX-WIDTH (< the centre gap) so nothing overruns the faces:
+    // the name wraps (dropping a scale if a single word is too wide), the war-context stacks line-by-line.
+    const maxW = gap * 2 - 12;                                // fits inside the clear gap between the two faces
     const town = (world.name || 'the town').toUpperCase();
-    const title = `RAID ON ${town}`;
-    drawText(ctx, title, cx - Math.floor(textWidth(title) / 2), 20, '#e8c860', 1);
+    drawText(ctx, `RAID ON ${town}`, cx - Math.floor(textWidth(`RAID ON ${town}`, 1) / 2), 20, '#e8c860', 1);
 
-    const vs = 'VS';
-    drawText(ctx, vs, cx - Math.floor(textWidth(vs, 4) / 2), cy - 42, '#f4d868', 4);   // big gold VS
+    // the aggressor's NAME — scale 2 wrapped to fit; drop to scale 1 if even one word is too wide at scale 2
+    let ns = 2, nameLines = faceoffWrap(f.name, ns, maxW);
+    if (nameLines.some(l => textWidth(l, ns) > maxW)) { ns = 1; nameLines = faceoffWrap(f.name, ns, maxW); }
 
-    let ns = 2;                                               // the aggressor's NAME — the centrepiece, danger red
-    if (textWidth(f.name, 2) > GW - 44 || f.name.length > 15) ns = 1;
-    drawText(ctx, f.name, cx - Math.floor(textWidth(f.name, ns) / 2), cy + 2, '#e8483a', ns);
+    // the WAR CONTEXT, stacked (each on its own centred line)
+    const ctxLines = [];
+    if (f.raidCount >= 2) ctxLines.push(`${faceoffOrdinal(f.raidCount)} RAID OF THE WAR`);
+    if (f.escaped) ctxLines.push('HE BROKE OFF LAST TIME');
+    else if (f.swornName) ctxLines.push(`HE SWORE AGAINST ${f.swornName}`);
+    else if (f.raidCount < 2) ctxLines.push('A WARBAND STRIKES');
+    const subLines = ctxLines.flatMap(l => faceoffWrap(l, 1, maxW));
 
-    const bits = [];
-    if (f.raidCount >= 2) bits.push(`${faceoffOrdinal(f.raidCount)} RAID OF THE WAR`);
-    bits.push(f.harvestLost > 0 ? `${f.harvestLost} TAKEN FROM THE STORES` : (f.felled > 0 ? `${f.felled} RAIDER${f.felled === 1 ? '' : 'S'} FELLED` : 'THE LINE HELD'));
-    const sub = bits.join('    ');
-    drawText(ctx, sub, cx - Math.floor(textWidth(sub) / 2), cy + 2 + ns * 5 + 6, '#9aa0ac', 1);
+    // vertical stack, centred as one block around cy: big VS · name lines · context lines
+    const VS_SCALE = 6;                                       // 1.5x the old scale-4 VS
+    const vsH = VS_SCALE * 5, nameH = nameLines.length * (ns * 5 + 2), subH = subLines.length * 8;
+    const blockH = vsH + 10 + nameH + (subLines.length ? 6 + subH : 0);
+    let y = cy - Math.floor(blockH / 2);
+    drawText(ctx, 'VS', cx - Math.floor(textWidth('VS', VS_SCALE) / 2), y, '#f4d868', VS_SCALE);
+    y += vsH + 10;
+    for (const ln of nameLines) { drawText(ctx, ln, cx - Math.floor(textWidth(ln, ns) / 2), y, '#e8483a', ns); y += ns * 5 + 2; }
+    y += subLines.length ? 6 : 0;
+    for (const ln of subLines) { drawText(ctx, ln, cx - Math.floor(textWidth(ln, 1) / 2), y, '#9aa0ac', 1); y += 8; }
 
-    const cue = 'CLICK TO CONTINUE';
-    drawText(ctx, cue, cx - Math.floor(textWidth(cue) / 2), GH - 15, performance.now() % 1000 < 620 ? '#c8ccd8' : '#6a6f7c', 1);
+    // full-width YELLOW banner along the bottom, black CLICK TO CONTINUE text that blinks until clicked
+    const banH = 16, banY = GH - banH;
+    ctx.fillStyle = '#e8c650'; ctx.fillRect(0, banY, GW, banH);
+    ctx.fillStyle = '#7a5e12'; ctx.fillRect(0, banY, GW, 1);                       // thin darker lip on top
+    if (performance.now() % 900 < 560) {
+        const cue = 'CLICK TO CONTINUE';
+        drawText(ctx, cue, cx - Math.floor(textWidth(cue, 1) / 2), banY + Math.floor((banH - 5) / 2), '#1a1206', 1);
+    }
     ctx.restore();
 }
 
@@ -6896,7 +6936,9 @@ function frame(now) {
     // #Codex36 P1-1: while a crossing is in flight the OUTGOING town has already been snapshotted — ticking
     // it further would do work the save never sees (lost at 20x + slow IndexedDB). Freeze the sim; display
     // still draws the last state under the crossing static.
-    simAccumulator += _switching ? 0 : dt * (world._speedMult || 1);
+    // #faceoff FREEZE the sim while the pre-battle VS card is up — a true "VS → click → FIGHT" gate: the
+    // warband holds at the fog edge until dismissed, then charges in. (Display-only pause; determinism resumes.)
+    simAccumulator += (_switching || faceoff) ? 0 : dt * (world._speedMult || 1);
     let steps = 0;
     while (simAccumulator >= FIXED_DT && steps < 800) {
         for (const f of world.farmers) { f._riI = f.pos.i; f._riJ = f.pos.j; }   // #interp snapshot the PRE-tick pos as the "from"
@@ -6904,7 +6946,18 @@ function frame(now) {
         if (_re && _re.raiders) for (const r of _re.raiders) { r._riI = r.i; r._riJ = r.j; }
         world.tick(FIXED_DT); simAccumulator -= FIXED_DT; steps++;
     }
-    maybeFaceoff();   // #faceoff raise the VS card if a struck raid just resolved (reads the display-only debrief stamp)
+    maybeFaceoff();   // #faceoff raise the pre-battle VS card the frame the warband lands (reads display-only raidEvent)
+    // #incoming the SENTRY'S ALARM (detection edge) fires the fullscreen shader — headline "INCOMING RAID..." —
+    // moved here from the strike. Once per telegraph; display-only, so no determinism reach.
+    {
+        const pr = world.pendingRaid;
+        if (pr && pr.detected && !_raidDetected) {
+            _raidDetected = true;
+            raidFx = { t: 0, stings: 1, kind: 'incoming' };
+            raidShake = 5;
+            if (audio.raidSting) audio.raidSting();
+        } else if (!pr) { _raidDetected = false; }   // reset for the next telegraph
+    }
     // #interp — the sim ticks at 30Hz (FIXED_DT) but we render at 60/120Hz, so a farmer's pos only advances every
     // 2nd/4th frame → its motion (and the follow camera tracking it) STUTTERS. Fix: render each farmer BETWEEN its
     // last two sim positions by the leftover-accumulator fraction. Display-only — we stash the TRUE pos, draw at
@@ -6930,18 +6983,6 @@ function frame(now) {
     if (world.pendingRaid && !world.raidEvent) {
         requestRaidCouncil(world);
         requestDuelBeat(world);   // #one-beat the DM's single staged moment for the marquee duel (named foes only)
-    }
-    // #nemesis THE WAR SO FAR (Kimi: put the memory READ at the telegraph, away from the aftermath pile-up):
-    // the frame a NAMED return telegraphs, one spotlight card recaps the war from the arc — raids weathered,
-    // the sworn grudge, how the last raid went — during the calm minute while the warband still gathers.
-    if (world.pendingRaid && world.pendingRaid.e && world.pendingRaid.e.foe && !world.pendingRaid.detected && !world.pendingRaid._warCard) {
-        world.pendingRaid._warCard = true;   // once per telegraph (transient display scratch on the raid)
-        const foe = world.pendingRaid.e.foe, nem = world.nemesis;
-        const sworn = foe.sworeAgainst != null ? world.farmers.find(x => x.sheet.seed === foe.sworeAgainst) : null;
-        const last = nem && nem.lastOutcome === 'escaped' ? 'Last time he broke off and got away.' : '';
-        momentQueue.push({ label: 'THE WAR SO FAR', kind: 'raid', tone: 'somber', color: '#e0a040', icon: 'foe:orc:1',
-            text: `${foe.name} has raided ${world.name} ${foe.raidCount - 1} time${foe.raidCount > 2 ? 's' : ''} before. ${last}${sworn ? ` He swore against ${sworn.sheet.name.split(' ')[0]} — and now he returns for them.` : ' Now he returns.'}`,
-            why: 'read from the town\'s memory of his war', day: world.day, season: world.season, year: world.year });
     }
     // #nemesis THE BATTLE RECORD → SuperMemory: the frame a REAL raid's show ends, compile the round-by-round
     // record from the fx stream + the verdict and persist it as one battle document. Side-channel only (the
@@ -7007,7 +7048,8 @@ function frame(now) {
     }
     if (world.raidEvent && world.raidEvent.struck && !_raidStruck) {
         _raidStruck = true;
-        raidFx = { t: 0, stings: 1 };   // #raid-feel the war-horn refires at t≈1.05 and t≈2.1 (three in all)
+        // #incoming the fullscreen shader now plays at the ALARM (detection), not here — the strike keeps just
+        // the physical IMPACT: a screen-shake + the war-horn sting as the lead raider crosses the line.
         raidShake = 7;
         const e = world.raidEvent.e || {};
         raidFocus = (e.i != null && e.j != null) ? { i: e.i, j: e.j } : (world.well ? { i: world.well.i, j: world.well.j } : raidFocus);
@@ -7396,7 +7438,7 @@ function drawBootScreen(t) {
                 : 'raid did not stage — check RYFARMS.pendingRaid / an active rehearsal';
         },
         // #demo the 90-second-window variant (Kimi: "demo arithmetic doesn't close" at 45s of telegraph):
-        // a REAL canon raid with a compressed clock — marquee + WAR SO FAR immediately, alarm at ~4s,
+        // a REAL canon raid with a compressed clock — marquee immediately, alarm at ~4s,
         // the blow at ~14s. Same raid in every other respect.
         demoRaid: (commit = 0.5) => {
             const msg = RYFARMS.raid(commit);
@@ -7445,9 +7487,9 @@ function drawBootScreen(t) {
             location.href = location.pathname + '?seed=' + seed; return seed;
         }),
         dismissCard: () => { resumeCard = null; },
-        // #faceoff (debug) force the post-raid VS card with a chosen foe name / outcome, no raid needed
-        demoFaceoff: (name = 'Krul the Howler', raidCount = 2, felled = 2, harvestLost = 0) => {
-            faceoffSeenAt = -999; faceoff = { at: performance.now(), name: String(name).toUpperCase(), raidCount: raidCount | 0, felled: felled | 0, harvestLost: harvestLost | 0 };
+        // #faceoff (debug) force the pre-battle VS card with a chosen foe name / war context, no raid needed
+        demoFaceoff: (name = 'Krul the Howler', raidCount = 4, escaped = true, swornName = null) => {
+            faceoffSeenRid = '__demo'; faceoff = { at: performance.now(), name: String(name).toUpperCase(), raidCount: raidCount | 0, escaped: !!escaped, swornName };
             return `faceoff card: ${name}`;
         },
         enrich: tryEnrich,                                   // ask the LLM chronicler now (debug)
