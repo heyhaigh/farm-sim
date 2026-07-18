@@ -6964,13 +6964,14 @@ function frame(now) {
     // preserved backlog must NOT drain, or a raid born mid-batch at 20x could advance/strike BEHIND the freeze.
     while (!faceoff && simAccumulator >= FIXED_DT && steps < 800) {
         for (const f of world.farmers) { f._riI = f.pos.i; f._riJ = f.pos.j; }   // #interp snapshot the PRE-tick pos as the "from"
-        const _re = world.raidEvent;   // #interp raiders (display-only, 30Hz) get the SAME smoothing so they don't jump/shake
+        const _re = world.raidEvent;   // #interp raiders (display-only, 30Hz) get the SAME smoothing so they don't jump/shake — AND the pre-tick raid identity
         if (_re && _re.raiders) for (const r of _re.raiders) { r._riI = r.i; r._riJ = r.j; }
-        const hadRaid = !!world.raidEvent;
         world.tick(FIXED_DT); simAccumulator -= FIXED_DT; steps++;
-        // the tick a raid is BORN, raise the pre-battle card AT ONCE so the freeze catches it at 'approach' — the
-        // `!faceoff` guard then exits the batch, preserving the leftover accumulator for the (post-dismiss) resume.
-        if (!hadRaid && world.raidEvent) maybeFaceoff();
+        // #Codex42-P1 raise the pre-battle card the moment world.raidEvent changes IDENTITY — both a fresh raid
+        // (null→event) AND a pointer REPLACEMENT (a new raid landing over a long-running cinematic). A boolean
+        // "did a raid exist" would miss the replacement and let the new raid advance behind the freeze at 20x.
+        // The `!faceoff` guard then exits the batch, preserving the leftover accumulator for the post-dismiss resume.
+        if (world.raidEvent && world.raidEvent !== _re) maybeFaceoff();
     }
     maybeFaceoff();   // #faceoff also covers a raid already present at frame start (e.g. right after a load)
     // #incoming the SENTRY'S ALARM (detection edge) fires the fullscreen shader — headline "INCOMING RAID..." —
