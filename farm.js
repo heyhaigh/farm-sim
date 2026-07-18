@@ -5953,6 +5953,7 @@ export class World {
             // its (now day-spanning) timer runs out, so spells can persist across several days.
         }
         this.#tickFounding();   // #106 drive the day-10 gathering -> dusk ballot across the day
+        this.#tickCounterCeremony();   // #counteroffensive PHASE 2 drive the war-vote gathering -> dusk ballot
         this.#tickPendingRaid(); // #131 drive a telegraphed raid across its lead window (no-op unless one is pending)
         this.#tickSortie();      // #counteroffensive drive the ghost war party (no-op unless one is staged; no rng)
         this.#tickCounterSortie();   // #counteroffensive PHASE 2 bring the REAL war party home when its deadline lands (no rng)
@@ -6440,15 +6441,12 @@ export class World {
     #tickCounterOffensive() {
         this.grievance *= GRIEVANCE_DECAY;                          // fury settles over a quiet stretch
         if (this.grievance < 0.01) this.grievance = 0;
-        const cv = this.counterVote;
-        if (cv) {   // a called vote deliberates for a day, then the ballot is read at the next dawn
-            if (cv.phase === 'called' && this.day > cv.calledDay) this.#tallyCounterVote(cv);
-            return;                                                 // one reckoning at a time
-        }
+        if (this.counterVote) return;                               // a reckoning is already in motion this day (see #tickCounterCeremony)
         if (this.day < this.counterCooldownUntil) return;
         const el = this.#counterEligible();
         if (!el) return;
-        // the wronged hero calls it; the CALL consumes the accrued fury + sets the cooldown NOW (pass or fail)
+        // the wronged hero CALLS it at dawn; the ceremony gathers at midday and the ballot is read at dusk (a
+        // within-day CEREMONY, #tickCounterCeremony). The call consumes the accrued fury + sets the cooldown NOW.
         this.counterVote = { phase: 'called', foe: { pairKey: el.foe.pairKey, name: el.foe.name, raidCount: el.foe.raidCount },
                              heroSeed: el.hero.sheet.seed, calledDay: this.day, dir: el.dir, dirName: el.dirName,
                              grievanceAt: this.grievance, yes: 0, no: 0 };
@@ -6458,6 +6456,23 @@ export class World {
             el.hero, null, '#e0a040', { tier: 'callout', tone: 'tense', why: 'the town weighs a war of its own' });
         if (el.hero.say) el.hero.say(this.culture === 'orc' ? 'WE HUNT HIM NOW!' : 'We ride on him — who stands with me?', '#e0a040');
     }
+
+    // #counteroffensive PHASE 2 — THE WAR-VOTE CEREMONY, driven per-tick across the day the reckoning is called:
+    // tools down at midday, the town gathers at the square and argues its stances (see counterGathering + the
+    // 'assemble' routing in #decide), and the ballot is read at DUSK. Pure clock gates — deterministic.
+    #tickCounterCeremony() {
+        const cv = this.counterVote; if (!cv) return;
+        if (cv.phase === 'called' && this.clock >= DAY_LENGTH * FOUNDING_GATHER_START) {
+            cv.phase = 'gather';
+            const where = this.culture === 'orc' ? 'the war-post' : 'the town well';
+            this.addChronicle('raid', `${this.name} downs its tools and gathers at ${where} — to weigh riding on ${cv.foe.name}.`,
+                null, null, '#e0a040', { tier: 'callout', tone: 'tense', why: 'the town assembles to weigh war' });
+        } else if (cv.phase === 'gather' && this.clock >= DAY_LENGTH) {   // dusk — the ballot is read
+            this.#tallyCounterVote(cv);
+        }
+    }
+    // True while the town is assembled at the square arguing the war vote (drives the walk-to-square + stance thoughts).
+    counterGathering() { return this.counterVote != null && this.counterVote.phase === 'gather'; }
 
     // is a counter-offensive EARNED? A named nemesis, seen as a PATTERN, who keeps getting AWAY, against a town
     // that chose the DEFENSE branch (not truce), with grievance boiled past the threshold, a wronged hero present
@@ -9233,6 +9248,23 @@ export class Farmer {
         return pool[hashString(this.sheet.seed + ':delib:' + Math.floor(this.world.clock / 4)) % pool.length];
     }
 
+    // #counteroffensive PHASE 2 — what a farmer argues at the WAR VOTE: their stance on riding out. A HAWK
+    // (competitive, vengeful, unscarred) cries to strike back; a DOVE (collaborative, cautious) pleads to hold
+    // the wall and mind the crops. Reflects their likely ballot; deterministic (seeded, no rng).
+    #warStanceThought() {
+        const orc = this.world.culture === 'orc';
+        const cv = this.world.counterVote, foe = (cv && cv.foe && cv.foe.name) ? cv.foe.name.split(' ')[0].toUpperCase() : 'HIM';
+        const p = this.sheet.personality || {};
+        const hawk = (p.competitiveness ?? 0.5) + (0.5 - (p.honesty ?? 0.5)) - (this.caution || 0) * 0.4;
+        const dove = (p.collaboration ?? 0.5) + (this.caution || 0) * 0.4;
+        const pool = hawk >= dove
+            ? (orc ? [`WE HUNT ${foe} DOWN`, 'BLOOD FOR BLOOD', 'HE BLEEDS US — WE END HIM', 'RIDE ON HIS CAMP', 'NO MORE RUNNING']
+                   : [`WE CAN'T LET ${foe} KEEP BLEEDING US`, 'RIDE ON HIM — END IT', 'HOW MANY MORE HARVESTS DO WE LOSE?', 'HE SWORE AGAINST US — WE ANSWER', 'THE WALL ISN\'T ENOUGH ANYMORE'])
+            : (orc ? ['HOLD THE POST', 'THE BAND IS THINNED ENOUGH', 'WHO GUARDS THE YOUNG?', 'A MARCH COSTS US MORE THAN IT TAKES']
+                   : ['OUR CROPS NEED US, NOT A WAR', "WE'VE BLED ENOUGH — HOLD THE WALL", 'WHO FEEDS THE CHILDREN IF WE RIDE?', "A MARCH WON'T BRING BACK WHAT'S GONE", 'LET THE WALLS DO THE WORK']);
+        return pool[hashString('warstance:' + this.sheet.seed + ':' + Math.floor(this.world.clock / 4)) % pool.length];
+    }
+
     // #watch — am I the one keeping watch right now? The single sentry (the elected Watch, or the founders'
     // rotation-holder before there is one) stands the beat ALL DAY on their watch day — not just at night — so
     // "keeps watch today" in the ROLES panel matches what you see them doing. Only if hale AND housed: survival
@@ -10702,10 +10734,10 @@ export class Farmer {
         // #106 FOUNDING GATHERING — on the vote day the town downs tools at midday and converges on the
         // square, holding there to deliberate until the ballot is read at dusk. A sick soul stays abed (they
         // don't vote); everyone else drops chores and gathers.
-        if (w.foundingGathering() || w.congregating()) {
+        if (w.foundingGathering() || w.congregating() || w.counterGathering()) {
             const spot = w.assembleSpot(this);
             if (Math.abs(this.pos.i - spot.i) + Math.abs(this.pos.j - spot.j) > 1.3) {
-                if (this.#goTo(spot.i, spot.j, 'assemble')) { this.think(w.congregating() ? this.#foundingLine() : this.#deliberationThought()); return; }
+                if (this.#goTo(spot.i, spot.j, 'assemble')) { this.think(w.counterGathering() ? this.#warStanceThought() : w.congregating() ? this.#foundingLine() : this.#deliberationThought()); return; }
             }
             this.state = 'assemble'; return;
         }
@@ -12581,7 +12613,7 @@ export class Farmer {
             // #106 hold at the square, deliberating, until the world reads the ballot at dusk (then -> decide)
             case 'assemble': {
                 const w = this.world;
-                if (!w.foundingGathering() && !w.congregating()) { this.state = 'decide'; break; }
+                if (!w.foundingGathering() && !w.congregating() && !w.counterGathering()) { this.state = 'decide'; break; }
                 // #132b the DAY-1 congregation is voiced by the world director (#tickCongregation) — turn-taking,
                 // everyone speaks, no dead air. Founders just HOLD here (face the well); no per-farmer scramble.
                 if (w.congregating()) break;
@@ -12589,7 +12621,7 @@ export class Farmer {
                 if (this.assembleT <= 0) {
                     this.assembleT = 3 + this.rand() * 5;              // unchanged rng draw
                     const floorWasFree = w.floorFree();                // #speech-floor (display-only check)
-                    this.think(w.congregating() ? this.#foundingLine() : this.#deliberationThought());   // day-1 congregation vs day-10 vote
+                    this.think(w.counterGathering() ? this.#warStanceThought() : w.congregating() ? this.#foundingLine() : this.#deliberationThought());   // war vote / day-1 congregation / day-10 vote
                     // if another voice holds the floor, keep this muttering SILENT this beat (display suppression
                     // only — the rng above is untouched, so the digest stays byte-identical); else take the floor.
                     if (!floorWasFree) this.bubble = null;
