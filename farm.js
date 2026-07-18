@@ -6798,9 +6798,6 @@ export class World {
                 if (re.struck) this._debrief = { at: this.time, until: this.time + 40,
                     foe: re.e.foe ? { name: re.e.foe.name, raidCount: re.e.foe.raidCount } : null,
                     clan: (re.out && re.out.clan) || re.e.by || null,
-                    // #faceoff a name for the VS card even on a non-nemesis raid: the lead orc's name (e.foeName),
-                    // else the tribe. Display-only, on the never-serialized debrief stamp — no sim/determinism reach.
-                    foeName: (re.e.foe && re.e.foe.name) || re.e.foeName || (re.out && re.out.clan) || re.e.by || null,
                     felled: re.out && re.out.felled, harvestLost: re.out && re.out.harvestLost };
             }
         }
