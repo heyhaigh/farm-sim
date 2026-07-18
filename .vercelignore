@@ -1,0 +1,41 @@
+# What NOT to upload on a `vercel` CLI deploy. NOTE: assets/ is deliberately NOT
+# listed here, so a LOCAL cli deploy DOES include the CraftPix art (unlike a git
+# deploy, which excludes it via .gitignore). The art is served by the running game,
+# never committed to the public repo — licensing-clean.
+
+.git
+node_modules
+.vercel
+.env
+.env.local
+*.log
+.DS_Store
+screenshots/
+.playwright-mcp/
+component-library/
+
+# personal tooling (never ship)
+.agents/
+.claude/
+skills-lock.json
+
+# not needed for the playable demo
+tests/
+v1-3d/
+
+# local-only working docs / review scratch
+review.diff
+.council-*.md
+KIMI_REVIEW_PACKET.md
+CODEX_REVIEW_*.md
+CODEX_TEST_DIRECTIVE.md
+*_PLAN.md
+*_BRIEF.md
+*_REVIEW.md
+*_NOTES.md
+COUNCIL_*.md
+COUNCIL_STATE*.md
+RY_FARMS_STATE.md
+WAR_DOCTRINES.md
+ORC_HUMAN_LORE.md
+DEMO_SCRIPT.md
