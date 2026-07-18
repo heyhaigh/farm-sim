@@ -6013,6 +6013,9 @@ function maybeFaceoff() {
     faceoff = { at: performance.now(), name: String(name).toUpperCase(),
                 raidCount: (foe && foe.raidCount) | 0,
                 escaped: !!(world.nemesis && world.nemesis.lastOutcome === 'escaped'), swornName };
+    // #Codex41-P1 a raid landing MID-WHISPER must not have its dismissal keys eaten by the (now-obscured) chat
+    // input — blur it so keydowns reach the window handler (which dismisses the card).
+    blurChatInput();
 }
 
 const faceoffOrdinal = (n) => { const s = ['TH', 'ST', 'ND', 'RD'], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); };
@@ -6033,11 +6036,28 @@ function drawFaceoffBust(img, ready, flip, anchorX, cy, h, side, xoff) {
     ctx.restore();
 }
 
-// wrap `str` into lines that each fit `maxW` at `scale` (greedy on spaces; a lone over-long word rides alone)
+// split ONE word into chunks that each fit `maxW` at `scale` (for a token too long for the column — #Codex41 P1)
+function faceoffSplitWord(word, scale, maxW) {
+    const out = []; let cur = '';
+    for (const ch of String(word)) {
+        if (cur && textWidth(cur + ch, scale) > maxW) { out.push(cur); cur = ch; }
+        else cur += ch;
+    }
+    if (cur) out.push(cur);
+    return out;
+}
+
+// wrap `str` into lines that each fit `maxW` at `scale` (greedy on spaces; a single word too wide for the
+// column is HARD-SPLIT by measured width so it can never overrun the portraits — no lone over-long line)
 function faceoffWrap(str, scale, maxW) {
     const words = String(str).split(' '), lines = [];
     let cur = '';
     for (const w of words) {
+        if (textWidth(w, scale) > maxW) {                        // a single oversized token — flush, then hard-split it
+            if (cur) { lines.push(cur); cur = ''; }
+            for (const chunk of faceoffSplitWord(w, scale, maxW)) lines.push(chunk);
+            continue;
+        }
         const t = cur ? cur + ' ' + w : w;
         if (!cur || textWidth(t, scale) <= maxW) cur = t;
         else { lines.push(cur); cur = w; }
@@ -6940,13 +6960,19 @@ function frame(now) {
     // warband holds at the fog edge until dismissed, then charges in. (Display-only pause; determinism resumes.)
     simAccumulator += (_switching || faceoff) ? 0 : dt * (world._speedMult || 1);
     let steps = 0;
-    while (simAccumulator >= FIXED_DT && steps < 800) {
+    // #faceoff #Codex41-P1 gate the batch on !faceoff too (not only the accumulator add): while the card is up a
+    // preserved backlog must NOT drain, or a raid born mid-batch at 20x could advance/strike BEHIND the freeze.
+    while (!faceoff && simAccumulator >= FIXED_DT && steps < 800) {
         for (const f of world.farmers) { f._riI = f.pos.i; f._riJ = f.pos.j; }   // #interp snapshot the PRE-tick pos as the "from"
         const _re = world.raidEvent;   // #interp raiders (display-only, 30Hz) get the SAME smoothing so they don't jump/shake
         if (_re && _re.raiders) for (const r of _re.raiders) { r._riI = r.i; r._riJ = r.j; }
+        const hadRaid = !!world.raidEvent;
         world.tick(FIXED_DT); simAccumulator -= FIXED_DT; steps++;
+        // the tick a raid is BORN, raise the pre-battle card AT ONCE so the freeze catches it at 'approach' — the
+        // `!faceoff` guard then exits the batch, preserving the leftover accumulator for the (post-dismiss) resume.
+        if (!hadRaid && world.raidEvent) maybeFaceoff();
     }
-    maybeFaceoff();   // #faceoff raise the pre-battle VS card the frame the warband lands (reads display-only raidEvent)
+    maybeFaceoff();   // #faceoff also covers a raid already present at frame start (e.g. right after a load)
     // #incoming the SENTRY'S ALARM (detection edge) fires the fullscreen shader — headline "INCOMING RAID..." —
     // moved here from the strike. Once per telegraph; display-only, so no determinism reach.
     {

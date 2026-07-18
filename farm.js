@@ -2743,7 +2743,7 @@ export class World {
             // #131 a telegraphed raid survives a reload (seeded, plain) — but an ADMIN REHEARSAL raid is a ghost:
             // it must never ride a save (a stray save mid-show would greet the next boot with a phantom warband).
             pendingRaid: (this.pendingRaid && !this.pendingRaid.rehearsal)
-                ? (({ _warCard, ...pr }) => ({ ...pr, e: { ...pr.e } }))(this.pendingRaid)   // #Codex37 P2: display scratch never rides the save (a reload mid-telegraph was permanently eating WAR SO FAR)
+                ? { ...this.pendingRaid, e: { ...this.pendingRaid.e } }   // a real telegraph rides the save — a plain clone (nested `e` copied so the save shares no live ref)
                 : null,
             raidsSuffered: this.raidsSuffered || 0, learned: this.learned || null,   // #134 the learning arc rides the save
             nemesis: this.nemesis ? { ...this.nemesis } : null,   // #nemesis the named-war arc rides the save (plain, deterministic)
