@@ -18,9 +18,7 @@ void main() {
 const FRAG = `
 precision mediump float;
 uniform sampler2D uTex;
-uniform vec2 uRes;        // output resolution
 uniform vec2 uTexRes;     // game canvas resolution
-uniform float uTime;
 varying vec2 vUv;
 
 void main() {
@@ -95,26 +93,25 @@ export class CRT {
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
-        this.uRes = gl.getUniformLocation(prog, 'uRes');
         this.uTexRes = gl.getUniformLocation(prog, 'uTexRes');
-        this.uTime = gl.getUniformLocation(prog, 'uTime');
-        this.uPal = [0, 1, 2, 3].map(i => gl.getUniformLocation(prog, `uPal${i}`));
-        // default DMG green until a palette is supplied
-        this.palette = [[0.06, 0.13, 0.06], [0.21, 0.38, 0.18], [0.52, 0.65, 0.17], [0.89, 0.95, 0.69]];
+        this._texW = 0; this._texH = 0;   // Codex #44 P2 — track allocated texture storage for texSubImage2D
     }
-
-    // palette: array of 4 [r,g,b] in 0..1, darkest -> lightest
-    setPalette(palette) { if (palette) this.palette = palette; }
 
     render(time) {
         const gl = this.gl;
         gl.viewport(0, 0, this.out.width, this.out.height);
         gl.bindTexture(gl.TEXTURE_2D, this.tex);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.src);
-        gl.uniform2f(this.uRes, this.out.width, this.out.height);
-        gl.uniform2f(this.uTexRes, this.src.width, this.src.height);
-        gl.uniform1f(this.uTime, time);
-        for (let i = 0; i < 4; i++) if (this.uPal[i]) gl.uniform3fv(this.uPal[i], this.palette[i]);
+        // Codex #44 P2 [EFFICIENCY] — only (re)ALLOCATE texture storage when the source size changes; otherwise
+        // UPDATE in place with texSubImage2D. The per-frame upload is unavoidable (the source canvas changes), but
+        // redefining storage every frame is not.
+        const sw = this.src.width, sh = this.src.height;
+        if (sw !== this._texW || sh !== this._texH) {
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.src);
+            this._texW = sw; this._texH = sh;
+        } else {
+            gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, this.src);
+        }
+        gl.uniform2f(this.uTexRes, sw, sh);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
 

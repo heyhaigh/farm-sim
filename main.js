@@ -1861,6 +1861,12 @@ let farmerBubbles = [];   // #bubble-overlay: {f, sx} per on-screen farmer this 
 function collectDrawables() {
     const list = [];
     farmerBubbles = [];   // rebuilt each frame alongside the y-sorted list
+    // Codex #44 P1 [EFFICIENCY] — cull off-screen dynamic objects (crops/facilities) BEFORE allocating a draw
+    // closure and entering the per-frame y-sort. A large town has hundreds of crops far outside the viewport; only
+    // the on-screen neighbourhood needs to be built + sorted. Generous pad so a tall sprite whose footline sits just
+    // past the bottom edge (it's drawn UPWARD from there) is never clipped. Uses live GW/GH (they change on resize).
+    const CULL = 100;
+    const offScreen = (sx, sy) => sx < -CULL || sx > GW + CULL || sy < -CULL || sy > GH + CULL;
 
     // Wild foliage has height, so it participates in the same footline sort as
     // farmers and buildings instead of being baked flat into the terrain.
@@ -2201,6 +2207,7 @@ function collectDrawables() {
     // crops
     for (const crop of world.crops.values()) {
         const sx = cam.x + isoX(crop.i, crop.j), sy = cam.y + isoY(crop.i, crop.j);
+        if (offScreen(sx, sy)) continue;   // Codex #44 P1 — skip crops outside the viewport (no closure, no sort entry)
         list.push({
             y: sy + TILE_H * 0.5, draw: () => {
                 if (crop.water > 0.45 && !crop.withered) {
@@ -2226,18 +2233,21 @@ function collectDrawables() {
             if (fac.struct) {
                 const b = fac.struct;
                 const bx = cam.x + isoX(b.i + 0.5, b.j + 0.5), by = cam.y + isoY(b.i + 0.5, b.j + 0.5);
-                const spr = b.kind === 'barn' ? barnSprite : b.kind === 'mill' ? millSprite : b.kind === 'hatchery' ? hatchSprite : coopSprite;
-                list.push({ y: by + TILE_H, draw: () => ctx.drawImage(spr, Math.floor(bx - spr.width / 2), Math.floor(by + TILE_H - spr.height)) });
+                if (!offScreen(bx, by)) {   // Codex #44 P1 — cull off-screen facility buildings
+                    const spr = b.kind === 'barn' ? barnSprite : b.kind === 'mill' ? millSprite : b.kind === 'hatchery' ? hatchSprite : coopSprite;
+                    list.push({ y: by + TILE_H, draw: () => ctx.drawImage(spr, Math.floor(bx - spr.width / 2), Math.floor(by + TILE_H - spr.height)) });
+                }
             }
             if (fac.trough) {
                 const tr = fac.trough;
                 const tx = cam.x + isoX(tr.i + 0.5, tr.j + 0.5), ty = cam.y + isoY(tr.i + 0.5, tr.j + 0.5);
-                list.push({ y: ty + TILE_H * 0.4, draw: () => ctx.drawImage(troughSprite, Math.floor(tx - 6), Math.floor(ty - 1)) });
+                if (!offScreen(tx, ty)) list.push({ y: ty + TILE_H * 0.4, draw: () => ctx.drawImage(troughSprite, Math.floor(tx - 6), Math.floor(ty - 1)) });
             }
             // producers (animals tucked inside their coop/barn at night aren't drawn)
             for (const p of fac.producers) {
                 if (p.inside) continue;
                 const px = cam.x + isoX(p.fx, p.fy), py = cam.y + isoY(p.fx, p.fy);
+                if (offScreen(px, py)) continue;   // Codex #44 P1 — cull off-screen animals/pond life
                 list.push({ y: py + TILE_H * 0.5, draw: () => drawProducer(p, px, py) });
             }
         }
@@ -7262,21 +7272,7 @@ function frame(now) {
     // custom pixel hand cursor, on top of everything (dragging = pressed/gold too)
     if (mouse.x >= 0) drawCursor(mouse.x, mouse.y, mouse.dragging || cursorIsHot(worldHover));
 
-    crt.setPalette(hexPalette(world.seasonDef.dmg));
-    crt.render(t);
-}
-
-// convert a season's 4 hex shades into [r,g,b] 0..1 arrays for the shader
-const _palCache = {};
-function hexPalette(hexes) {
-    const key = hexes.join(',');
-    if (_palCache[key]) return _palCache[key];
-    const pal = hexes.map(h => {
-        const n = parseInt(h.slice(1), 16);
-        return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
-    });
-    _palCache[key] = pal;
-    return pal;
+    crt.render(t);   // Codex #44 P2 — the CRT does full-color; the old per-season DMG palette feed was inert (removed)
 }
 
 // boot screen: static + title card

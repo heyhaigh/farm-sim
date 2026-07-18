@@ -286,21 +286,15 @@ const WEATHER_STATES = {
     drought: { label: 'DROUGHT', next: { drought: 1.5, sun: 1.5, cloud: 1 }, dur: [520, 1500] },
 };
 
-// Each season also carries a `dmg` 4-shade Game Boy palette (darkest -> lightest)
-// that the CRT shader quantizes the whole scene into.
 export const SEASONS = [
     { name: 'SPRING', growth: 1.15, waterMul: 1.0, ground: ['#6e8f4d', '#658447'], tilled: '#6a4c30', accent: '#7dd069',
-      dmg: ['#0f2110', '#35602f', '#84a52c', '#e2f2b0'],
       weather: { sun: 3, cloud: 3, rain: 3, storm: 1, blizzard: 0, drought: 0.3 } },
     { name: 'SUMMER', growth: 1.3, waterMul: 1.5, ground: ['#5f8a38', '#578235'], tilled: '#6e4e2e', accent: '#f0d060',
-      dmg: ['#12240c', '#3a6a22', '#9ab52e', '#eef8bc'],
       weather: { sun: 5, cloud: 2, rain: 1.5, storm: 1.5, blizzard: 0, drought: 2.5 } },
     { name: 'FALL', growth: 0.8, waterMul: 0.8, ground: ['#8a7038', '#7c6634'], tilled: '#5e4228', accent: '#e0803c',
-      dmg: ['#201606', '#5c451c', '#b48a2c', '#f2e2a0'],
       weather: { sun: 3, cloud: 4, rain: 3, storm: 1.5, blizzard: 0, drought: 0.5 } },
     // winter: no thunderstorms (storm:0) — blizzards take their place; nothing grows
     { name: 'WINTER', growth: 0.4, waterMul: 0.4, ground: ['#c6ced6', '#bac2ca'], tilled: '#8a7a68', accent: '#a8c8e8',
-      dmg: ['#101c22', '#385158', '#82a0a6', '#e6f2f2'],
       weather: { sun: 2, cloud: 4, rain: 1, storm: 0, blizzard: 2.5, drought: 0 } },
 ];
 export const SEASON_LENGTH = 15;
@@ -2734,8 +2728,11 @@ export class World {
         }
     }
     bondCount(f) {
+        // Codex #44 P2 — match an ENDPOINT of the `a|b` key exactly, not a substring: seed 12 must not count
+        // 112|34 / 512|78 / 123|456 as its bonds (which could falsely complete the "beloved" dream).
+        const s = String(f.sheet.seed);
         let n = 0;
-        for (const [k, v] of this.bonds) if (k.includes(String(f.sheet.seed)) && v > 0) n++;
+        for (const [k, v] of this.bonds) { if (v <= 0) continue; const p = k.indexOf('|'); if (k.slice(0, p) === s || k.slice(p + 1) === s) n++; }
         return n;
     }
 
@@ -2812,6 +2809,12 @@ export class World {
             harvestTotal: this.harvestTotal, dayHarvestStart: this._dayHarvestStart,
             weather: this.weather, weatherTimer: this.weatherTimer, lightningTimer: this.lightningTimer,   // #Codex25-5 gates the storm strike + world.rand
             dmCooldown: this.dmCooldown, preyCooldown: this.preyCooldown, foeCooldown: this.foeCooldown,
+            // Codex #44 P1 — persist a rollover-spawned treasure / rare node so a save taken RIGHT AFTER the dawn
+            // that spawned it doesn't discard the reward on reload. Flatten the live `claimant` farmer ref to a seed
+            // (a farmer object isn't structuredClone-safe) — relinked to the rebuilt farmer in #restoreFrom.
+            treasure: this.treasure ? { ...this.treasure, claimant: this.treasure.claimant ? this.treasure.claimant.sheet.seed : null } : null,
+            rareNodes: this.rareNodes.map(n => ({ ...n, claimant: n.claimant ? n.claimant.sheet.seed : null })),
+            rareCooldown: this.rareCooldown,
             townCollab: this.townCollab, townCompete: this.townCompete, townVolatile: this.townVolatile,
             stormLosses: this.stormLosses,
             workMult: this.workMult, growthMult: this.growthMult,
@@ -3097,8 +3100,21 @@ export class World {
         // rebuild derived state + shed anything transient the constructor seeded for a fresh town
         for (const plot of this.plots) this.#rebuildFields(plot);
         this.helpBoard = []; this.encounters = []; this.prey = [];
-        this.treasure = null; this.merchant = null; this.dayRecap = null;
-        this.rareNodes = []; this.rareCooldown = 0;   // #97 P2: transient, like treasure — respawn after load
+        this.merchant = null; this.dayRecap = null;
+        // Codex #44 P1 — RESTORE treasure + rare nodes (a reward spawned at the dawn just before this save must
+        // survive reload, not vanish). Relink each `claimant` seed back to its rebuilt farmer (farmers exist by now,
+        // restored at the top of this method). Old saves lacking the fields default cleanly to none.
+        this.treasure = d.treasure ? { ...d.treasure } : null;
+        if (this.treasure && this.treasure.claimant != null) { const f = this.farmers.find(x => x.sheet.seed === this.treasure.claimant); this.treasure.claimant = f || null; }
+        this.rareNodes = Array.isArray(d.rareNodes) ? d.rareNodes.map(n => ({ ...n })) : [];
+        for (const n of this.rareNodes) if (n.claimant != null) { const f = this.farmers.find(x => x.sheet.seed === n.claimant); n.claimant = f || null; }
+        this.rareCooldown = d.rareCooldown || 0;
+        // Codex #44 P2 — reconcile expedition flags ONCE on load (moved off the per-tick hot path): a save whose
+        // mustering/onSortie flags outlived their expedition (corrupt/old save) is brought home here. Runtime paths
+        // already clear these flags, so this is the only place a stray flag can arrive.
+        if (!this.counterSortie && !this.searchParty) {
+            for (const f of this.farmers) if (f.mustering || f.onSortie) { f.mustering = false; f.onSortie = false; if (f.state === 'sortie') f.state = 'decide'; }
+        }
         this.lightningFlash = 0; this.struckTile = null; this.townLevelFlash = 0;   // #Codex25-5 lightningTimer is authoritative now — restored above, NOT reset here (display flashes stay transient)
         this.birds = []; this.#spawnBirds(4 + Math.floor(this.rand() * 3));   // re-perch on the REAL current trees
         // #farmyard one-time migration: pre-yard saves scattered facilities mid-field with crops flush
@@ -5979,12 +5995,6 @@ export class World {
         this.#tickSortie();      // #counteroffensive drive the ghost war party (no-op unless one is staged; no rng)
         this.#tickCounterSortie();   // #counteroffensive PHASE 2 bring the REAL war party home when its deadline lands (no rng)
         this.#tickSearchParty();     // #searchparty (P2.5) drive the rescue: muster → away → home with the stranded soul (no rng)
-        // Codex #43 P1 — central flag reconcile: with NO expedition in flight, no one should be flagged mustering/
-        // onSortie. A stray flag (a sortie that dissolved, a corrupt/old save) would trap a farmer off-field or in a
-        // 'sortie'↔'decide' loop — bring them home. Draws no rng; a pure no-op in a clean world (the common case).
-        if (!this.counterSortie && !this.searchParty) {
-            for (const f of this.farmers) if (f.mustering || f.onSortie) { f.mustering = false; f.onSortie = false; if (f.state === 'sortie') f.state = 'decide'; }
-        }
         this.#tickRaidEvent(dt); // #Slice3 drive the watched raid choreography (no-op unless a raid is staged)
         this.#tickRehearsal(dt); // #admin drive an election REHEARSAL's phases (no-op unless the booth staged one)
         this.weatherTimer -= dt;
