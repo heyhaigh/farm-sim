@@ -23,6 +23,15 @@ skills-lock.json
 tests/
 v1-3d/
 
+# assets: ship ONLY the runtime PNGs — drop the huge editor/source originals the
+# game never loads (this cuts the upload from ~184MB to just the sprites)
+*.aseprite
+*.psd
+*.pdf
+*.tmx
+*.url
+*.tmp
+
 # local-only working docs / review scratch
 review.diff
 .council-*.md

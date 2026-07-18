@@ -13,6 +13,11 @@ relationships, and the drive to build a farm; together they raise a town that gr
 remembers, and finds other towns. The whole thing renders through a CRT shader, with
 no build step — pure ES modules + Canvas 2D + a WebGL post-process.
 
+### ▶ Play the live demo — **[farm-sim-rosy.vercel.app](https://farm-sim-rosy.vercel.app/)**
+
+One click, nothing to install. (Drag to pan · click a farmer for their sheet ·
+**M** for the world map · **ROSTER** to whisper to a farmer.)
+
 ## SuperMemory, end to end
 
 The substrate is a **self-hosted SuperMemory** instance (`npx supermemory local`,
@@ -40,26 +45,40 @@ never calls SuperMemory again mid-tick — memory-derived content is frozen into
 reproducible substrate. The whole read/write loop lives *around* the sim (founding,
 writeback, portal), never inside its hot path, so the world stays deterministic and testable.
 
-## Run
+## Run it locally
+
+**Just play it — zero setup.** Serve the folder and open it. No build, no keys, no
+accounts. The CRT world, farmers, crops, and buildings are all procedural, and it
+founds a town from an embedded offline crew, so it's fully playable out of the box:
 
 ```bash
-# from this directory — static files + the optional LLM endpoints
 node server.mjs            # http://localhost:8000  (node server.mjs 8001 for another port)
-
-# or any static server (game fully works; LLM channels just fall back)
+# ...or any static server:
 python3 -m http.server 8000
 ```
 
-Point it at your self-hosted SuperMemory in `.env` (copy `.env.example`) — if no
-instance is reachable, the game falls back to a small embedded crew so it always runs:
+> **Environment art (trees, rocks, wildlife, orc biome) comes from free CraftPix
+> packs that their license doesn't allow redistributing, so they're not in this repo**
+> (`assets/` is gitignored). The game **degrades gracefully** without them — the
+> procedural farmers, crops, and buildings still render (that's what the
+> [live demo](https://farm-sim-rosy.vercel.app/) currently shows). For the full
+> CraftPix look, download the free packs listed under [Credits](#credits) into `assets/`.
+
+Everything below is **optional** — each integration falls back cleanly if it's absent.
+
+### Memory: grow farmers from your own SuperMemory
+
+Point it at a self-hosted [SuperMemory](https://github.com/supermemoryai/supermemory)
+instance in `.env` (copy `.env.example`). Without one, the town founds from the
+embedded crew:
 
 ```bash
-SUPERMEMORY_URL=http://localhost:6767      # your self-hosted instance
-SUPERMEMORY_API_KEY=sm_...                 # generated on the instance's first boot
+SUPERMEMORY_URL=http://localhost:6767      # npx supermemory local
+SUPERMEMORY_API_KEY=sm_...                 # printed on the instance's first boot
 ```
 
-Compile-don't-query: the corpus is pulled ONCE at town founding. The sim never
-calls SuperMemory's `/v4/search` — memory-derived content is frozen at founding.
+Compile-don't-query: the corpus is pulled ONCE at town founding; the sim never calls
+SuperMemory mid-tick — memory-derived content is frozen at founding.
 
 ### Optional LLM channels (expressive only — never in the sim loop)
 
@@ -73,8 +92,20 @@ OPENAI_BASE_URL=http://localhost:11434/v1   # e.g. Ollama — omit to use OpenAI
 RY_FARMS_LLM_MODEL=gpt-4.1-mini             # or a local model id
 ```
 
-With either a key or a base URL configured, three out-of-band channels wake
-(all share `api/_llm.js`, so all are endpoint-portable):
+**Local + free via [Ollama](https://ollama.com)** (no key, nothing leaves your machine):
+
+```bash
+# 1. install Ollama         — https://ollama.com  (macOS: `brew install ollama`)
+# 2. pull any chat model
+ollama pull gpt-oss:20b     # or llama3.2 / qwen2.5 — smaller = faster
+# 3. Ollama serves an OpenAI-compatible API on :11434; in .env point Propagate at it:
+#      OPENAI_BASE_URL=http://localhost:11434/v1
+#      RY_FARMS_LLM_MODEL=gpt-oss:20b
+```
+
+Or just set `OPENAI_API_KEY` and leave `OPENAI_BASE_URL` unset to use OpenAI. With
+either configured, three out-of-band channels wake (all share `api/_llm.js`, so all
+are endpoint-portable):
 
 - `api/ry-farms-chat.js` — farmers generate contextual two-line conversations
   from their goals, memories, relationships, weather, and town state.
@@ -283,5 +314,10 @@ saved with the town.
 ## Credits
 
 Built by Ryan Haigh with Claude Code as an expression of his "virtual self" —
-worker farmers draw from his own stored memories. Intended to eventually live on
+worker farmers drawn from his own stored memories. Intended to live on
 [heyhaigh.ai](https://heyhaigh.ai).
+
+- **Memory** — [SuperMemory](https://github.com/supermemoryai/supermemory), self-hosted; the genome every farmer is grown from.
+- **Local LLM** — [Ollama](https://ollama.com) powers the offline expressive channels (chat / chronicler / conscience).
+- **Environment art** — free top-down pixel-art packs from **[CraftPix](https://craftpix.net)**, used under their free license and **not redistributed here** (download them into `assets/` for the full look). Packs used: top-down trees, bushes, rocks & stones, forest objects, rocky-area objects, hunt-animals, farm-animals, plants-for-farm, guild-hall, the "main characters home" set, the orc character pack, the swordsman (lvl 1–3) set, and the basic RPG UI + 16×16 fantasy-icon sets.
+- The **procedural** farmers, crops, buildings, CRT shader, and bitmap font are original (`pixel.js` / `crt.js`); character and tile variety takes cues from Brandon James Greer's pixel-art breakdowns.
