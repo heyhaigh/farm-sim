@@ -1,14 +1,44 @@
 # Ry Farms
 
-A fullscreen, isometric **pixel-art farming simulation** where every farmer — a
-"Ry Bot" — is procedurally grown from a real memory in Ryan's
-[SuperMemory](https://supermemory.ai) knowledge graph. Each one gets a D&D-style
-character sheet, its own thoughts, and the drive to build a farm. They till,
-plant, water, and harvest; they ask each other for help; they raise communal
-buildings together; and their farms — and the town itself — grow over time.
-The whole thing renders through a CRT shader.
+> ### 🧠 Built on SuperMemory
+> A living world where every inhabitant is **grown from a real memory** — and every
+> life they go on to live is **written back as a new one**. Ry Farms closes the loop
+> on a **self-hosted [SuperMemory](https://github.com/supermemoryai/supermemory)**
+> instance: *memories in, a society out, lives back in.*
 
-No build step. Pure ES modules + Canvas 2D + a WebGL post-process.
+Ry Farms is a fullscreen, isometric **pixel-art farming simulation** where every
+farmer — a "Ry Bot" — is procedurally grown from a document in a self-hosted
+SuperMemory knowledge graph. Each gets a D&D-style character sheet, its own thoughts,
+relationships, and the drive to build a farm; together they raise a town that grows,
+remembers, and finds other towns. The whole thing renders through a CRT shader, with
+no build step — pure ES modules + Canvas 2D + a WebGL post-process.
+
+## SuperMemory, end to end
+
+The substrate is a **self-hosted SuperMemory** instance (`npx supermemory local`,
+`http://localhost:6767`) — local-first, never the cloud. Ry Farms uses it as a full
+**read → compile → write → re-read loop**, not a one-time data dump:
+
+1. **Grow from memory (read).** `api/knowledge-graph.js` lists the instance's
+   `/v3/documents` with a Bearer key that never reaches the browser; each doc is
+   FNV-hashed into the seed that grows one deterministic farmer — archetype, stats,
+   personality, and creed all fall out of that memory's content.
+2. **Memory is load-bearing (proof).** `node tests/ablation.mjs` founds three towns
+   from the *same seed* but different memory sources (real corpus / shuffled / invented)
+   and shows they grow into **observably different societies**. Same seed, different
+   memories ⇒ a different town: the integration *changes the world, it doesn't decorate it.*
+3. **Write lives back (write).** `api/memory-writeback.js` persists each farmer's
+   *compiled inner life* — and the town's political history — back into SuperMemory,
+   tagged (`ry-farms` container) so those generated life-docs are filtered OUT on read
+   and never contaminate the source corpus. A farmer's remembered life outlives any save.
+4. **Walk the graph (portal).** The memory portal (`memory-graph.html`) reads the living
+   graph back through `/v4/search` and renders it in the sim's own CRT aesthetic —
+   farmer hubs orbited by their creed, beliefs, and the source memories they grew from.
+
+**Compile-don't-query.** The *sim itself* pulls its corpus ONCE at town founding and
+never calls SuperMemory again mid-tick — memory-derived content is frozen into a seeded,
+reproducible substrate. The whole read/write loop lives *around* the sim (founding,
+writeback, portal), never inside its hot path, so the world stays deterministic and testable.
 
 ## Run
 
@@ -20,15 +50,8 @@ node server.mjs            # http://localhost:8000  (node server.mjs 8001 for an
 python3 -m http.server 8000
 ```
 
-Every farmer is grown from a real memory. The corpus comes from a **self-hosted
-[SuperMemory](https://github.com/supermemoryai/supermemory)** instance
-(`npx supermemory local`, default `http://localhost:6767`): the server-side
-`api/knowledge-graph.js` proxy lists its `/v3/documents` with a Bearer key that
-never touches the browser, normalizes each doc, and sorts by id so the same
-corpus always grows the same deterministic town. If no instance is reachable, the
-game falls back to a small embedded crew so it always runs.
-
-Set the source in `.env` (copy `.env.example`):
+Point it at your self-hosted SuperMemory in `.env` (copy `.env.example`) — if no
+instance is reachable, the game falls back to a small embedded crew so it always runs:
 
 ```bash
 SUPERMEMORY_URL=http://localhost:6767      # your self-hosted instance
@@ -251,6 +274,10 @@ saved with the town.
 | `crt.js` | WebGL CRT post-process (scanlines, RGB mask, chromatic aberration, corner vignette, flicker) |
 | `main.js` | Rendering, camera, input, HUD, boot, and the roster/conscience-chat UI |
 | `conscience.js` | Client for the conscience channel — classify, sim check, reply, offline fallbacks |
+| `api/knowledge-graph.js` | **SuperMemory read** — server-side proxy that lists `/v3/documents` (Bearer key never reaches the browser) and normalizes the corpus that grows the town |
+| `api/memory-writeback.js` | **SuperMemory write** — persists each farmer's compiled life + the town's history back to SuperMemory, tagged so it never re-enters as a source memory |
+| `api/memory-graph.js` + `memory-graph.html` | **The memory portal** — reads the living graph via `/v4/search` and renders it in the sim's CRT aesthetic |
+| `tests/ablation.mjs` | **Proof memory is load-bearing** — same seed, different memory sources ⇒ observably different societies |
 | `v1-3d/` | A preserved first experiment: Three.js SDF smooth-min creatures with seamless blended bodies |
 
 ## Credits
