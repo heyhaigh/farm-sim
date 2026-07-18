@@ -5700,16 +5700,25 @@ function drawFogMarkers() {
     if (rosterOpen || chronOpen || boardOpen || settingsOpen || worldMapOpen) return;
     const T = crossThresholds();
     for (const n of crossNeighbors()) {
-        const wi = CENTER + Math.cos(n.ang) * T.marker, wj = CENTER + Math.sin(n.ang) * T.marker;
-        const ti = Math.round(wi), tj = Math.round(wj);
-        const dark = ti < 0 || tj < 0 || ti >= GRID || tj >= GRID || !world.isRevealed(ti, tj);
-        if (!dark) continue;   // reveal has swallowed the marker point — it re-plants farther out next frame
-        const sx = cam.x + isoX(wi, wj), sy = cam.y + isoY(wi, wj);
-        if (sx < 60 || sx > GW - 60 || sy < 30 || sy > GH - 24) continue;   // it lives in the world; find it there
         const label = `${n.name.toUpperCase()} LIES THIS WAY`;
-        const wpx = textWidth(label);
+        const half = textWidth(label) / 2;
+        // #fog-label the label must sit on the DARK fog, not the revealed green (gray-on-green is illegible). Push
+        // the marker OUTWARD along the bearing until the WHOLE label width (sampled across its screen span → tiles)
+        // is unrevealed. Recomputed each frame, so as land is revealed the text re-plants deeper in the dark.
+        let md = T.marker, wi, wj, sx = 0, sy = 0, clear = false;
+        for (let step = 0; step < 26 && !clear; step++, md += 3) {
+            wi = CENTER + Math.cos(n.ang) * md; wj = CENTER + Math.sin(n.ang) * md;
+            sx = cam.x + isoX(wi, wj); sy = cam.y + isoY(wi, wj);
+            clear = true;
+            for (const off of [-half, -half * 0.5, 0, half * 0.5, half]) {
+                const t = screenToTile(sx + off, sy - 2), ti = Math.round(t.i), tj = Math.round(t.j);
+                if (ti >= 0 && tj >= 0 && ti < GRID && tj < GRID && world.isRevealed(ti, tj)) { clear = false; break; }
+            }
+        }
+        if (!clear) continue;   // no fully-dark spot within reach on this bearing — nothing legible to show
+        if (sx < 60 || sx > GW - 60 || sy < 30 || sy > GH - 24) continue;   // its clear spot is off-screen — find it there
         ctx.save(); ctx.globalAlpha = 0.8;
-        drawText(ctx, label, Math.round(sx - wpx / 2), Math.round(sy - 4), '#6a7080');
+        drawText(ctx, label, Math.round(sx - half), Math.round(sy - 4), '#6a7080');
         // a small gray arrow beneath, pointing deeper into the dark (screen-space bearing)
         const sdx = Math.cos(n.ang) - Math.sin(n.ang), sdy = (Math.cos(n.ang) + Math.sin(n.ang)) / 2;
         const nn = Math.hypot(sdx, sdy) || 1, ax = sx, ay = sy + 8;
