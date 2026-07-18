@@ -1,13 +1,13 @@
-# Ry Farms
+# Propogate
 
 > ### 🧠 Built on SuperMemory
 > A living world where every inhabitant is **grown from a real memory** — and every
-> life they go on to live is **written back as a new one**. Ry Farms closes the loop
+> life they go on to live is **written back as a new one**. Propogate closes the loop
 > on a **self-hosted [SuperMemory](https://github.com/supermemoryai/supermemory)**
 > instance: *memories in, a society out, lives back in.*
 
-Ry Farms is a fullscreen, isometric **pixel-art farming simulation** where every
-farmer — a "Ry Bot" — is procedurally grown from a document in a self-hosted
+Propogate is a fullscreen, isometric **pixel-art farming simulation** where every
+farmer is procedurally grown from a document in a self-hosted
 SuperMemory knowledge graph. Each gets a D&D-style character sheet, its own thoughts,
 relationships, and the drive to build a farm; together they raise a town that grows,
 remembers, and finds other towns. The whole thing renders through a CRT shader, with
