@@ -1,4 +1,4 @@
-// save.js — Ry Farms persistence (#88): IndexedDB storage for town snapshots.
+// save.js — Propagate persistence (#88): IndexedDB storage for town snapshots.
 //
 // A town whose whole thesis is "little people who remember" must not forget itself on
 // reload — so the lived world (chronicle, bonds, grudges, monuments, the charted map,

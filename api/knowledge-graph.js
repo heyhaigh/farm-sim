@@ -1,6 +1,6 @@
 // api/knowledge-graph.js — the town's SEED CORPUS, read from a self-hosted SuperMemory.
 //
-// Ry Farms grows every farmer from a real memory. This endpoint is the server-side bridge to a
+// Propagate grows every farmer from a real memory. This endpoint is the server-side bridge to a
 // local SuperMemory instance (`npx supermemory local`, default http://localhost:6767): it lists
 // the document corpus via GET /v3/documents (Bearer-authed with a key the browser must never see)
 // and normalizes each doc to the shape dna.js expects — { id, title, summary, content }. The list

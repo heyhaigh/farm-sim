@@ -57,7 +57,7 @@ export async function persistTownHistory(world, isCurrent = () => true) {
     try {
         const res = await fetch(ENDPOINT, {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
-            body: JSON.stringify({ town: world.name || 'RY FARMS', townSeed: world.seed, rev: world._rev || world.day || 0, townHistory: {
+            body: JSON.stringify({ town: world.name || 'PROPAGATE', townSeed: world.seed, rev: world._rev || world.day || 0, townHistory: {
                 manager: nameOf(r.manager), managerTerms: r.managerTerms, watch: nameOf(r.watch), year: world.year,
                 history: (r.history || []).map(h => ({ office: h.office, name: h.name, fromYear: h.fromYear, toYear: h.toYear, endReason: h.endReason, why: h.why })),
                 raidsSuffered: world.raidsSuffered || 0, learned: world.learned || null,   // #134 the town's raid memory + what it learned
@@ -145,7 +145,7 @@ export async function persistLives(world, isCurrent = () => true) {
         const res = await fetch(ENDPOINT, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ town: world.name || 'RY FARMS', townSeed: world.seed, rev: world._rev || world.day || 0, farmers: pending.map(p => lifeOf(p.f)) }),
+            body: JSON.stringify({ town: world.name || 'PROPAGATE', townSeed: world.seed, rev: world._rev || world.day || 0, farmers: pending.map(p => lifeOf(p.f)) }),
             signal: controller.signal,
         });
         if (!res.ok) throw new Error(`writeback ${res.status}`);
@@ -183,7 +183,7 @@ export async function persistBattle(world, battle) {
     try {
         const res = await fetch(ENDPOINT, {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
-            body: JSON.stringify({ town: world.name || 'RY FARMS', townSeed: world.seed, rev: world._rev || world.day || 0, battle }),
+            body: JSON.stringify({ town: world.name || 'PROPAGATE', townSeed: world.seed, rev: world._rev || world.day || 0, battle }),
         });
         if (!res.ok) throw new Error(`battle ${res.status}`);
         const data = await res.json();

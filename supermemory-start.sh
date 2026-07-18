@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start the self-hosted SuperMemory local server for Ry Farms (hackathon integration).
+# Start the self-hosted SuperMemory local server for Propagate (hackathon integration).
 # Runs on http://localhost:6767 with an encrypted local store in ./.supermemory (gitignored).
 # The game (server.mjs) reads/writes it via SUPERMEMORY_URL in .env. Its own dashboard is the
 # visual memory portal at http://localhost:6767.

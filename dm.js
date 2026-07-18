@@ -65,7 +65,7 @@ export async function enrichStories(world, isCurrent = () => true) {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                town: { name: (world.name || 'RY FARMS'), seed: world.seed, day: world.day, season: world.seasonName },
+                town: { name: (world.name || 'PROPAGATE'), seed: world.seed, day: world.day, season: world.seasonName },
                 characters: pending.map(characterOf),
             }),
             signal: controller.signal,

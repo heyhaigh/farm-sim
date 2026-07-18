@@ -1,4 +1,4 @@
-// main.js — Ry Farms: rendering, camera, input, UI, boot.
+// main.js — Propagate: rendering, camera, input, UI, boot.
 
 import { fetchMemories, generateCrew, mod, fmtMod, STAT_NAMES, TRAIT_NAMES, TRAIT_LABELS, hashString, mulberry32 } from './dna.js';
 import { audio } from './audio.js';
@@ -258,7 +258,7 @@ let settingsDrag = null;                           // 'music' | 'sfx' while drag
 // (the settings NEW TOWN reset hatch is gone — founding lives on the world map; RYFARMS.wipeSave remains for QA)
 let lastSavedDay = 0;                              // last world.day autosaved (rollover-triggered)
 let saveFlashAt = -1e9;                            // brief "SAVED" tick in the top bar
-let resumeCard = null;                             // "PREVIOUSLY ON RY FARMS" catch-up card (shown once on resume)
+let resumeCard = null;                             // "PREVIOUSLY ON PROPAGATE" catch-up card (shown once on resume)
 let faceoff = null;                                // #faceoff the pre-battle VS card raised when the warband lands (render-only)
 let faceoffSeenEvent = null;                       // the raidEvent object we've raised a faceoff for (one card per raid; identity-keyed)
 const BOARD_CLOSE = { x: 0, y: 0, w: 0, h: 0 };
@@ -3450,7 +3450,7 @@ function drawUI() {
 
     // town name sits in a container that grows to fit its characters; the day/time info starts
     // AFTER it (dynamic, not a fixed x) so a long name like "SEDGEMARCH" never overlaps the clock
-    const nameStr = (world.name || 'RY FARMS').toUpperCase();
+    const nameStr = (world.name || 'PROPAGATE').toUpperCase();
     const nameW = textWidth(nameStr, 2);
     ctx.fillStyle = 'rgba(125,208,105,0.10)';
     ctx.fillRect(2, 2, nameW + 8, 14);
@@ -5972,7 +5972,7 @@ function drawMoments() {
     ctx.restore();
 }
 
-// "PREVIOUSLY ON RY FARMS" — the returning player's catch-up card (#88): the last few
+// "PREVIOUSLY ON PROPAGATE" — the returning player's catch-up card (#88): the last few
 // chronicle beats of the resumed town, held on screen until any click/key. This is also the
 // story-emergence instrument: if this card is ever boring, the sim has told us something.
 function drawResumeCard() {
@@ -5997,7 +5997,7 @@ function drawResumeCard() {
     ctx.fillStyle = '#e8c860'; ctx.fillRect(PX, PY, PW, 1); ctx.fillRect(PX, PY + PH - 1, PW, 1);
     ctx.fillRect(PX, PY, 1, PH); ctx.fillRect(PX + PW - 1, PY, 1, PH);
 
-    drawText(ctx, rc.title || `PREVIOUSLY ON ${(world.name || 'RY FARMS').toUpperCase()}`, PX + 6, PY + 6, '#f0d060', 1);
+    drawText(ctx, rc.title || `PREVIOUSLY ON ${(world.name || 'PROPAGATE').toUpperCase()}`, PX + 6, PY + 6, '#f0d060', 1);
     const sd = SEASONS[rc.season];
     const sub = `DAY ${rc.day} - ${sd ? sd.name : ''} OF YEAR ${rc.year}`;
     drawText(ctx, sub, PX + 6, PY + 15, '#9ad0e0');
@@ -7292,7 +7292,7 @@ function drawBootScreen(t) {
     if (bootTime > 0.7) {
         ctx.fillStyle = 'rgba(10,12,18,0.88)';
         ctx.fillRect(0, 0, GW, GH);
-        drawText(ctx, 'RY FARMS', GW / 2 - textWidth('RY FARMS', 3) / 2, 110, '#7dd069', 3);
+        drawText(ctx, 'PROPAGATE', GW / 2 - textWidth('PROPAGATE', 3) / 2, 110, '#7dd069', 3);
         const tagline = memoryTagline();
         drawText(ctx, tagline, GW / 2 - textWidth(tagline) / 2, 140, '#9aa0b4');
         const dots = '.'.repeat(1 + (Math.floor(t * 3) % 3));
@@ -7367,7 +7367,7 @@ function drawBootScreen(t) {
         };
     } else {
         lastSavedDay = world.day;
-        world.addLog(`Ry Farms — seed ${worldSeed}`, '#5a6672');
+        world.addLog(`Propagate — seed ${worldSeed}`, '#5a6672');
         // #lineage the roster of towns this world remembers — every OTHER town the index has seen. Set
         // BEFORE the founders spawn so each can be grown "out of" one (their past life sited at a town that
         // truly stood here). Deterministic (the index is persisted); empty on a first world, so nothing changes.

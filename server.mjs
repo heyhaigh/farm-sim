@@ -1,4 +1,4 @@
-// server.mjs — local dev server for Ry Farms: static files (no-cache, so edits always
+// server.mjs — local dev server for Propagate: static files (no-cache, so edits always
 // land on hard reload) + the /api/* expressive-channel endpoints (LLM chat + the DM's
 // writing desk). Node built-ins only, no dependencies.
 //

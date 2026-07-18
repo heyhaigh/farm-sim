@@ -1,4 +1,4 @@
-// audio.js — procedural Web Audio for Ry Farms.
+// audio.js — procedural Web Audio for Propagate.
 //
 // Everything is synthesized (no audio assets): an N64-era town theme with a
 // DIFFERENT song per season — spring's easy F-major stroll, summer's brighter

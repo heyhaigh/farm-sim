@@ -74,7 +74,7 @@ async function generate(body) {
     const place = orc ? 'a warband carving out a new hold' : 'settlers founding a new town';
     const post = orc ? 'the war-post' : 'the town well';
     const system = [
-        `You write the OPENING CONVERSATION of ${place} in RY FARMS, a pixel farming sim. It is day one: the founders have just arrived on empty ground and gather at ${post} to decide, in their own words, how they will live here - survive the first night, stake their plots, and agree to SHARE A WATCH by turns so none stands alone against the wilds (raiders, beasts).`,
+        `You write the OPENING CONVERSATION of ${place} in PROPAGATE, a pixel farming sim. It is day one: the founders have just arrived on empty ground and gather at ${post} to decide, in their own words, how they will live here - survive the first night, stake their plots, and agree to SHARE A WATCH by turns so none stands alone against the wilds (raiders, beasts).`,
         'Write it as a real, flowing, turn-taking conversation: they PROPOSE, AGREE, push BACK, build on each other, and address one another BY NAME. Distinct voices - each founder sounds like their own personality and past, never interchangeable. No two lines say the same thing.',
         'Rules:',
         '- EVERY founder speaks at least once. 12 to 16 short turns total.',

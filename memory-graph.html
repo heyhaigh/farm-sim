@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Ry Farms · the town's memory</title>
+<title>Propagate · the town's memory</title>
 <style>
   html,body { margin:0; height:100%; background:#08090c; overflow:hidden; }
   /* the WebGL output canvas fills the screen; the graph is drawn to a hidden low-res canvas
@@ -242,7 +242,7 @@ function draw() {
 
 // top title bar + bottom legend, drawn in the game's font like its HUD
 function chrome() {
-  drawText(sctx, 'RY FARMS', 6, 6, C.title, 2);
+  drawText(sctx, 'PROPAGATE', 6, 6, C.title, 2);
   drawText(sctx, "THE TOWN'S MEMORY", 6, 18, C.sub);
   if (window._src) drawText(sctx, `${window._townCount||0} TOWNS - ${farmerNodes.length} FARMERS - ${window._ties||0} TIES - LIVE FROM SUPERMEMORY`, 6, 27, C.dim);
   const leg = 'CREED  BELIEF  MEMORY  RIFT   HOVER A DOT - CLICK A FARMER';

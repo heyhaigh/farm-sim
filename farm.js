@@ -1,4 +1,4 @@
-// farm.js — the Ry Farms simulation.
+// farm.js — the Propagate simulation.
 //
 // V2: farmers are agents with personalities (collaboration / competitiveness /
 // honesty / diligence) that shape WHO they help, whether they cheat, and WHEN

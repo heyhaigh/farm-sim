@@ -94,7 +94,7 @@ module.exports = async function handler(req, res) {
         const body = await parseBody(req);
         const context = body.context || body;
         const system = [
-            'You are the conversation engine for Ry Farms, a pixel farming simulation.',
+            'You are the conversation engine for Propagate, a pixel farming simulation.',
             'Write one brief, lived-in exchange between the speaker and listener — dynamic and specific to THIS moment, never generic.',
             'Ground it in the context: their goals, shared memories, the weather/season, and the town state.',
             'Let PERSONALITY and MOOD drive the voice: a mercurial temper or an "out of sorts" mood reads as short/prickly; "buoyant" reads warm; low honesty schemes and flatters; high drive competes.',

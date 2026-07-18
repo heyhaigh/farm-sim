@@ -56,7 +56,7 @@ module.exports = async function handler(req, res) {
         const meaning = EFFECT_MEANING[b.effect] || 'has some minor use';
         const ingredients = Array.isArray(b.ingredients) ? b.ingredients.join(', ') : String(b.ingredients || 'a few things');
         const system = [
-            'You name and tell the lore of an item a farmer just INVENTED in Ry Farms, a pixel farming sim.',
+            'You name and tell the lore of an item a farmer just INVENTED in Propagate, a pixel farming sim.',
             'You are handed the item\'s fixed mechanical EFFECT. Invent ONLY the flavour — an evocative NAME and a one-line LORE of why these ingredients combine into it.',
             'The lore MUST be consistent with the given effect and must NOT claim any greater power (no cure-alls, riches, resurrection, guarantees).',
             'Rustic, folk, hand-made in tone — a hedge-remedy or a lucky trinket, not high fantasy. No emojis, markdown, or modern references.',

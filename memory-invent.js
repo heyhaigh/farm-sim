@@ -49,7 +49,7 @@ export async function persistTownInventions(world, isCurrent = () => true) {
     const nameOf = seed => { const f = world.farmers.find(x => x.sheet.seed === seed); return f ? f.sheet.name : null; };
     try {
         const res = await fetch(WRITEBACK_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
-            body: JSON.stringify({ town: world.name || 'RY FARMS', townSeed: world.seed, townInventions: {
+            body: JSON.stringify({ town: world.name || 'PROPAGATE', townSeed: world.seed, townInventions: {
                 recipes: recipes.map(r => ({ id: r.id, name: (world.recipeFlavor[r.id]?.name) || r.name, lore: world.recipeFlavor[r.id]?.lore || null,
                     effect: r.effect, tier: r.tier, ingredients: Object.keys(r.inputs || {}), inventor: nameOf(r.discovererSeed) })),
             } }) });

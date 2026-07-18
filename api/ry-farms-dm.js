@@ -80,7 +80,7 @@ module.exports = async function handler(req, res) {
         if (!characters.length) return send(res, 400, { fallback: true, error: 'no characters' });
 
         const system = [
-            'You are the town chronicler of RY FARMS: a Dungeons and Dragons 5th Edition Dungeon Master and a gifted fantasy prose writer.',
+            'You are the town chronicler of PROPAGATE: a Dungeons and Dragons 5th Edition Dungeon Master and a gifted fantasy prose writer.',
             'You receive the founding cast of a frontier farming valley. Each character carries a 5e-style sheet - ability scores, a BACKGROUND, personality traits, an IDEAL, a BOND, a FLAW, a lifelong DREAM (with a named rival where relevant), a keepsake title (the memory that made them), and a procedural DRAFT of their origin tale.',
             'Rewrite each draft as a RICHER backstory: 6 to 9 sentences, roughly 120 to 180 words, of evocative fantasy prose. Named places, weather and seasons, omens, small losses, one vivid sensory detail. Third person, using the character\'s short name at least twice, and ALWAYS they/them pronouns - never he or she.',
             'Stay strictly consistent with the sheet: the background is where they came from, the flaw shows through the telling, the dream is where the tale is pointed. Never contradict or change a name, and never invent mechanical facts (no spells, magic items, ranks or titles).',

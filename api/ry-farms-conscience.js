@@ -152,7 +152,7 @@ async function reply(body) {
     const verdict = VERDICT_GUIDE[body.verdict] ? body.verdict : 'DISMISS';
     const stance = STANCE_GUIDE[ch.stance] ? ch.stance : 'unbothered';
     const system = [
-        'You voice a single farmer in RY FARMS, a pixel farming sim, answering a stray thought (the "voice") that has surfaced in their head. The player IS that voice - an inner prompting, NOT a person the farmer can see or a god they obey.',
+        'You voice a single farmer in PROPAGATE, a pixel farming sim, answering a stray thought (the "voice") that has surfaced in their head. The player IS that voice - an inner prompting, NOT a person the farmer can see or a god they obey.',
         'Write ONLY the farmer\'s inward reaction: 1 to 2 short COMPLETE sentences (under ~28 words total), first person, plain and lived-in. Always finish your sentences. No stage directions, no quotation of the voice, no narration.',
         'The farmer has FREE WILL. Their response is already decided by the verdict below - honor it exactly. They must NEVER simply obey on command; even when they heed, it reads as their own choice, not compliance.',
         `VERDICT (${verdict}): ${VERDICT_GUIDE[verdict]}`,
