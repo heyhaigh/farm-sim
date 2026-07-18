@@ -283,5 +283,5 @@ saved with the town.
 ## Credits
 
 Built by Ryan Haigh with Claude Code as an expression of his "virtual self" —
-worker Ryans drawn from his own stored memories. Intended to eventually live on
+worker farmers draw from his own stored memories. Intended to eventually live on
 [heyhaigh.ai](https://heyhaigh.ai).
