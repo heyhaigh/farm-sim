@@ -37,3 +37,7 @@ KIMI_REVIEW_PACKET.md
 
 # generated Codex review patch (scratch, not a deliverable)
 review.diff
+
+# Codex review directives + reports — local-only working docs, never on the public repo
+CODEX_REVIEW_*.md
+CODEX_TEST_DIRECTIVE.md
