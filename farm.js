@@ -408,6 +408,17 @@ const WATCH_POSTS = 6, WATCH_SCAN = 3.2;
 // worst-case cross-town traverse so the marquee loop (tell -> whisper -> defenders posted) can't die to
 // pathfinding. Measured on this.time (MONOTONIC) — NOT this.clock, which resets to 0 every day at the rollover.
 const RAID_LEAD = 45, RAID_RALLY = 30;
+// #counteroffensive PHASE 1 tuning — the grievance ledger + the war-vote gate. Grievance accrues each time the
+// nemesis ESCAPES (scaled by how deep the war runs), decays slowly with peace, and past a threshold the town is
+// ELIGIBLE to vote on striking back. All in "days" / unitless grievance.
+const GRIEVANCE_PER_ESCAPE = 0.4;   // base fury added each time the nemesis breaks off and gets away
+const GRIEVANCE_PER_RAID = 0.12;    // + this per accumulated raid (a longer war stokes deeper resolve)
+const GRIEVANCE_MAX = 3;            // cap so it can't run away
+const GRIEVANCE_DECAY = 0.94;       // per-day cool toward peace (a quiet stretch lets the fury settle)
+const GRIEVANCE_THRESHOLD = 0.9;    // grievance must reach this to make a counter-offensive ELIGIBLE (~2-3 escapes)
+const COUNTER_MIN_RAIDS = 2;        // a PATTERN, not one raid's bad luck
+const COUNTER_MIN_TOWN = 4;         // a town this small or smaller can't spare a war party
+const COUNTER_COOLDOWN = 20;        // days after a vote (pass OR fail) before another may be called
 // #131 seeded bearing -> a plain-word compass label for the tell; index = round(dir / 45deg) % 8, dir 0 = +i.
 const COMPASS = ['east', 'south-east', 'south', 'south-west', 'west', 'north-west', 'north', 'north-east'];
 // #raid-feel the label must match what the EYE sees: the map is an iso projection, so a grid-space angle
@@ -898,6 +909,15 @@ export class World {
                                    // SuperMemory. See startRaidRehearsal / startElectionRehearsal / cancelRehearsal.
         this.raidsSuffered = 0;    // #134 how many raids this town has weathered — drives the LEARNING ARC
         this.learned = null;       // #134 its learned response once battered enough: 'defense' (hold the wall) | 'truce' (sue for peace)
+        // #counteroffensive PHASE 1 — the town's resolve to strike BACK. All DETERMINISTIC (pure hashString +
+        // seeded state, never world.rand) and driven from the day rollover so it fires identically watched OR
+        // dormant. `grievance` accrues each time the nemesis ESCAPES and decays with peace; past a threshold the
+        // sworn-against hero CALLS a failable town VOTE. On a YES, `counterAuthorized` records the mandate for the
+        // (Phase 2) sim-side sortie to execute. All ride the save.
+        this.grievance = 0;             // 0..GRIEVANCE_MAX — the town's accrued fury at a nemesis that keeps getting away
+        this.counterVote = null;        // an in-flight war vote: { phase:'called', foe:{pairKey,name,raidCount}, heroSeed, calledDay, dir, dirName, grievanceAt, yes, no }
+        this.counterAuthorized = null;  // a PASSED mandate awaiting Phase 2: { foe:{pairKey,name}, dir, dirName, heroSeed, at }
+        this.counterCooldownUntil = 0;  // day until which no new war vote may be called (set when one is called, pass or fail)
         this.dmCooldown = 90;      // a grace period before the first threat stalks the young town
         this.foeCooldown = 240;    // #foe-cadence the FIRST lethal foe (orc/assassin) holds off ~1+ day past the grace
         this._live = false;        // #108 true only while this town is the one being WATCHED (set by main.js on
@@ -2746,6 +2766,11 @@ export class World {
                 ? { ...this.pendingRaid, e: { ...this.pendingRaid.e } }   // a real telegraph rides the save — a plain clone (nested `e` copied so the save shares no live ref)
                 : null,
             raidsSuffered: this.raidsSuffered || 0, learned: this.learned || null,   // #134 the learning arc rides the save
+            // #counteroffensive PHASE 1 — the grievance ledger + the war vote + a passed mandate all ride the save (plain data)
+            grievance: this.grievance || 0,
+            counterVote: this.counterVote ? { ...this.counterVote, foe: { ...this.counterVote.foe } } : null,
+            counterAuthorized: this.counterAuthorized ? { ...this.counterAuthorized, foe: { ...this.counterAuthorized.foe } } : null,
+            counterCooldownUntil: this.counterCooldownUntil || 0,
             nemesis: this.nemesis ? { ...this.nemesis } : null,   // #nemesis the named-war arc rides the save (plain, deterministic)
             nemesisLog: (this.nemesisLog || []).map(x => ({ ...x })),   // #nemesis the town's book of ENDED wars
             // #Codex30 P1 — the DAY-1 congregation director's coverage state survives a reload (Sets flattened to
@@ -2890,6 +2915,11 @@ export class World {
         this._inboxWatermark = (d.inboxWatermark && typeof d.inboxWatermark === 'object') ? { ...d.inboxWatermark } : {};
         this.pendingRaid = (d.pendingRaid && d.pendingRaid.e) ? { ...d.pendingRaid, e: { ...d.pendingRaid.e } } : null;   // #131 restore a telegraphed raid mid-flight
         this.raidsSuffered = d.raidsSuffered || 0; this.learned = d.learned || null;   // #134 the learning arc
+        // #counteroffensive PHASE 1 — restore the grievance ledger + any in-flight vote / passed mandate (old saves: defaults)
+        this.grievance = d.grievance || 0;
+        this.counterVote = d.counterVote || null;
+        this.counterAuthorized = d.counterAuthorized || null;
+        this.counterCooldownUntil = d.counterCooldownUntil || 0;
         this.nemesis = d.nemesis || null;   // #nemesis the named-war arc (old saves: no arc yet — the next raid founds one)
         this.nemesisLog = Array.isArray(d.nemesisLog) ? d.nemesisLog.map(x => ({ ...x })) : [];
         // #Codex30 P1 restore the congregation director's coverage state (rebuild the Sets), so a reload mid-scene
@@ -5886,6 +5916,7 @@ export class World {
             this.#recomputeTownTraits();
             this.#ensureDreams();   // safety net: any future arrival rolls their dream at first dawn
             this.#updateCivic();    // #94: tally yesterday's directive -> approval/recall, post today's
+            this.#tickCounterOffensive();   // #counteroffensive PHASE 1: cool grievance, advance/tally the war vote, or call one
             this.#fireSabotage();   // #97 Slice 4: spring any due sabotage, then the Watch investigates
             this.#dailyHealthCheck();
             this.#advanceSeason();
@@ -6181,6 +6212,9 @@ export class World {
                     hero, null, '#f0d060', { tier: 'grand', tone: 'triumph', label: 'THE WAR ENDS', why: 'the named foe fell with his band', icon: 'foe:orc:1' });
             } else {
                 nem.lastOutcome = 'escaped';
+                // #counteroffensive PHASE 1 — the foe got away AGAIN: the town's grievance deepens (scaled by how
+                // long this war has run). Deterministic, part of the resolver's verdict — no new roll.
+                this.grievance = Math.min(GRIEVANCE_MAX, this.grievance + GRIEVANCE_PER_ESCAPE + nem.raidCount * GRIEVANCE_PER_RAID);
                 if (out.heroSeed != null && nem.sworeAgainst !== out.heroSeed) {
                     nem.sworeAgainst = out.heroSeed;
                     // #Codex36 P2: the name debuts on the RETURN (raid two) — raid one's oath is sworn by
@@ -6381,6 +6415,90 @@ export class World {
         this.nemesisLog.push({ pairKey: nem.pairKey, name: nem.name, raidCount: nem.raidCount,
                                sworeAgainst: sworn ? shortName(sworn) : null, outcome, day: this.day, year: this.year });
         if (this.nemesisLog.length > 8) this.nemesisLog.shift();
+    }
+
+    // #counteroffensive PHASE 1 — THE RECKONING. Run once per day rollover. Grievance cools with peace; and when
+    // an eligible war of grievance boils over, the sworn-against hero CALLS the town to a failable vote. It rides
+    // the save and is DETERMINISTIC (pure hashString + seeded state, never world.rand) so it fires byte-identically
+    // whether the town is watched or dormant. A YES leaves a `counterAuthorized` mandate for the Phase 2 sortie.
+    #tickCounterOffensive() {
+        this.grievance *= GRIEVANCE_DECAY;                          // fury settles over a quiet stretch
+        if (this.grievance < 0.01) this.grievance = 0;
+        const cv = this.counterVote;
+        if (cv) {   // a called vote deliberates for a day, then the ballot is read at the next dawn
+            if (cv.phase === 'called' && this.day > cv.calledDay) this.#tallyCounterVote(cv);
+            return;                                                 // one reckoning at a time
+        }
+        if (this.day < this.counterCooldownUntil) return;
+        const el = this.#counterEligible();
+        if (!el) return;
+        // the wronged hero calls it; the CALL consumes the accrued fury + sets the cooldown NOW (pass or fail)
+        this.counterVote = { phase: 'called', foe: { pairKey: el.foe.pairKey, name: el.foe.name, raidCount: el.foe.raidCount },
+                             heroSeed: el.hero.sheet.seed, calledDay: this.day, dir: el.dir, dirName: el.dirName,
+                             grievanceAt: this.grievance, yes: 0, no: 0 };
+        this.counterCooldownUntil = this.day + COUNTER_COOLDOWN;
+        this.grievance = 0;
+        this.addChronicle('raid', `${shortName(el.hero)} calls ${this.name} to a reckoning — shall the town ride on ${el.foe.name}?`,
+            el.hero, null, '#e0a040', { tier: 'callout', tone: 'tense', why: 'the town weighs a war of its own' });
+        if (el.hero.say) el.hero.say(this.culture === 'orc' ? 'WE HUNT HIM NOW!' : 'We ride on him — who stands with me?', '#e0a040');
+    }
+
+    // is a counter-offensive EARNED? A named nemesis, seen as a PATTERN, who keeps getting AWAY, against a town
+    // that chose the DEFENSE branch (not truce), with grievance boiled past the threshold, a wronged hero present
+    // to call it, and a body of able riders to spare. Pure predicate — returns the cast or null.
+    #counterEligible() {
+        const nem = this.nemesis;
+        if (!nem || nem.ended) return null;
+        if (nem.raidCount < COUNTER_MIN_RAIDS) return null;         // a pattern, not one raid's bad luck
+        if (nem.lastOutcome !== 'escaped') return null;             // the foe got away — the open wound
+        if (this.learned !== 'defense') return null;                // a truce-minded town doesn't ride out
+        if (this.grievance < GRIEVANCE_THRESHOLD) return null;      // the fury must have boiled over
+        if (nem.sworeAgainst == null) return null;
+        const hero = this.farmers.find(f => f.sheet.seed === nem.sworeAgainst && !f.downed && f.health !== 'sick');
+        if (!hero) return null;                                     // the wronged hero must be here to call it
+        const able = this.farmers.filter(f => !f.downed && f.health !== 'sick').length;
+        if (able < COUNTER_MIN_TOWN) return null;                   // too few to spare a war party
+        const dir = (hashString('counterdir:' + nem.pairKey + ':' + this.day) % 360) * Math.PI / 180;
+        return { foe: nem, hero, dir, dirName: screenCompass(dir) };
+    }
+
+    // read the ballot: every able soul casts YES/NO by their nature (a FAILABLE vote — a collaborative, dovish
+    // town can stay its hand). Deterministic; a pure per-voter hash waver keeps it from being trait-locked.
+    #tallyCounterVote(cv) {
+        const hero = this.farmers.find(f => f.sheet.seed === cv.heroSeed);
+        let yes = 0, no = 0;
+        for (const f of this.farmers) {
+            if (f.downed || f.health === 'sick') continue;          // the downed + bedridden don't cast
+            if (this.#counterBallot(f, cv, hero)) yes++; else no++;
+        }
+        cv.yes = yes; cv.no = no; cv.phase = 'tallied';
+        if (yes > no) {
+            this.counterAuthorized = { foe: { pairKey: cv.foe.pairKey, name: cv.foe.name }, dir: cv.dir, dirName: cv.dirName, heroSeed: cv.heroSeed, at: this.day };
+            this.addChronicle('legend', `${this.name} resolves to strike back at ${cv.foe.name} — the vote carries, ${yes} to ${no}. The town turns from prey to hunter.`,
+                hero, null, '#f0d060', { tier: 'grand', tone: 'triumph', label: 'THE TOWN RIDES', why: 'prey resolves to become the hunter', icon: 'foe:orc:1' });
+        } else {
+            this.addChronicle('town', `${this.name} weighed a strike on ${cv.foe.name} and chose to hold the wall — the vote fails, ${no} to ${yes}.`,
+                hero, null, '#9ad0e0', { tier: 'callout', tone: 'somber', why: 'the town stays its hand' });
+        }
+        this.counterVote = null;   // resolved — the mandate (if any) rides in counterAuthorized for Phase 2
+    }
+
+    // one voter's YES/NO on riding out: fighters + the collaborative + the deeply-aggrieved + those who stand with
+    // the wronged hero lean YES; the cautious, the weary, and the even-tempered lean NO. No world.rand — a pure
+    // hash waver so the vote can't fork the sim's rng stream.
+    #counterBallot(f, cv, hero) {
+        const p = f.sheet.personality || {};
+        let score = -0.35;                                         // war is a grave step — the town's DEFAULT is to hold the wall
+        score += ((p.competitiveness ?? 0.5) - 0.4) * 1.0;        // the fighters want to ride
+        score += ((p.collaboration ?? 0.5) - 0.4) * 0.4;         // the collaborative rally behind a town resolve
+        score += (0.5 - (p.honesty ?? 0.5)) * 0.3;              // a vengeful streak (low honesty) leans YES
+        score -= (f.caution || 0) * 0.3;                        // the scarred are wary of another fight
+        score += Math.min(0.6, (cv.grievanceAt || GRIEVANCE_THRESHOLD) * 0.3);   // the deeper the wrong, the louder the YES
+        if (f === hero) score += 0.6;                            // the caller votes for their own reckoning
+        else if (hero && f.opinionOf) score += f.opinionOf(hero) * 0.5;   // stand WITH the one the foe swore against
+        if ((f.energy ?? 1) < 0.35) score -= 0.3;               // the weary aren't up for a march
+        const jit = ((hashString('counterballot:' + this.seed + ':' + f.sheet.seed + ':' + cv.calledDay) >>> 0) % 1000) / 1000 - 0.5;
+        return score + jit * 0.5 > 0;
     }
 
     cancelRehearsal() {

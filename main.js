@@ -7493,6 +7493,20 @@ function drawBootScreen(t) {
             cancel: () => world.cancelRehearsal(),
             get active() { return world.rehearsal; },
         },
+        // #counteroffensive PHASE 1 (debug) — prime an eligible war of grievance so the NEXT day rollover CALLS the
+        // failable town vote, and the one after TALLIES it. After arm(), let two days pass (RYFARMS.speed high helps).
+        counter: {
+            arm: (name = 'Gorehowl the Cruel', raidCount = 3) => {
+                const w = world, hero = w.farmers.find(f => !f.downed && f.health !== 'sick') || w.farmers[0];
+                if (!hero) return 'no able hero in town';
+                w.nemesis = { pairKey: 'orc:debug', name, raidCount, sworeAgainst: hero.sheet.seed, lastOutcome: 'escaped', ended: false };
+                w.learned = 'defense'; w.grievance = 1.8; w.counterCooldownUntil = 0; w.counterVote = null; w.counterAuthorized = null;
+                return `armed: ${name} (raid ${raidCount}), sworn against ${hero.sheet.name.split(' ')[0]} — let ~2 days pass (the vote is called, then tallied)`;
+            },
+            status: () => ({ grievance: +(world.grievance || 0).toFixed(2), vote: world.counterVote, authorized: world.counterAuthorized,
+                             cooldownUntil: world.counterCooldownUntil, learned: world.learned,
+                             nemesis: world.nemesis && { name: world.nemesis.name, raidCount: world.nemesis.raidCount, escaped: world.nemesis.lastOutcome === 'escaped' } }),
+        },
         // deterministic stepping for reproducibility tests: N uniform FIXED_DT sim ticks
         runSteps: (n) => { for (let k = 0; k < n; k++) world.tick(FIXED_DT); },
         FIXED_DT,
