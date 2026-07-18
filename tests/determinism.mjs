@@ -60,10 +60,15 @@ const BASELINE = {
     // self-salve mends hp; red-health farmers don't hunt into danger; sentry stands down when critically
     // hurt) legitimately shifts the trajectory. Prior: #farmyard (facilities cluster at the house, crops buffered a tile
     // off every pen, yardV save marker) legitimately shifts placement + the serialized shape
-    20260706: '76f81ef4',
-    42: '20d5f94e',
-    7: '64f39c7d',
-    3: '3b8b9a8b',
+    // re-pinned 2026-07-18 — P2.5 SEARCH PARTY + Codex #43 hardening. The search party is a REAL new behavior that
+    // FIRES in normal 30-day play (a farmer downed far in the wilds is rescued: riders muster + think() + march),
+    // legitimately shifting the trajectory. Codex #43 fixes compound it: off-field (onSortie) riders are now excluded
+    // from civic selection/quorum/voting (#civicPresent), their wilderness encounters are DETACHED at departure (an
+    // off-field target no longer draws world.rand), and departure revalidates riders. All same-twice held.
+    20260706: '39aa030b',
+    42: '620a2970',
+    7: '73e30a3c',
+    3: '60e16873',
 };
 
 function boot(seed, culture) {

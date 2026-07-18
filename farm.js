@@ -426,6 +426,11 @@ const SORTIE_MAX_DAYS = 3;          // the away window is 1..this, scaled by (ha
 const SORTIE_SPOILS_CAP = 0.6;      // a win RECLAIMS up to this share of the loot the nemesis carried off
 const SORTIE_HOLD_SEC = 3;          // after the vote carries, HOLD this long (read the announcement) before the party moves
 const SORTIE_MUSTER_MAX = 14;       // the party marches to the frontier rally and departs by here at the latest (anti-stall)
+// #searchparty (P2.5) — a farmer felled FAR in the wilds is stranded; once they've lain out there a while the
+// town musters a rescue that rides to them and carries them home. All deterministic (pure hashes, no rng).
+const SEARCH_RADIUS = 24;           // a farmer downed beyond this (tiles from the square) is "out there" — too far to crawl home
+const SEARCH_STRAND_DAYS = 1;       // ...and left stranded at least this many days before the town rides out
+const SEARCH_PARTY_MAX = 3;         // at most this many go on the rescue (fewer than a war party — it's a search, not a battle)
 // #131 seeded bearing -> a plain-word compass label for the tell; index = round(dir / 45deg) % 8, dir 0 = +i.
 const COMPASS = ['east', 'south-east', 'south', 'south-west', 'west', 'north-west', 'north', 'north-east'];
 // #raid-feel the label must match what the EYE sees: the map is an iso projection, so a grid-space angle
@@ -930,6 +935,10 @@ export class World {
         // return at a monotonic deadline and the spoils/cost land. { phase, foe, dir, dirName, party:[seeds],
         // heroSeed, leftAt, returnAt, days, spoils, resolved }.
         this.counterSortie = null;
+        // #searchparty (P2.5) — a RESCUE party out after a farmer stranded far in the wilds. Same muster/away flow
+        // as the war sortie (rides the save; members off-field). { phase, missingSeed, target:{i,j}, party:[seeds],
+        // rally, tallyAt, leftAt, returnAt, days, resolved }.
+        this.searchParty = null;
         this.dmCooldown = 90;      // a grace period before the first threat stalks the young town
         this.foeCooldown = 240;    // #foe-cadence the FIRST lethal foe (orc/assassin) holds off ~1+ day past the grace
         this._live = false;        // #108 true only while this town is the one being WATCHED (set by main.js on
@@ -2784,6 +2793,7 @@ export class World {
             counterAuthorized: this.counterAuthorized ? { ...this.counterAuthorized, foe: { ...this.counterAuthorized.foe } } : null,
             counterCooldownUntil: this.counterCooldownUntil || 0,
             counterSortie: this.counterSortie ? { ...this.counterSortie, foe: { ...this.counterSortie.foe }, party: [...this.counterSortie.party], rally: this.counterSortie.rally ? { ...this.counterSortie.rally } : null } : null,
+            searchParty: this.searchParty ? { ...this.searchParty, party: [...this.searchParty.party], rally: this.searchParty.rally ? { ...this.searchParty.rally } : null, target: this.searchParty.target ? { ...this.searchParty.target } : null } : null,
             nemesis: this.nemesis ? { ...this.nemesis } : null,   // #nemesis the named-war arc rides the save (plain, deterministic)
             nemesisLog: (this.nemesisLog || []).map(x => ({ ...x })),   // #nemesis the town's book of ENDED wars
             // #Codex30 P1 — the DAY-1 congregation director's coverage state survives a reload (Sets flattened to
@@ -2928,12 +2938,16 @@ export class World {
         this._inboxWatermark = (d.inboxWatermark && typeof d.inboxWatermark === 'object') ? { ...d.inboxWatermark } : {};
         this.pendingRaid = (d.pendingRaid && d.pendingRaid.e) ? { ...d.pendingRaid, e: { ...d.pendingRaid.e } } : null;   // #131 restore a telegraphed raid mid-flight
         this.raidsSuffered = d.raidsSuffered || 0; this.learned = d.learned || null;   // #134 the learning arc
-        // #counteroffensive PHASE 1 — restore the grievance ledger + any in-flight vote / passed mandate (old saves: defaults)
+        // #counteroffensive PHASE 1 — restore the grievance ledger + any in-flight vote / passed mandate (old saves: defaults).
+        // Codex #43 P0 — DEEP-clone each: `d.*` may be a live snapshot tree (a test structuredClones serialize() rather
+        // than JSON round-tripping), so a bare `|| null` would alias the nested foe/party/rally into the loaded world.
+        // Match the deep-copy norm used for pendingRaid/nemesisLog/congState right below.
         this.grievance = d.grievance || 0;
-        this.counterVote = d.counterVote || null;
-        this.counterAuthorized = d.counterAuthorized || null;
+        this.counterVote = d.counterVote ? structuredClone(d.counterVote) : null;
+        this.counterAuthorized = d.counterAuthorized ? structuredClone(d.counterAuthorized) : null;
         this.counterCooldownUntil = d.counterCooldownUntil || 0;
-        this.counterSortie = d.counterSortie || null;
+        this.counterSortie = d.counterSortie ? structuredClone(d.counterSortie) : null;
+        this.searchParty = d.searchParty ? structuredClone(d.searchParty) : null;
         this.nemesis = d.nemesis || null;   // #nemesis the named-war arc (old saves: no arc yet — the next raid founds one)
         this.nemesisLog = Array.isArray(d.nemesisLog) ? d.nemesisLog.map(x => ({ ...x })) : [];
         // #Codex30 P1 restore the congregation director's coverage state (rebuild the Sets), so a reload mid-scene
@@ -3123,7 +3137,11 @@ export class World {
     }
     // #watch a sentry has to be FIT to stand: not dead, not felled, and NOT sick (a sick watcher rests at home,
     // so they can't hold the line — the beat must hand off, not go dark). One predicate, used everywhere.
-    static #watchFit(f) { return f && f.health !== 'dead' && f.health !== 'sick' && !f.downed && f.hp >= f.maxHp * SENTRY_STANDDOWN_HP; }   // #health a critically hurt sentry hands off + mends
+    static #watchFit(f) { return f && f.health !== 'dead' && f.health !== 'sick' && !f.downed && !f.onSortie && f.hp >= f.maxHp * SENTRY_STANDDOWN_HP; }   // #health a critically hurt sentry hands off + mends; Codex #43 P1 an away rider (onSortie) can't stand watch
+    // Codex #43 P1 — the single "present for civic life" predicate: excludes the dead/sick/downed AND anyone off-field
+    // on an expedition (onSortie). A MUSTERING farmer is still home and counts. Persistent office/leaderboard TITLES
+    // may remain assigned to an away holder; this gates active SELECTION / QUORUM / VOTING / JURY only.
+    static #civicPresent(f) { return f && f.health !== 'dead' && f.health !== 'sick' && !f.downed && !f.onSortie; }
     // #watch the founders' shared rotation-holder for TODAY, skipping anyone unfit (dead/sick/felled) to the next
     // on the roster. Election-agnostic — it's the STAND-IN pool the sentry falls back to when the seated Watch is
     // absent. Pure day-math + seed order, no rng, holds no digest state.
@@ -3218,7 +3236,7 @@ export class World {
     #healerFitness(f) { const s = f.sheet; return (mod(s.stats.wis) + mod(s.stats.int)) * 0.35 + s.personality.collaboration + f.reputation + (s.level || 1) * 0.06; }
     #bestFor(fitFn, ...exclude) {
         const ex = new Set(exclude.filter(Boolean).map(x => x.sheet ? x.sheet.seed : x));
-        const pool = [...this.farmers].filter(f => !ex.has(f.sheet.seed) && f.health !== 'sick' && !f.downed).sort((a, b) => a.sheet.seed - b.sheet.seed);
+        const pool = [...this.farmers].filter(f => !ex.has(f.sheet.seed) && World.#civicPresent(f)).sort((a, b) => a.sheet.seed - b.sheet.seed);   // Codex #43 P1 an away rider can't be seated into a role
         let best = null, bestV = -1e9;
         for (const f of pool) { const v = fitFn(f); if (v > bestV) { bestV = v; best = f; } }
         return best;
@@ -3276,7 +3294,7 @@ export class World {
         // HOLD. An office-holder is never punished (or churned out on recovery) for a day nobody could
         // act. (Codex r13 #1.) Expectation scales to who's actually AVAILABLE, not the whole roster.
         const mgr = this.managerFarmer();
-        const eligible = this.farmers.filter(f => f !== mgr && f.health !== 'sick' && !f.downed).length;
+        const eligible = this.farmers.filter(f => f !== mgr && World.#civicPresent(f)).length;   // Codex #43 P1 an away rider can't heed a directive → not in the denominator
         if (eligible > 0) {
             // MANAGER approval = how much of the AVAILABLE town rallied to the day's directive. Only move it
             // when the town actually WEIGHED IN (someone heeded or refused). A directive that went out while
@@ -3296,14 +3314,14 @@ export class World {
             const wf = this.watchFarmer();
             if (wf) {
                 let sum = 0, n = 0;
-                for (const f of this.farmers) if (f !== wf && f.health !== 'sick' && !f.downed) { sum += f.opinionOf(wf); n++; }
+                for (const f of this.farmers) if (f !== wf && World.#civicPresent(f)) { sum += f.opinionOf(wf); n++; }
                 if (n > 0) r.watchApproval = Math.max(0, Math.min(1, r.watchApproval * 0.9 + (0.55 + sum / n) * 0.1));
             }
             r.watchLowDays = r.watchApproval < RECALL_FLOOR ? r.watchLowDays + 1 : 0;
             // HEALER approval drifts toward the town's regard for them (a tend/cure nudges it directly).
             if (hf) {
                 let sum = 0, n = 0;
-                for (const f of this.farmers) if (f !== hf && f.health !== 'sick' && !f.downed) { sum += f.opinionOf(hf); n++; }
+                for (const f of this.farmers) if (f !== hf && World.#civicPresent(f)) { sum += f.opinionOf(hf); n++; }
                 if (n > 0) r.healerApproval = Math.max(0, Math.min(1, r.healerApproval * 0.9 + (0.55 + sum / n) * 0.1));
             }
             r.healerLowDays = r.healerApproval < RECALL_FLOOR ? r.healerLowDays + 1 : 0;
@@ -3618,7 +3636,7 @@ export class World {
     #electionCandidates(office) {
         const fitFn = office === 'manager' ? (f => this.#managerFitness(f)) : (f => this.#watchFitness(f));
         const incumbent = office === 'manager' ? this.managerFarmer() : this.watchFarmer();
-        const pool = this.farmers.filter(f => f.health !== 'sick' && !f.downed);
+        const pool = this.farmers.filter(f => World.#civicPresent(f));   // Codex #43 P1 an away rider can't stand for office
         const ranked = [...pool].sort((a, b) => (fitFn(b) - fitFn(a)) || (a.sheet.seed - b.sheet.seed));
         const slate = [];
         if (incumbent && pool.includes(incumbent)) slate.push(incumbent.sheet.seed);
@@ -3632,7 +3650,7 @@ export class World {
         const r = this.roles, el = r.election;
         if (!el || el.phase === 'tallied') return;
         el.phase = 'tallied';
-        const voters = this.farmers.filter(f => f.health !== 'sick' && !f.downed);
+        const voters = this.farmers.filter(f => World.#civicPresent(f));   // Codex #43 P1 an away rider casts no ballot
         const mgrWinner = this.#electOffice('manager', el.mgrCands, voters);
         const watchWinner = this.#electOffice('watch', el.watchCands.filter(s => s !== mgrWinner), voters);
         el.result = { manager: mgrWinner, watch: watchWinner };
@@ -3748,7 +3766,7 @@ export class World {
     holdTrial(thief, victim, name, crimeLabel = null) {
         const r = this.roles, wch = this.watchFarmer();
         if (!wch || thief === wch) return;                       // no Watch, or the Watch is the accused
-        const jurors = this.farmers.filter(f => f !== thief && f.health !== 'sick' && !f.downed);
+        const jurors = this.farmers.filter(f => f !== thief && World.#civicPresent(f));   // Codex #43 P1 an away rider isn't on the jury
         if (jurors.length < 2) return;                            // too small a town to try anyone
         const caseId = ++r.caseSeq;
         const roll = mulberry32((this.seed ^ thief.sheet.seed ^ (this.day * 0x51ed) ^ caseId) >>> 0);
@@ -4071,7 +4089,7 @@ export class World {
     // rally to the current communal project, else call for donations to level the town.
     #postDirective() {
         const r = this.roles, m = this.managerFarmer();
-        if (!m) { r.directive = null; return; }
+        if (!m || m.onSortie) { r.directive = null; return; }   // Codex #43 P1 an away Manager posts no directive (title persists; the day is a no-signal hold)
         let kind = null, text = null;
         const orc = this.culture === 'orc';
         if (this.project) {
@@ -5930,6 +5948,7 @@ export class World {
             this.#recomputeTownTraits();
             this.#ensureDreams();   // safety net: any future arrival rolls their dream at first dawn
             this.#updateCivic();    // #94: tally yesterday's directive -> approval/recall, post today's
+            this.#checkMissing();           // #searchparty (P2.5): a stranded soul's rescue takes precedence over a war vote — check it FIRST
             this.#tickCounterOffensive();   // #counteroffensive PHASE 1: cool grievance, advance/tally the war vote, or call one
             this.#fireSabotage();   // #97 Slice 4: spring any due sabotage, then the Watch investigates
             this.#dailyHealthCheck();
@@ -5959,6 +5978,13 @@ export class World {
         this.#tickPendingRaid(); // #131 drive a telegraphed raid across its lead window (no-op unless one is pending)
         this.#tickSortie();      // #counteroffensive drive the ghost war party (no-op unless one is staged; no rng)
         this.#tickCounterSortie();   // #counteroffensive PHASE 2 bring the REAL war party home when its deadline lands (no rng)
+        this.#tickSearchParty();     // #searchparty (P2.5) drive the rescue: muster → away → home with the stranded soul (no rng)
+        // Codex #43 P1 — central flag reconcile: with NO expedition in flight, no one should be flagged mustering/
+        // onSortie. A stray flag (a sortie that dissolved, a corrupt/old save) would trap a farmer off-field or in a
+        // 'sortie'↔'decide' loop — bring them home. Draws no rng; a pure no-op in a clean world (the common case).
+        if (!this.counterSortie && !this.searchParty) {
+            for (const f of this.farmers) if (f.mustering || f.onSortie) { f.mustering = false; f.onSortie = false; if (f.state === 'sortie') f.state = 'decide'; }
+        }
         this.#tickRaidEvent(dt); // #Slice3 drive the watched raid choreography (no-op unless a raid is staged)
         this.#tickRehearsal(dt); // #admin drive an election REHEARSAL's phases (no-op unless the booth staged one)
         this.weatherTimer -= dt;
@@ -6480,6 +6506,7 @@ export class World {
     // that chose the DEFENSE branch (not truce), with grievance boiled past the threshold, a wronged hero present
     // to call it, and a body of able riders to spare. Pure predicate — returns the cast or null.
     #counterEligible() {
+        if (this.#expeditionOut()) return null;                     // a war party or rescue is already out — don't strip the town twice
         const nem = this.nemesis;
         if (!nem || nem.ended) return null;
         if (nem.raidCount < COUNTER_MIN_RAIDS) return null;         // a pattern, not one raid's bad luck
@@ -6505,12 +6532,23 @@ export class World {
             if (this.#counterBallot(f, cv, hero)) yes++; else no++;
         }
         cv.yes = yes; cv.no = no; cv.phase = 'tallied';
-        if (yes > no) {
+        // Codex #43 P1 — revalidate the FOE + HERO at the LAST moment. The foe was validated at DAWN; a real raid
+        // during the day's ceremony could have ENDED the nemesis (truce/concluded) or downed/sickened the hero. A
+        // stale-foe launch would fabricate spoils from a ledger that no longer applies. If the cause has lapsed, the
+        // carried vote dissolves with a chronicle rather than sending a party out at a ghost.
+        const nem = this.nemesis;
+        const foeValid = nem && !nem.ended && nem.pairKey === cv.foe.pairKey;
+        const heroValid = hero && !hero.downed && hero.health !== 'sick';
+        if (yes > no && foeValid && heroValid) {
             this.counterAuthorized = { foe: { pairKey: cv.foe.pairKey, name: cv.foe.name }, dir: cv.dir, dirName: cv.dirName, heroSeed: cv.heroSeed, at: this.day };
             this.addChronicle('legend', `${this.name} resolves to strike back at ${cv.foe.name} — the vote carries, ${yes} to ${no}. The town turns from prey to hunter.`,
                 hero, null, '#f0d060', { tier: 'grand', tone: 'triumph', label: 'THE TOWN RIDES', why: 'prey resolves to become the hunter', icon: 'foe:orc:1' });
             // #counteroffensive PHASE 2 — the war party ACTUALLY rides out (real farmers leave the field).
             this.#launchCounterSortie(cv, hero);
+        } else if (yes > no) {
+            // the town willed it, but the moment passed — the feud already turned or the hero fell during the vote.
+            this.addChronicle('town', `${this.name}'s vote to ride on ${cv.foe.name} carries ${yes} to ${no} — but by dusk the moment has passed, and the muster quietly disperses.`,
+                hero, null, '#9ad0e0', { tier: 'callout', tone: 'somber', why: 'the war-cause lapsed before the muster could form' });
         } else {
             this.addChronicle('town', `${this.name} weighed a strike on ${cv.foe.name} and chose to hold the wall — the vote fails, ${no} to ${yes}.`,
                 hero, null, '#9ad0e0', { tier: 'callout', tone: 'somber', why: 'the town stays its hand' });
@@ -6584,8 +6622,24 @@ export class World {
             const riders = s.party.map(seed => this.farmers.find(f => f.sheet.seed === seed)).filter(Boolean);
             const atRally = riders.length > 0 && riders.every(f => !f.mustering || Math.hypot(f.pos.i - s.rally.i, f.pos.j - s.rally.j) < 2.6);
             if (atRally || this.time - s.tallyAt > SORTIE_MUSTER_MAX) {
-                // DEPART — the party crosses into the dark (off-field); the away clock starts NOW
-                for (const f of riders) { f.mustering = false; f.onSortie = true; f.state = 'decide'; f.path = null; }
+                // Codex #43 P1 — REVALIDATE at the threshold of departure. A rider downed/sickened during the muster
+                // (a raid landed, an illness struck) stays HOME; if the HERO themselves fell, the whole strike stands
+                // down. Anyone who does ride has their active wilderness encounter DETACHED first — an off-field target
+                // must not keep an encounter advancing against them with world.rand (a determinism leak).
+                const heroF = this.farmers.find(f => f.sheet.seed === s.heroSeed);
+                if (!heroF || heroF.downed || heroF.health === 'sick') {
+                    for (const f of riders) { f.mustering = false; f.state = 'decide'; }
+                    this.addChronicle('town', `The ride on ${s.foe.name} falters at the muster — the one who swore the oath cannot lead it, and the party stands down.`,
+                        heroF || null, null, '#9ad0e0', { tier: 'callout', tone: 'somber', why: 'the hero fell before the party could ride' });
+                    this.counterSortie = null; return;
+                }
+                const departing = riders.filter(f => !f.downed && f.health !== 'sick');
+                for (const f of departing) {
+                    const enc = this.encounterFor(f); if (enc) enc.done = true;   // detach — no clash ticks against an off-field rider
+                    f.mustering = false; f.onSortie = true; f.state = 'decide'; f.path = null; f.combatStance = null; f.threatAlert = 0;
+                }
+                for (const f of riders) if (!departing.includes(f)) { f.mustering = false; f.state = 'decide'; }   // the hurt stand down cleanly
+                s.party = departing.map(f => f.sheet.seed);   // the away roster is who ACTUALLY rode (resolve reads this)
                 s.phase = 'away'; s.leftAt = this.time; s.returnAt = this.time + s.days * (DAY_LENGTH + NIGHT_LENGTH);
             }
             return;
@@ -6627,6 +6681,84 @@ export class World {
         this.counterSortie = null;
     }
 
+    // #expedition the muster-phase expedition (war sortie OR rescue party) a farmer is marching out with, or null.
+    musterExpOf(f) {
+        const s = f.sheet.seed;
+        if (this.counterSortie && this.counterSortie.phase === 'muster' && this.counterSortie.party.includes(s)) return this.counterSortie;
+        if (this.searchParty && this.searchParty.phase === 'muster' && this.searchParty.party.includes(s)) return this.searchParty;
+        return null;
+    }
+    // any outbound expedition already stripping the town? (only one at a time — never empty the fields twice)
+    #expeditionOut() { return !!(this.counterSortie || this.searchParty); }
+
+    // #searchparty (P2.5) — a farmer felled FAR in the wilds and left stranded triggers a RESCUE. Checked at the
+    // day rollover. Deterministic; no rng. One expedition at a time.
+    #checkMissing() {
+        if (this.#expeditionOut() || this.counterVote) return;   // one mobilization at a time (a war vote in flight counts)
+        const missing = this.farmers.find(f => f.downed && !f.onSortie
+            && Math.hypot(f.pos.i - CENTER, f.pos.j - CENTER) > SEARCH_RADIUS
+            && this.day - (f.downFrom ?? this.day) >= SEARCH_STRAND_DAYS);
+        if (missing) this.#launchSearchParty(missing);
+    }
+
+    // muster a rescue: 2..SEARCH_PARTY_MAX hale hands (leaving the workforce floor), marching out toward the
+    // stranded soul, gone a short window scaled by how far they lie, then home WITH them.
+    #launchSearchParty(missing) {
+        const hale = this.farmers.filter(f => !f.downed && f.health !== 'sick' && !f.onSortie && !f.mustering && f !== missing);
+        if (hale.length - 2 < SORTIE_WORKFORCE_FLOOR) return;   // can't spare a rescue and keep the floor — they self-recover
+        const target = { i: Math.round(missing.pos.i), j: Math.round(missing.pos.j) };
+        const dir = Math.atan2(target.j - CENTER, target.i - CENTER);
+        const party = hale.sort((a, b) => (mod(b.sheet.stats.con) + mod(b.sheet.stats.str)) - (mod(a.sheet.stats.con) + mod(a.sheet.stats.str)) || a.sheet.seed - b.sheet.seed)
+            .slice(0, Math.max(2, Math.min(SEARCH_PARTY_MAX, hale.length - SORTIE_WORKFORCE_FLOOR)));
+        for (const f of party) { f.mustering = true; f.state = 'decide'; f.path = null; f.combatStance = null; f.threatAlert = 0; this.clearHelp(f); }
+        const dist = Math.hypot(target.i - CENTER, target.j - CENTER);
+        const days = Math.max(1, Math.min(2, Math.round(dist / 28)));   // a day, maybe two if they lie far
+        this.searchParty = { phase: 'muster', missingSeed: missing.sheet.seed, target, dir, dirName: screenCompass(dir),
+                             party: party.map(f => f.sheet.seed), rally: this.#sortieRally(dir), tallyAt: this.time, leftAt: 0, returnAt: 0, days, resolved: false };
+        this.addChronicle('town', `${shortName(missing)} lies stranded in the wilds — ${party.length} of ${this.name} muster to bring them home.`,
+            party[0], missing, '#9ad0e0', { tier: 'callout', tone: 'tense', why: 'a rescue rides out for a stranded soul' });
+    }
+
+    // drive the rescue: MUSTER (hold → march to rally → depart off-field) → AWAY (until returnAt) → home WITH the
+    // stranded farmer, revived. No rng. Called each tick.
+    #tickSearchParty() {
+        const s = this.searchParty;
+        if (!s || s.resolved) return;
+        if (s.phase === 'muster') {
+            if (this.time - s.tallyAt < SORTIE_HOLD_SEC) return;
+            const riders = s.party.map(seed => this.farmers.find(f => f.sheet.seed === seed)).filter(Boolean);
+            const atRally = riders.length > 0 && riders.every(f => !f.mustering || Math.hypot(f.pos.i - s.rally.i, f.pos.j - s.rally.j) < 2.6);
+            if (atRally || this.time - s.tallyAt > SORTIE_MUSTER_MAX) {
+                for (const f of riders) { f.mustering = false; f.onSortie = true; f.state = 'decide'; f.path = null; }
+                s.phase = 'away'; s.leftAt = this.time; s.returnAt = this.time + s.days * (DAY_LENGTH + NIGHT_LENGTH);
+            }
+            return;
+        }
+        if (s.phase === 'away' && this.time >= s.returnAt) this.#resolveSearchParty(s);
+    }
+
+    // THEY RETURN — with the stranded soul. The rescuers come back on-field; the missing farmer is REVIVED (carried
+    // home to the square, wounds bound) instead of the long crawl. Deterministic — a rescue always succeeds if it
+    // could be sent (the failure mode is that none could be spared, handled at #checkMissing).
+    #resolveSearchParty(s) {
+        s.resolved = true;
+        const riders = s.party.map(seed => this.farmers.find(f => f.sheet.seed === seed)).filter(Boolean);
+        for (const f of riders) if (f.onSortie) { f.onSortie = false; f.state = 'decide'; f.threatAlert = 0; }
+        const missing = this.farmers.find(f => f.sheet.seed === s.missingSeed);
+        if (missing) {
+            missing.downed = false; missing.onSortie = false; missing.combatStance = null; missing.state = 'decide';
+            missing.hp = Math.max(missing.hp || 0, Math.round((missing.maxHp || 10) * 0.5)); missing.reviveDay = 0;
+            const home = this.well || { i: CENTER, j: CENTER };
+            missing.pos = { i: home.i + 1, j: home.j }; missing.sparkle = Math.max(missing.sparkle || 0, 1);
+        }
+        this.addChronicle('legend', missing
+            ? `The search party carries ${shortName(missing)} home to ${this.name} — battered, but alive.`
+            : `The search party returns to ${this.name} from the wilds.`,
+            riders[0] || null, missing || null, '#f0d060', { tier: 'grand', tone: 'triumph', label: 'BROUGHT HOME', why: 'the town rode out and brought its own back' });
+        if (this._live) this.sortie = { rehearsal: false, rid: 'searchret:' + this.day, dir: s.dir, dirName: s.dirName, target: this.name, phase: 'return', at: this.time, n: riders.length };
+        this.searchParty = null;
+    }
+
     cancelRehearsal() {
         if (this.pendingRaid && this.pendingRaid.rehearsal) { this.pendingRaid = null; this._raidScript = null; }
         if (this.raidEvent && this.raidEvent.rehearsal) this.raidEvent = null;
@@ -6661,7 +6793,7 @@ export class World {
             if ((!rh.speakQueue || rh.spoken >= rh.speakQueue.length) && this.floorFree()) { rh.phase = 'tally'; rh.t = 0; }
         } else if (rh.phase === 'tally') {
             if (!rh.result && rh.t > 3.5) {
-                const voters = this.farmers.filter(f => f.health !== 'sick' && !f.downed);
+                const voters = this.farmers.filter(f => World.#civicPresent(f));   // Codex #43 P1 an away rider casts no ballot (ghost rehearsal)
                 const year = this.year + 1;
                 const mgrSeed = this.#ghostOffice('manager', this.#electionCandidates('manager'), voters, year);
                 const watchSeed = this.#ghostOffice('watch', this.#electionCandidates('watch').filter(s => s !== mgrSeed), voters, year);
@@ -7263,7 +7395,7 @@ export class World {
     #advanceEncounter(e, dt) {
         if (e.presentational) return;   // #Slice3 a WATCHED-raid raider is driven wholly by #tickRaidEvent
         const f = e.target;
-        if (!f || !this.farmers.includes(f) || f.health === 'sick') { this.#endEncounter(e, null); return; }
+        if (!f || !this.farmers.includes(f) || f.health === 'sick' || f.onSortie) { this.#endEncounter(e, null); return; }   // Codex #43 P1 an off-field rider can't be fought — the encounter never advances against them (determinism leak)
         e.life -= dt;
         const beast = e.def.kind === 'beast';
         // BEASTS defend their own patch: they won't chase far from where they sprang, won't press into
@@ -10845,7 +10977,7 @@ export class Farmer {
         // some to the Healer when the satchel runs low (goodwill-gated; loners/enemies pass). Caregiving.
         if (w.roles.healerNeedsHerbs && !this.isHealer() && this.goal !== 'lone wolf' && this.grass >= 3 && !w.isNight()) {
             const hf = w.healerFarmer();
-            if (hf && hf !== this && this.opinionOf(hf) > -0.3 && (this.effCollab() > 0.45 || this.opinionOf(hf) > 0.2)) {
+            if (hf && hf !== this && !hf.onSortie && this.opinionOf(hf) > -0.3 && (this.effCollab() > 0.45 || this.opinionOf(hf) > 0.2)) {   // Codex #43 P1 don't march grass to an away Healer's stale position
                 this.herbTarget = hf; this.think("THE HEALER NEEDS HERBS - I'LL BRING GRASS");
                 if (this.#goTo(hf.pos.i + 0.5, hf.pos.j + 0.5, 'herbrun')) return;
                 this.herbTarget = null;
@@ -12636,12 +12768,12 @@ export class Farmer {
             // #counteroffensive PHASE 2 — a rider MUSTERING to ride out: HOLD (through the announcement beat) then
             // march to the frontier rally and wait there. The world flips them off-field at depart (#tickCounterSortie).
             case 'sortie': {
-                const w = this.world, s = w.counterSortie;
-                if (!this.mustering || !s || s.phase !== 'muster') { this.state = 'decide'; break; }
-                if (w.time - s.tallyAt >= SORTIE_HOLD_SEC && Math.hypot(this.pos.i - s.rally.i, this.pos.j - s.rally.j) > 2) {
-                    this.#goTo(s.rally.i, s.rally.j, 'sortie');   // march to the frontier rally (else hold, formed up)
+                const w = this.world, exp = w.musterExpOf(this);   // the war sortie OR the rescue party they march with
+                if (!this.mustering || !exp) { this.mustering = false; this.state = 'decide'; break; }   // Codex #43 P1 CLEAR the flag — else #decide re-routes to 'sortie' forever (a cleared sortie orphans the flag)
+                if (w.time - exp.tallyAt >= SORTIE_HOLD_SEC && Math.hypot(this.pos.i - exp.rally.i, this.pos.j - exp.rally.j) > 2) {
+                    this.#goTo(exp.rally.i, exp.rally.j, 'sortie');   // march to the rally (else hold, formed up)
                     if ((hashString('mustcry:' + this.sheet.seed + ':' + Math.floor(w.time / 4)) >>> 0) % 5 === 0)
-                        this.think(w.culture === 'orc' ? 'FOR THE BAND' : 'FOR THE FALLEN');
+                        this.think(exp === w.searchParty ? "HOLD ON — WE'RE COMING" : w.culture === 'orc' ? 'FOR THE BAND' : 'FOR THE FALLEN');
                 }
                 break;
             }
