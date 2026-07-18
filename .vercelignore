@@ -6,6 +6,13 @@
 .git
 node_modules
 .vercel
+
+# SuperMemory self-hosted store — CONTAINS SECRETS (api-key, auth-secret) + your
+# personal memory data. MUST NEVER deploy. (Was the 500MB that leaked publicly.)
+.supermemory
+.supermemory/
+
+# secrets / env
 .env
 .env.local
 *.log

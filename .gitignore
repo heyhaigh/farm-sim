@@ -13,6 +13,9 @@ screenshots/
 # node (only if tooling is added later)
 node_modules/
 
+# Vercel CLI project link (created by `vercel` deploys) — never commit
+.vercel/
+
 # licensed reference art (CraftPix) used as inspiration only + workflow scratch
 assets/
 
