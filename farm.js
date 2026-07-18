@@ -6476,6 +6476,11 @@ export class World {
             this.counterAuthorized = { foe: { pairKey: cv.foe.pairKey, name: cv.foe.name }, dir: cv.dir, dirName: cv.dirName, heroSeed: cv.heroSeed, at: this.day };
             this.addChronicle('legend', `${this.name} resolves to strike back at ${cv.foe.name} — the vote carries, ${yes} to ${no}. The town turns from prey to hunter.`,
                 hero, null, '#f0d060', { tier: 'grand', tone: 'triumph', label: 'THE TOWN RIDES', why: 'prey resolves to become the hunter', icon: 'foe:orc:1' });
+            // #counteroffensive PHASE 1.5 — the visible payoff: on a WATCHED town the war party RIDES OUT toward the
+            // foe (render-only stagecraft, reusing the Phase 0 sortie display; never serialized, draws no rng, and
+            // #tickSortie clears it). The real spoils / stakes / downing are Phase 2 — this is the seen "they ride".
+            if (this._live) this.sortie = { rehearsal: false, rid: 'counter:' + this.day, dir: cv.dir, dirName: cv.dirName,
+                                            target: `${cv.foe.name}'s camp`, phase: 'muster', at: this.time, n: Math.min(4, this.farmers.length) };
         } else {
             this.addChronicle('town', `${this.name} weighed a strike on ${cv.foe.name} and chose to hold the wall — the vote fails, ${no} to ${yes}.`,
                 hero, null, '#9ad0e0', { tier: 'callout', tone: 'somber', why: 'the town stays its hand' });
