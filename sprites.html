@@ -123,7 +123,7 @@
 
 <script type="module">
   // pond life + the procedural facility buildings — built by the game's own sprite module
-  import { makeLilyPad, makeFish, makeCoop, makeBarn, makeMill, makeHatchery, makeWindmill, makeTower, makeToolshed } from './pixel.js';
+  import { makeLilyPad, makeFish, makeCoop, makeBarn, makeMill, makeHatchery, makeWindmill, makeTower, makeToolshed, makeFencePost, makeCropSprites } from './pixel.js';
 
   const SW  = 'assets/craftpix-net-180537-free-swordsman-1-3-level-pixel-top-down-sprite-character/PNG/';
   const ORC = 'assets/craftpix-net-363992-free-top-down-orc-game-character-pixel-art/Tiled_files/';
@@ -244,6 +244,16 @@
             { act: 'Windmill', frames: [makeWindmill(0), makeWindmill(1), makeWindmill(2), makeWindmill(3)], file: 'pixel.js · makeWindmill(0..3)', spec: { rate: 1 } },
             { act: 'Tower', frames: [makeTower()], file: 'pixel.js · makeTower()' },
             { act: 'Toolshed', frames: [makeToolshed()], file: 'pixel.js · makeToolshed()' },
+          ] },
+        { name: 'Props & crops — reworked (batch #3)',
+          note: 'The TINY sprites — near 1× game size + drawn many times per screen, so the lever is ramp quality + minimal form, NOT detail. FENCE POST: 4-shade WOOD ramp, lit-left/shadow-right, top-cap highlight, ground AO (the cheapest total-screen win — hundreds per screen). CROPS: the WITHERED stage (every crop\'s drought look) is now a drooping wilted plant tinted per-type (its own desaturated leaf + shriveled fruit, dried-straw browns) — read as wilted, not just dark; and BEANSTALK gets a bespoke drooping-pod ripe stage instead of borrowing wheat\'s grain heads. POND (see the Pond-life card above, hot-loaded): lily pad + koi now have a water-contact shadow ring so they sit IN the water, plus an extra ramp step + spec glint. All verified to read at true 1×.',
+          anims: [
+            { act: 'Fence_Post', frames: [makeFencePost()], file: 'pixel.js · makeFencePost()', spec: { zoom: 2 } },
+            { act: 'Beanstalk_Ripe', frames: [makeCropSprites('beanstalk')[3]], file: 'pixel.js · makeCropSprites(beanstalk)[3]' },
+            { act: 'Beanstalk_Withered', frames: [makeCropSprites('beanstalk')[4]], file: 'makeCropSprites(beanstalk)[4]' },
+            { act: 'Carrot_Withered', frames: [makeCropSprites('carrot')[4]], file: 'makeCropSprites(carrot)[4]' },
+            { act: 'Grapes_Withered', frames: [makeCropSprites('grapes')[4]], file: 'makeCropSprites(grapes)[4]' },
+            { act: 'Wheat_Withered', frames: [makeCropSprites('wheat')[4]], file: 'makeCropSprites(wheat)[4]' },
           ] },
       ],
     },

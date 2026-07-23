@@ -444,18 +444,24 @@ function drawCropStage(ctx, style, type, stage, withered) {
         px(ctx, 3, 13, 6, 1, '#3a2818');   // 1px dark underside
     };
 
-    // ---- withered: drooping brown husk (any type) ----
+    // ---- withered: a WILTED plant (drought/neglect) — dried-straw browns + THIS crop's
+    // own desaturated leaf/fruit, drooping to the right. Per-type tint, not just darkened. ----
     if (withered) {
-        const wStem = '#7a5c34', wLeaf = '#8a6a3c', wLeafD = '#654c28';
+        const dry = RAMPS.GRAIN[1], dryD = RAMPS.GRAIN[0], dryL = RAMPS.GRAIN[2];   // dried straw-brown ramp
+        const sick = shade(style.leaf, 0.6), sickD = shade(style.leaf, 0.45);       // sickly desaturated green-brown
+        const shrivel = shade(style.fruit, 0.55);                                   // shriveled fruit remnant (per-type hue)
         soil();
-        px(ctx, 5, 5, 2, 6, wStem);        // bent stalk
-        px(ctx, 6, 5, 1, 6, wLeafD);
-        px(ctx, 2, 7, 3, 2, wLeaf);        // sagging leaves
-        px(ctx, 7, 8, 3, 2, wLeaf);
-        px(ctx, 4, 5, 2, 2, wLeafD);
-        px(ctx, 2, 9, 1, 1, wLeafD);
-        px(ctx, 9, 10, 1, 1, wLeafD);
-        px(ctx, 5, 4, 2, 1, wLeaf);        // drooping tip
+        // bent stalk arcing right as it collapses
+        px(ctx, 5, 4, 2, 3, dry); px(ctx, 6, 6, 2, 3, dryD); px(ctx, 7, 9, 2, 2, dry);
+        px(ctx, 5, 4, 1, 3, dryL);         // sunlit left of the stalk
+        px(ctx, 5, 3, 1, 1, dryL);         // curled dry tip
+        // sagging sickly leaves hanging down
+        px(ctx, 2, 6, 3, 1, sick); px(ctx, 2, 7, 2, 2, sickD);
+        px(ctx, 8, 8, 2, 1, sick); px(ctx, 9, 9, 1, 2, sickD);
+        // a shriveled fruit clinging (fruiting crops only), per-type colour
+        if (style.form !== 'tall') { px(ctx, 6, 8, 2, 2, shrivel); px(ctx, 6, 8, 1, 1, shade(shrivel, 1.2)); }
+        // fallen dry flecks on the soil
+        px(ctx, 3, 10, 1, 1, dryD); px(ctx, 8, 11, 1, 1, dryD);
         return;
     }
 
@@ -597,6 +603,29 @@ function drawCropStage(ctx, style, type, stage, withered) {
                 px(ctx, 7, 4, 3, 3, fruit); px(ctx, 7, 4, 3, 1, fruitL); px(ctx, 8, 5, 1, 1, fruitD);
                 px(ctx, 5, 5, 2, 2, fruitD);         // lower bloom in shade
                 px(ctx, 5, 5, 1, 1, fruit);
+            }
+            break;
+        }
+        // ---------------------------------------------------------------
+        case 'beanstalk': { // a tall climbing vine; ripe = drooping green bean pods
+            const vine = RAMPS.FOLIAGE[3], vineD = RAMPS.FOLIAGE[1], vineL = RAMPS.FOLIAGE[5];
+            const pod = fruit, podD = shade(pod, 0.72), podL = shade(pod, 1.25);
+            if (stage === 2) {
+                px(ctx, 5, 3, 2, 8, vine); px(ctx, 6, 3, 1, 8, vineD);   // twisting stalk
+                px(ctx, 5, 3, 1, 8, vineL);                              // sunlit left
+                px(ctx, 3, 6, 2, 2, vine); px(ctx, 7, 8, 2, 2, vine);    // climbing leaves
+                px(ctx, 3, 6, 1, 1, vineL); px(ctx, 7, 8, 1, 1, vineL);
+                px(ctx, 4, 5, 1, 1, vine); px(ctx, 7, 7, 1, 1, vine);    // tendrils
+                px(ctx, 5, 2, 2, 2, vineL);                              // growing tip
+            } else {
+                px(ctx, 5, 2, 2, 9, vine); px(ctx, 6, 2, 1, 9, vineD);   // tall stalk
+                px(ctx, 5, 2, 1, 9, vineL);                              // sunlit left
+                px(ctx, 3, 4, 2, 1, vine); px(ctx, 7, 6, 2, 1, vine);    // leaves
+                px(ctx, 4, 3, 2, 2, vineL);                              // crown leaves
+                // drooping pods (lit top, shaded tip)
+                px(ctx, 3, 5, 1, 3, pod); px(ctx, 3, 5, 1, 1, podL); px(ctx, 3, 8, 1, 1, podD);
+                px(ctx, 8, 4, 1, 3, pod); px(ctx, 8, 4, 1, 1, podL); px(ctx, 8, 7, 1, 1, podD);
+                px(ctx, 6, 8, 1, 3, pod); px(ctx, 6, 8, 1, 1, podL); px(ctx, 6, 11, 1, 1, podD);
             }
             break;
         }
@@ -859,12 +888,19 @@ export function makeTower() {
     return c;
 }
 
+// The most-drawn sprite in the game (hundreds per screen) — so it's pure ramp + form,
+// no detail: 4-shade WOOD ramp, sunlit-left / shadow-right, a top-cap highlight, and a
+// 1px ground-contact AO. Light upper-left, consistent with every building. (§1b, §4)
 export function makeFencePost() {
     const [c, ctx] = makeCanvas(4, 10);
-    ctx.fillStyle = '#8a6844';
-    ctx.fillRect(1, 0, 2, 10);
-    ctx.fillStyle = '#68503c';
-    ctx.fillRect(1, 8, 2, 2);
+    const W = RAMPS.WOOD, OL = RAMPS.OUTLINE.brown;
+    ctx.fillStyle = W[2]; ctx.fillRect(1, 1, 2, 8);              // post body
+    ctx.fillStyle = W[3]; ctx.fillRect(1, 1, 1, 8);             // sunlit left edge
+    ctx.fillStyle = W[1]; ctx.fillRect(2, 1, 1, 8);             // shadow right edge
+    ctx.fillStyle = W[4]; ctx.fillRect(1, 0, 2, 1);             // top-cap highlight (sun on the cut top)
+    ctx.fillStyle = shade(W[3], 1.12); ctx.fillRect(1, 0, 1, 1); // brightest top-left nub
+    ctx.fillStyle = shade(W[1], 0.85); ctx.fillRect(2, 4, 1, 1); // grain knot on the shadow side
+    ctx.fillStyle = OL; ctx.fillRect(1, 9, 2, 1);              // ground-contact AO
     return c;
 }
 
@@ -874,42 +910,42 @@ export function makeFencePost() {
 
 export function makeLilyPad(bloom) {
     const [c, ctx] = makeCanvas(14, 12);
-    // giant Victoria-style pad: green disc with a reddish rim + center notch
-    ctx.fillStyle = '#3a6e3a';
-    ctx.fillRect(2, 4, 10, 5);
-    ctx.fillRect(1, 5, 12, 3);
-    ctx.fillStyle = '#5aa048';
-    ctx.fillRect(3, 4, 8, 4);
-    ctx.fillRect(2, 5, 10, 2);
-    ctx.fillStyle = '#7dc060';
-    ctx.fillRect(4, 5, 6, 1);
-    ctx.fillStyle = '#8a4a4a';      // rim
-    ctx.fillRect(1, 4, 1, 4); ctx.fillRect(12, 4, 1, 4);
-    ctx.fillStyle = '#2e5230';      // center seam
-    ctx.fillRect(6, 4, 1, 5);
+    const F = RAMPS.FOLIAGE;
+    // water-contact shadow — a dark translucent ring so the pad sits IN the water, not on it
+    ctx.fillStyle = 'rgba(18,40,52,0.42)';
+    ctx.fillRect(1, 7, 12, 1); ctx.fillRect(2, 8, 10, 2); ctx.fillRect(3, 10, 8, 1);
+    // pad disc — FOLIAGE ramp, lit upper-left, shaded underside crescent
+    ctx.fillStyle = F[2]; ctx.fillRect(2, 3, 10, 5); ctx.fillRect(1, 4, 12, 3);   // dark silhouette
+    ctx.fillStyle = F[4]; ctx.fillRect(3, 3, 8, 4); ctx.fillRect(2, 4, 10, 2);    // mid body
+    ctx.fillStyle = F[5]; ctx.fillRect(3, 3, 6, 1); ctx.fillRect(2, 4, 4, 1);     // sunlit upper-left
+    ctx.fillStyle = F[6]; ctx.fillRect(3, 3, 3, 1);                               // spec highlight
+    ctx.fillStyle = F[0]; ctx.fillRect(1, 6, 12, 1);                              // shaded underside crescent
+    ctx.fillStyle = shade(F[2], 0.7); ctx.fillRect(6, 3, 1, 5);                   // center V-notch seam
     if (bloom) {
-        ctx.fillStyle = '#f0e0ec';   // white/pink flower
-        ctx.fillRect(6, 1, 2, 2);
-        ctx.fillStyle = '#e880a8';
-        ctx.fillRect(5, 2, 1, 1); ctx.fillRect(8, 2, 1, 1); ctx.fillRect(6, 0, 2, 1);
-        ctx.fillStyle = '#f0d040';
-        ctx.fillRect(6, 2, 2, 1);
+        ctx.fillStyle = '#f0e0ec'; ctx.fillRect(6, 1, 2, 2);                      // white/pink flower
+        ctx.fillStyle = '#e880a8'; ctx.fillRect(5, 2, 1, 1); ctx.fillRect(8, 2, 1, 1); ctx.fillRect(6, 0, 2, 1);
+        ctx.fillStyle = '#f0d040'; ctx.fillRect(6, 2, 2, 1);                      // pollen centre
+        ctx.fillStyle = '#fffdf6'; ctx.fillRect(6, 1, 1, 1);                      // petal glint
     }
     return c;
 }
 
 export function makeFish(frame) {
     const [c, ctx] = makeCanvas(8, 5);
-    ctx.fillStyle = '#e08040';       // koi orange
-    ctx.fillRect(1, 1, 5, 3);
-    ctx.fillRect(2, 0, 3, 1);
-    ctx.fillStyle = '#f0a860';
-    ctx.fillRect(2, 1, 3, 1);
-    ctx.fillStyle = '#e08040';       // tail flicks
+    const body = '#e08040', dark = shade(body, 0.74), light = '#f4b070', spec = '#fff0dc';
+    // water-contact shadow so the koi sits under the surface (keeps its ~0.85 draw alpha in-game)
+    ctx.fillStyle = 'rgba(18,40,52,0.4)'; ctx.fillRect(2, 4, 4, 1);
+    ctx.fillStyle = body; ctx.fillRect(1, 1, 5, 3); ctx.fillRect(2, 0, 3, 1);   // body
+    ctx.fillStyle = light; ctx.fillRect(2, 1, 3, 1);        // sunlit back
+    ctx.fillStyle = dark;  ctx.fillRect(1, 3, 5, 1);        // shaded belly
+    ctx.fillStyle = '#f6ece0'; ctx.fillRect(3, 2, 1, 1);    // koi white patch
+    ctx.fillStyle = spec;  ctx.fillRect(4, 1, 1, 1);        // spec glint on the back
+    // tail flicks (frame)
+    ctx.fillStyle = body;
     if (frame) { ctx.fillRect(6, 0, 2, 2); ctx.fillRect(6, 3, 2, 1); }
     else { ctx.fillRect(6, 1, 2, 1); ctx.fillRect(6, 0, 2, 1); ctx.fillRect(6, 3, 2, 1); }
-    ctx.fillStyle = '#20242c';
-    ctx.fillRect(2, 1, 1, 1);        // eye
+    ctx.fillStyle = dark; ctx.fillRect(6, frame ? 1 : 2, 1, 1);   // tail-root shade
+    ctx.fillStyle = '#20242c'; ctx.fillRect(2, 1, 1, 1);          // eye
     return c;
 }
 
