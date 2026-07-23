@@ -1524,6 +1524,24 @@ function drawSmoke(hx, hy, dispW, dispH, seed = 0) {
     ctx.globalAlpha = 1;
 }
 
+// bird_fly_animation.png: 432x1024 = 3 duplicate columns x 16 rows of 144x64 cells.
+// It's a "fly away" cinematic — the bird GROWS from a speck (rows 1-4) then flaps
+// up-right and FADES OUT over the last rows. Measured peak (max) alpha per row of
+// the col-0 cell: rows 4-12 are SOLID (max alpha = 1.0), rows 13/14/15 fade to
+// 0.70/0.40/0.25 (ghosts). So the flap MUST come from solid rows only.
+// We use adjacent rows 9/10/11 (all max-alpha 1.0, ~17px wide → consistent crow
+// size, so it flaps without visibly growing) as a clean upstroke/glide/downstroke
+// cycle. These are the MEASURED bird-only content boxes (green grass specks that
+// are baked into the sheet excluded); all frames face RIGHT.
+const BIRD_FLY_FRAMES = [
+    { sx: 67, sy: 10 * 64 + 8, w: 17, h: 15 },    // row 10 — wings raised (upstroke)
+    { sx: 72, sy: 11 * 64 + 6, w: 19, h: 12 },    // row 11 — wings spread level (glide)
+    { sx: 62, sy:  9 * 64 + 9, w: 17, h: 12 },    // row 9  — wings swept down (downstroke)
+];
+const BIRD_FLY_SCALE = 0.7;   // ~17-19px frame -> ~12-13px on screen — MATCHES the perched crow (14px content
+                              // drawn to ~11px effective) and stays SMALLER than a 16px farmer. (1.5 rendered the
+                              // whole bird ~29px = bigger than a farmer, so the crow looked enormous in flight.)
+
 function addBirds(list) {
     if (!birdJumpReady || !imageLoaded(birdJumpSheet)) return;
     if (world.isNight()) return;   // crows aren't out at night
@@ -1548,12 +1566,12 @@ function addBirds(list) {
                 ctx.translate(sx, sy);
                 if (flip) ctx.scale(-1, 1);
                 if (flying && birdFlyReady && imageLoaded(birdFlySheet)) {
-                    // fly sheet: 144x64 cells, 3 cols. Rows 9-10 hold the big wing-spread birds;
-                    // crop TIGHT to that content (was cropping a mostly-empty 100x62 box, so the
-                    // bird rendered as a tiny off-center speck) and alternate them to flap.
-                    const col = b.seed % 3;
-                    const row = (Math.floor(t * 8 + b.seed) % 2) ? 9 : 10;
-                    ctx.drawImage(birdFlySheet, col * 144 + 14, row * 64 + 6, 72, 50, -16, -13, 32, 22);
+                    // draw one measured, uncropped flap frame (see BIRD_FLY_FRAMES),
+                    // bird-bbox-centered just above the anchor so no wing ever clips.
+                    // (The sheet's 3 columns are pixel-identical for these rows.)
+                    const f = BIRD_FLY_FRAMES[Math.floor(t * 12 + b.seed) % BIRD_FLY_FRAMES.length];
+                    const dw = Math.round(f.w * BIRD_FLY_SCALE), dh = Math.round(f.h * BIRD_FLY_SCALE);
+                    ctx.drawImage(birdFlySheet, f.sx, f.sy, f.w, f.h, -Math.round(dw / 2), -2 - Math.round(dh / 2), dw, dh);
                 } else {
                     // jump sheet: 32x32 cells, 20 cols x 3 rows — draw the WHOLE cell so no hop
                     // frame gets cut off.

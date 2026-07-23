@@ -15,6 +15,7 @@
     --accent: #ffd24a;
     --human: #7dd069;
     --orc: #e0806a;
+    --creature: #6ab8e0;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -51,8 +52,9 @@
     font-size: 15px; letter-spacing: 2px; text-transform: uppercase;
     padding: 22px 0 10px; border-bottom: 1px solid var(--line); margin-bottom: 18px;
   }
-  .family.human > h2 { color: var(--human); }
-  .family.orc   > h2 { color: var(--orc); }
+  .family.human    > h2 { color: var(--human); }
+  .family.orc      > h2 { color: var(--orc); }
+  .family.creature > h2 { color: var(--creature); }
 
   .char { margin-bottom: 34px; }
   .char > h3 { font-size: 14px; margin-bottom: 2px; }
@@ -84,12 +86,14 @@
 <header>
   <h1><span class="tag">PROPAGATE</span> · SPRITE LIBRARY</h1>
   <p>
-    A review catalog of every character sprite sheet the game draws from — think a tiny Storybook
-    for pixel people. Each tile loops one animation so the team can eyeball every character's every
-    move and spot cycles that need updating. Sheets are 64px-cell grids: 4&nbsp;rows&nbsp;=&nbsp;directions
+    A review catalog of every character and creature sprite the game draws from — think a tiny
+    Storybook for pixel people. Each tile loops one animation so the team can eyeball every
+    move and spot cycles that need updating. Character sheets are 64px-cell grids: 4&nbsp;rows&nbsp;=&nbsp;directions
     (the game maps <code>down:&nbsp;row&nbsp;0</code>, <code>side:&nbsp;row&nbsp;2</code>,
     <code>up:&nbsp;row&nbsp;3</code>; row&nbsp;1 is the second diagonal/unused row), N&nbsp;columns&nbsp;=&nbsp;frames
-    (auto-detected from sheet width). Loaded live from <code>assets/…</code> — pure asset gallery, no game engine.
+    (auto-detected from sheet width). Creature tiles reuse the game's own crops and cycles
+    (and import the real procedural builders from <code>pixel.js</code> for pond life). The Direction
+    control only applies to character sheets — creatures render their fixed in-game row.
   </p>
 </header>
 
@@ -117,12 +121,26 @@
 
 <div id="catalog"></div>
 
-<script>
-(() => {
-  'use strict';
+<script type="module">
+  // pond life has no sheet — it's built procedurally by the game's own sprite module
+  import { makeLilyPad, makeFish } from './pixel.js';
 
   const SW  = 'assets/craftpix-net-180537-free-swordsman-1-3-level-pixel-top-down-sprite-character/PNG/';
   const ORC = 'assets/craftpix-net-363992-free-top-down-orc-game-character-pixel-art/Tiled_files/';
+  const HOME = 'assets/craftpix-net-654184-main-characters-home-free-top-down-pixel-art-asset/PNG/';
+  const FARM = 'assets/craftpix-net-291971-free-top-down-animals-farm-pixel-art-sprites/PNG/Without_shadow/';
+  const HUNT = 'assets/craftpix-net-789196-free-top-down-hunt-animals-pixel-sprite-pack/PNG/Without_shadow/';
+
+  // Crow flight frames — MEASURED bird-only content boxes of bird_fly_animation.png
+  // (432x1024 = 3 duplicate cols x 16 rows of 144x64; a "fly away" cinematic that
+  // GROWS then FADES). Rows 4-12 are SOLID (max alpha 1.0); rows 13-15 fade out.
+  // We use adjacent solid rows 9/10/11 (consistent ~17px size) for a clean
+  // opaque up/glide/down flap. MUST stay in sync with BIRD_FLY_FRAMES in main.js.
+  const BIRD_FLY_FRAMES = [
+    { sx: 67, sy: 10 * 64 + 8, w: 17, h: 15 },    // row 10 — wings raised (upstroke)
+    { sx: 72, sy: 11 * 64 + 6, w: 19, h: 12 },    // row 11 — wings spread level (glide)
+    { sx: 62, sy:  9 * 64 + 9, w: 17, h: 12 },    // row 9  — wings swept down (downstroke)
+  ];
 
   // canonical activity order for every character
   const ACTS = ['Idle', 'Walk', 'Run', 'Attack', 'Walk_Attack', 'Run_Attack', 'Hurt', 'Death'];
@@ -173,6 +191,42 @@
           anims: orcAnims(3) },
       ],
     },
+    {
+      family: 'Creatures — birds, livestock, pond life & prey', cls: 'creature',
+      chars: [
+        { name: 'Crow',
+          note: 'The crop raider (world.birds). FLY plays an opaque 3-frame flap cropped from the SOLID rows 9–11 of the fly sheet (a fly-away cinematic that grows then fades — rows 13–15 are semi-transparent ghosts, so we avoid them; rows 9–11 are max-alpha 1.0 and the same ~17px size, so the crow flaps without growing). HOP/PECK cycles all 20 columns of the jump sheet; its 3 rows are color variants and each bird picks one by seed. Both face RIGHT natively; the game mirrors for leftward travel. Every creature here shares ONE pixel density (native size × the global Scale) — so the crow reads SMALL, at true relative scale.',
+          anims: [
+            { act: 'Fly', src: HOME + 'bird_fly_animation.png', spec: { type: 'fly' } },
+            { act: 'Hop_V1', src: HOME + 'bird_jump_animation.png', spec: { type: 'row', gridCols: 20, gridRows: 3, row: 0 } },
+            { act: 'Hop_V2', src: HOME + 'bird_jump_animation.png', spec: { type: 'row', gridCols: 20, gridRows: 3, row: 1 } },
+            { act: 'Hop_V3', src: HOME + 'bird_jump_animation.png', spec: { type: 'row', gridCols: 20, gridRows: 3, row: 2 } },
+          ] },
+        { name: 'Livestock & poultry (facility producers)',
+          note: 'The coop / pen / sheep-pen flocks, drawn from real CraftPix farm-animal sheets (6×8 grids; the game renders side row 2, which faces LEFT, and mirrors when an animal walks right — idle animals hold column 0). In-game kinds map to pack names: cow=Bull, pig=Piglet, goat=Sheep, sheep=Lamb, chicken=Chick, plus the Rooster. Drawn at true relative size — the 64px Bull is genuinely bigger than the 16px Chick.',
+          anims: [
+            { act: 'Cow', src: FARM + 'Bull_animation_without_shadow.png', spec: { type: 'row', gridCols: 6, gridRows: 8, row: 2 } },
+            { act: 'Pig', src: FARM + 'Piglet_animation_without_shadow.png', spec: { type: 'row', gridCols: 6, gridRows: 8, row: 2 } },
+            { act: 'Goat', src: FARM + 'Sheep_animation_without_shadow.png', spec: { type: 'row', gridCols: 6, gridRows: 8, row: 2 } },
+            { act: 'Sheep', src: FARM + 'Lamb_animation_without_shadow.png', spec: { type: 'row', gridCols: 6, gridRows: 8, row: 2 } },
+            { act: 'Chicken', src: FARM + 'Chick_animation_without_shadow.png', spec: { type: 'row', gridCols: 6, gridRows: 8, row: 2 } },
+            { act: 'Rooster', src: FARM + 'Rooster_animation_without_shadow.png', spec: { type: 'row', gridCols: 6, gridRows: 8, row: 2 } },
+          ] },
+        { name: 'Pond life (water garden)',
+          note: 'Procedural sprites built by the game\'s own pixel.js, imported live — no sheet exists. Koi shimmer just under the surface at 85% alpha with a 2-frame tail flick; lily pads toggle to their bloomed state when ready to collect. (Both winter off — the pond freezes over.) Tiny by nature, drawn at the same density as everything else.',
+          anims: [
+            { act: 'Koi', frames: [makeFish(0), makeFish(1)], file: 'pixel.js · makeFish(0|1)', spec: { alpha: 0.85, rate: 3 } },
+            { act: 'Lily_Pad', frames: [makeLilyPad(false), makeLilyPad(true)], file: 'pixel.js · makeLilyPad(bloom)', spec: { rate: 8 } },
+          ] },
+        { name: 'Wild prey (hunted for meat)',
+          note: 'Roaming prey (world.prey): 4-frame side-profile idle cycles from row 2 of each sheet. Deer and hare face LEFT natively, the turkey faces RIGHT; the game mirrors each to face its heading and cycles faster while bolting from a hunter. (The pack\'s cat_animation.png is unused in-game, so it isn\'t cataloged.)',
+          anims: [
+            { act: 'Deer', src: HUNT + 'Deer/Deer_Idle.png', spec: { type: 'row', gridCols: 4, gridRows: 4, row: 2, frames: 4, rate: 2 } },
+            { act: 'Hare', src: HUNT + 'Hare/Hare_Idle.png', spec: { type: 'row', gridCols: 4, gridRows: 4, row: 2, frames: 4, rate: 2 } },
+            { act: 'Turkey', src: FARM + 'Turkey_animation_without_shadow.png', spec: { type: 'row', gridCols: 6, gridRows: 8, row: 2, frames: 4, rate: 2 } },
+          ] },
+      ],
+    },
   ];
 
   const CELL = 64;
@@ -206,25 +260,47 @@
         meta.textContent = 'loading…';
         const file = document.createElement('div');
         file.className = 'file';
-        file.textContent = an.src.split('/').pop();
-        file.title = an.src;
+        file.textContent = an.src ? an.src.split('/').pop() : an.file;
+        file.title = an.src || an.file;
         card.append(stage, act, meta, file);
         grid.appendChild(card);
 
-        const entry = { canvas, ctx: canvas.getContext('2d'), img: new Image(), cols: 1, missing: false };
-        entry.img.onload = () => {
-          entry.cols = Math.max(1, Math.round(entry.img.naturalWidth / CELL));
-          meta.textContent = `${entry.cols} frames · ${entry.img.naturalWidth}×${entry.img.naturalHeight}`;
+        const spec = an.spec || { type: 'char' };
+        const entry = { canvas, ctx: canvas.getContext('2d'), spec, zoom: spec.zoom || 1,
+                        cols: 1, cellW: CELL, cellH: CELL, missing: false };
+        if (an.frames) {
+          // procedural offscreen canvases straight from pixel.js
+          entry.frames = an.frames;
+          entry.cols = an.frames.length;
+          entry.cellW = Math.max(...an.frames.map(f => f.width));
+          entry.cellH = Math.max(...an.frames.map(f => f.height));
+          meta.textContent = `${entry.cols} frames · ${entry.cellW}×${entry.cellH} procedural`;
           sizeCanvas(entry);
-        };
-        entry.img.onerror = () => {
-          entry.missing = true;
-          card.classList.add('missing');
-          meta.textContent = 'failed to load';
+        } else {
+          entry.img = new Image();
+          entry.img.onload = () => {
+            if (spec.type === 'fly') {
+              entry.cols = BIRD_FLY_FRAMES.length;
+              entry.cellW = 24; entry.cellH = 22;   // stage box: largest measured frame is 21×19
+            } else if (spec.type === 'row') {
+              entry.cellW = entry.img.naturalWidth / spec.gridCols;
+              entry.cellH = entry.img.naturalHeight / spec.gridRows;
+              entry.cols = spec.frames || spec.gridCols;
+            } else {
+              entry.cols = Math.max(1, Math.round(entry.img.naturalWidth / CELL));
+            }
+            meta.textContent = `${entry.cols} frames · ${entry.img.naturalWidth}×${entry.img.naturalHeight}`;
+            sizeCanvas(entry);
+          };
+          entry.img.onerror = () => {
+            entry.missing = true;
+            card.classList.add('missing');
+            meta.textContent = 'failed to load';
+            sizeCanvas(entry);
+          };
+          entry.img.src = an.src;
           sizeCanvas(entry);
-        };
-        entry.img.src = an.src;
-        sizeCanvas(entry);
+        }
         cards.push(entry);
       }
       chEl.appendChild(grid);
@@ -234,8 +310,9 @@
   }
 
   function sizeCanvas(e) {
-    e.canvas.width = CELL * scale;
-    e.canvas.height = CELL * scale;
+    const z = scale * e.zoom;
+    e.canvas.width = Math.round(e.cellW * z);
+    e.canvas.height = Math.round(e.cellH * z);
     e.ctx.imageSmoothingEnabled = false;
   }
 
@@ -248,9 +325,29 @@
     frameTick++;
     for (const e of cards) {
       e.ctx.clearRect(0, 0, e.canvas.width, e.canvas.height);
+      const z = scale * e.zoom;
+      const f = Math.floor(frameTick / (e.spec.rate || 1)) % e.cols;
+      if (e.frames) {   // procedural pixel.js sprite — center it in its stage box
+        const spr = e.frames[f];
+        if (e.spec.alpha) e.ctx.globalAlpha = e.spec.alpha;
+        e.ctx.drawImage(spr, 0, 0, spr.width, spr.height,
+          Math.round((e.cellW - spr.width) / 2 * z), Math.round((e.cellH - spr.height) / 2 * z),
+          spr.width * z, spr.height * z);
+        e.ctx.globalAlpha = 1;
+        continue;
+      }
       if (e.missing || !e.img.complete || !e.img.naturalWidth) continue;
-      const f = frameTick % e.cols;
-      e.ctx.drawImage(e.img, f * CELL, dir * CELL, CELL, CELL, 0, 0, CELL * scale, CELL * scale);
+      if (e.spec.type === 'fly') {          // measured per-frame content crops, centered
+        const fr = BIRD_FLY_FRAMES[f];
+        e.ctx.drawImage(e.img, fr.sx, fr.sy, fr.w, fr.h,
+          Math.round((e.cellW - fr.w) / 2 * z), Math.round((e.cellH - fr.h) / 2 * z),
+          fr.w * z, fr.h * z);
+      } else if (e.spec.type === 'row') {   // fixed in-game row, N-frame cycle
+        e.ctx.drawImage(e.img, f * e.cellW, e.spec.row * e.cellH, e.cellW, e.cellH,
+          0, 0, e.cellW * z, e.cellH * z);
+      } else {                              // 64px character sheet — direction row
+        e.ctx.drawImage(e.img, f * CELL, dir * CELL, CELL, CELL, 0, 0, CELL * z, CELL * z);
+      }
     }
   }
   requestAnimationFrame(loop);
@@ -268,7 +365,6 @@
   wire('dirGroup', 'dir', v => { dir = v; });
   wire('scaleGroup', 'scale', v => { scale = v; for (const e of cards) sizeCanvas(e); });
   wire('fpsGroup', 'fps', v => { fps = v; });
-})();
 </script>
 </body>
 </html>
