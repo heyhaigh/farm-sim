@@ -796,6 +796,51 @@ export function makeToolshed() {
     return c;
 }
 
+// #85 legend MEMORIAL — a small gold-plaqued stone raised where a raider was felled
+// (accumulates across a war, permanent on the battlefield). Tiny-sprite discipline:
+// STONE-ramp shaft (lit-left/shadow-right + ashlar-lite block tones + a mortar seam),
+// a pointed lit cap, a plinth with a lit course + ground AO, and a hue-shifted GRAIN
+// plaque with a spec glint. 12×21, cached. Anchor: cap at top, shadow at the base. (§1b)
+let _monument = null;
+export function makeMonument() {
+    if (_monument) return _monument;
+    const [c, ctx] = makeCanvas(12, 21);
+    const S = RAMPS.STONE, G = RAMPS.GRAIN, OL = RAMPS.OUTLINE.warm, cx = 6;
+    groundShadow(ctx, cx, 19, 6, 2, 0.32);                       // soft 2-layer ground shadow
+    // plinth (base block): body + lit top course + shaded lower course + ground AO
+    ctx.fillStyle = OL;  ctx.fillRect(1, 14, 10, 5);
+    ctx.fillStyle = S[2]; ctx.fillRect(1, 15, 10, 3);
+    ctx.fillStyle = S[3]; ctx.fillRect(1, 15, 10, 1);           // lit top course
+    ctx.fillStyle = S[1]; ctx.fillRect(1, 17, 10, 1);           // shaded lower course
+    ctx.fillStyle = shade(OL, 0.9); ctx.fillRect(1, 18, 10, 1); // ground-contact AO
+    // shaft — STONE ramp, lit-left / shadow-right, ashlar-lite blocks + a mortar seam
+    const sx0 = 3, sw = 6, sTop = 2, sBot = 14;
+    ctx.fillStyle = OL;   ctx.fillRect(sx0 - 1, sTop, sw + 2, sBot - sTop);
+    ctx.fillStyle = S[2]; ctx.fillRect(sx0, sTop, sw, sBot - sTop);
+    ctx.fillStyle = S[3]; ctx.fillRect(sx0, sTop, 2, sBot - sTop);              // sunlit left
+    ctx.fillStyle = shade(S[4], 1.05); ctx.fillRect(sx0, sTop, 1, sBot - sTop); // brightest left edge
+    ctx.fillStyle = S[1]; ctx.fillRect(sx0 + sw - 1, sTop, 1, sBot - sTop);     // shadow right
+    ctx.fillStyle = shade(S[2], 1.08); ctx.fillRect(sx0 + 1, sTop + 1, 3, 3);   // lighter block
+    ctx.fillStyle = shade(S[2], 0.9);  ctx.fillRect(sx0 + 2, sTop + 8, 3, 3);   // darker block
+    ctx.fillStyle = S[0]; ctx.fillRect(sx0, sTop + 6, sw, 1);                   // mortar seam
+    ctx.fillStyle = shade(S[3], 1.08); ctx.fillRect(sx0, sTop + 7, sw, 1);      // lit under-seam course
+    // pointed CAP with a lit top
+    ctx.fillStyle = OL;  ctx.fillRect(cx - 3, 1, 6, 1);
+    ctx.fillStyle = S[3]; ctx.fillRect(cx - 2, 1, 4, 1);
+    ctx.fillStyle = shade(S[4], 1.1); ctx.fillRect(cx - 1, 0, 2, 1);            // lit pointed peak
+    ctx.fillStyle = S[1]; ctx.fillRect(cx + 1, 1, 1, 1);                        // cap shadow corner
+    // gold PLAQUE — GRAIN ramp shadow->lit + recessed frame + spec glint + engraving
+    ctx.fillStyle = OL;  ctx.fillRect(cx - 3, 6, 6, 5);                         // recessed frame
+    ctx.fillStyle = G[1]; ctx.fillRect(cx - 2, 7, 4, 3);                        // plaque body (shadow gold)
+    ctx.fillStyle = G[3]; ctx.fillRect(cx - 2, 7, 4, 1);                        // lit top
+    ctx.fillStyle = G[4]; ctx.fillRect(cx - 2, 7, 2, 1);                        // brighter lit-left
+    ctx.fillStyle = shade(G[1], 0.82); ctx.fillRect(cx - 2, 9, 4, 1);          // shaded bottom
+    ctx.fillStyle = shade(G[0], 0.9); ctx.fillRect(cx - 1, 8, 2, 1);           // engraved line
+    ctx.fillStyle = '#fffdf6'; ctx.fillRect(cx - 2, 7, 1, 1);                   // spec glint
+    _monument = c;
+    return c;
+}
+
 // A Dutch windmill: an ashlar stone tower + a timber cap, with FOUR lattice sails that
 // truly ROTATE across the 4 frames (22.5°/frame; the 4-fold symmetry makes the cycle
 // loop seamlessly at ~9fps — see main.js). Sails are plotted pixel-by-pixel along the

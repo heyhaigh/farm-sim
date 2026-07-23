@@ -6,7 +6,7 @@ import { World, CHUNK, T, GRID, CENTER, DAY_LENGTH, NIGHT_LENGTH, ITEMS, CRAFTAB
 import {
     TILE_W, TILE_H, makeCanvas, drawText, textWidth,
     makeFarmerSprites, makeCropSprites, makeHouse, makeWell, makeBoard, makeFencePost,
-    makeScaffold, makeToolshed, makeWindmill, makeTower, makeLantern,
+    makeScaffold, makeToolshed, makeWindmill, makeTower, makeLantern, makeMonument,
     makeLilyPad, makeFish, makeChicken, makeCow, makePig, makeGoat, makeSheep, makeCoop, makeBarn, makeMill, makeHatchery, makeTrough,
     makeTree, makeStump, makeWildWheat, makeWildFlowers,
     fillDiamond, strokeDiamond,
@@ -2499,19 +2499,13 @@ function collectDrawables() {
 
     return list;
 }
-// A commemorative stone raised where a great deed happened — a small plinth + a gold-plaqued obelisk.
+// A commemorative stone raised where a raider fell — the procedural gold-plaqued obelisk
+// (pixel.js makeMonument, RAMPS.STONE + GRAIN). Anchored: cap at the top of the sprite,
+// shadow at its base, centred on the tile (matches the 12×21 hover hit-rect below).
+const monumentSprite = makeMonument();
 function drawMonument(sx, sy) {
     ctx.imageSmoothingEnabled = false;
-    const footY = Math.floor(sy + TILE_H / 2), cx = Math.floor(sx);
-    ctx.fillStyle = 'rgba(10,14,10,0.3)'; ctx.fillRect(cx - 6, footY - 1, 12, 3);          // ground shadow
-    ctx.fillStyle = '#7a7466'; ctx.fillRect(cx - 5, footY - 4, 10, 4);                      // plinth
-    ctx.fillStyle = '#5c574c'; ctx.fillRect(cx - 5, footY - 1, 10, 1);
-    ctx.fillStyle = '#9a9484'; ctx.fillRect(cx - 3, footY - 17, 6, 13);                     // stone shaft
-    ctx.fillStyle = '#b4ae9c'; ctx.fillRect(cx - 3, footY - 17, 2, 13);                     // lit edge
-    ctx.fillStyle = '#6a6458'; ctx.fillRect(cx + 2, footY - 17, 1, 13);                     // shade edge
-    ctx.fillStyle = '#8a8474'; ctx.fillRect(cx - 2, footY - 19, 4, 2);                      // pointed cap
-    ctx.fillStyle = '#e0b040'; ctx.fillRect(cx - 2, footY - 12, 4, 3);                      // gold plaque
-    ctx.fillStyle = '#f6dc88'; ctx.fillRect(cx - 2, footY - 12, 4, 1);
+    ctx.drawImage(monumentSprite, Math.floor(sx - 6), Math.floor(sy + TILE_H / 2 - 19));
 }
 // A wild prey animal: a sliced side-profile idle frame of its real sprite, mirrored to face its heading
 // (fallback: a small critter blob). Cycles a little faster while bolting from a hunter.
