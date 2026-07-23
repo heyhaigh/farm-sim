@@ -283,7 +283,7 @@ const scaffoldSprite = makeScaffold();
 const lanternSprite = makeLantern();
 const structSprites = {
     toolshed: makeToolshed(),
-    windmill: [makeWindmill(0), makeWindmill(1)],
+    windmill: [makeWindmill(0), makeWindmill(1), makeWindmill(2), makeWindmill(3)],
     tower: makeTower(),
     well2: wellSprite,
 };
@@ -2326,7 +2326,7 @@ function collectDrawables() {
             continue;
         }
         let spr = structSprites[st.type];
-        if (st.type === 'windmill') spr = spr[Math.floor(performance.now() / 350) % 2];
+        if (st.type === 'windmill') spr = spr[Math.floor(performance.now() / 110) % 4];   // ~9fps sweep (display-time; never sim/seed)
         if (!spr) continue;   // unknown structure type (e.g. statue art still loading)
         list.push({
             y: sy + TILE_H, draw: () =>

@@ -196,6 +196,57 @@ function recess(ctx, x, y, w, h, inner, rim) {
     ctx.fillStyle = shade(inner, 0.66); ctx.fillRect(x, y + h - 1, w, 1);     // inner base AO (kept above the outline floor)
 }
 
+// HAND-LAID ASHLAR tower body — the mill's masonry treatment, generalized to a
+// (possibly tapered) tower: running-bond blocks, per-block tone by horizontal
+// position + deterministic ±1-step jitter, mortar relief (lit top bevel + base AO),
+// moss flecks, a soft right-face form wash + bright sunlit left edge, eave + ground
+// AO. Pure/deterministic (seeded scatter, no rng). S = STONE ramp. (§1b Chrono-Trigger)
+function ashlarBody(ctx, cx, yTop, yBot, halfTop, halfBot, S, OL) {
+    const F = RAMPS.FOLIAGE;
+    const halfAt = (y) => halfTop + (halfBot - halfTop) * (y - yTop) / Math.max(1, yBot - yTop);
+    const hwT = Math.round(halfTop);
+    // outline silhouette (per row, follows the taper) + ridge cap
+    ctx.fillStyle = OL;
+    for (let y = yTop; y <= yBot; y++) { const hw = Math.round(halfAt(y)); ctx.fillRect(cx - hw - 1, y, (hw + 1) * 2, 1); }
+    ctx.fillRect(cx - hwT - 1, yTop - 1, (hwT + 1) * 2, 1);
+    // base fill
+    ctx.fillStyle = S[2];
+    for (let y = yTop; y <= yBot; y++) { const hw = Math.round(halfAt(y)); ctx.fillRect(cx - hw, y, hw * 2, 1); }
+    // ashlar blocks, running bond
+    const CH = 5, BW = 8;
+    for (let ci = 0, y = yTop; y <= yBot; y += CH, ci++) {
+        const off = (ci % 2) * (BW >> 1), hw = Math.round(halfAt(y + CH / 2)), L = cx - hw, Rr = cx + hw;
+        for (let x = L - off; x < Rr; x += BW) {
+            const gx = Math.max(L, x), gxe = Math.min(Rr - 1, x + BW - 1), w2 = gxe - gx + 1;
+            if (w2 < 2) continue;
+            const lf = hw > 0 ? (gx - L) / (hw * 2) : 0.5;
+            let idx = lf < 0.34 ? 3 : lf > 0.66 ? 1 : 2;
+            const hsh = ((gx * 73856093) ^ (y * 19349663)) >>> 0, jit = hsh % 5;
+            if (jit === 0) idx = Math.min(4, idx + 1); else if (jit === 1) idx = Math.max(0, idx - 1);
+            const h2 = Math.min(CH, yBot - y + 1);
+            ctx.fillStyle = S[idx]; ctx.fillRect(gx, y, w2, h2);
+            ctx.fillStyle = shade(S[idx], 1.14); ctx.fillRect(gx, y, w2, 1);
+            ctx.fillStyle = shade(S[idx], 0.78); ctx.fillRect(gx, y + h2 - 1, w2, 1);
+            if (hsh % 11 === 0) { ctx.fillStyle = F[3]; ctx.fillRect(gx + 1, y + 1, 2, 1); ctx.fillStyle = F[4]; ctx.fillRect(gx + 1, y + 1, 1, 1); }
+        }
+    }
+    // vertical mortar seams
+    ctx.fillStyle = S[0];
+    for (let ci = 0, y = yTop; y <= yBot; y += CH, ci++) {
+        const off = (ci % 2) * (BW >> 1), hw = Math.round(halfAt(y + CH / 2)), L = cx - hw, Rr = cx + hw;
+        for (let x = L - off + BW; x < Rr; x += BW) if (x > L && x < Rr) ctx.fillRect(x - 1, y, 1, Math.min(CH, yBot - y + 1));
+    }
+    // form: soft right-face shadow wash + bright sunlit left edge
+    for (let y = yTop; y <= yBot; y++) {
+        const hw = Math.round(halfAt(y));
+        ctx.fillStyle = 'rgba(20,26,34,0.22)'; ctx.fillRect(cx + Math.round(hw * 0.34), y, Math.ceil(hw * 0.66), 1);
+        ctx.fillStyle = shade(S[4], 1.14); ctx.fillRect(cx - hw, y, 1, 1);
+    }
+    ctx.fillStyle = shade(S[0], 0.9); ctx.fillRect(cx - hwT, yTop, hwT * 2, 1);                          // eave AO
+    const hwB = Math.round(halfBot);
+    ctx.fillStyle = shade(OL, 0.9); ctx.fillRect(cx - hwB - 1, yBot + 1, (hwB + 1) * 2, 1);              // ground AO
+}
+
 // derive appearance traits deterministically from the seed (unsigned shifts!)
 function look(seed) {
     const s = seed >>> 0;
@@ -668,70 +719,143 @@ export function makeScaffold() {
     return c;
 }
 
+// The TOOLSHED — a weathered-plank lean-to with a mono-pitch shingle roof, an open
+// recessed bay of hanging tools (rake / hoe / spade) and a closed plank door. A town
+// build. Exemplar: Harvest Moon outbuildings. (§2 farm-building class, §1b timber)
 export function makeToolshed() {
-    const [c, ctx] = makeCanvas(26, 24);
-    ctx.fillStyle = '#8a6844';
-    ctx.fillRect(3, 10, 20, 12);
-    ctx.fillStyle = '#68503c';
-    ctx.fillRect(10, 14, 6, 8);
-    ctx.fillStyle = '#586068';
-    for (let i = 0; i < 6; i++) ctx.fillRect(1 + i * 2, 10 - i, 24 - i * 4, 2);
-    // tools leaning
-    ctx.fillStyle = '#c8ac80';
-    ctx.fillRect(5, 12, 1, 9);
-    ctx.fillRect(19, 13, 1, 8);
-    ctx.fillStyle = '#9aa0ac';
-    ctx.fillRect(4, 11, 3, 2);
-    ctx.fillRect(18, 12, 3, 1);
-    return c;
-}
-
-export function makeWindmill(frame = 0) {
-    const [c, ctx] = makeCanvas(28, 34);
-    // tower
-    ctx.fillStyle = '#c8ac80';
-    ctx.fillRect(10, 14, 8, 20);
-    ctx.fillStyle = '#a8906a';
-    ctx.fillRect(10, 30, 8, 4);
-    ctx.fillStyle = '#68503c';
-    ctx.fillRect(12, 26, 4, 8);
-    // cap
-    ctx.fillStyle = '#8a5c3c';
-    ctx.fillRect(9, 11, 10, 4);
-    // blades (two frames = X vs +)
-    ctx.fillStyle = '#e8e0d0';
-    const cx = 14, cy = 13;
-    if (frame === 0) {
-        ctx.fillRect(cx - 1, cy - 11, 2, 10);
-        ctx.fillRect(cx - 1, cy + 2, 2, 10);
-        ctx.fillRect(cx - 12, cy - 1, 10, 2);
-        ctx.fillRect(cx + 3, cy - 1, 10, 2);
-    } else {
-        for (let d = 2; d < 10; d++) {
-            ctx.fillRect(cx + d - 1, cy + d - 1, 2, 2);
-            ctx.fillRect(cx - d, cy + d - 1, 2, 2);
-            ctx.fillRect(cx + d - 1, cy - d, 2, 2);
-            ctx.fillRect(cx - d, cy - d, 2, 2);
+    const [c, ctx] = makeCanvas(48, 44);
+    const W = RAMPS.WOOD, S = RAMPS.STONE, OL = RAMPS.OUTLINE.brown;
+    const bx0 = 8, bx1 = 40, wy0 = 16, wy1 = 40;
+    groundShadow(ctx, 24, 41, 21, 5, 0.3);
+    // weathered plank walls + form self-shadow (drawWall)
+    drawWall(ctx, bx0, bx1, wy0, wy1, { base: W[2], hi: W[3], lo: W[1], ol: OL }, 6);
+    ctx.fillStyle = shade(W[1], 1.1); ctx.fillRect(bx0 - 1, wy1 - 2, bx1 - bx0 + 3, 1);   // sill relief
+    ctx.fillStyle = shade(OL, 0.85); ctx.fillRect(bx0 - 1, wy1 + 1, bx1 - bx0 + 3, 1);     // ground AO
+    // MONO-PITCH (lean-to) roof — slopes up to the LEFT (light side); shingled slab with
+    // an overhang. Per-column top y descends left→right; drawn as stepped plank rows.
+    const rL = bx0 - 3, rR = bx1 + 3, topL = 6, topR = 16, th = 5;
+    for (let x = rL; x <= rR; x++) {
+        const ty = Math.round(topL + (topR - topL) * (x - rL) / (rR - rL));
+        ctx.fillStyle = OL; ctx.fillRect(x, ty - 1, 1, 1);                       // top outline edge
+        for (let d = 0; d < th; d++) {
+            const col = d === 0 ? shade(W[3], 1.06) : d < 2 ? W[2] : d < th - 1 ? W[1] : shade(W[0], 0.9);
+            ctx.fillStyle = col; ctx.fillRect(x, ty + d, 1, 1);
         }
+        if ((x - rL) % 5 === 2) { ctx.fillStyle = shade(W[0], 0.85); ctx.fillRect(x, ty + 1, 1, th - 1); }   // shingle seams
+        ctx.fillStyle = shade(W[0], 0.7); ctx.fillRect(x, ty + th, 1, 1);        // eave underside shadow
     }
-    ctx.fillStyle = '#584838';
-    ctx.fillRect(cx - 1, cy - 1, 2, 2);
+    ctx.fillStyle = shade(OL, 0.8); ctx.fillRect(bx0, wy0, bx1 - bx0 + 1, 1);    // eave AO band on wall
+    // open BAY (left) — a recessed dark interior with a back wall + hanging tools
+    recess(ctx, 11, 22, 13, 17, '#1a1611', OL);
+    ctx.fillStyle = shade(W[0], 1.2); ctx.fillRect(12, 23, 11, 1);               // faint back-wall top light
+    // rake: shaft + tines
+    ctx.fillStyle = W[3]; ctx.fillRect(14, 24, 1, 13); ctx.fillStyle = shade(W[3], 0.85); ctx.fillRect(15, 24, 1, 13);
+    ctx.fillStyle = S[3]; ctx.fillRect(12, 36, 5, 1); for (let t = 12; t <= 16; t += 2) ctx.fillRect(t, 37, 1, 2);
+    // hoe: shaft + angled head
+    ctx.fillStyle = W[3]; ctx.fillRect(19, 24, 1, 12); ctx.fillStyle = shade(W[3], 0.85); ctx.fillRect(20, 25, 1, 11);
+    ctx.fillStyle = S[4]; ctx.fillRect(18, 35, 1, 1); ctx.fillStyle = S[3]; ctx.fillRect(17, 36, 3, 2);
+    // spade leaning in the corner: shaft + blade
+    ctx.fillStyle = W[2]; ctx.fillRect(22, 25, 1, 9);
+    ctx.fillStyle = S[3]; ctx.fillRect(21, 34, 3, 3); ctx.fillStyle = shade(S[4], 1.1); ctx.fillRect(21, 34, 1, 1);
+    // closed plank DOOR (right) with hinges + handle
+    recess(ctx, 27, 24, 9, 15, '#20190f', OL);
+    ctx.fillStyle = W[2]; ctx.fillRect(28, 25, 7, 13);
+    ctx.fillStyle = W[3]; ctx.fillRect(28, 25, 1, 13);                            // lit board
+    ctx.fillStyle = shade(W[0], 0.9); ctx.fillRect(30, 25, 1, 13); ctx.fillRect(33, 25, 1, 13);   // plank seams
+    ctx.fillStyle = '#2a2620'; ctx.fillRect(28, 27, 2, 1); ctx.fillRect(28, 35, 2, 1);            // hinges
+    ctx.fillStyle = shade(S[4], 1.05); ctx.fillRect(34, 31, 1, 1);                // handle
     return c;
 }
 
+// A Dutch windmill: an ashlar stone tower + a timber cap, with FOUR lattice sails that
+// truly ROTATE across the 4 frames (22.5°/frame; the 4-fold symmetry makes the cycle
+// loop seamlessly at ~9fps — see main.js). Sails are plotted pixel-by-pixel along the
+// rotated arm (no ctx.rotate/arc → no anti-aliasing). frame = 0..3. (§7, §P11)
+export function makeWindmill(frame = 0) {
+    const [c, ctx] = makeCanvas(44, 64);
+    const S = RAMPS.STONE, W = RAMPS.WOOD, OL = RAMPS.OUTLINE.warm;
+    const cx = 22, hubY = 20;
+    groundShadow(ctx, 22, 61, 15, 4, 0.3);
+    // stone tower, gently tapered (wider at the base)
+    ashlarBody(ctx, cx, 26, 62, 9, 13, S, OL);
+    // door + window recesses
+    ctx.fillStyle = S[4]; ctx.fillRect(cx - 4, 50, 8, 1);            // door lintel
+    recess(ctx, cx - 3, 51, 6, 11, '#171310', S[0]);
+    ctx.fillStyle = W[1]; ctx.fillRect(cx - 2, 52, 4, 10);          // plank door
+    ctx.fillStyle = shade(W[0], 0.9); ctx.fillRect(cx, 52, 1, 10);
+    recess(ctx, cx - 2, 36, 4, 4, '#161a20', S[0]);                 // small window
+    ctx.fillStyle = RAMPS.GLASS[1]; ctx.fillRect(cx - 2, 36, 4, 4);
+    ctx.fillStyle = shade(RAMPS.GLASS[2], 1.2); ctx.fillRect(cx - 2, 36, 1, 1);
+    // timber CAP (the rotating boat-cap that carries the sails) — overhangs the tower top
+    ctx.fillStyle = OL; ctx.fillRect(cx - 9, 21, 18, 6);
+    ctx.fillStyle = W[2]; ctx.fillRect(cx - 8, 22, 16, 4);
+    ctx.fillStyle = W[3]; ctx.fillRect(cx - 8, 22, 16, 1);          // lit ridge
+    ctx.fillStyle = shade(W[1], 0.85); ctx.fillRect(cx - 8, 25, 16, 1);   // under-cap shadow (eave AO on tower)
+    ctx.fillStyle = W[1]; ctx.fillRect(cx - 9, 19, 3, 3);          // finial stub
+    // ---- four lattice SAILS, rotated for this frame (plotted, not transformed) ----
+    const cloth = '#e8e0d0', spar = W[1], sparHi = W[3];
+    const len = 18, baseAng = frame * (Math.PI / 8);   // 22.5° per frame
+    for (let k = 0; k < 4; k++) {
+        const a = baseAng + k * (Math.PI / 2), dx = Math.cos(a), dy = Math.sin(a), nx = -dy, ny = dx;
+        // stock (spar): 2px, hub -> tip, stepped finely so the diagonal has no gaps
+        for (let r = 2; r <= len; r += 0.5) {
+            const x = Math.round(cx + dx * r), y = Math.round(hubY + dy * r);
+            ctx.fillStyle = spar; ctx.fillRect(x, y, 1, 1);
+            ctx.fillStyle = sparHi; ctx.fillRect(Math.round(cx + dx * r + nx), Math.round(hubY + dy * r + ny), 1, 1);
+        }
+        // sail cloth on the +perp side of each stock, widening toward the tip, with slats
+        for (let r = 4; r <= len; r += 0.5) {
+            const wsail = 1 + Math.floor((r / len) * 3);
+            for (let w = 1; w <= wsail; w++) {
+                ctx.fillStyle = cloth;
+                ctx.fillRect(Math.round(cx + dx * r + nx * w), Math.round(hubY + dy * r + ny * w), 1, 1);
+            }
+            if (Math.round(r) % 3 === 0) {   // perpendicular lattice slat
+                for (let w = 1; w <= wsail; w++) { ctx.fillStyle = shade(cloth, 0.82); ctx.fillRect(Math.round(cx + dx * r + nx * w), Math.round(hubY + dy * r + ny * w), 1, 1); }
+            }
+        }
+        ctx.fillStyle = '#fffdf6'; ctx.fillRect(Math.round(cx + dx * len), Math.round(hubY + dy * len), 1, 1);   // bright tip
+    }
+    // hub cap over the sail roots
+    ctx.fillStyle = W[0]; ctx.fillRect(cx - 2, hubY - 2, 4, 4);
+    ctx.fillStyle = shade(W[2], 1.1); ctx.fillRect(cx - 2, hubY - 2, 2, 1);
+    ctx.fillStyle = '#2a2620'; ctx.fillRect(cx - 1, hubY - 1, 2, 2);
+    return c;
+}
+
+// The lightning-ward TOWER — a tapered ashlar obelisk with a carved rune band, a
+// battlemented crown, a steel rod and a glowing amber orb finial (soft halo). A
+// town-plaza landmark. Exemplar: Chrono Trigger / Terranigma stonework. (§2, §1b)
 export function makeTower() {
-    const [c, ctx] = makeCanvas(18, 32);
-    ctx.fillStyle = '#787e8c';
-    ctx.fillRect(5, 10, 8, 22);
-    ctx.fillStyle = '#9aa0ac';
-    ctx.fillRect(4, 8, 10, 3);
-    ctx.fillStyle = '#586068';
-    ctx.fillRect(7, 24, 4, 8);
-    // rod + orb
-    ctx.fillStyle = '#c8ccd8';
-    ctx.fillRect(8, 1, 2, 8);
-    ctx.fillStyle = '#f0d060';
-    ctx.fillRect(7, 0, 4, 3);
+    const [c, ctx] = makeCanvas(28, 56);
+    const S = RAMPS.STONE, W = RAMPS.WOOD, G = RAMPS.GRAIN, OL = RAMPS.OUTLINE.warm;
+    const cx = 14;
+    groundShadow(ctx, 14, 53, 11, 4, 0.3);
+    // tapered stone obelisk
+    ashlarBody(ctx, cx, 16, 54, 5, 8, S, OL);
+    // battlemented crown (crenellations) over the top course
+    ctx.fillStyle = OL; ctx.fillRect(cx - 6, 13, 12, 4);
+    ctx.fillStyle = S[3]; ctx.fillRect(cx - 5, 14, 10, 3);
+    ctx.fillStyle = shade(S[4], 1.1); ctx.fillRect(cx - 5, 14, 10, 1);        // lit merlon tops
+    ctx.fillStyle = S[1]; ctx.fillRect(cx - 3, 14, 2, 2); ctx.fillRect(cx + 1, 14, 2, 2);   // crenel gaps (shadowed)
+    // carved rune band mid-shaft — a recessed groove with lit glyph flecks
+    ctx.fillStyle = shade(S[0], 0.95); ctx.fillRect(cx - 6, 32, 12, 3);
+    ctx.fillStyle = shade(S[4], 1.15); ctx.fillRect(cx - 6, 32, 12, 1);       // lit top lip of the groove
+    ctx.fillStyle = G[4]; ctx.fillRect(cx - 4, 33, 1, 1); ctx.fillRect(cx - 1, 33, 1, 1); ctx.fillRect(cx + 3, 33, 1, 1);   // glyph glints
+    // arched ward-door recess at the base
+    ctx.fillStyle = S[4]; ctx.fillRect(cx - 3, 44, 6, 1);
+    recess(ctx, cx - 2, 45, 4, 9, '#161310', S[0]);
+    // steel rod up to the finial
+    ctx.fillStyle = OL; ctx.fillRect(cx - 1, 4, 3, 10);
+    ctx.fillStyle = S[4]; ctx.fillRect(cx - 1, 4, 1, 10);                     // lit rod edge
+    ctx.fillStyle = S[1]; ctx.fillRect(cx + 1, 4, 1, 10);                     // shaded rod edge
+    // glowing amber orb — soft translucent halo (2 layers) then the solid bead + glint
+    ctx.fillStyle = 'rgba(240,200,80,0.16)'; ctx.fillRect(cx - 5, 0, 12, 10);
+    ctx.fillStyle = 'rgba(248,214,110,0.28)'; ctx.fillRect(cx - 3, 0, 8, 7);
+    ctx.fillStyle = G[3]; ctx.fillRect(cx - 3, 1, 6, 5); ctx.fillRect(cx - 2, 0, 4, 7);   // orb body
+    ctx.fillStyle = G[5]; ctx.fillRect(cx - 2, 1, 3, 2);                      // hot core
+    ctx.fillStyle = '#fffdf6'; ctx.fillRect(cx - 2, 1, 1, 1);                 // spec glint
+    ctx.fillStyle = shade(G[2], 0.9); ctx.fillRect(cx - 2, 5, 4, 1);          // orb underside
     return c;
 }
 

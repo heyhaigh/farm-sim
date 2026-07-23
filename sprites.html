@@ -123,7 +123,7 @@
 
 <script type="module">
   // pond life + the procedural facility buildings — built by the game's own sprite module
-  import { makeLilyPad, makeFish, makeCoop, makeBarn, makeMill, makeHatchery } from './pixel.js';
+  import { makeLilyPad, makeFish, makeCoop, makeBarn, makeMill, makeHatchery, makeWindmill, makeTower, makeToolshed } from './pixel.js';
 
   const SW  = 'assets/craftpix-net-180537-free-swordsman-1-3-level-pixel-top-down-sprite-character/PNG/';
   const ORC = 'assets/craftpix-net-363992-free-top-down-orc-game-character-pixel-art/Tiled_files/';
@@ -237,6 +237,13 @@
             { act: 'Coop', frames: [makeCoop()], file: 'pixel.js · makeCoop()' },
             { act: 'Mill', frames: [makeMill()], file: 'pixel.js · makeMill()' },
             { act: 'Hatchery', frames: [makeHatchery()], file: 'pixel.js · makeHatchery()' },
+          ] },
+        { name: 'Plaza structures — reworked (batch #2)',
+          note: 'Town-plaza landmarks, same quality bar as the facility buildings. WINDMILL now has a proper 4-frame blade ROTATION (22.5°/frame; the sails are plotted pixel-by-pixel along the rotated arm — no ctx.rotate/arc, so no anti-aliasing — and the 4-fold symmetry makes the loop seamless; in-game it runs ~9fps off performance.now, display-time only). Its tower base + the lightning-ward TOWER use the mill\'s hand-laid ashlar (per-block tone jitter, mortar relief, moss). TOOLSHED is a weathered-plank lean-to (mono-pitch shingle roof) with an open bay of hanging tools. Old→new: windmill 28×34→44×64, tower 18×32→28×56, toolshed 26×24→48×44. The tower orb has an intentional translucent glow halo (an FX layer, not AA).',
+          anims: [
+            { act: 'Windmill', frames: [makeWindmill(0), makeWindmill(1), makeWindmill(2), makeWindmill(3)], file: 'pixel.js · makeWindmill(0..3)', spec: { rate: 1 } },
+            { act: 'Tower', frames: [makeTower()], file: 'pixel.js · makeTower()' },
+            { act: 'Toolshed', frames: [makeToolshed()], file: 'pixel.js · makeToolshed()' },
           ] },
       ],
     },
