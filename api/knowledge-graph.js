@@ -151,6 +151,12 @@ async function searchLineage(base, headers) {
     try {
         const body = {
             q: 'farmer creed belief dream founders help remembers course', limit: 100, containerTag: 'ry-farms',
+            // #search adopt the unified search API's EXPLICIT mode: 'memories' returns extracted-fact chunks only.
+            // Hybrid/documents were evaluated then REJECTED here (Codex P1): a raw multi-line farmer-life DOCUMENT
+            // chunk fed to the creed parser produced a malformed creed that then gets inherited + persisted — and
+            // hybrid gave no recall gain on this kind-filtered read (33 forebears either way). Structured parsing
+            // of document chunks is a separate feature, not a retrofit onto this read.
+            searchMode: 'memories',
             filters: { AND: [{ key: 'kind', value: 'farmer-life' }] },
         };
         const r = await fetch(`${base}/v4/search`, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: controller.signal });
@@ -162,7 +168,7 @@ async function searchLineage(base, headers) {
             if (m.kind !== 'farmer-life' || !m.name) continue;
             const key = `${m.townSeed ?? 'x'}:${m.farmerSeed ?? m.name}`;
             const g = byKey.get(key) || { name: m.name, townSeed: m.townSeed, farmerSeed: m.farmerSeed, facts: [] };
-            const txt = String(row.memory || '').trim(); if (txt) g.facts.push(txt);
+            const txt = String(row.memory || '').trim(); if (txt) g.facts.push(txt);   // #search memories-mode extracted facts only (no raw document chunks — see body comment)
             byKey.set(key, g);
         }
         const out = [];

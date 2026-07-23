@@ -131,6 +131,22 @@ const RAID_BATTLE_SONG = {
     ],
 };
 
+// #START MENU SONG — "The Welcome": a poppy, upbeat lobby theme for the start screen (and the View/
+// spectator browse-mode). Deliberately DIFFERENT from every in-town score — a bright D-major pop loop
+// (I–V–vi–IV: D–A–Bm–G) at a bouncy 120bpm with a square-wave hook, busy plucks, and a light kick+snare
+// pop groove (kick on the downbeats, snare on the off-beats). It's the "front door" music: cheerful and
+// welcoming, so arriving feels like an invitation rather than dropping straight into the seasonal mood.
+const MENU_SONG = {
+    tempo: 120, lead: { type: 'square', gain: 0.062, vibrato: true },
+    padGain: 0.042, bassGain: 0.30, pluckProb: 0.88, restProb: 0.26, drums: [0, 1.5, 2, 3.5],
+    chords: [
+        { bass: 73.42, notes: [146.83, 185.00, 220.00, 293.66], melody: [369.99, 440.00, 587.33, 659.26, 739.99] },   // D  (I)
+        { bass: 110.00, notes: [220.00, 277.18, 329.63, 440.00], melody: [440.00, 554.37, 659.26, 739.99, 880.00] },   // A  (V)
+        { bass: 61.74, notes: [123.47, 185.00, 246.94, 293.66], melody: [369.99, 493.88, 587.33, 659.26, 739.99] },    // Bm (vi)
+        { bass: 98.00, notes: [196.00, 246.94, 293.66, 392.00], melody: [392.00, 493.88, 587.33, 659.26, 783.99] },    // G  (IV)
+    ],
+};
+
 class FarmAudio {
     constructor() {
         this.ctx = null;
@@ -149,6 +165,7 @@ class FarmAudio {
         this.rainGain = null;       // weather layer
         this.nextBar = 0;
         this.barIdx = 0;
+        this._menuMode = false;     // #START the start-screen / spectator-lobby theme overrides the town score
         this.timer = null;
         this.lastFlash = 0;
         this.rainTarget = 0;
@@ -224,6 +241,10 @@ class FarmAudio {
     #applyMusic() { if (this.musicGain && this.ctx) this.musicGain.gain.setTargetAtTime(this.musicLevel() * (1 - this.nightMix), this.ctx.currentTime, 0.08); }
     #applySfx() { if (this.sfxBus && this.ctx) this.sfxBus.gain.setTargetAtTime(this.sfxOn ? this.sfxVol : 0, this.ctx.currentTime, 0.08); }
     setMusicVolume(v) { this.musicVol = Math.max(0, Math.min(1, v)); this.#save('musicVol', this.musicVol); this.#applyMusic(); }
+    // #START while the launch menu / spectator lobby is up, play the poppy MENU_SONG at full (no night duck)
+    setMenuMode(on) { this._menuMode = !!on; }
+    // #START the start-screen volume button — a UNIVERSAL mute (master bus → both music AND sound effects).
+    setMuted(m) { this.enabled = !m; if (this.ctx) this.master.gain.linearRampToValueAtTime(this.enabled ? 0.8 : 0, this.ctx.currentTime + 0.15); }
     setSfxVolume(v) { this.sfxVol = Math.max(0, Math.min(1, v)); this.#save('sfxVol', this.sfxVol); this.#applySfx(); }
     toggleMusic() { this.musicOn = !this.musicOn; this.#save('musicOn', this.musicOn ? '1' : '0'); this.#applyMusic(); return this.musicOn; }
     toggleSfx() { this.sfxOn = !this.sfxOn; this.#save('sfxOn', this.sfxOn ? '1' : '0'); this.#applySfx(); return this.sfxOn; }
@@ -263,8 +284,11 @@ class FarmAudio {
         this.nightMix += (target - this.nightMix) * 0.01;
         const raidFloor = this.musicOn ? (this.raidPhase === 2 ? 0.55 : this.raidPhase === 1 ? 0.35 : 0) : 0;
         const lvl = Math.max(this.musicLevel(), raidFloor);
-        this.musicGain.gain.setTargetAtTime(lvl * (this.raidPhase ? 1 : 1 - this.nightMix), t, 0.5);
-        this.cricketGain.gain.setTargetAtTime(0.5 * this.nightMix, t, 0.5);
+        // #START the lobby theme plays at full whatever the hour (no night hush), and the night chorus stays
+        // silent under it — it's front-door music, not the town's own evening.
+        const musicDuck = (this.raidPhase || this._menuMode) ? 1 : 1 - this.nightMix;
+        this.musicGain.gain.setTargetAtTime(lvl * musicDuck, t, 0.5);   // #START start-screen silence is handled by the master mute (setMuted), so it kills SFX too
+        this.cricketGain.gain.setTargetAtTime(0.5 * this.nightMix * (this._menuMode ? 0 : 1), t, 0.5);
         // rain/wind bed by weather (blizzard drives the noise bed as howling wind)
         this.rainTarget = weather === 'storm' ? 0.24 : weather === 'blizzard' ? 0.2 : weather === 'rain' ? 0.13 : 0;
         this.rainGain.gain.setTargetAtTime(this.rainTarget, t, 1.2);
@@ -283,12 +307,13 @@ class FarmAudio {
         // frame-drum while the warband congregates on the edges); the moment the raid LANDS it hard-cuts to
         // "Iron at the Gate" (driving battle music, kick on every beat). Swaps on bar boundaries; reverts the
         // same way when the field clears. Music is display-only/non-deterministic — the sim never hears it.
-        const song = this.raidPhase === 2 ? RAID_BATTLE_SONG
+        const song = this._menuMode ? MENU_SONG            // #START the lobby theme overrides everything
+                   : this.raidPhase === 2 ? RAID_BATTLE_SONG
                    : this.raidPhase === 1 ? RAID_APPROACH_SONG
                    : (songs[this.season] || songs[0] || SEASON_SONGS[0]);
         const bar = (60 / song.tempo) * 4;
         while (this.nextBar < t + 0.4) {
-            if (this.nightMix < 0.85 || this.raidPhase) this.#scheduleBar(this.nextBar, song, this.barIdx);
+            if (this.nightMix < 0.85 || this.raidPhase || this._menuMode) this.#scheduleBar(this.nextBar, song, this.barIdx);
             this.nextBar += bar;
             this.barIdx = (this.barIdx + 1) % song.chords.length;
         }

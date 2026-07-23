@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Propagate — Sprite Library</title>
+<style>
+  :root {
+    --bg: #14161b;
+    --panel: #1b1e25;
+    --card: #20242d;
+    --line: #2c313c;
+    --ink: #e8eaf0;
+    --dim: #8a90a0;
+    --accent: #ffd24a;
+    --human: #7dd069;
+    --orc: #e0806a;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 13px;
+    line-height: 1.5;
+    padding: 24px 28px 80px;
+  }
+  header { max-width: 1200px; margin: 0 auto 10px; }
+  h1 { font-size: 20px; letter-spacing: 1px; }
+  h1 .tag { color: var(--accent); }
+  header p { color: var(--dim); max-width: 78ch; margin-top: 6px; }
+  header code { color: var(--ink); background: var(--card); padding: 0 4px; border-radius: 3px; }
+
+  .controls {
+    max-width: 1200px; margin: 18px auto 26px;
+    display: flex; flex-wrap: wrap; gap: 18px; align-items: center;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    padding: 10px 14px; position: sticky; top: 8px; z-index: 5;
+  }
+  .controls .group { display: flex; align-items: center; gap: 6px; }
+  .controls .lbl { color: var(--dim); text-transform: uppercase; font-size: 11px; letter-spacing: 1px; }
+  .controls button {
+    font: inherit; color: var(--dim); background: var(--card);
+    border: 1px solid var(--line); border-radius: 5px; padding: 3px 10px; cursor: pointer;
+  }
+  .controls button:hover { color: var(--ink); }
+  .controls button.on { color: #14161b; background: var(--accent); border-color: var(--accent); font-weight: 700; }
+
+  .family { max-width: 1200px; margin: 0 auto 14px; }
+  .family > h2 {
+    font-size: 15px; letter-spacing: 2px; text-transform: uppercase;
+    padding: 22px 0 10px; border-bottom: 1px solid var(--line); margin-bottom: 18px;
+  }
+  .family.human > h2 { color: var(--human); }
+  .family.orc   > h2 { color: var(--orc); }
+
+  .char { margin-bottom: 34px; }
+  .char > h3 { font-size: 14px; margin-bottom: 2px; }
+  .char > .note { color: var(--dim); margin-bottom: 12px; max-width: 90ch; }
+
+  .grid { display: flex; flex-wrap: wrap; gap: 12px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+    padding: 10px 10px 8px; text-align: center;
+  }
+  .card .stage {
+    background:
+      linear-gradient(45deg, #262b34 25%, transparent 25%, transparent 75%, #262b34 75%),
+      linear-gradient(45deg, #262b34 25%, #222630 25%, #222630 75%, #262b34 75%);
+    background-size: 16px 16px; background-position: 0 0, 8px 8px;
+    border-radius: 5px; display: inline-block; line-height: 0; margin-bottom: 8px;
+  }
+  .card canvas { image-rendering: pixelated; image-rendering: crisp-edges; }
+  .card .act { font-weight: 700; letter-spacing: 1px; }
+  .card .meta { color: var(--dim); font-size: 11px; }
+  .card .file { color: #565c6a; font-size: 10px; max-width: 200px; margin: 2px auto 0;
+                overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card.missing .stage { opacity: 0.25; }
+  .card.missing .act::after { content: " — SHEET NOT FOUND"; color: #e06a6a; font-size: 10px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1><span class="tag">PROPAGATE</span> · SPRITE LIBRARY</h1>
+  <p>
+    A review catalog of every character sprite sheet the game draws from — think a tiny Storybook
+    for pixel people. Each tile loops one animation so the team can eyeball every character's every
+    move and spot cycles that need updating. Sheets are 64px-cell grids: 4&nbsp;rows&nbsp;=&nbsp;directions
+    (the game maps <code>down:&nbsp;row&nbsp;0</code>, <code>side:&nbsp;row&nbsp;2</code>,
+    <code>up:&nbsp;row&nbsp;3</code>; row&nbsp;1 is the second diagonal/unused row), N&nbsp;columns&nbsp;=&nbsp;frames
+    (auto-detected from sheet width). Loaded live from <code>assets/…</code> — pure asset gallery, no game engine.
+  </p>
+</header>
+
+<div class="controls">
+  <div class="group" id="dirGroup">
+    <span class="lbl">Direction</span>
+    <button data-dir="0">Down (row 0)</button>
+    <button data-dir="1">Row 1</button>
+    <button data-dir="2" class="on">Side (row 2)</button>
+    <button data-dir="3">Up (row 3)</button>
+  </div>
+  <div class="group" id="scaleGroup">
+    <span class="lbl">Scale</span>
+    <button data-scale="2">2×</button>
+    <button data-scale="3" class="on">3×</button>
+    <button data-scale="4">4×</button>
+  </div>
+  <div class="group" id="fpsGroup">
+    <span class="lbl">Speed</span>
+    <button data-fps="4">4 fps</button>
+    <button data-fps="8" class="on">8 fps</button>
+    <button data-fps="12">12 fps</button>
+  </div>
+</div>
+
+<div id="catalog"></div>
+
+<script>
+(() => {
+  'use strict';
+
+  const SW  = 'assets/craftpix-net-180537-free-swordsman-1-3-level-pixel-top-down-sprite-character/PNG/';
+  const ORC = 'assets/craftpix-net-363992-free-top-down-orc-game-character-pixel-art/Tiled_files/';
+
+  // canonical activity order for every character
+  const ACTS = ['Idle', 'Walk', 'Run', 'Attack', 'Walk_Attack', 'Run_Attack', 'Hurt', 'Death'];
+
+  // Swordsman sheet filenames (CraftPix casing: "attack" is lowercase, the rest Title_Case)
+  const swSheet = (lvl, act) => {
+    const name = act === 'Attack' ? 'attack' : act;
+    return `${SW}Swordsman_lvl${lvl}/With_shadow/Swordsman_lvl${lvl}_${name}_with_shadow.png`;
+  };
+  const swAnims = (lvl) => ACTS.map(a => ({ act: a, src: swSheet(lvl, a) }));
+
+  // Orc sheet filenames (lowercase; orc1's walk/run attack composites carry odd "front" names —
+  // orc1_walk_attack even has a stray space before "_with_shadow" in the shipped asset)
+  const orcSheet = (v, act) => {
+    const a = act.toLowerCase();
+    if (v === 1 && act === 'Walk_Attack') return `${ORC}orc1_walk_attack_front _with_shadow.png`;
+    if (v === 1 && act === 'Run_Attack')  return `${ORC}orc1_run_attack_front_with_shadow.png`;
+    return `${ORC}orc${v}_${a}_with_shadow.png`;
+  };
+  const orcAnims = (v) => ACTS.map(a => ({ act: a, src: orcSheet(v, a) }));
+
+  const FAMILIES = [
+    {
+      family: 'Humans — Swordsman pack', cls: 'human',
+      chars: [
+        { name: 'Swordsman lvl1',
+          note: 'The human of Propagate. Its Walk sheet drives the launch-menu walker; side row faces RIGHT natively.',
+          anims: swAnims(1) },
+        { name: 'Swordsman lvl2',
+          note: 'Mid-level swordsman — in the pack, not yet used by the game. Cataloged for future upgrades.',
+          anims: swAnims(2) },
+        { name: 'Swordsman lvl3 — "the assassin"',
+          note: 'The lone duelist: the game uses its attack / hurt / death sheets (via Tiled_files/Swordsman3) for assassin fights.',
+          anims: swAnims(3) },
+      ],
+    },
+    {
+      family: 'Orcs — top-down orc pack', cls: 'orc',
+      chars: [
+        { name: 'Orc 1',
+          note: 'Orc farmers (shadowless idle in-game) and the raiders that hit HUMAN towns. Menu walker uses its Walk sheet (side row faces LEFT; mirrored to face right). Its walk/run-attack composites ship under odd "front" filenames.',
+          anims: orcAnims(1) },
+        { name: 'Orc 2',
+          note: 'Rival tribe #1 — raider variant for ORC-vs-ORC raids (attacker never shares the defender\'s face).',
+          anims: orcAnims(2) },
+        { name: 'Orc 3',
+          note: 'Rival tribe #2 — the other orc-vs-orc raider variant.',
+          anims: orcAnims(3) },
+      ],
+    },
+  ];
+
+  const CELL = 64;
+  let dir = 2, scale = 3, fps = 8;
+
+  const cards = [];   // { img, canvas, ctx, cols, missing }
+
+  const catalog = document.getElementById('catalog');
+  for (const fam of FAMILIES) {
+    const famEl = document.createElement('section');
+    famEl.className = 'family ' + fam.cls;
+    famEl.innerHTML = `<h2>${fam.family}</h2>`;
+    for (const ch of fam.chars) {
+      const chEl = document.createElement('div');
+      chEl.className = 'char';
+      chEl.innerHTML = `<h3>${ch.name}</h3><div class="note">${ch.note}</div>`;
+      const grid = document.createElement('div');
+      grid.className = 'grid';
+      for (const an of ch.anims) {
+        const card = document.createElement('div');
+        card.className = 'card';
+        const stage = document.createElement('div');
+        stage.className = 'stage';
+        const canvas = document.createElement('canvas');
+        stage.appendChild(canvas);
+        const act = document.createElement('div');
+        act.className = 'act';
+        act.textContent = an.act.replace('_', ' ').toUpperCase();
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        meta.textContent = 'loading…';
+        const file = document.createElement('div');
+        file.className = 'file';
+        file.textContent = an.src.split('/').pop();
+        file.title = an.src;
+        card.append(stage, act, meta, file);
+        grid.appendChild(card);
+
+        const entry = { canvas, ctx: canvas.getContext('2d'), img: new Image(), cols: 1, missing: false };
+        entry.img.onload = () => {
+          entry.cols = Math.max(1, Math.round(entry.img.naturalWidth / CELL));
+          meta.textContent = `${entry.cols} frames · ${entry.img.naturalWidth}×${entry.img.naturalHeight}`;
+          sizeCanvas(entry);
+        };
+        entry.img.onerror = () => {
+          entry.missing = true;
+          card.classList.add('missing');
+          meta.textContent = 'failed to load';
+          sizeCanvas(entry);
+        };
+        entry.img.src = an.src;
+        sizeCanvas(entry);
+        cards.push(entry);
+      }
+      chEl.appendChild(grid);
+      famEl.appendChild(chEl);
+    }
+    catalog.appendChild(famEl);
+  }
+
+  function sizeCanvas(e) {
+    e.canvas.width = CELL * scale;
+    e.canvas.height = CELL * scale;
+    e.ctx.imageSmoothingEnabled = false;
+  }
+
+  // one shared clock so every loop stays in phase
+  let last = 0, frameTick = 0;
+  function loop(now) {
+    requestAnimationFrame(loop);
+    if (now - last < 1000 / fps) return;
+    last = now;
+    frameTick++;
+    for (const e of cards) {
+      e.ctx.clearRect(0, 0, e.canvas.width, e.canvas.height);
+      if (e.missing || !e.img.complete || !e.img.naturalWidth) continue;
+      const f = frameTick % e.cols;
+      e.ctx.drawImage(e.img, f * CELL, dir * CELL, CELL, CELL, 0, 0, CELL * scale, CELL * scale);
+    }
+  }
+  requestAnimationFrame(loop);
+
+  // control wiring — one active button per group
+  function wire(groupId, attr, apply) {
+    const group = document.getElementById(groupId);
+    group.addEventListener('click', (ev) => {
+      const btn = ev.target.closest('button');
+      if (!btn) return;
+      for (const b of group.querySelectorAll('button')) b.classList.toggle('on', b === btn);
+      apply(Number(btn.dataset[attr]));
+    });
+  }
+  wire('dirGroup', 'dir', v => { dir = v; });
+  wire('scaleGroup', 'scale', v => { scale = v; for (const e of cards) sizeCanvas(e); });
+  wire('fpsGroup', 'fps', v => { fps = v; });
+})();
+</script>
+</body>
+</html>

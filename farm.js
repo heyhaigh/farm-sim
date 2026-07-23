@@ -12614,6 +12614,12 @@ export class Farmer {
                 const home = guard ? { i: guard.pos.i, j: guard.pos.j }
                     : homeSafe ? { i: this.plot.x + 6, j: this.plot.y + 6 } : { i: CENTER, j: CENTER };
                 const dx = home.i - this.pos.i, dy = home.j - this.pos.j, d = Math.hypot(dx, dy) || 1;
+                // #flee-facing turn to face the way they RUN (same rule as the walk mover): screen-X (i-j) sets
+                // left/right, screen-Y dominance picks the up/down row, else side. Without this the flee case left
+                // facing/moveDir STALE from the prior task — a farmer bolting left could still be drawn facing up.
+                const sx = dx - dy; if (Math.abs(sx) > 0.05) this.facing = sx > 0 ? 1 : -1;
+                if (Math.abs(dx) + Math.abs(dy) > 0.02)
+                    this.moveDir = Math.abs(dx + dy) > Math.abs(dx - dy) * 2 ? ((dx + dy) < 0 ? 'up' : 'down') : 'side';
                 const sp = this.speed * 1.2 * dt;
                 const ni = this.pos.i + dx / d * sp, nj = this.pos.j + dy / d * sp;
                 if (!this.world.pathBlocked(Math.floor(ni), Math.floor(nj))) { this.pos.i = ni; this.pos.j = nj; }

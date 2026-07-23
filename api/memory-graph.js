@@ -43,7 +43,10 @@ module.exports = async function handler(req, res) {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), DEADLINE_MS);
         try {
-            const body = { q, limit, containerTag: 'ry-farms' };
+            // #search adopt the unified search API's EXPLICIT mode: 'memories' returns extracted-fact chunks only.
+            // (Hybrid was evaluated then dropped — it gave no gain on the kind-filtered reads and risked showing
+            // raw multi-line document chunks verbatim as memory nodes; parsing below reads row.memory only.)
+            const body = { q, limit, containerTag: 'ry-farms', searchMode: 'memories' };
             if (filters) body.filters = filters;   // /v4/search honours metadata AND-filters (kind, townSeed)
             const r = await fetch(`${base}/v4/search`, { method: 'POST', headers, signal: controller.signal, body: JSON.stringify(body) });
             if (!r.ok) throw new Error(`search ${r.status}`);

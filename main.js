@@ -73,8 +73,12 @@ function memoryCaption() {
 }
 const usedMemoryIds = new Set();
 let selected = null;
-let bootTime = 0;
+let bootT0 = null;   // #Codex-VS first-boot-frame timestamp (seconds) → refresh-rate-independent boot timing
 let booted = false;
+let startScreen = false;                            // #START the launch menu is up (drawn into the canvas, CRT-shaded)
+let startPage = 'title';                            // 'title' (Start Game / View) → 'choose' (human / orc / view / back)
+let startHits = null;                              // button rects (game px), set each frame by drawStartScreen (keys vary by page)
+let _startScreenErr = false;                        // #START logged-once guard for a menu-draw failure (never black the game)
 let rosterOpen = false;
 let rosterScroll = 0;
 // CONSCIENCE CHAT (#93): the bottom half of the roster window is a chat with one farmer, where
@@ -104,6 +108,9 @@ let _raidDetected = false;        // #incoming fire the "INCOMING RAID" shader o
 let chronReadTotal = 0;           // world._chronTotal at last view — the badge shows only for UNREAD beats
 let chronScroll = 0;
 let followMode = false;           // camera tracks followTarget (F/crosshair toggles; drag/Esc cancels)
+let specTarget = null;            // #START launch-page spectator camera: the townsfolk it's drifting between
+let specNextSwitch = 0;           // wall-clock ms for the next spectator-camera target rotation
+let menuMuted = true;             // #START the start-screen volume button state (starts muted; click to hear the theme)
 let followTarget = null;          // the farmer being trailed — independent of the open card, so closing
                                   // the sheet (X) keeps following; only F / Esc / a pan stops it
 let recapSeq = -1;                // last day-recap seq we've seen (to detect a new one)
@@ -457,12 +464,25 @@ for (const v of [1, 2, 3]) {
     const mk = (suf) => { const im = new Image(); im.src = `${ORC_TF}orc${v}_${suf}_with_shadow.png`; return im; };
     orcAttackImg[v] = mk('attack'); orcHurtImg[v] = mk('hurt'); orcWalkImg[v] = mk('walk'); orcDeathImg[v] = mk('death');
 }
+// #anim-migrate orc FARMER activity sheets — the SHADOWLESS variants (the game draws its own foot shadow;
+// the with-shadow foe sheets bake in a blob). walk 6f / run 8f / attack 8f / hurt 6f / death 8f, same 4-row
+// 64px layout as the idle sheet. A sheet that hasn't loaded just falls back to the idle-sheet frames.
+const orcFarmerAnim = {};
+for (const k of ['walk', 'run', 'attack', 'hurt', 'death']) {
+    const im = new Image(); im.onerror = () => {};
+    im.src = `${ORC_TF}orc1_${k}_without_shadow.png`;
+    orcFarmerAnim[k] = im;
+}
 // #sprite the assassin (lvl-3 swordsman) gets its own attack/hurt/death — a lone duelist that swings, flinches, falls
 const ASSN_TF = './assets/craftpix-net-180537-free-swordsman-1-3-level-pixel-top-down-sprite-character/Tiled_files/Swordsman3/';
 const mkA = (suf) => { const im = new Image(); im.src = ASSN_TF + suf; return { 0: im }; };
 const assassinAttackImg = mkA('Swordsman_lvl3_attack_with_shadow.png');
 const assassinHurtImg = mkA('Swordsman_lvl3_Hurt_with_shadow.png');
 const assassinDeathImg = mkA('Swordsman_lvl3_Death_with_shadow.png');
+// #START the launch choose-screen HUMAN walker — the Swordsman lvl1 WALK sheet (384x256 = 6 cols x 4 rows of
+// 64px cells, same layout as the orc walk sheet; side row faces RIGHT natively). Menu-display only.
+const menuHumanWalkImg = new Image();
+menuHumanWalkImg.src = './assets/craftpix-net-180537-free-swordsman-1-3-level-pixel-top-down-sprite-character/PNG/Swordsman_lvl1/With_shadow/Swordsman_lvl1_Walk_with_shadow.png';
 const SWING_DUR = 0.36, HURT_DUR = 0.34, DEATH_DUR = 0.7;   // display windows for the attack/hurt/death animations
 const WALK_STRIDE = 0.42;   // tiles travelled per walk-frame step (drives the gait off DISTANCE, so it reads right at any speed)
 
@@ -898,26 +918,52 @@ charBody.onload = () => { charBodyReady = true; }; charBody.onerror = () => {};
 charHead.onload = () => { charHeadReady = true; }; charHead.onerror = () => {};
 charBody.src = CHAR_BASE + 'Swordsman_lvl1_Walk_body.png';
 charHead.src = CHAR_BASE + 'Swordsman_lvl1_Walk_head.png';
+// #anim-migrate the RUN (8f) + IDLE (12f) tintable Parts — full activity cycles for the in-game farmers.
+// Same 64px 4-row layout as the Walk parts. Loaded tolerant: until a sheet is ready its cycle is null and
+// the renderer falls back to the walk-based frames (never throws, never blacks the game).
+const charRunBody = new Image(), charRunHead = new Image(), charIdleBody = new Image(), charIdleHead = new Image();
+for (const im of [charRunBody, charRunHead, charIdleBody, charIdleHead]) im.onerror = () => {};
+charRunBody.src = CHAR_BASE + 'Swordsman_lvl1_Run_body.png';
+charRunHead.src = CHAR_BASE + 'Swordsman_lvl1_Run_head.png';
+charIdleBody.src = CHAR_BASE + 'Swordsman_lvl1_Idle_body.png';
+charIdleHead.src = CHAR_BASE + 'Swordsman_lvl1_Idle_head.png';
 const CHAR_FW = 64, CHAR_NCOLS = 6;
 const CHAR_DIRS = { down: 0, side: 2, up: 3 };   // sheet rows by facing (row0 front, row3 back, row2 3/4-side)
 let charBox = null;   // shared content bbox across ALL rows (keeps every direction aligned)
+let charBoxGen = -1;  // which sheet-readiness generation the box was computed at
 function charReady() { return charBodyReady && charHeadReady && charBody.naturalWidth > 0; }
-function composeCharCell(col, row) {
+const sheetOk = (im) => !!(im && im.complete && im.naturalWidth > 0);
+// readiness generation: bumps as the run/idle sheets finish loading, so cached per-farmer frame sets
+// (and the shared bbox) rebuild once per arrival instead of every frame.
+function charGen() {
+    return (charReady() ? 1 : 0) | (sheetOk(charRunBody) && sheetOk(charRunHead) ? 2 : 0)
+         | (sheetOk(charIdleBody) && sheetOk(charIdleHead) ? 4 : 0);
+}
+function composeCharCell(col, row, body = charBody, head = charHead) {
     const [cv, cx] = makeCanvas(CHAR_FW, CHAR_FW);
     cx.imageSmoothingEnabled = false;
-    cx.drawImage(charBody, col * CHAR_FW, row * CHAR_FW, CHAR_FW, CHAR_FW, 0, 0, CHAR_FW, CHAR_FW);
-    cx.drawImage(charHead, col * CHAR_FW, row * CHAR_FW, CHAR_FW, CHAR_FW, 0, 0, CHAR_FW, CHAR_FW);
+    cx.drawImage(body, col * CHAR_FW, row * CHAR_FW, CHAR_FW, CHAR_FW, 0, 0, CHAR_FW, CHAR_FW);
+    cx.drawImage(head, col * CHAR_FW, row * CHAR_FW, CHAR_FW, CHAR_FW, 0, 0, CHAR_FW, CHAR_FW);
     return [cv, cx];
 }
 function computeCharBox() {
     let x0 = 99, x1 = -1, y0 = 99, y1 = -1;
-    for (const row of Object.values(CHAR_DIRS)) for (let col = 0; col < CHAR_NCOLS; col++) {
-        const [, cx] = composeCharCell(col, row);
-        const d = cx.getImageData(0, 0, CHAR_FW, CHAR_FW).data;
-        for (let y = 0; y < CHAR_FW; y++) for (let x = 0; x < CHAR_FW; x++)
-            if (d[(y * CHAR_FW + x) * 4 + 3] > 16) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    // UNION across every loaded peace sheet (walk + run + idle) so all activities share one crop —
+    // every frame the same size, feet on the same line, zero jitter switching gaits.
+    const sheets = [[charBody, charHead]];
+    if (sheetOk(charRunBody) && sheetOk(charRunHead)) sheets.push([charRunBody, charRunHead]);
+    if (sheetOk(charIdleBody) && sheetOk(charIdleHead)) sheets.push([charIdleBody, charIdleHead]);
+    for (const [body, head] of sheets) {
+        const ncols = Math.max(1, Math.round(body.naturalWidth / CHAR_FW));
+        for (const row of Object.values(CHAR_DIRS)) for (let col = 0; col < ncols; col++) {
+            const [, cx] = composeCharCell(col, row, body, head);
+            const d = cx.getImageData(0, 0, CHAR_FW, CHAR_FW).data;
+            for (let y = 0; y < CHAR_FW; y++) for (let x = 0; x < CHAR_FW; x++)
+                if (d[(y * CHAR_FW + x) * 4 + 3] > 16) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+        }
     }
     charBox = { x: x0, y: y0, w: Math.max(1, x1 - x0 + 1), h: Math.max(1, y1 - y0 + 1) };
+    charBoxGen = charGen();
 }
 function hslToRgb(h, s, l) {
     if (s === 0) { const v = Math.round(l * 255); return [v, v, v]; }
@@ -942,36 +988,60 @@ function tintPixels(cx, w, h, hueDeg, hairOnly) {
     cx.putImageData(img, 0, 0);
 }
 // Compose one frame at (col,row): body (clothing) fully recolored, head with only hair recolored.
-function tintedCharCell(col, row, hue) {
+function tintedCharCell(col, row, hue, body = charBody, head = charHead) {
     const [bc, bcx] = makeCanvas(CHAR_FW, CHAR_FW); bcx.imageSmoothingEnabled = false;
-    bcx.drawImage(charBody, col * CHAR_FW, row * CHAR_FW, CHAR_FW, CHAR_FW, 0, 0, CHAR_FW, CHAR_FW);
+    bcx.drawImage(body, col * CHAR_FW, row * CHAR_FW, CHAR_FW, CHAR_FW, 0, 0, CHAR_FW, CHAR_FW);
     tintPixels(bcx, CHAR_FW, CHAR_FW, hue, false);
     const [hc, hcx] = makeCanvas(CHAR_FW, CHAR_FW); hcx.imageSmoothingEnabled = false;
-    hcx.drawImage(charHead, col * CHAR_FW, row * CHAR_FW, CHAR_FW, CHAR_FW, 0, 0, CHAR_FW, CHAR_FW);
+    hcx.drawImage(head, col * CHAR_FW, row * CHAR_FW, CHAR_FW, CHAR_FW, 0, 0, CHAR_FW, CHAR_FW);
     tintPixels(hcx, CHAR_FW, CHAR_FW, hue, true);
     const [out, ox] = makeCanvas(CHAR_FW, CHAR_FW); ox.imageSmoothingEnabled = false;
     ox.drawImage(bc, 0, 0); ox.drawImage(hc, 0, 0);
     return out;
 }
-const charCache = new Map();   // farmer -> { down, side, up } each a frame set
+const charCache = new Map();   // farmer -> { down, side, up } each a frame set (rebuilt when new sheets load)
 function buildCharSets(f) {
-    if (!charBox) computeCharBox();
+    const gen = charGen();
+    if (!charBox || charBoxGen !== gen) computeCharBox();
     const bx = charBox;
     const hueSeed = f.sheet.seed != null ? f.sheet.seed : hashString((f.sheet.memory && f.sheet.memory.id) || f.sheet.name);
     const hue = (hueSeed % 300) + 30;
     const dw = Math.max(1, Math.round(bx.w * ASSET_SCALE)), dh = Math.max(1, Math.round(bx.h * ASSET_SCALE));
-    const frameFor = (col, row) => {
-        const cell = tintedCharCell(col, row, hue);
+    const frameFor = (col, row, body, head) => {
+        const cell = tintedCharCell(col, row, hue, body, head);
         const [out, ox] = makeCanvas(dw, dh); ox.imageSmoothingEnabled = false;
         ox.drawImage(cell, bx.x, bx.y, bx.w, bx.h, 0, 0, dw, dh);
         return out;
     };
-    const setForRow = (row) => ({ idle: frameFor(0, row), walk1: frameFor(1, row), walk2: frameFor(4, row), work: frameFor(2, row), sleep: frameFor(0, row) });
-    return { down: setForRow(CHAR_DIRS.down), side: setForRow(CHAR_DIRS.side), up: setForRow(CHAR_DIRS.up) };
+    // #anim-migrate full activity CYCLES (walk 6f / run 8f / idle 12f), tinted + cached per farmer, built
+    // LAZILY per activity on first request so a whole town spawning doesn't tint 78 frames per head at once.
+    const CYCLE_SHEETS = {
+        walk: [charBody, charHead],
+        run: [charRunBody, charRunHead],
+        idle: [charIdleBody, charIdleHead],
+    };
+    const setForRow = (row) => {
+        const set = { idle: frameFor(0, row, charBody, charHead), walk1: frameFor(1, row, charBody, charHead),
+                      walk2: frameFor(4, row, charBody, charHead), work: frameFor(2, row, charBody, charHead),
+                      sleep: frameFor(0, row, charBody, charHead) };
+        const built = {};
+        set.cycle = (k) => {
+            if (built[k] !== undefined) return built[k];
+            const sh = CYCLE_SHEETS[k];
+            if (!sh || !sheetOk(sh[0]) || !sheetOk(sh[1])) return (built[k] = null);
+            const n = Math.max(1, Math.round(sh[0].naturalWidth / CHAR_FW));
+            const arr = []; for (let c = 0; c < n; c++) arr.push(frameFor(c, row, sh[0], sh[1]));
+            return (built[k] = arr);
+        };
+        return set;
+    };
+    const sets = { down: setForRow(CHAR_DIRS.down), side: setForRow(CHAR_DIRS.side), up: setForRow(CHAR_DIRS.up) };
+    sets._gen = gen;
+    return sets;
 }
 function characterSprites(f) {
     let sets = charCache.get(f);
-    if (!sets) { sets = buildCharSets(f); charCache.set(f, sets); }
+    if (!sets || sets._gen !== charGen()) { sets = buildCharSets(f); charCache.set(f, sets); }
     return sets[f.moveDir] || sets.down;   // pick the row matching current facing
 }
 
@@ -981,10 +1051,21 @@ function characterSprites(f) {
 // when facing away (up row). Same feet-anchored crop as the walk sprite, so the body stays aligned.
 const BATTLE_PARTS = {};
 ['Idle_body', 'Idle_head', 'Idle_sword', 'Idle_sword_back', 'attack_body', 'attack_head', 'attack_sword', 'attack_sword_back',
- 'Hurt_red', 'Hurt_sword', 'Hurt_sword_back']
-    .forEach(n => { const im = new Image(); im.src = CHAR_BASE + 'Swordsman_lvl1_' + n + '.png'; BATTLE_PARTS[n] = im; });
+ 'Hurt_red', 'Hurt_sword', 'Hurt_sword_back', 'Death_body', 'Death_head', 'Death_sword', 'Death_sword_back']
+    .forEach(n => { const im = new Image(); im.onerror = () => {}; im.src = CHAR_BASE + 'Swordsman_lvl1_' + n + '.png'; BATTLE_PARTS[n] = im; });
 function battleReady() { const b = BATTLE_PARTS; return b.attack_body.complete && b.attack_body.naturalWidth > 0 && b.Idle_body.complete && b.Idle_body.naturalWidth > 0; }
-let battleBox = null;
+// #anim-migrate readiness generation for the battle sheets (the Death parts can land after attack/idle) —
+// cached battle sets rebuild once when a late sheet arrives, so the death cycle is never permanently missing.
+function battleGen() {
+    // #anim-migrate P2 (Codex): a cached battle set also consumes the attack/idle HEADS and every SWORD layer,
+    // which can finish loading AFTER the bodies on a cold start. Keying the generation off a LOADED-COUNT of
+    // EVERY battle part (loads are monotonic absent→present, so the count only rises) bumps the gen when any
+    // late layer lands, so the set rebuilds once and a fighter is never left permanently headless/unarmed.
+    const b = BATTLE_PARTS; let n = 0;
+    for (const k in b) if (sheetOk(b[k])) n++;
+    return n;
+}
+let battleBox = null, battleBoxGen = -1;
 function battleCellRaw(prefix, col, row) {   // untinted composite (for the shared bbox)
     const [cv, cx] = makeCanvas(CHAR_FW, CHAR_FW); cx.imageSmoothingEnabled = false;
     const up = row === CHAR_DIRS.up, sword = up ? BATTLE_PARTS[prefix + '_sword_back'] : BATTLE_PARTS[prefix + '_sword'];
@@ -1003,7 +1084,9 @@ function computeBattleBox() {
             if (d[(y * CHAR_FW + x) * 4 + 3] > 16) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
     } };
     scan('Idle', 1); scan('attack', 8);
+    if (sheetOk(BATTLE_PARTS.Death_body)) scan('Death', Math.max(1, Math.round(BATTLE_PARTS.Death_body.naturalWidth / CHAR_FW)));
     battleBox = { x: x0, y: y0, w: Math.max(1, x1 - x0 + 1), h: Math.max(1, y1 - y0 + 1) };
+    battleBoxGen = battleGen();
 }
 function tintedBattleCell(prefix, col, row, hue) {
     const up = row === CHAR_DIRS.up, sword = up ? BATTLE_PARTS[prefix + '_sword_back'] : BATTLE_PARTS[prefix + '_sword'];
@@ -1022,15 +1105,25 @@ function tintedBattleCell(prefix, col, row, hue) {
 }
 const battleCache = new Map();
 function buildBattleSets(f) {
-    if (!battleBox) computeBattleBox();
+    const gen = battleGen();
+    if (!battleBox || battleBoxGen !== gen) computeBattleBox();
+    if (!charBox || charBoxGen !== charGen()) computeCharBox();   // the rig the battle frames align to
     const bx = battleBox;
     const hueSeed = f.sheet.seed != null ? f.sheet.seed : hashString((f.sheet.memory && f.sheet.memory.id) || f.sheet.name);
     const hue = (hueSeed % 300) + 30;
     const dw = Math.max(1, Math.round(bx.w * ASSET_SCALE)), dh = Math.max(1, Math.round(bx.h * ASSET_SCALE));
+    // #anim-migrate battle frames are drawn RIG-ALIGNED as the farmer's main body (not just an overlay):
+    // each frame carries the offset from the peace-walk crop (charBox) to its own crop (battleBox), so
+    // drawFarmer can anchor by the normal walk rig and the body never jitters when steel comes out.
+    const rig = {
+        dx: Math.round((bx.x - charBox.x) * ASSET_SCALE), dy: Math.round((bx.y - charBox.y) * ASSET_SCALE),
+        w: Math.max(1, Math.round(charBox.w * ASSET_SCALE)), h: Math.max(1, Math.round(charBox.h * ASSET_SCALE)),
+    };
     const frameFor = (prefix, col, row) => {
         const cell = tintedBattleCell(prefix, col, row, hue);
         const [out, ox] = makeCanvas(dw, dh); ox.imageSmoothingEnabled = false;
         ox.drawImage(cell, bx.x, bx.y, bx.w, bx.h, 0, 0, dw, dh);
+        out._rig = rig;
         return out;
     };
     // the HURT flinch = the pre-reddened Hurt_red silhouette + the sword (the red flash, as a real pose)
@@ -1041,20 +1134,51 @@ function buildBattleSets(f) {
         if (up) put(sword); put(BATTLE_PARTS.Hurt_red); if (!up) put(sword);
         const [out, ox] = makeCanvas(dw, dh); ox.imageSmoothingEnabled = false;
         ox.drawImage(cell, bx.x, bx.y, bx.w, bx.h, 0, 0, dw, dh);
+        out._rig = rig;
         return out;
     };
+    // #anim-migrate the Hurt_red sheet's first 2 columns are EMPTY (measured) — the flinch starts at col 2.
+    // Including them would draw a floating sword with no body (Hurt_sword IS populated there), so only
+    // columns where the red silhouette itself has pixels make the cycle.
+    const hurtCols = [];
+    if (BATTLE_PARTS.Hurt_red.naturalWidth > 0) {
+        const hc = Math.round(BATTLE_PARTS.Hurt_red.naturalWidth / CHAR_FW);
+        for (let c = 0; c < hc; c++) {
+            // check the whole 4-row column strip for silhouette pixels
+            let has = false;
+            for (let r = 0; r < 4 && !has; r++) {
+                const [, cx] = makeCanvas(CHAR_FW, CHAR_FW); cx.imageSmoothingEnabled = false;
+                cx.drawImage(BATTLE_PARTS.Hurt_red, c * CHAR_FW, r * CHAR_FW, CHAR_FW, CHAR_FW, 0, 0, CHAR_FW, CHAR_FW);
+                const d = cx.getImageData(0, 0, CHAR_FW, CHAR_FW).data;
+                for (let i = 3; i < d.length; i += 4) if (d[i] > 16) { has = true; break; }
+            }
+            if (has) hurtCols.push(c);
+        }
+    }
+    if (!hurtCols.length) hurtCols.push(0);
     const setForRow = (row) => {
         const ac = Math.max(1, Math.round(BATTLE_PARTS.attack_body.naturalWidth / CHAR_FW));
         const atk = []; for (let c = 0; c < ac; c++) atk.push(frameFor('attack', c, row));
-        const hc = BATTLE_PARTS.Hurt_red.naturalWidth > 0 ? Math.round(BATTLE_PARTS.Hurt_red.naturalWidth / CHAR_FW) : 1;
-        const hurt = []; for (let c = 0; c < Math.max(1, hc); c++) hurt.push(hurtFrameFor(c, row));
-        return { idle: frameFor('Idle', 0, row), atk, hurt };
+        // #anim-migrate P2 (Codex): only build a hurt cycle when the Hurt_red silhouette is actually loaded —
+        // otherwise leave it NULL so drawFarmer keeps the normal pose + red-flash fallback. Without this, an
+        // unloaded/404'd Hurt_red still yields a truthy array of TRANSPARENT frames (hurtCols falls back to [0]),
+        // and drawFarmer would draw that empty frame + suppress the fallback → the farmer vanishes on a hit.
+        const hurt = sheetOk(BATTLE_PARTS.Hurt_red) ? hurtCols.map(c => hurtFrameFor(c, row)) : null;
+        // the DEATH fall (7f, sword clattering with them) — held on the last frame while downed
+        let death = null;
+        if (sheetOk(BATTLE_PARTS.Death_body) && sheetOk(BATTLE_PARTS.Death_head)) {
+            const dc = Math.max(1, Math.round(BATTLE_PARTS.Death_body.naturalWidth / CHAR_FW));
+            death = []; for (let c = 0; c < dc; c++) death.push(frameFor('Death', c, row));
+        }
+        return { idle: frameFor('Idle', 0, row), atk, hurt, death };
     };
-    return { down: setForRow(CHAR_DIRS.down), side: setForRow(CHAR_DIRS.side), up: setForRow(CHAR_DIRS.up) };
+    const sets = { down: setForRow(CHAR_DIRS.down), side: setForRow(CHAR_DIRS.side), up: setForRow(CHAR_DIRS.up) };
+    sets._gen = gen;
+    return sets;
 }
 function battleSprites(f) {
     let s = battleCache.get(f);
-    if (!s) { s = buildBattleSets(f); battleCache.set(f, s); }
+    if (!s || s._gen !== battleGen()) { s = buildBattleSets(f); battleCache.set(f, s); }
     return s[f.moveDir] || s.down;
 }
 // is this (human) farmer fighting? then they draw their sword — a raid duel (mustered on a struck line) OR
@@ -1068,15 +1192,20 @@ function farmerInBattle(f) {
 // #3.1 orc farmers wear the real ORC sprite (the DM's foe pack, already loaded as threatImg.orc) instead of
 // the re-skinned human farmer. The pack is a 4x4 grid of 64px frames; we crop the character out of its padded
 // cell, scale it to a farmer-ish height (orcs a touch taller), and slice a few idle columns so it still has a
-// little life. All facings use the front-menacing pose (row 2), matching how the foe orcs render.
+// little life. Facings are directional off the sheet rows (down=0, up/back=1, side/left=2, right=3).
 const orcCharCache = new Map();
 function orcSpriteReady() { return orcFarmerImg && orcFarmerImg.complete && orcFarmerImg.naturalWidth > 0; }
+// readiness generation for the orc activity sheets — cached sets rebuild once per late-arriving sheet
+function orcGen() {
+    return (orcSpriteReady() ? 1 : 0) | (sheetOk(orcFarmerAnim.walk) ? 2 : 0) | (sheetOk(orcFarmerAnim.run) ? 4 : 0)
+         | (sheetOk(orcFarmerAnim.attack) ? 8 : 0) | (sheetOk(orcFarmerAnim.hurt) ? 16 : 0) | (sheetOk(orcFarmerAnim.death) ? 32 : 0);
+}
 function orcCharSets(f) {
     const img = orcFarmerImg, FW = 64;
     const cols = Math.max(1, Math.round(img.naturalWidth / FW));
-    // Directional (256x256 sheet = 4 rows): ROW 0 = front view (down), ROW 2 = side profile facing LEFT
-    // (mirrored by facing in drawFarmer), ROW 3 = BACK view (up — orcs face away as they walk up). Crop the
-    // body with the feet near the bottom edge so there's no empty gap (the orc foot-shadow is disabled anyway).
+    // Directional (256x256 sheet = 4 rows): ROW 0 = front (down), ROW 1 = BACK view (up — orcs face away as they
+    // walk up), ROW 2 = side profile facing LEFT (mirrored by facing in drawFarmer), ROW 3 = right. Crop the body
+    // with the feet near the bottom edge so there's no empty gap (the orc foot-shadow is disabled anyway).
     const sx0 = 12, sy0 = 8, sw = 40, sh = 40;
     // #orc-scale player: orc TOWNSFOLK looked like children beside the raiders (26px vs the foes'
     // ~35px). Orcs are big — draw them at raider scale so an orc town reads as an orc town.
@@ -1088,14 +1217,41 @@ function orcCharSets(f) {
         ox.drawImage(img, c * FW + sx0, row * FW + sy0, sw, sh, 0, 0, dw, dh);
         return out;
     };
-    const setRow = (row) => ({ idle: frameCol(0, row), walk1: frameCol(1, row), walk2: frameCol(2, row), work: frameCol(1, row), sleep: frameCol(0, row) });
-    return { down: setRow(0), side: setRow(2), up: setRow(3) };
+    // #anim-migrate full activity cycles off the REAL orc sheets (walk 6f / run 8f / attack 8f / hurt 6f /
+    // death 8f + a 4f idle breathe). Composed from the FULL 64px cell (an axe swing overflows the idle crop)
+    // and rig-stamped back to the idle crop so drawFarmer anchors them without jitter. Lazy per activity.
+    const cellD = Math.max(1, Math.round(FW * scale));
+    const rig = { dx: Math.round(-sx0 * scale), dy: Math.round(-sy0 * scale), w: dw, h: dh };
+    const cellFrame = (src, col, row) => {
+        const [out, ox] = makeCanvas(cellD, cellD); ox.imageSmoothingEnabled = false;
+        ox.drawImage(src, col * FW, row * FW, FW, FW, 0, 0, cellD, cellD);
+        out._rig = rig;
+        return out;
+    };
+    const CYCLE_SRC = { idle: img, walk: orcFarmerAnim.walk, run: orcFarmerAnim.run,
+                        attack: orcFarmerAnim.attack, hurt: orcFarmerAnim.hurt, death: orcFarmerAnim.death };
+    const setRow = (row) => {
+        const set = { idle: frameCol(0, row), walk1: frameCol(1, row), walk2: frameCol(2, row), work: frameCol(1, row), sleep: frameCol(0, row) };
+        const built = {};
+        set.cycle = (k) => {
+            if (built[k] !== undefined) return built[k];
+            const src = CYCLE_SRC[k];
+            if (!sheetOk(src)) return (built[k] = null);
+            const n = Math.max(1, Math.round(src.naturalWidth / FW));
+            const arr = []; for (let c = 0; c < n; c++) arr.push(cellFrame(src, c, row));
+            return (built[k] = arr);
+        };
+        return set;
+    };
+    const sets = { down: setRow(0), side: setRow(2), up: setRow(1) };   // #anim-migrate row1 = back/up (row3 is right) — see the orc mapping at the DM foe config
+    sets._gen = orcGen();
+    return sets;
 }
 
 function farmerSprites(f) {
     if (f.sheet.culture === 'orc' && orcSpriteReady()) {
         let sets = orcCharCache.get(f);
-        if (!sets) { sets = orcCharSets(f); orcCharCache.set(f, sets); }
+        if (!sets || sets._gen !== orcGen()) { sets = orcCharSets(f); orcCharCache.set(f, sets); }
         return sets[f.moveDir] || sets.down;
     }
     if (charReady()) return characterSprites(f);
@@ -2730,21 +2886,72 @@ function drawIntentIcon(kind, cx, y) {
 }
 
 function drawFarmer(f, sx, sy) {
-    let frame;
+    // #anim-migrate every activity now plays its PROPER multi-frame cycle from the real sheets (walk 6f,
+    // run 8f, idle 12f, attack 8f, hurt 5-6f, death 7-8f per culture), with the old 2-frame logic kept as
+    // the graceful fallback for sheets that haven't loaded (and the procedural pre-sheet sprites).
+    let frame = null, swordBaked = false, hurtPose = false;
     const battling = farmerInBattle(f);
+    const isOrc = f.sheet.culture === 'orc';
     {
-        // #sprite always the NORMAL body sprite (walk cycle + alignment + foot-shadow all intact) — the sword
-        // is a separate LAYER overlaid on top when battling (drawn below), so bringing the blade back never
-        // costs the walk animation or plants a stray shadow line.
         const frames = farmerSprites(f);
-        frame = frames.idle;
-        if (f.state === 'walk' || f.state === 'flee') {
-            frame = Math.floor(f.animTime * (f.state === 'flee' ? 11 : 7)) % 2 ? frames.walk1 : frames.walk2;
-        } else if (f.state === 'work' || f.state === 'build' || f.state === 'coopbuild' || f.state === 'housebuild' || f.state === 'chop' || f.state === 'break' || f.state === 'forage' || f.state === 'mine' || f.state === 'fencepost' || f.state === 'scarecrow' || f.state === 'fight' || battling || (f.state === 'muster' && f._skirmish)) {
-            frame = Math.floor(f.animTime * ((f.state === 'fight' || f._skirmish || battling) ? 8 : 5)) % 2 ? frames.work : frames.idle;
-        } else if (f.state === 'sleep') {
-            frame = frames.sleep;
+        const cyc = frames.cycle || (() => null);
+        // human battle frames (tinted body+head+SWORD composites) — fetched lazily, null until sheets ready
+        let _bat;
+        const bat = () => (_bat !== undefined ? _bat : (_bat = (!isOrc && charReady() && battleReady()) ? battleSprites(f) : null));
+        const loop = (arr, fps) => (arr && arr.length ? arr[Math.floor(f.animTime * fps) % arr.length] : null);
+        const byProgress = (arr, p) => (arr && arr.length ? arr[Math.floor(Math.max(0, Math.min(0.999, p)) * arr.length)] : null);
+        // stand-and-fight beats: a raid line under the blow, or a wilderness clash
+        const struckLine = world.raidEvent && world.raidEvent.struck && (f._skirmish || f.state === 'muster');
+        const fighting = f.state === 'fight' || f.combatStance === 'fight' || struckLine;
+        const swinging = f._swingAt != null && world.time - f._swingAt < 0.42;
+        // RUN when hurrying to support in battle: mustering to the defense line (walk→'muster'), riding to a
+        // counter-sortie / search-party rally (f.mustering / walk→'sortie'). Only while actually TRAVELLING —
+        // standing in formation reads as guard/fight, never a run-in-place.
+        const battleRush = f.state === 'walk' && (f.mustering || (f.path && (f.path.then === 'muster' || f.path.then === 'sortie')));
+
+        if (f.downed) {
+            if (f._deathAnimAt == null) f._deathAnimAt = world.time;   // display-only timer (render field, like f._by)
+            const arr = isOrc ? cyc('death') : (bat() ? bat().death : null);
+            frame = byProgress(arr, (world.time - f._deathAnimAt) / 0.8);   // play the fall once, hold the last frame
+            if (frame && !isOrc) swordBaked = true;
+        } else if (f._deathAnimAt != null) f._deathAnimAt = null;
+
+        if (!frame && f.hurtFlash > 0.04) {
+            // struck: the HURT flinch plays across the flash window (hurtFlash decays 1 → 0)
+            const arr = isOrc ? cyc('hurt') : (bat() ? bat().hurt : null);
+            frame = byProgress(arr, 1 - Math.min(1, f.hurtFlash));
+            if (frame) { hurtPose = true; if (!isOrc) swordBaked = true; }
         }
+        if (!frame && fighting) {
+            const atk = isOrc ? cyc('attack') : (bat() ? bat().atk : null);
+            if (swinging) frame = byProgress(atk, (world.time - f._swingAt) / 0.42);   // the full swing on the duel beat
+            else if (f.state === 'fight' || f.combatStance === 'fight') frame = loop(atk, 10);   // sustained melee
+            if (frame && !isOrc) swordBaked = true;
+            // a line-holder between swings falls through → armed guard (idle breathe + the sword overlay below)
+        }
+        if (!frame && (f.state === 'walk' || f.state === 'flee')) {
+            const run = (f.state === 'flee' || battleRush) ? cyc('run') : null;
+            if (run) frame = loop(run, f.state === 'flee' ? 15 : 12);
+            else {
+                const walk = cyc('walk');
+                frame = walk ? loop(walk, f.state === 'flee' ? 14 : 9)
+                             : (Math.floor(f.animTime * (f.state === 'flee' ? 11 : 7)) % 2 ? frames.walk1 : frames.walk2);
+            }
+        }
+        // #chop the woodcutter's swing: felling a tree (chop) and grubbing the stump (break) now SWING THE
+        // BLADE on the same attack cycle a duel uses — a real overhand chop, not the old up/down bounce.
+        // Looped at the sustained-melee cadence; falls through to the labour beat if the attack/battle sheets
+        // haven't loaded yet (orc: cyc('attack'); human: the tinted body+head+SWORD composite).
+        if (!frame && (f.state === 'chop' || f.state === 'break')) {
+            const atk = isOrc ? cyc('attack') : (bat() ? bat().atk : null);
+            frame = loop(atk, 10);
+            if (frame) swordBaked = true;   // #Codex-VS BOTH cultures: the attack frame already holds the blade/axe → suppress the hoe (null cold-load frame still falls through to the hoe pose)
+        }
+        if (!frame && (f.state === 'work' || f.state === 'build' || f.state === 'coopbuild' || f.state === 'housebuild' || f.state === 'chop' || f.state === 'break' || f.state === 'forage' || f.state === 'mine' || f.state === 'fencepost' || f.state === 'scarecrow')) {
+            frame = Math.floor(f.animTime * 5) % 2 ? frames.work : frames.idle;   // the labour beat (the hoe overlay rides it)
+        }
+        if (!frame && f.state === 'sleep') frame = frames.sleep;
+        if (!frame) frame = loop(cyc('idle'), 8) || frames.idle;   // idle breathe (12f) — or the old still pose
     }
 
     // #raid-feel duel lunge: a defender landing their swing snaps toward the raider and eases back (display
@@ -2755,7 +2962,10 @@ function drawFarmer(f, sx, sy) {
         sx += ((f._swingI - f._swingJ) / n) * 3.5 * k;
         sy += ((f._swingI + f._swingJ) / n) * 1.75 * k;
     }
-    const fw = frame.width, fh = frame.height;
+    // #anim-migrate rig-aligned frames (battle/death/orc-activity cells) carry a _rig: anchor by the normal
+    // walk-crop dims and draw the wider cell at its stamped offset — the body never shifts between activities.
+    const rig = frame._rig;
+    const fw = rig ? rig.w : frame.width, fh = rig ? rig.h : frame.height;
     const px = Math.floor(sx - fw / 2);
     const py = Math.floor(sy + TILE_H / 2 - fh + 2);
     const footY = py + fh - 2;
@@ -2801,20 +3011,21 @@ function drawFarmer(f, sx, sy) {
     // source faces right); the ORC side row faces LEFT, so mirror when facing>0. Front/back rows never mirror.
     const flip = orcFrame ? (f.moveDir === 'side' && f.facing > 0)
                           : (f.facing < 0 && (!charReady() || f.moveDir === 'side'));
+    const rdx = rig ? rig.dx : 0, rdy = rig ? rig.dy : 0;
     if (flip) {
         ctx.save();
         ctx.translate(px + fw, dy);
         ctx.scale(-1, 1);
-        ctx.drawImage(frame, 0, 0);
+        ctx.drawImage(frame, rdx, rdy);
         ctx.restore();
     } else {
-        ctx.drawImage(frame, px, dy);
+        ctx.drawImage(frame, px + rdx, dy + rdy);
     }
 
     // #sprite BATTLE SWORD — the blade as a LAYER over the normal body, aligned to its rig (so the walk
     // cycle + shadow are untouched). Swings through the attack-sword frames on the duel beat (f._swingAt),
     // else an idle guard; the back-sword when facing away. Untinted — it's steel.
-    if (battling && charReady() && battleReady() && charBox) {
+    if (battling && !swordBaked && charReady() && battleReady() && charBox) {   // #anim-migrate skip when the frame already holds the blade
         const row = CHAR_DIRS[f.moveDir] ?? CHAR_DIRS.down, up = row === CHAR_DIRS.up;
         const SW = 0.42, swinging = f._swingAt != null && world.time - f._swingAt < SW;
         const part = swinging ? (up ? BATTLE_PARTS.attack_sword_back : BATTLE_PARTS.attack_sword)
@@ -2842,7 +3053,8 @@ function drawFarmer(f, sx, sy) {
     }
 
     // struck by a threat: a red flash. In danger: a blinking red "!" over their head.
-    if (f.hurtFlash > 0) {
+    // (#anim-migrate the rect flash is the FALLBACK — skipped when a real hurt-flinch frame is playing)
+    if (f.hurtFlash > 0 && !hurtPose) {
         ctx.fillStyle = `rgba(224,64,48,${Math.min(0.55, f.hurtFlash * 0.5)})`;
         ctx.fillRect(px + 3, py + 2, fw - 6, fh - 4);
     }
@@ -2918,7 +3130,7 @@ function drawFarmer(f, sx, sy) {
     }
 
     // held hoe by day when doing farm work (so they read as farmers, not swordsmen)
-    const toolStates = f.state === 'work' || f.state === 'chop' || f.state === 'mine' || f.state === 'forage';
+    const toolStates = (f.state === 'work' || f.state === 'chop' || f.state === 'mine' || f.state === 'forage') && !swordBaked;   // #chop no hoe over a swung blade
     if (toolStates && !awakeAtNight) {
         const dir = f.facing < 0 ? -1 : 1;
         const hx = f.facing < 0 ? px + 1 : px + fw - 2;
@@ -6037,7 +6249,11 @@ function maybeFaceoff() {
     if (foe && foe.sworeAgainst != null) { const s = world.farmers.find(x => x.sheet.seed === foe.sworeAgainst); if (s) swornName = s.sheet.name.split(' ')[0]; }
     faceoff = { at: performance.now(), name: String(name).toUpperCase(),
                 raidCount: (foe && foe.raidCount) | 0,
-                escaped: !!(world.nemesis && world.nemesis.lastOutcome === 'escaped'), swornName };
+                escaped: !!(world.nemesis && world.nemesis.lastOutcome === 'escaped'), swornName,
+                // #faceoff-info the encounter facts that fill the centre column (display-only, off the sim)
+                raiders: (re.raiders && re.raiders.length) || 0,
+                clan: e.by ? String(e.by).toUpperCase() : null,
+                defenders: world.farmers.filter(x => !x.downed && x.health !== 'dead' && x.health !== 'sick').length };
     // #Codex41-P1 a raid landing MID-WHISPER must not have its dismissal keys eaten by the (now-obscured) chat
     // input — blur it so keydowns reach the window handler (which dismisses the card).
     blurChatInput();
@@ -6091,6 +6307,14 @@ function faceoffWrap(str, scale, maxW) {
     return lines;
 }
 
+// a HUD-style block nameplate for the faceoff header (like the top-bar town name): a SUBTLE fill colour (no
+// outer stroke) with big centred text. Returns nothing; the caller lays plates out in a row.
+function faceoffPlate(x, y, w, h, text, scale, textCol, fillCol) {
+    ctx.fillStyle = fillCol; ctx.fillRect(x, y, w, h);
+    const tw = textWidth(text, scale);
+    drawText(ctx, text, Math.round(x + (w - tw) / 2), Math.round(y + (h - 5 * scale) / 2), textCol, scale);
+}
+
 function drawFaceoff() {
     if (!faceoff || !booted) return;
     const f = faceoff;
@@ -6104,9 +6328,9 @@ function drawFaceoff() {
     ctx.fillStyle = 'rgba(5,6,10,0.94)'; ctx.fillRect(0, 0, GW, GH);   // near-opaque stage — the busts are the whole show
 
     const cx = Math.floor(GW / 2), cy = Math.floor(GH / 2);
-    const PHt = Math.min(272, GH - 18);                       // bust height
     const slide = (1 - inA) * 42;                             // busts glide in from their own sides
-    const gap = 58;                                           // wider clear centre column so text never runs onto the faces
+    const gap = 58;                                           // clear centre column so text never runs onto the faces
+    const banH = 16, banY = GH - banH;                        // the yellow bottom banner (drawn later, ON TOP of the busts)
     const orcTown = world.culture === 'orc';
     // DEFENDER (townsfolk, LEFT): a human town fields human-farmer; an orc town fields orc-raider (orc farmers look
     // the same). RAIDER (RIGHT): an orc-raider warband hits a human town; orc-raider-2 hits an orc town. All busts
@@ -6115,45 +6339,59 @@ function drawFaceoff() {
     const defReady = orcTown ? orcPortraitReady : humanPortraitReady;
     const raiderImg = orcTown ? orcRaider2Img : orcPortraitImg;
     const raiderReady = orcTown ? orcRaider2Ready : orcPortraitReady;
-    drawFaceoffBust(defImg, defReady, true, cx - gap, cy, PHt, -1, -slide);          // defender, LEFT, FLIPPED → faces right/inward
-    drawFaceoffBust(raiderImg, raiderReady, false, cx + gap, cy, PHt, +1, +slide);   // raider, RIGHT, faces left/inward
 
-    // a soft dark column down the middle so the VS text reads cleanly over the two faces
+    // a soft dark column down the middle so the centre facts read cleanly over the two faces
     const grad = ctx.createLinearGradient(cx - 112, 0, cx + 112, 0);
     grad.addColorStop(0, 'rgba(6,7,12,0)'); grad.addColorStop(0.5, 'rgba(6,7,12,0.92)'); grad.addColorStop(1, 'rgba(6,7,12,0)');
     ctx.fillStyle = grad; ctx.fillRect(cx - 112, 0, 224, GH);
 
-    // #faceoff-layout everything centred within a hard MAX-WIDTH (< the centre gap) so nothing overruns the faces:
-    // the name wraps (dropping a scale if a single word is too wide), the war-context stacks line-by-line.
-    const maxW = gap * 2 - 12;                                // fits inside the clear gap between the two faces
-    const town = (world.name || 'the town').toUpperCase();
-    drawText(ctx, `RAID ON ${town}`, cx - Math.floor(textWidth(`RAID ON ${town}`, 1) / 2), 20, '#e8c860', 1);
+    // ===== TOP HEADER: [TOWN  VS.]  [ATTACKER] in HUD-style plates (subtle fill, no stroke), in the band above the
+    // busts. Town + "VS." share ONE plate (yellow text); the raider gets its own red plate. Sized to always fit on
+    // ONE line within a comfortable margin — the scale steps DOWN (never wraps/truncates).
+    const town = (world.name || 'THE TOWN').toUpperCase();
+    let atk = f.name;
+    const left = `${town} VS.`;
+    const padX = 6, padY = 4, hgap = 8;
+    const rowW = (s) => (textWidth(left, s) + padX * 2) + hgap + (textWidth(atk, s) + padX * 2);
+    let hs = 4; while (hs > 1 && rowW(hs) > GW - 24) hs--;    // biggest scale (≤4) that fits with a margin
+    // #Codex-VS hard-fit at min scale: real names fit at ≥scale 3, but the demoFaceoff QA hook accepts arbitrary
+    // strings — a huge one would overflow scale 1 and centre the row to a NEGATIVE x, clipping both plates. Trim
+    // the attacker name (the variable part) with a terminal dot (the 3×5 font has no ellipsis glyph) so it fits.
+    if (rowW(hs) > GW - 24) {
+        const avail = (GW - 24) - (textWidth(left, hs) + padX * 2) - hgap - padX * 2;
+        while (atk.length > 1 && textWidth(`${atk}.`, hs) > avail) atk = atk.slice(0, -1);
+        atk += '.';
+    }
+    const plateH = 5 * hs + padY * 2, topY = 8;
+    const leftW = textWidth(left, hs) + padX * 2, atkW = textWidth(atk, hs) + padX * 2;
+    let hx = Math.round(cx - (leftW + hgap + atkW) / 2);
+    faceoffPlate(hx, topY, leftW, plateH, left, hs, '#f4d868', 'rgba(22,38,20,0.82)'); hx += leftW + hgap;   // town + VS.: yellow text
+    faceoffPlate(hx, topY, atkW, plateH, atk, hs, '#ffffff', 'rgba(184,40,32,0.92)');                        // raider: red fill, white letters
 
-    // the aggressor's NAME — scale 2 wrapped to fit; drop to scale 1 if even one word is too wide at scale 2
-    let ns = 2, nameLines = faceoffWrap(f.name, ns, maxW);
-    if (nameLines.some(l => textWidth(l, ns) > maxW)) { ns = 1; nameLines = faceoffWrap(f.name, ns, maxW); }
+    // ===== CENTRE: the ENCOUNTER FACTS — clan · warband size · defenders · the war so far — fill the gap with
+    // meaningful info, stacked + vertically centred. The FIRST line (the headline) is white; every following
+    // detail line is the soft HUD grey (matching the weather label), so the eye lands on the headline first.
+    const maxW = gap * 2 - 10;
+    const lines = [];
+    if (f.clan) lines.push(f.clan);
+    if (f.raiders) lines.push(`${f.raiders} RAIDER${f.raiders === 1 ? '' : 'S'} STRONG`);
+    if (f.defenders != null) lines.push(`${f.defenders} DEFENDER${f.defenders === 1 ? '' : 'S'} STAND`);
+    if (f.raidCount >= 2) lines.push(`${faceoffOrdinal(f.raidCount)} RAID OF THE WAR`);
+    if (f.escaped) lines.push('HE BROKE OFF LAST TIME');
+    else if (f.swornName) lines.push(`HE SWORE AGAINST ${f.swornName}`);
+    else if (f.raidCount < 2) lines.push('A WARBAND STRIKES');
+    const rendered = [];
+    lines.forEach((t, i) => { const c = i === 0 ? '#ffffff' : '#9aa0b4'; for (const w of faceoffWrap(t, 1, maxW)) rendered.push({ t: w, c }); });
+    let sy = cy - Math.floor((rendered.length * 9) / 2);
+    for (const r of rendered) { drawText(ctx, r.t, cx - Math.floor(textWidth(r.t, 1) / 2), sy, r.c, 1); sy += 9; }
 
-    // the WAR CONTEXT, stacked (each on its own centred line)
-    const ctxLines = [];
-    if (f.raidCount >= 2) ctxLines.push(`${faceoffOrdinal(f.raidCount)} RAID OF THE WAR`);
-    if (f.escaped) ctxLines.push('HE BROKE OFF LAST TIME');
-    else if (f.swornName) ctxLines.push(`HE SWORE AGAINST ${f.swornName}`);
-    else if (f.raidCount < 2) ctxLines.push('A WARBAND STRIKES');
-    const subLines = ctxLines.flatMap(l => faceoffWrap(l, 1, maxW));
+    // ===== BUSTS ON TOP (top of the z-order) — near full-height, BOTTOM-anchored so they overflow under the banner
+    // (which clips them → NO gap at the bottom) while the top rises into the header (the raider's hair over the text).
+    const PHt = GH - 4, bustCy = cy + 4;
+    drawFaceoffBust(defImg, defReady, true, cx - gap, bustCy, PHt, -1, -slide);          // defender, LEFT, FLIPPED → faces right/inward
+    drawFaceoffBust(raiderImg, raiderReady, false, cx + gap, bustCy, PHt, +1, +slide);   // raider, RIGHT, faces left/inward
 
-    // vertical stack, centred as one block around cy: big VS · name lines · context lines
-    const VS_SCALE = 6;                                       // 1.5x the old scale-4 VS
-    const vsH = VS_SCALE * 5, nameH = nameLines.length * (ns * 5 + 2), subH = subLines.length * 8;
-    const blockH = vsH + 10 + nameH + (subLines.length ? 6 + subH : 0);
-    let y = cy - Math.floor(blockH / 2);
-    drawText(ctx, 'VS', cx - Math.floor(textWidth('VS', VS_SCALE) / 2), y, '#f4d868', VS_SCALE);
-    y += vsH + 10;
-    for (const ln of nameLines) { drawText(ctx, ln, cx - Math.floor(textWidth(ln, ns) / 2), y, '#e8483a', ns); y += ns * 5 + 2; }
-    y += subLines.length ? 6 : 0;
-    for (const ln of subLines) { drawText(ctx, ln, cx - Math.floor(textWidth(ln, 1) / 2), y, '#9aa0ac', 1); y += 8; }
-
-    // full-width YELLOW banner along the bottom, black CLICK TO CONTINUE text that blinks until clicked
-    const banH = 16, banY = GH - banH;
+    // ===== full-width YELLOW banner along the bottom (kept ABOVE the busts so CLICK TO CONTINUE stays readable)
     ctx.fillStyle = '#e8c650'; ctx.fillRect(0, banY, GW, banH);
     ctx.fillStyle = '#7a5e12'; ctx.fillRect(0, banY, GW, 1);                       // thin darker lip on top
     if (performance.now() % 900 < 560) {
@@ -6166,7 +6404,7 @@ function drawFaceoff() {
 // Autosave (#88): the town writes itself to IndexedDB at every day rollover, plus whenever the
 // tab hides/closes. Fire-and-forget — a failed write never touches the sim (save.js swallows).
 function maybeAutosave() {
-    if (!booted || !world || world.day === lastSavedDay) return;
+    if (!booted || !world || world._spectator || world.day === lastSavedDay) return;   // #START the menu backdrop never persists
     lastSavedDay = world.day;                       // claim synchronously so a slow write can't double-fire
     // #Codex24-1/#Codex25-1: register the world summary ONLY after a SUCCESSFUL save, and register an IMMUTABLE
     // summary captured SYNCHRONOUSLY with the save (same world state — the sim can't interleave between these two
@@ -6285,6 +6523,7 @@ out.addEventListener('pointerdown', (e) => {
     audio.ensure();   // browsers only allow audio to start on a user gesture
     const p = gamePoint(e);
     mouse.downX = p.x; mouse.downY = p.y;
+    if (startScreen) { mouse.panStart = null; return; }   // #START the menu owns the canvas — never pan the town behind it
     // #98 a grand Moment spotlight eats the next click (dismiss it, don't fall through to world/pan)
     if (activeMoment && MOMENTS_HIT.w) { activeMoment = null; mouse.panStart = null; return; }
     // #callout the X on a discovery toast dismisses it (only the X — clicking the bar itself falls through)
@@ -6331,6 +6570,22 @@ out.addEventListener('pointerup', (e) => {
     if (wasSlider) return;   // finished dragging a volume slider — consume the release
     if (wasDrag || !booted) return;
     const p = gamePoint(e);
+
+    // #START the launch menu owns every click while it's up: a button acts, anything else is swallowed
+    if (startScreen) {
+        const H = startHits || {};
+        if (H.sound && inRect(p, H.sound)) { menuMuted = !menuMuted; audio.ensure(); audio.setMuted(menuMuted); return; }   // #START universal mute (music + SFX)
+        if (startPage === 'title') {
+            if (H.start && inRect(p, H.start)) { startPage = 'choose'; return; }     // → the choose screen
+            if (H.view && inRect(p, H.view)) { startScreen = false; audio.ensure(); audio.setMenuMode(false); audio.setMuted(false); return; }   // dismiss → spectate the town behind (this click is a gesture: unlock the audio ctx + lift the menu mute so game audio — chops, music — plays)
+        } else {
+            if (H.human && inRect(p, H.human)) { location.search = '?fresh=1'; return; }
+            if (H.orc && inRect(p, H.orc)) { location.search = '?fresh=1&orc=1'; return; }
+            if (H.view && inRect(p, H.view)) { startScreen = false; audio.ensure(); audio.setMenuMode(false); audio.setMuted(false); return; }   // dismiss → spectate the town behind (this click is a gesture: unlock the audio ctx + lift the menu mute so game audio — chops, music — plays)
+            if (H.back && inRect(p, H.back)) { startPage = 'title'; return; }         // ‹ back to the title screen
+        }
+        return;
+    }
 
     // the "previously on" catch-up card swallows the first click (any click dismisses it)
     if (resumeCard) { resumeCard = null; return; }
@@ -6770,6 +7025,7 @@ function mostInterestingFarmer() {
 }
 
 window.addEventListener('keydown', (e) => {
+    if (startScreen) return;   // #START the launch menu owns input — no world shortcuts drive the backdrop
     if (chatFocused) return;   // #93: typing a whisper — never fire world shortcuts (W/F/T/arrows)
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     if (resumeCard) { resumeCard = null; return; }   // any key dismisses the catch-up card
@@ -7124,7 +7380,18 @@ function frame(now) {
     if (raidShake > 0) raidShake = Math.max(0, raidShake - dt * 11);
 
     // camera: while a raid is live, ride the raidFocus; otherwise trail followTarget
-    if (raidFocus) {
+    // #START launch-page spectator drift — the camera gently trails a random townsperson, rotating to a new one
+    // every ~15s, purely for ambient life behind the menu (display-only; never opens a card).
+    if (startScreen && world._spectator && world.farmers.length) {
+        const nowMs = performance.now();
+        if (!specTarget || !world.farmers.includes(specTarget) || nowMs >= specNextSwitch) {
+            specTarget = world.farmers[Math.floor(Math.random() * world.farmers.length)];
+            specNextSwitch = nowMs + 15000;
+        }
+        const tx = GW / 2 - isoX(specTarget.pos.i, specTarget.pos.j);
+        const ty = GH / 2 - isoY(specTarget.pos.i, specTarget.pos.j) - 12;
+        cam.x += (tx - cam.x) * 0.05; cam.y += (ty - cam.y) * 0.05;   // slow, dreamy drift
+    } else if (raidFocus) {
         const tx = GW / 2 - isoX(raidFocus.i, raidFocus.j);
         const ty = GH / 2 - isoY(raidFocus.i, raidFocus.j) - 12;
         if (!mouse.dragging) { cam.x += (tx - cam.x) * 0.16; cam.y += (ty - cam.y) * 0.16; }
@@ -7182,7 +7449,7 @@ function frame(now) {
     for (const d of drawables) d.draw();
     // #bubble-overlay — words on top of the whole scene, so a farmer standing behind the silo/war-post/house
     // (or clustered at the well during the day-1 congregation) is never speaking from behind the building.
-    for (const fb of farmerBubbles) drawFarmerBubble(fb.f, fb.sx);
+    if (!startScreen) for (const fb of farmerBubbles) drawFarmerBubble(fb.f, fb.sx);   // #START no speech bubbles behind the menu
 
     // #raid-feel floating COMBAT TEXT (MISS / PARRY! / HIT! / FELLED! / BREAKS OFF) from the duel exchanges —
     // rises and fades over ~1.2s of sim time; also the trigger for the clash SFX (each new entry plays once).
@@ -7206,11 +7473,11 @@ function frame(now) {
         restoreFarmerInterp();
         if (_snapped) { cam.x = _camFx; cam.y = _camFy; }
     }
-    drawUI();
+    if (!startScreen) drawUI();   // #START the launch pages are a pure view-portal — no top bar / controls / minimap
     maybeAutosave();
     // (end-of-day recap card removed — the Moments/callout banners + the chronicle carry the day's beats now;
     // the "PREVIOUSLY ON" catch-up card on RESUME is separate and stays, see drawResumeCard)
-    drawMoments();   // #98: spotlight the profound beats on top of the HUD (still under the CRT shader)
+    if (!startScreen) drawMoments();   // #98: spotlight the profound beats on top of the HUD (still under the CRT shader)
     if (raidFx) {   // #raidfx battle-transition, topmost in-game layer; the war-horn sounds three times across it
         drawRaidFx(); raidFx.t += dt;
         if (raidFx.stings < 3 && raidFx.t >= raidFx.stings * 1.05) { raidFx.stings++; if (audio.raidSting) audio.raidSting(); }
@@ -7225,7 +7492,7 @@ function frame(now) {
     }
     // a quiet indicator while the camera is trailing someone (F, or the sheet's crosshair, toggles it)
     FOLLOW_PREV.w = FOLLOW_NEXT.w = 0;   // no banner, no clickable arrows (cleared each frame)
-    if (followMode && followTarget && world.farmers.includes(followTarget) && !rosterOpen && !chronOpen && !boardOpen) {
+    if (!startScreen && followMode && followTarget && world.farmers.includes(followTarget) && !rosterOpen && !chronOpen && !boardOpen) {
         const lbl = `FOLLOWING ${followTarget.sheet.name.split(' ')[0].toUpperCase()} - F TO STOP`;
         // sit the plate near the bottom edge (the log bar is gone) as a floating element
         const tw = textWidth(lbl), bx = Math.floor((GW - tw) / 2), boxTop = GH - 16, cy = GH - 11;
@@ -7245,7 +7512,7 @@ function frame(now) {
     // building hover tooltip — only when hovering the world (not over a panel, not dragging,
     // and not while an inventory-slot tooltip is already showing on the open sheet)
     let worldHover = false;
-    if (booted && !raidFx && mouse.x >= 0 && !mouse.dragging && !rosterOpen && !boardOpen && !chronOpen && !settingsOpen && !worldMapOpen && mouse.y > 18 &&
+    if (booted && !startScreen && !raidFx && mouse.x >= 0 && !mouse.dragging && !rosterOpen && !boardOpen && !chronOpen && !settingsOpen && !worldMapOpen && mouse.y > 18 &&
         !(selected && inRect(mouse, SHEET_RECT)) && !inRect(mouse, MINIMAP)) {
         // #hover a farmer/foe under the cursor takes priority (it's the moving thing you're tracking), then buildings
         const ent = entityUnder(mouse.x, mouse.y);
@@ -7262,38 +7529,268 @@ function frame(now) {
 
     // B4: nudge the player toward a fresh off-screen story beat (drawn above the world, below the cursor)
     updateDramaSpotlight();
-    if (booted && !rosterOpen && !chronOpen && !boardOpen) drawDramaCue();
-    if (booted && !rosterOpen && !chronOpen && !boardOpen && !worldMapOpen && !settingsOpen) { drawSortie(); drawThreatTell(); }   // #131 / #counteroffensive
-    updateCrossing(); drawFogMarkers(); drawCrossHint();   // #P2 fog markers + the warn banner + crossing trigger
+    if (booted && !startScreen && !rosterOpen && !chronOpen && !boardOpen) drawDramaCue();
+    if (booted && !startScreen && !rosterOpen && !chronOpen && !boardOpen && !worldMapOpen && !settingsOpen) { drawSortie(); drawThreatTell(); }   // #131 / #counteroffensive
+    if (!startScreen) { updateCrossing(); drawFogMarkers(); drawCrossHint(); }   // #P2 fog markers + the warn banner + crossing trigger (hidden under the launch menu)
 
     drawFaceoff();      // #faceoff the post-raid VS card sits above the world/panels (resume card + cursor top it)
     drawResumeCard();   // the "previously on" catch-up card sits above every panel (only the cursor tops it)
 
+    // #START the launch menu — over the world/panels, under the cursor. Guarded: a menu-draw glitch must never
+    // skip crt.render and black out the whole game (the town behind stays visible); log the first failure only.
+    if (startScreen) { try { drawStartScreen(); } catch (e) { if (!_startScreenErr) { _startScreenErr = true; console.error('start screen draw error:', e); } } }
+
     // custom pixel hand cursor, on top of everything (dragging = pressed/gold too)
-    if (mouse.x >= 0) drawCursor(mouse.x, mouse.y, mouse.dragging || cursorIsHot(worldHover));
+    if (mouse.x >= 0) drawCursor(mouse.x, mouse.y, mouse.dragging || cursorIsHot(worldHover) || startHovering());
 
     crt.render(t);   // Codex #44 P2 — the CRT does full-color; the old per-season DMG palette feed was inert (removed)
 }
 
-// boot screen: static + title card
+// boot / loading screen: the CRT tunes in (heavy static settling to near-black), then a 64-bit pixel
+// LOADER bar sweeps while the memories are pulled from SuperMemory, captioned "RETRIEVING MEMORIES".
 function drawBootScreen(t) {
-    bootTime += 1 / 60;
-    // static noise
+    if (bootT0 == null) bootT0 = t;
+    const bootTime = t - bootT0;   // #Codex-VS seconds since the first boot frame (RAF clock) — not a per-frame counter, so 30/60/120Hz all pace the same
+    // TUNE-IN: heavy CRT snow that settles into a dark screen over the first ~0.6s (the set finding its channel)
+    const tune = Math.max(0, 1 - bootTime / 0.6);          // 1 → 0
     const img = ctx.createImageData(GW, GH);
+    const amp = 16 + tune * 120;                           // grain fades from heavy static to a faint hiss
     for (let i = 0; i < img.data.length; i += 4) {
-        const v = Math.random() * 110;
+        const v = Math.random() * amp;
         img.data[i] = v; img.data[i + 1] = v; img.data[i + 2] = v; img.data[i + 3] = 255;
     }
     ctx.putImageData(img, 0, 0);
-    if (bootTime > 0.7) {
-        ctx.fillStyle = 'rgba(10,12,18,0.88)';
-        ctx.fillRect(0, 0, GW, GH);
-        drawText(ctx, 'PROPAGATE', GW / 2 - textWidth('PROPAGATE', 3) / 2, 110, '#7dd069', 3);
-        const tagline = memoryTagline();
-        drawText(ctx, tagline, GW / 2 - textWidth(tagline) / 2, 140, '#9aa0b4');
-        const dots = '.'.repeat(1 + (Math.floor(t * 3) % 3));
-        drawText(ctx, `TUNING CHANNEL${dots}`, GW / 2 - textWidth('TUNING CHANNEL...') / 2, 158, '#6a9ade');
+    ctx.fillStyle = `rgba(8,10,16,${0.9 - tune * 0.5})`;   // wash to near-black; the faint grain still shows through
+    ctx.fillRect(0, 0, GW, GH);
+    if (bootTime < 0.35) return;                           // let the snow play solo for a beat
+
+    const cx = Math.round(GW / 2), cy = Math.round(GH / 2);
+
+    // ---- 64-bit pixel LOADER: a framed bar of chunky cells with a lit band sweeping L→R (indeterminate) ----
+    const CELL = 6, GAPC = 2, N = 16;
+    const barW = N * CELL + (N - 1) * GAPC, barH = 10;
+    const bx = cx - Math.round(barW / 2), by = cy - 8;
+    ctx.fillStyle = '#2a3350'; ctx.fillRect(bx - 3, by - 3, barW + 6, barH + 6);   // bezel
+    ctx.fillStyle = '#0c0f18'; ctx.fillRect(bx - 1, by - 1, barW + 2, barH + 2);   // inner well
+    const head = ((performance.now() / 1000 / 1.5) % 1) * (N + 5) - 3;             // leading cell, enters/exits the ends
+    for (let k = 0; k < N; k++) {
+        const d = head - k;                               // cells LIGHT behind the sweeping head, fading with distance
+        let col = '#141c18';                              // unlit cell
+        if (d >= 0 && d < 4) col = d < 1 ? '#c8f0a0' : d < 2 ? '#7dd069' : '#4a8a3c';
+        ctx.fillStyle = col;
+        ctx.fillRect(bx + k * (CELL + GAPC), by, CELL, barH);
     }
+
+    // ---- caption underneath ----
+    // #Codex-VS honest per-source wording: 'offline' = still reaching the store (pending / unreachable);
+    // 'invented' = the fetch failed and lives were GENERATED (not retrieved); otherwise a real pull succeeded.
+    const label = memorySource === 'invented' ? 'IMAGINING LIVES'
+        : memorySource === 'offline' ? 'TUNING IN'
+        : 'RETRIEVING MEMORIES';
+    const dots = '.'.repeat(1 + (Math.floor(t * 2.5) % 3));
+    const lw = textWidth(`${label}...`, 1);               // reserve the widest dot-count so it never jitters
+    drawText(ctx, `${label}${dots}`, cx - Math.round(lw / 2), by + barH + 12, '#9aa0b4', 1);
+}
+
+// ---------------------------------------------------------------------------
+// Start screen (#START) — the launch menu
+// ---------------------------------------------------------------------------
+// A plain visit boots a live, randomised, NON-persisting town (the spectator backdrop) and paints
+// this menu straight INTO the game canvas — so it rides the same CRT shader, pixel font, and panel/
+// button styling as everything else (drawn just before crt.render, under the cursor). TWO screens:
+//   'title'  — the animated PROPAGATE title, a tagline, a white ▶ START GAME, and a VIEW EXISTING TOWN text-button
+//   'choose' — CREATE A HUMAN TOWN / RAISE AN ORC WARBAND, a VIEW A LIVING TOWN text-button, and ‹ BACK
+// The title is an animated pixel spritesheet (propagate_grow, white removed → transparent); it falls
+// back to the 3x5 font wordmark until the sheet loads. Buttons navigate to the real, persisting game.
+const TITLE_SHEET = { cols: 8, rows: 5, frames: 40, fw: 256, fh: 113, ms: 90 };   // propagate-title-anim.png (frame 39 = bare finale, unused by the loop)
+let startTitleImg = null, startTitleTried = false;
+function startHovering() { return !!(startScreen && startHits && Object.values(startHits).some(r => inRect(mouse, r))); }
+
+// right-pointing PLAY triangle of EXACT height h, top-aligned at yTop (so it matches text-cap height).
+function drawPlayIcon(x, yTop, h, color) {
+    ctx.fillStyle = color;
+    const w = Math.max(3, Math.round(h * 0.82));
+    for (let c = 0; c < w; c++) {
+        const colH = Math.max(1, Math.round(h * (1 - c / w)));
+        ctx.fillRect(x + c, Math.round(yTop) + Math.floor((h - colH) / 2), 1, colH);
+    }
+    return w;   // pixel width consumed
+}
+
+// the animated title, centred at (cx, topY); returns the y just below it. Falls back to the font wordmark.
+function drawTitleArt(cx, topY, maxW) {
+    if (!startTitleTried) { startTitleTried = true; const im = new Image(); im.onload = () => { startTitleImg = im; }; im.src = './propagate-title-anim2.png'; }
+    if (startTitleImg && startTitleImg.width) {
+        // Ping-pong the growth so the loop never snaps: vines grow in 0→38, rest on the
+        // full-lush apex (~1.1s), recede 38→0 slightly faster, breathe on the sprouted frame,
+        // regrow. Frame 39 (the bare-gold finale) is skipped — flashing it between lush 38 and
+        // the frame-0 rest was the visible loop hitch.
+        // Straight FORWARD loop (no boomerang): play 0→LAST once — vines bloom in (0→~20), then the SHINE
+        // sweeps L→R across the letters (~20→LAST) — PAUSE 2s on the lush, shine-complete frame, then REPLAY
+        // from the start. The bare tail (37-39) is never shown; the shine only ever travels left→right.
+        const T = TITLE_SHEET, LAST = 32, PLAY = LAST * T.ms, PAUSE = 2000, REST = 150;   // pause the instant the shine finishes, before the foliage recedes (frames 33+ minimize)
+        const cycle = PLAY + PAUSE + REST, e = performance.now() % cycle;
+        let i;
+        if (e < PLAY) i = Math.floor(e / T.ms);        // play forward 0→LAST (grow, then the shine sweeps across)
+        else if (e < PLAY + PAUSE) i = LAST;           // PAUSE on the lush, shine-complete frame
+        else i = 0;                                    // brief beat, then the loop replays from the start
+        const sx = (i % T.cols) * T.fw, sy = Math.floor(i / T.cols) * T.fh;
+        const sc = Math.min(maxW / T.fw, 2.4), w = Math.round(T.fw * sc), h = Math.round(T.fh * sc);
+        const dx = Math.round(cx - w / 2), dy = Math.round(topY);
+        const sm = ctx.imageSmoothingEnabled; ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(startTitleImg, sx, sy, T.fw, T.fh, dx, dy, w, h); ctx.imageSmoothingEnabled = sm;
+        return dy + h;
+    }
+    const s = GW < 400 ? 3 : 4, tw = textWidth('PROPAGATE', s), tx = Math.round(cx - tw / 2), ty = Math.round(topY + 20);
+    drawText(ctx, 'PROPAGATE', tx + 1, ty + 1, 'rgba(0,0,0,0.6)', s);
+    drawText(ctx, 'PROPAGATE', tx, ty, '#7dd069', s);
+    return ty + 5 * s;
+}
+
+// a centred TEXT button (no plate). hotCol is the hover colour (defaults to the gold used elsewhere).
+function startTextButton(key, cx, y, label, scale, baseCol, hotCol = '#ffd24a') {
+    const tw = textWidth(label, scale), r = { x: Math.round(cx - tw / 2) - 6, y: y - 3, w: tw + 12, h: 5 * scale + 6 };
+    const hot = inRect(mouse, r);
+    drawText(ctx, label, Math.round(cx - tw / 2), y, hot ? hotCol : baseCol, scale);
+    startHits[key] = r;
+    return r;
+}
+
+// a full tinted-plate button in the game's FOUND-A-TOWN style. Registers its hit rect under `key`.
+function startPlateButton(key, bx, y, bw, bh, label, base, fill, fillHot, textCol) {
+    const cx = bx + bw / 2, r = { x: bx, y, w: bw, h: bh }, hot = inRect(mouse, r);
+    ctx.fillStyle = hot ? fillHot : fill; ctx.fillRect(r.x, r.y, r.w, r.h);
+    ctx.strokeStyle = base; ctx.lineWidth = 1; ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
+    drawText(ctx, label, Math.round(cx - textWidth(label) / 2), r.y + (bh - 5) / 2, hot ? '#ffffff' : textCol);
+    startHits[key] = r;
+}
+
+// #START choose-screen WALKERS — a looping, right-facing walk sprite per culture, cropped straight from the
+// CraftPix WALK sheets (both 384x256 = 6 cols x 4 rows of 64px cells, side = row 2) so each gets a smooth
+// 6-frame gait WITH its baked-in foot shadow. Human: Swordsman lvl1 walk (side faces RIGHT — no mirror).
+// Orc: orc1 walk (side faces LEFT → mirrored). The old in-game farmer sprite (2-frame walk) remains only as
+// a last-ditch fallback while a sheet loads. Fake farmer objects satisfy the fallback sprite builders.
+const MENU_HUMAN = { sheet: { culture: 'human', seed: 77 }, moveDir: 'side', facing: 1, state: 'walk', animTime: 0 };
+const MENU_ORC_FB = { sheet: { culture: 'orc', seed: 33 }, moveDir: 'side', facing: 1, state: 'walk', animTime: 0 };
+// crop the 6 side-row cells of a 64px walk sheet down to body + foot shadow → an array of frame canvases
+function menuWalkFrames(img, sx0, sy0, sw, sh) {
+    if (!img || !img.complete || !img.naturalWidth) return null;
+    const FW = 64, cols = Math.max(1, Math.round(img.naturalWidth / FW)), row = 2;   // side row
+    const frames = [];
+    for (let c = 0; c < cols; c++) {
+        const [o, ox] = makeCanvas(sw, sh); ox.imageSmoothingEnabled = false;
+        ox.drawImage(img, c * FW + sx0, row * FW + sy0, sw, sh, 0, 0, sw, sh);
+        frames.push(o);
+    }
+    return frames;
+}
+let menuOrcWalk = null;
+function menuOrcFrames() {
+    // orc1 walk, side row faces LEFT; crop covers the body AND the baked foot shadow (y6..50 of the cell)
+    return menuOrcWalk || (menuOrcWalk = menuWalkFrames(orcWalkImg && orcWalkImg[1], 12, 6, 40, 44));
+}
+let menuHumanWalk = null;
+function menuHumanFrames() {
+    // Swordsman lvl1 walk, side row faces RIGHT; body sits x24..42 / y17..47 in its cell (shadow included)
+    return menuHumanWalk || (menuHumanWalk = menuWalkFrames(menuHumanWalkImg, 18, 14, 30, 36));
+}
+// draw a walking `culture` sprite with its FEET centred at (footX, footY), scaled to targetH, facing right.
+function drawMenuWalker(culture, footX, footY, targetH, t) {
+    let frame = null, flip = false;
+    const frames = culture === 'orc' ? menuOrcFrames() : menuHumanFrames();
+    if (frames && frames.length) {
+        frame = frames[Math.floor(t * 8) % frames.length];
+        flip = culture === 'orc';                   // orc side row faces left → mirror; swordsman already faces right
+    }
+    if (!frame) {                                   // sheet not ready → in-game farmer sprite (2-frame walk)
+        const fr = farmerSprites(culture === 'orc' ? MENU_ORC_FB : MENU_HUMAN);
+        frame = Math.floor(t * 7) % 2 ? fr.walk1 : fr.walk2;
+        flip = culture === 'orc';                   // orcCharSets side faces left; human char side already faces right
+    }
+    if (!frame || !frame.width) return 0;
+    const scale = targetH / frame.height, w = Math.round(frame.width * scale), h = Math.round(frame.height * scale);
+    const dx = Math.round(footX - w / 2), dy = Math.round(footY - h);
+    const sm = ctx.imageSmoothingEnabled; ctx.imageSmoothingEnabled = false;
+    if (flip) { ctx.save(); ctx.translate(dx + w, dy); ctx.scale(-1, 1); ctx.drawImage(frame, 0, 0, w, h); ctx.restore(); }
+    else ctx.drawImage(frame, dx, dy, w, h);
+    ctx.imageSmoothingEnabled = sm;
+    return w;
+}
+
+function drawStartScreen() {
+    ctx.fillStyle = 'rgba(8,9,14,0.8)'; ctx.fillRect(0, 0, GW, GH);   // the ~80% black veil over the living town
+    // deepen the CENTRE into a clean stage for the menu (the living town still breathes at the edges) so the
+    // town's own farmers / silo badge / speech bubbles behind the centred content don't clutter it.
+    const vg = ctx.createRadialGradient(GW / 2, GH / 2, 0, GW / 2, GH / 2, GH * 0.95);
+    vg.addColorStop(0, 'rgba(5,7,10,0.7)'); vg.addColorStop(0.5, 'rgba(5,7,10,0.45)'); vg.addColorStop(1, 'rgba(5,7,10,0)');
+    ctx.fillStyle = vg; ctx.fillRect(0, 0, GW, GH);
+    const cx = GW / 2;
+    startHits = {};
+
+    // #START volume button (top-right, pulled in from the CRT-curved corner so it's easy to hit) — the launch
+    // pages START MUTED (autoplay policy); click to hear the theme.
+    const sndR = { x: GW - 34, y: 10, w: 20, h: 14 };
+    if (inRect(mouse, sndR)) { ctx.fillStyle = 'rgba(255,255,255,0.09)'; ctx.fillRect(sndR.x, sndR.y, sndR.w, sndR.h); }
+    drawSpeakerIcon(sndR.x + 6, sndR.y + 3, !menuMuted);
+    startHits.sound = sndR;
+
+    if (startPage === 'title') {
+        const titleBottom = drawTitleArt(cx, GH * 0.13, Math.min(GW - 48, 300));
+        // the title frame carries transparent padding below the letters — tuck the tagline up into it so it
+        // sits beneath the animation (but not jammed against the vines).
+        const tag = 'A world that remembers itself';
+        drawText(ctx, tag.toUpperCase(), Math.round(cx - textWidth(tag) / 2), titleBottom - 8, '#9aa0b4');
+
+        // PRIMARY: yellow ▶ START GAME — dropped well below the title/tagline so the CTA reads as its own
+        // beat, with a gently BLINKING play arrow to pull the eye (steady/solid on hover).
+        const gy = titleBottom + 62, iconH = 10, label = 'START GAME';   // iconH = scale-2 text cap height (5*2), top-aligned
+        const iconW = Math.max(3, Math.round(iconH * 0.82)), pad = 7, lw = textWidth(label, 2);
+        const groupW = iconW + pad + lw, gx = Math.round(cx - groupW / 2);
+        const startRect = { x: gx - 8, y: gy - 5, w: groupW + 16, h: iconH + 10 };
+        const startHot = inRect(mouse, startRect);
+        const blink = 0.2 + 0.8 * (0.5 + 0.5 * Math.sin(performance.now() / 260));   // ~0.2→1.0 pulse, ~1.6s cycle
+        const arrowCol = startHot ? '#ffffff' : `rgba(255,210,74,${blink.toFixed(2)})`;
+        drawPlayIcon(gx, gy, iconH, arrowCol);                                        // top-aligned with the label
+        drawText(ctx, label, gx + iconW + pad, gy, startHot ? '#ffffff' : '#ffd24a', 2);
+        startHits.start = startRect;
+
+        // SECONDARY: a quiet white text button — fades to 30% opacity on hover (a soft, receding feel)
+        startTextButton('view', cx, gy + iconH + 13, 'Or view existing town'.toUpperCase(), 1, '#ffffff', 'rgba(255,255,255,0.3)');
+        return;
+    }
+
+    // 'choose' — no title art; a heading, two culture CTAs (each a right-facing WALKING sprite + label in a
+    // stroke-outlined container that fills on hover), and a view button — the block CENTRED over the living town.
+    const heading = 'CHOOSE YOUR PATH', t = performance.now() / 1000;
+    const slot = 40, boxH = 42, boxGap = 14, headGap = 24, viewGap = 30, padX = 14;
+    const labelHuman = 'CREATE A HUMAN TOWN', labelOrc = 'CREATE AN ORC TOWN';
+    const maxLabelW = Math.max(textWidth(labelHuman), textWidth(labelOrc));
+    const boxW = padX + slot + 10 + maxLabelW + padX, boxX = Math.round(cx - boxW / 2);
+    const blockH = 5 + headGap + boxH + boxGap + boxH + viewGap + 5;
+    let y = Math.round(GH / 2 - blockH / 2);
+
+    drawText(ctx, heading, Math.round(cx - textWidth(heading) / 2), y, '#9aa0b4');
+    y += 5 + headGap;
+
+    // spriteH matched so the two read at the SAME scale/density (orcs are bigger, so the human is a touch shorter);
+    // both are down-scaled from their native sheet frames → crisp, no chunky up-scaling.
+    const ctaBox = (key, culture, label, spriteH, stroke, fillHot, textCol) => {
+        const r = { x: boxX, y, w: boxW, h: boxH }, hot = inRect(mouse, r);
+        ctx.fillStyle = hot ? fillHot : 'rgba(255,255,255,0.05)'; ctx.fillRect(r.x, r.y, r.w, r.h);
+        ctx.strokeStyle = stroke; ctx.lineWidth = 1; ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
+        drawMenuWalker(culture, r.x + padX + slot / 2, r.y + boxH - 4, spriteH, t);   // feet near the container floor
+        drawText(ctx, label, r.x + padX + slot + 10, Math.round(r.y + boxH / 2 - 2), hot ? '#ffffff' : textCol, 1);
+        startHits[key] = r;
+        y += boxH + boxGap;
+    };
+    ctaBox('human', 'human', labelHuman, 30, '#7dd069', 'rgba(125,208,105,0.30)', '#b6e8a0');   // green — a human town
+    ctaBox('orc',   'orc',   labelOrc,   36, '#e0806a', 'rgba(224,128,106,0.30)', '#f0b0a0');    // ember — an orc town
+
+    y += viewGap - boxGap;
+    startTextButton('view', cx, y, 'View existing town'.toUpperCase(), 1, '#c9a45a');
+
+    // BACK — top-left, quiet
+    startTextButton('back', 34, 26, 'BACK', 1, '#8a8f9c');
 }
 
 // ---------------------------------------------------------------------------
@@ -7301,6 +7798,23 @@ function drawBootScreen(t) {
 // ---------------------------------------------------------------------------
 
 (async function boot() {
+    // MOBILE GATE: the sim is a fullscreen mouse+keyboard experience. On touch/small-screen
+    // devices, show a full-screen notice instead of booting the game at all.
+    const isMobile = window.matchMedia('(pointer: coarse)').matches ||
+                     Math.min(window.innerWidth, window.innerHeight) < 600;
+    if (isMobile) {
+        const tv = document.getElementById('tv');
+        if (tv) tv.style.display = 'none';
+        const gate = document.createElement('div');
+        gate.setAttribute('role', 'status');
+        gate.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;' +
+            'background:#000;color:#e6e5de;font-family:monospace;font-size:16px;letter-spacing:0.08em;' +
+            'text-transform:uppercase;text-align:center;padding:24px;z-index:9999;';
+        gate.textContent = 'Switch to a desktop experience to play';
+        document.body.appendChild(gate);
+        return;
+    }
+
     requestAnimationFrame(frame);
     loadAssetArt();
 
@@ -7310,8 +7824,16 @@ function drawBootScreen(t) {
     // and the determinism-test entrance (?fresh=1&seed=42 never loads a save).
     const bootParams = new URLSearchParams(location.search);
     const urlSeed = bootParams.get('seed');
-    const wantFresh = bootParams.get('fresh') != null;
+    // #START the LAUNCH OVERLAY: a plain visit (no ?seed / ?fresh / ?play intent) opens the start
+    // screen — three ways in over a LIVE, randomised, NON-PERSISTING town (see world._spectator).
+    // The buttons then navigate to the real, persisting experience (?fresh=1 / ?fresh=1&orc=1) or
+    // dismiss to spectate. ?play=1 is the "skip the menu, resume my last town" hatch for returning
+    // players (plain-visit auto-resume is now gated behind the menu, so the town no longer resumes
+    // silently — a menu greets you instead).
+    const startMode = !bootParams.has('seed') && !bootParams.has('fresh') && !bootParams.has('play');
+    const wantFresh = bootParams.get('fresh') != null || startMode;   // the menu's backdrop is always a fresh random town
     const worldSeed = urlSeed != null && urlSeed !== '' ? (parseInt(urlSeed, 10) >>> 0) : Math.floor(Math.random() * 0x7fffffff);
+    // ?play=1 with no ?orc keeps the human default; the menu backdrop is always a calm human town.
     const bootCulture = (bootParams.get('orc') != null || bootParams.get('culture') === 'orc') ? 'orc' : 'human';   // #3.1 ?orc=1 raises a warband
 
     // Grow the cast from a REAL self-hosted SuperMemory corpus if one is reachable; otherwise from
@@ -7333,6 +7855,10 @@ function drawBootScreen(t) {
         }
     }
     if (!world) world = new World(worldSeed, bootCulture);
+    // #START the menu backdrop is a SPECTATOR town: it lives and animates but never persists — no
+    // autosave, no SuperMemory writeback, no world-index entry, no cross-town raid ambush. Browsing
+    // the start screen must leave zero trace (no save slots littered, no junk fed to the memory store).
+    if (startMode) world._spectator = true;
 
     // hook tile changes to terrain redraw
     const origSet = world.set.bind(world);
@@ -7342,7 +7868,8 @@ function drawBootScreen(t) {
     // #reconciliation: apply any world-layer events queued for this town WHILE IT WAS AWAY (a raid on the
     // frontier that docked its stores, a parley honored/broken) before the resume card is built, so they land
     // in the chronicle + the "PREVIOUSLY ON" recap. Deterministic consume; cleared once applied.
-    try {
+    // #START a spectator backdrop consumes no inbox and joins no world index — it is not a real town.
+    if (!world._spectator) try {
         const widx = await loadWorldIndex();
         const pending = (widx.inbox && widx.inbox[String(world.seed)]) || [];
         if (pending.length) await consumeInbox(world, pending);   // exactly-once (Codex r20/r21)
@@ -7352,7 +7879,8 @@ function drawBootScreen(t) {
     // #108 from here on this town is the WATCHED one: a cross-town raid that ARRIVES during live play stages a
     // visible warband + alarm (see World.#spawnRaid). Set AFTER the on-load inbox consume, so a raid that landed
     // while the town was dormant stays a "PREVIOUSLY ON" line rather than ambushing the player on resume.
-    world._live = true;
+    // (Spectator backdrops stay calm — no staged cross-town raid behind the menu.)
+    world._live = !world._spectator;
 
     if (resumed) {
         lastSavedDay = world.day;   // don't immediately re-save what we just loaded
@@ -7394,7 +7922,7 @@ function drawBootScreen(t) {
     selected = null;
 
     // the town also saves itself whenever the tab hides or closes (the rollover autosave's backstop)
-    const saveOnHide = () => { if (booted && world && !world._retired) saveTown(world); };
+    const saveOnHide = () => { if (booted && world && !world._retired && !world._spectator) saveTown(world); };
     const syncTabHidden = () => { if (world) world._tabHidden = document.hidden; };   // #101 sim reads this to pause the LLM chat
     document.addEventListener('visibilitychange', () => {
         syncTabHidden();
@@ -7410,15 +7938,16 @@ function drawBootScreen(t) {
     world.addLog(`${memories.length} memories loaded from ${memorySource}`, '#8a9ade');
     world.addLog('Click a farmer to read their sheet. Drag to pan.', '#9aa0b4');
 
-    // let the tuning screen breathe for a moment
-    setTimeout(() => { booted = true; }, 1400);
+    // let the tuning screen breathe for a moment — then, on a plain visit, drop the launch overlay
+    // OVER the now-living town (so the backdrop is a breathing town, not the tuning static).
+    setTimeout(() => { booted = true; if (startMode) { startScreen = true; audio.setMenuMode(true); audio.setMuted(true); } }, 1400);
 
     // the LLM chronicler (#92 stage 2): once the town is up, offer the cast's draft tales
     // for a finer telling. One try shortly after boot; the slow recheck catches farmers
     // whose stories only reach composer-generation at the next dawn (older saves migrating)
     // and any later arrivals. Display-only, save-carried, fails silent to procedural text.
     const tryEnrich = async () => {
-        if (document.hidden) return;   // #101 a backgrounded/forgotten tab must NOT feed SuperMemory or the LLM
+        if (document.hidden || (world && world._spectator)) return;   // #101 / #START no LLM+memory for a hidden tab or the menu backdrop
         const w = world;
         if (await enrichStories(w, () => world === w)) saveTown(w);
     };
@@ -7428,14 +7957,14 @@ function drawBootScreen(t) {
     // #132b the DAY-1 FOUNDING CONVERSATION: on a fresh town's opening congregation, ask the LLM to write the
     // founders' opening exchange (bespoke, natural, per-founder). Kicked NOW so it can land while they gather;
     // until it does (or if it never does) the sim director's authored pools carry the scene. Display-only.
-    if (!resumed && world.congregating && world.congregating()) requestCongregation(world);
+    if (!resumed && !world._spectator && world.congregating && world.congregating()) requestCongregation(world);
 
     // #91 memory writeback: persist each farmer's compiled life (creeds + beliefs + episodic) back to
     // self-hosted SuperMemory. Off the sim loop, best-effort, save-carried stamp. Slower cadence than
     // enrichment so a life is captured with a little history (beliefs form over days); no-ops offline.
     const tryPersist = async () => {
-        if (document.hidden) return;   // #101 STALE-TAB GUARD: no memory writeback while the tab is hidden — this
-        const w = world;               // is the loop that fed SuperMemory's paid gpt-5.1 extraction from a backgrounded tab
+        if (document.hidden || (world && world._spectator)) return;   // #101 STALE-TAB GUARD + #START menu-backdrop guard: no memory
+        const w = world;               // writeback while the tab is hidden OR while a spectator backdrop is up (feeds SuperMemory's paid extraction otherwise)
         // #101 the tab can be hidden (or the town replaced) DURING any await below, so every later paid op rechecks —
         // guarding only at the top let three writeback/enrich calls still fire after the tab went to the background.
         const stillActive = () => !document.hidden && world === w;
@@ -7453,6 +7982,11 @@ function drawBootScreen(t) {
 
     window.RYFARMS = {  // debug handle
         world, cam, audio,
+        // #ntsc live CRT controls — A/B the NTSC look vs the classic, and dial each stage 0..1.
+        //   RYFARMS.crt.toggle()            → flip ntsc <-> classic
+        //   RYFARMS.crt.set('ntsc', 0.7)    → keys: ntsc, scan, mask, glow, aberr, vig
+        //   RYFARMS.crt.get() / .reset() / .mode('classic')
+        crt: { toggle: () => crt.toggle(), mode: (m) => crt.setMode(m), set: (k, v) => crt.set(k, v), get: () => crt.get(), reset: () => crt.reset() },
         select: (i) => { selected = world.farmers[i] || null; },
         speed: (mult) => { world._speedMult = mult; },
         // #98 fire a test Moment: RYFARMS.moment() spotlights farmer 0 finding a star-crystal (with its memory why)
@@ -7546,7 +8080,9 @@ function drawBootScreen(t) {
         dismissCard: () => { resumeCard = null; },
         // #faceoff (debug) force the pre-battle VS card with a chosen foe name / war context, no raid needed
         demoFaceoff: (name = 'Krul the Howler', raidCount = 4, escaped = true, swornName = null) => {
-            faceoffSeenEvent = world && world.raidEvent; faceoff = { at: performance.now(), name: String(name).toUpperCase(), raidCount: raidCount | 0, escaped: !!escaped, swornName };
+            faceoffSeenEvent = world && world.raidEvent;
+            faceoff = { at: performance.now(), name: String(name).toUpperCase(), raidCount: raidCount | 0, escaped: !!escaped, swornName,
+                        raiders: 6, clan: 'THE ASHFANG CLAN', defenders: world ? world.farmers.filter(x => !x.downed && x.health !== 'sick').length : 8 };
             return `faceoff card: ${name}`;
         },
         enrich: tryEnrich,                                   // ask the LLM chronicler now (debug)
