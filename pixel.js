@@ -97,12 +97,103 @@ export const FARM_SPRITE_W = 16;
 export const FARM_SPRITE_H = 20;
 const OUTLINE = '#1c2028';
 
-function shade(hex, f) {
-    const n = parseInt(hex.slice(1), 16);
-    const r = Math.max(0, Math.min(255, Math.round(((n >> 16) & 255) * f)));
-    const g = Math.max(0, Math.min(255, Math.round(((n >> 8) & 255) * f)));
-    const b = Math.max(0, Math.min(255, Math.round((n & 255) * f)));
+// --- colour helpers (pure) for the hue-shifting shade() -------------------
+function _hexToRgb(hex) { const n = parseInt(hex.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
+function _rgbToHex(r, g, b) {
+    r = Math.max(0, Math.min(255, Math.round(r)));
+    g = Math.max(0, Math.min(255, Math.round(g)));
+    b = Math.max(0, Math.min(255, Math.round(b)));
     return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`;
+}
+function _rgbToHsl(r, g, b) {
+    r /= 255; g /= 255; b /= 255;
+    const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+    let h = 0, s = 0; const l = (max + min) / 2;
+    if (d > 0) {
+        s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+        if (max === r) h = (g - b) / d + (g < b ? 6 : 0);
+        else if (max === g) h = (b - r) / d + 2;
+        else h = (r - g) / d + 4;
+        h *= 60;
+    }
+    return [h, s, l];
+}
+function _hslToRgb(h, s, l) {
+    h = ((h % 360) + 360) % 360;
+    const c = (1 - Math.abs(2 * l - 1)) * s;
+    const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+    const m = l - c / 2;
+    let r = 0, g = 0, b = 0;
+    if (h < 60) { r = c; g = x; }
+    else if (h < 120) { r = x; g = c; }
+    else if (h < 180) { g = c; b = x; }
+    else if (h < 240) { g = x; b = c; }
+    else if (h < 300) { r = x; b = c; }
+    else { r = c; b = x; }
+    return [(r + m) * 255, (g + m) * 255, (b + m) * 255];
+}
+// rotate hue `h` toward `target` along the shortest arc, by at most `deg` degrees
+function _hueToward(h, target, deg) {
+    const diff = ((target - h + 540) % 360) - 180;
+    return h + Math.max(-deg, Math.min(deg, diff));
+}
+
+// Hue-shifting shade (PROCEDURAL_ART.md §1a). Value still tracks the old RGB-multiply
+// so existing builders keep their brightness; on top of that, darkening (f<1) rotates
+// hue toward a cool blue shadow anchor and DESATURATES, lightening (f>1) rotates toward
+// a warm anchor and SATURATES — the era's hue-shift, not a flat darken. Pure/deterministic.
+// For surfaces with 3+ steps prefer the authored RAMPS table over stacking shade() calls.
+function shade(hex, f) {
+    let [r, g, b] = _hexToRgb(hex);
+    r = Math.min(255, r * f); g = Math.min(255, g * f); b = Math.min(255, b * f);   // preserve prior value
+    let [h, s, l] = _rgbToHsl(r, g, b);
+    const mag = Math.min(0.3, Math.abs(1 - f));
+    if (f < 1) { h = _hueToward(h, 250, mag * 70); s = Math.max(0, s * (1 - mag * 0.5)); }        // shadow: cooler + less sat
+    else if (f > 1) { h = _hueToward(h, 48, mag * 55); s = Math.min(1, s * (1 + mag * 0.5)); }     // light: warmer + more sat
+    [r, g, b] = _hslToRgb(h, s, l);
+    return _rgbToHex(r, g, b);
+}
+
+// Authored sub-palettes (PROCEDURAL_ART.md §1) — the era way: index into hand-tuned,
+// hue-shifted ramps rather than runtime-darkening. Each array is ordered SHADOW -> LIGHT.
+export const RAMPS = {
+    OUTLINE:  { warm: '#211a1c', green: '#193926', brown: '#3a2818' },
+    WOOD:     ['#3a2a1c', '#5a4028', '#7a5433', '#946c46', '#b2854c'],
+    PLANK:    ['#59332a', '#82503f', '#ab7757', '#c9a24a'],
+    ROOF_RED: ['#3f1428', '#6d1924', '#8a2a2a', '#9e3931', '#bb4f3c'],
+    STONE:    ['#3f4249', '#4f525d', '#565a65', '#6c7a86', '#8b97a2'],
+    FOLIAGE:  ['#193926', '#2d603d', '#357137', '#4d843b', '#68963d', '#87ab3e', '#97ba3a'],
+    SKIN:     ['#a46f59', '#be865f', '#e1b26e', '#f6ca74'],
+    GRAIN:    ['#9a5d48', '#c48355', '#dc9a5c', '#eeb05e', '#f9cb69', '#ffe694'],
+    WATER:    ['#1e3550', '#2c4a6a', '#3c6a8e', '#5a94b4'],
+    WATER_SPEC: '#bfe4f0',
+    GLASS:    ['#63609f', '#7b85c3', '#a8b8e0'],
+};
+
+// Baked translucent ground shadow: a 2:1 ellipse of stepped rows (no arc/AA), drawn
+// under a building so it doesn't float (PROCEDURAL_ART.md §4.4). Two layers — a soft
+// outer halo + a denser core — so the far edge feathers instead of hard-cutting. Pure.
+function groundShadow(ctx, cx, cy, rx, ry, alpha = 0.3) {
+    const ell = (RX, RY, a) => {
+        ctx.fillStyle = `rgba(12,16,12,${a})`;
+        for (let dy = -RY; dy <= RY; dy++) {
+            const t = dy / RY;
+            const half = Math.round(RX * Math.sqrt(Math.max(0, 1 - t * t)));
+            if (half < 1) continue;
+            ctx.fillRect(Math.round(cx - half), Math.round(cy + dy), half * 2, 1);
+        }
+    };
+    ell(rx + 3, ry + 1, alpha * 0.45);   // soft outer halo
+    ell(rx, ry, alpha);                  // denser core
+}
+
+// A recessed opening (door / window / nest): a rim, a dark interior, a faint lit top
+// lip + a deeper base AO so the eye reads real DEPTH behind the hole. (§1b, §4.2)
+function recess(ctx, x, y, w, h, inner, rim) {
+    ctx.fillStyle = rim;   ctx.fillRect(x - 1, y - 1, w + 2, h + 2);
+    ctx.fillStyle = inner; ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = shade(inner, 1.7);  ctx.fillRect(x + 1, y, w - 1, 1);     // lit inner top lip
+    ctx.fillStyle = shade(inner, 0.66); ctx.fillRect(x, y + h - 1, w, 1);     // inner base AO (kept above the outline floor)
 }
 
 // derive appearance traits deterministically from the seed (unsigned shifts!)
@@ -879,76 +970,286 @@ export function makeChicken(frame) {
     return c;
 }
 
+// Front-elevation billboard WALL. Depth stack (light upper-left): base, weathered
+// boards, a TWO-step shaded right face (form self-shadow), a bright sunlit left edge,
+// plank seams (shadow + lit edge), an eave-AO band along the top (roof-overhang shadow
+// on the wall) and a ground-contact AO row. cols = { base, hi, lo, ol }. (§1b, §3, §4)
+function drawWall(ctx, x0, x1, y0, y1, cols, seamStep) {
+    const w = x1 - x0 + 1, h = y1 - y0 + 1;
+    ctx.fillStyle = cols.ol;   ctx.fillRect(x0 - 1, y0, w + 2, h + 1);       // silhouette outline (sides + base)
+    ctx.fillStyle = cols.base; ctx.fillRect(x0, y0, w, h);
+    // weathered boards: a couple of subtly off-tone planks + a knot each (deterministic)
+    if (seamStep) {
+        let bi = 0;
+        for (let x = x0 + 3; x < x1 - 6; x += seamStep) {
+            if (bi % 3 === 1) { ctx.fillStyle = shade(cols.base, 0.93); ctx.fillRect(x, y0 + 2, Math.min(seamStep - 1, x1 - 6 - x), h - 4); }
+            if (bi % 4 === 2) { ctx.fillStyle = shade(cols.lo, 0.72); ctx.fillRect(x + 1, y0 + Math.floor(h * 0.55), 1, 1); }   // knot
+            bi++;
+        }
+    }
+    // two-step shaded RIGHT face — reads as a solid turning form, not a flat panel
+    ctx.fillStyle = cols.lo;              ctx.fillRect(x1 - 5, y0, 6, h);
+    ctx.fillStyle = shade(cols.lo, 0.84); ctx.fillRect(x1 - 1, y0, 2, h);
+    // sunlit LEFT column + bright edge
+    ctx.fillStyle = cols.hi;              ctx.fillRect(x0, y0, 3, h);
+    ctx.fillStyle = shade(cols.hi, 1.08); ctx.fillRect(x0, y0, 1, h);
+    // plank seams: shadow groove + lit edge on the sunlit side of each board
+    if (seamStep) {
+        for (let x = x0 + seamStep; x < x1 - 2; x += seamStep) {
+            ctx.fillStyle = shade(cols.lo, 0.8);  ctx.fillRect(x, y0 + 1, 1, h - 2);
+            ctx.fillStyle = shade(cols.hi, 1.05); ctx.fillRect(x + 1, y0 + 1, 1, h - 2);
+        }
+    }
+    ctx.fillStyle = shade(cols.lo, 0.7);  ctx.fillRect(x0, y0, w, 1);        // eave AO band (overhang shadow)
+    ctx.fillStyle = shade(cols.ol, 0.88); ctx.fillRect(x0, y1, w, 1);        // ground-contact AO
+}
+
+// Pitched/gambrel ROOF as stepped rows. halfAt(y) -> half-width at row y (gambrel = a
+// custom profile). Depth: a fully lit LEFT slope + shaded RIGHT slope (committed UL
+// light), a bright ridge-left edge + dark eave-right edge, a neutral crown, shingle
+// COURSE lines every 2nd row (varied light/shadow so rows don't repeat), a ridge
+// highlight, and an eave-underside shadow along the overhang. No arc/stroke. (§1b, §4)
+function drawRoof(ctx, cx, yTop, yBot, halfAt, cols) {
+    const rows = [];
+    for (let y = yTop; y <= yBot; y++) rows.push([y, Math.max(1, Math.round(halfAt(y)))]);
+    ctx.fillStyle = cols.ol;
+    for (const [y, half] of rows) ctx.fillRect(cx - half - 1, y, (half + 1) * 2, 1);   // side silhouette
+    ctx.fillRect(cx - rows[0][1] - 1, yTop - 1, (rows[0][1] + 1) * 2, 1);              // ridge cap
+    const rowF = [1.0, 1.06, 0.95, 1.02, 0.97];   // per-course tone jitter so no two shingle rows repeat
+    for (let k = 0; k < rows.length; k++) {
+        const [y, half] = rows[k];
+        const rf = rowF[k % rowF.length];
+        ctx.fillStyle = shade(cols.base, rf); ctx.fillRect(cx - half, y, half * 2, 1);
+        ctx.fillStyle = shade(cols.hi, rf);   ctx.fillRect(cx - half, y, half, 1);         // lit left slope (varied)
+        ctx.fillStyle = shade(cols.hi, 1.12); ctx.fillRect(cx - half, y, 2, 1);            // bright ridge-left edge
+        ctx.fillStyle = shade(cols.lo, rf);   ctx.fillRect(cx, y, half, 1);                // shaded right slope (varied)
+        ctx.fillStyle = shade(cols.lo, 0.82); ctx.fillRect(cx + half - 2, y, 2, 1);        // dark eave-right edge
+        ctx.fillStyle = shade(cols.base, rf); ctx.fillRect(cx - 1, y, 2, 1);               // crown ridge
+        if (k % 2 === 1) {                                                                 // shingle course line
+            ctx.fillStyle = shade(cols.lo, 0.8);  ctx.fillRect(cx + 1, y, half - 1, 1);
+            ctx.fillStyle = shade(cols.hi, 0.98); ctx.fillRect(cx - half + 2, y, half - 2, 1);   // lit-edge highlight on the course
+        }
+    }
+    ctx.fillStyle = shade(cols.hi, 1.1); ctx.fillRect(cx - rows[0][1], yTop, rows[0][1] * 2, 1);   // ridge highlight
+    const last = rows[rows.length - 1];
+    ctx.fillStyle = shade(cols.lo, 0.72); ctx.fillRect(cx - last[1], last[0], last[1] * 2, 1);     // eave-underside shadow
+}
+
+// The chicken run — warm plank body + red pitched roof, chicken door + ramp, coop
+// window + nest box. ~46px tall (§2 farm-building class). Exemplar: Harvest Moon coop.
 export function makeCoop() {
-    const [c, ctx] = makeCanvas(24, 22);
-    ctx.fillStyle = '#c07850';       // red coop body
-    ctx.fillRect(3, 10, 18, 12);
-    ctx.fillStyle = '#a86040';
-    ctx.fillRect(3, 18, 18, 2);
-    ctx.fillStyle = '#3a2e28';       // door hole
-    ctx.fillRect(9, 14, 6, 8);
-    ctx.fillStyle = '#e8c060';       // ramp
-    ctx.fillRect(8, 21, 8, 1);
-    ctx.fillStyle = '#8a4a3a';       // roof
-    for (let i = 0; i < 6; i++) ctx.fillRect(1 + i * 2, 10 - i, 22 - i * 4, 2);
-    ctx.fillStyle = '#f0f0f0';       // little window
-    ctx.fillRect(16, 13, 3, 3);
+    const [c, ctx] = makeCanvas(54, 52);
+    const P = RAMPS.PLANK, R = RAMPS.ROOF_RED, W = RAMPS.WOOD, G = RAMPS.GRAIN, OL = RAMPS.OUTLINE.brown;
+    groundShadow(ctx, 27, 49, 23, 5, 0.3);
+    const bx0 = 10, bx1 = 44, wy0 = 24, wy1 = 46;
+    // weathered plank walls + form self-shadow (via drawWall)
+    drawWall(ctx, bx0, bx1, wy0, wy1, { base: P[2], hi: P[3], lo: P[1], ol: OL }, 6);
+    // foundation sill with a lit top edge + ground AO
+    ctx.fillStyle = W[1]; ctx.fillRect(bx0 - 1, wy1 - 2, bx1 - bx0 + 3, 2);
+    ctx.fillStyle = shade(W[2], 1.1); ctx.fillRect(bx0 - 1, wy1 - 2, bx1 - bx0 + 3, 1);
+    ctx.fillStyle = shade(OL, 0.85); ctx.fillRect(bx0 - 1, wy1 + 1, bx1 - bx0 + 3, 1);
+    // roof
+    drawRoof(ctx, 27, 6, 24, (y) => 4 + (y - 6) / 18 * 21, { base: R[3], hi: R[4], lo: R[2], ol: OL });
+    // chicken door — recessed, with a roost bar inside + threshold AO
+    recess(ctx, 23, 34, 9, 12, '#1c1510', OL);
+    ctx.fillStyle = W[2]; ctx.fillRect(24, 40, 7, 1);                   // roost bar
+    ctx.fillStyle = shade(W[1], 0.8); ctx.fillRect(24, 41, 7, 1);
+    // warm slatted ramp
+    ctx.fillStyle = G[3]; ctx.fillRect(21, 46, 13, 3);
+    ctx.fillStyle = G[1]; ctx.fillRect(21, 48, 13, 1);
+    ctx.fillStyle = shade(G[1], 0.8); ctx.fillRect(25, 46, 1, 3); ctx.fillRect(29, 46, 1, 3);   // slats
+    ctx.fillStyle = shade(P[1], 0.7); ctx.fillRect(22, 46, 11, 1);      // door threshold AO
+    // framed window with a mullion cross + glint + shadow-side pane
+    ctx.fillStyle = OL; ctx.fillRect(34, 27, 9, 9);
+    ctx.fillStyle = RAMPS.GLASS[1]; ctx.fillRect(35, 28, 7, 7);
+    ctx.fillStyle = RAMPS.GLASS[2]; ctx.fillRect(35, 28, 3, 3);         // lit pane
+    ctx.fillStyle = RAMPS.GLASS[0]; ctx.fillRect(39, 28, 3, 7);         // shadow-side pane
+    ctx.fillStyle = OL; ctx.fillRect(38, 28, 1, 7); ctx.fillRect(35, 31, 7, 1);   // mullion cross
+    ctx.fillStyle = shade(RAMPS.GLASS[2], 1.25); ctx.fillRect(36, 29, 1, 1);      // glint
+    // nest box off the left wall — lit lid, lid-shadow line, nail glint, recessed hole
+    ctx.fillStyle = OL; ctx.fillRect(6, 31, 6, 10);
+    ctx.fillStyle = W[2]; ctx.fillRect(7, 32, 4, 8);
+    ctx.fillStyle = W[3]; ctx.fillRect(7, 32, 4, 1);                   // lit lid
+    ctx.fillStyle = shade(W[1], 0.8); ctx.fillRect(7, 34, 4, 1);       // lid shadow line
+    ctx.fillStyle = '#1c1510'; ctx.fillRect(8, 36, 3, 3);             // nest hole
+    ctx.fillStyle = shade(W[1], 0.5); ctx.fillRect(8, 38, 3, 1);      // hole base AO
+    ctx.fillStyle = shade(W[3], 1.15); ctx.fillRect(10, 33, 1, 1);    // nail glint
     return c;
 }
 
+// Classic gambrel RED BARN — the town's biggest farm building; must not read smaller
+// than the cottage. White cross-plank doors, hayloft, ridge cupola. ~58px tall.
+// Exemplar: ALttP / Harvest Moon barns (warm→wine shingle planes). (§2 relative-order)
 export function makeBarn() {
-    const [c, ctx] = makeCanvas(30, 26);
-    ctx.fillStyle = '#b85040';       // classic red barn
-    ctx.fillRect(3, 10, 24, 16);
-    ctx.fillStyle = '#9a4436';
-    ctx.fillRect(3, 22, 24, 4);
-    ctx.fillStyle = '#e8e0d0';       // white trim doors
-    ctx.fillRect(11, 15, 8, 11);
-    ctx.fillStyle = '#7a3628';
-    ctx.fillRect(14, 15, 2, 11);
-    ctx.fillStyle = '#e8e0d0';       // X on doors
-    ctx.fillStyle = '#5a2e22';       // roof
-    for (let i = 0; i < 7; i++) ctx.fillRect(1 + i * 2, 10 - i * 1, 28 - i * 4, 2);
-    ctx.fillStyle = '#e8e0d0';       // hayloft
-    ctx.fillRect(13, 4, 4, 4);
+    const [c, ctx] = makeCanvas(64, 60);
+    const R = RAMPS.ROOF_RED, W = RAMPS.WOOD, S = RAMPS.STONE, OL = RAMPS.OUTLINE.warm;
+    const trim = '#e8e0d0', trimLo = '#b9ae95', trimHi = '#fffdf6';
+    groundShadow(ctx, 32, 57, 28, 7, 0.32);
+    const bx0 = 12, bx1 = 52, wy0 = 27, wy1 = 55;
+    // barn-red walls with weathered planks + form self-shadow (via drawWall)
+    drawWall(ctx, bx0, bx1, wy0, wy1, { base: R[3], hi: R[4], lo: R[2], ol: OL }, 7);
+    // stone foundation: course band with a lit top edge + ground AO
+    ctx.fillStyle = S[1]; ctx.fillRect(bx0 - 1, wy1 - 2, bx1 - bx0 + 3, 2);
+    ctx.fillStyle = shade(S[2], 1.1); ctx.fillRect(bx0 - 1, wy1 - 2, bx1 - bx0 + 3, 1);   // foundation top relief
+    ctx.fillStyle = S[0]; ctx.fillRect(bx0 - 1, wy1 + 1, bx1 - bx0 + 3, 1);               // ground AO
+    // gambrel roof: shallow upper slope (y8–14), steep lower slope (y14–27), overhanging eaves
+    drawRoof(ctx, 32, 8, 27, (y) => (y <= 14 ? 5 + (y - 8) * 1.5 : 14 + (y - 14) * 1.0),
+        { base: R[1], hi: R[3], lo: R[0], ol: OL });
+    // ridge cupola: louvered box (lit-left/shadow-right), cap, vent, base shadow onto roof
+    ctx.fillStyle = OL; ctx.fillRect(28, 3, 8, 6);
+    ctx.fillStyle = R[2]; ctx.fillRect(29, 4, 6, 4);
+    ctx.fillStyle = R[4]; ctx.fillRect(29, 4, 2, 4);                // lit left
+    ctx.fillStyle = R[1]; ctx.fillRect(33, 4, 2, 4);                // shadow right
+    ctx.fillStyle = shade(R[1], 0.82); ctx.fillRect(30, 5, 4, 1); ctx.fillRect(30, 7, 4, 1);  // louver slats
+    ctx.fillStyle = '#241c18'; ctx.fillRect(31, 5, 2, 1);          // vent slit
+    ctx.fillStyle = trim; ctx.fillRect(27, 2, 10, 1);               // cap
+    ctx.fillStyle = shade(R[0], 0.85); ctx.fillRect(28, 9, 8, 1);   // cupola base shadow on roof
+    // hayloft: recessed opening with baled hay + a pulley beam
+    recess(ctx, 29, 29, 7, 7, '#241c14', OL);
+    ctx.fillStyle = RAMPS.GRAIN[2]; ctx.fillRect(30, 32, 5, 3);     // hay bale inside
+    ctx.fillStyle = RAMPS.GRAIN[4]; ctx.fillRect(30, 32, 3, 1);     // lit straw
+    ctx.fillStyle = W[3]; ctx.fillRect(31, 26, 2, 3);              // pulley beam
+    ctx.fillStyle = W[1]; ctx.fillRect(31, 26, 1, 3);
+    ctx.fillStyle = '#2a2620'; ctx.fillRect(31, 29, 1, 1);        // pulley
+    // big white DOORS — recessed, framed planks, beveled X-braces, hinges, threshold AO
+    const dx0 = 25, dx1 = 39, dy0 = 37, dy1 = 55, dw = dx1 - dx0, dh = dy1 - dy0;
+    ctx.fillStyle = OL; ctx.fillRect(dx0 - 1, dy0 - 1, dw + 3, dh + 2);
+    ctx.fillStyle = trim; ctx.fillRect(dx0, dy0, dw + 1, dh + 1);
+    ctx.fillStyle = trimHi; ctx.fillRect(dx0, dy0, dw + 1, 1);                     // lit lintel
+    ctx.fillStyle = trimLo; ctx.fillRect(dx0, dy1, dw + 1, 1);                     // shaded sill
+    ctx.fillStyle = shade(trimLo, 0.85); ctx.fillRect(dx1 - 1, dy0, 2, dh + 1);    // right-door shadow face
+    ctx.fillStyle = trimLo; for (let x = dx0 + 3; x < dx1; x += 4) ctx.fillRect(x, dy0 + 1, 1, dh - 1);   // plank seams
+    ctx.fillStyle = shade(OL, 1.12); ctx.fillRect((dx0 + dx1) >> 1, dy0, 1, dh + 1);   // centre gap where doors meet
+    // beveled X-braces (both diagonals): a shadow stroke with a lit top edge = raised timber
+    for (let i = 0; i <= dw; i++) {
+        const ya = dy0 + Math.round(i * dh / dw), yb = dy0 + Math.round((dw - i) * dh / dw);
+        ctx.fillStyle = shade(trimLo, 0.8); ctx.fillRect(dx0 + i, ya, 1, 1); ctx.fillRect(dx0 + i, yb, 1, 1);
+        ctx.fillStyle = trimHi;             ctx.fillRect(dx0 + i, ya - 1, 1, 1); ctx.fillRect(dx0 + i, yb - 1, 1, 1);
+    }
+    ctx.fillStyle = '#2a2620'; ctx.fillRect(dx0 + 1, dy0 + 3, 2, 1); ctx.fillRect(dx0 + 1, dy1 - 3, 2, 1);   // hinges
+    ctx.fillStyle = shade(trimLo, 0.6); ctx.fillRect(dx0 - 1, dy1 + 1, dw + 3, 1);   // threshold ground AO
     return c;
 }
 
-// #99b the Mill — a stone grinding house with a big millstone wheel on its face (grinds wheat -> grain)
+// #99b the Mill — a stone grinding house with a big millstone wheel on its face
+// (grinds wheat -> grain). Cool-shifted stone courses; wheel rings are stepped
+// fillRects (no arc/AA). ~52px tall. Exemplar: Chrono Trigger masonry. (§1b, §3.5)
 export function makeMill() {
-    const [c, ctx] = makeCanvas(26, 26);
-    ctx.fillStyle = '#8a8378'; ctx.fillRect(4, 8, 18, 18);          // stone body
-    ctx.fillStyle = '#736c62'; ctx.fillRect(4, 22, 18, 4);         // shaded base course
-    ctx.fillStyle = '#5a544c';                                     // stone block seams
-    for (let j = 10; j < 24; j += 4) ctx.fillRect(4, j, 18, 1);
-    for (let i = 8; i < 22; i += 6) ctx.fillRect(i, 8, 1, 18);
-    ctx.fillStyle = '#3a342c'; ctx.fillRect(6, 16, 5, 10);         // doorway
-    ctx.fillStyle = '#4a4038'; ctx.fillStyle = '#6b4a2c'; ctx.fillRect(20, 6, 3, 3);   // roof vent
-    ctx.fillStyle = '#5a3a22';                                     // dark plank roof
-    for (let i = 0; i < 6; i++) ctx.fillRect(2 + i * 2, 8 - i, 22 - i * 4, 2);
-    // the millstone wheel on the face
-    ctx.fillStyle = '#c8c2b6'; ctx.beginPath(); ctx.arc(16, 17, 5, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#9a948a'; ctx.beginPath(); ctx.arc(16, 17, 5, 0, Math.PI * 2); ctx.stroke();
-    ctx.strokeStyle = '#6a645a'; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(11, 17); ctx.lineTo(21, 17); ctx.moveTo(16, 12); ctx.lineTo(16, 22); ctx.stroke();   // spokes
-    ctx.fillStyle = '#5a544c'; ctx.fillRect(15, 16, 2, 2);        // hub
+    const [c, ctx] = makeCanvas(52, 58);
+    const S = RAMPS.STONE, W = RAMPS.WOOD, F = RAMPS.FOLIAGE, OL = RAMPS.OUTLINE.warm;
+    groundShadow(ctx, 26, 55, 23, 6, 0.3);
+    const bx0 = 8, bx1 = 44, wy0 = 18, wy1 = 54, bw = bx1 - bx0 + 1, bh = wy1 - wy0 + 1;
+    ctx.fillStyle = OL;   ctx.fillRect(bx0 - 1, wy0, bw + 2, bh + 1);   // silhouette
+    ctx.fillStyle = S[2]; ctx.fillRect(bx0, wy0, bw, bh);
+    // HAND-LAID ASHLAR: running-bond blocks, tone by horizontal position (light UL) with
+    // deterministic per-block jitter + occasional moss; each block a lit top bevel + base
+    // mortar AO so the wall reads as stacked stone, not a flat face. (§1b Chrono-Trigger)
+    const CH = 5, BW = 9;
+    for (let ci = 0, y = wy0; y < wy1; y += CH, ci++) {
+        const off = (ci % 2) * (BW >> 1), h2 = Math.min(CH, wy1 - y);
+        for (let x = bx0 - off; x < bx1; x += BW) {
+            const gx = Math.max(bx0, x), gxe = Math.min(bx1, x + BW - 1), w2 = gxe - gx + 1;
+            if (w2 < 2) continue;
+            const lf = (gx - bx0) / bw;
+            let idx = lf < 0.34 ? 3 : lf > 0.66 ? 1 : 2;
+            const hsh = ((gx * 73856093) ^ (y * 19349663)) >>> 0, jit = hsh % 5;
+            if (jit === 0) idx = Math.min(4, idx + 1); else if (jit === 1) idx = Math.max(0, idx - 1);
+            ctx.fillStyle = S[idx]; ctx.fillRect(gx, y, w2, h2);
+            ctx.fillStyle = shade(S[idx], 1.14); ctx.fillRect(gx, y, w2, 1);           // block top bevel
+            ctx.fillStyle = shade(S[idx], 0.78); ctx.fillRect(gx, y + h2 - 1, w2, 1);  // base mortar AO
+            if (hsh % 11 === 0) { ctx.fillStyle = F[3]; ctx.fillRect(gx + 1, y + 1, 2, 1); ctx.fillStyle = F[4]; ctx.fillRect(gx + 1, y + 1, 1, 1); }  // moss
+        }
+    }
+    // vertical mortar seams between blocks
+    ctx.fillStyle = S[0];
+    for (let ci = 0, y = wy0; y < wy1; y += CH, ci++) {
+        const off = (ci % 2) * (BW >> 1);
+        for (let x = bx0 - off + BW; x < bx1; x += BW) if (x > bx0 && x < bx1) ctx.fillRect(x - 1, y, 1, Math.min(CH, wy1 - y));
+    }
+    // overall form: a soft right-face shadow wash + a bright sunlit left edge
+    ctx.fillStyle = 'rgba(20,26,34,0.24)'; ctx.fillRect(bx1 - 10, wy0, 11, bh);
+    ctx.fillStyle = shade(S[4], 1.14);     ctx.fillRect(bx0, wy0, 1, bh);
+    ctx.fillStyle = shade(S[0], 0.9);      ctx.fillRect(bx0, wy0, bw, 1);   // eave AO
+    ctx.fillStyle = shade(OL, 0.9);        ctx.fillRect(bx0 - 1, wy1 + 1, bw + 2, 1);   // ground AO
+    // dark plank pitched roof + a vent
+    drawRoof(ctx, 26, 4, 18, (y) => 3 + (y - 4) / 14 * 19, { base: W[1], hi: W[3], lo: RAMPS.OUTLINE.brown, ol: OL });
+    ctx.fillStyle = W[0]; ctx.fillRect(33, 8, 3, 4); ctx.fillStyle = RAMPS.GRAIN[2]; ctx.fillRect(33, 8, 3, 1);  // vent
+    // upper window — recessed with a glint + a lintel stone
+    ctx.fillStyle = S[4]; ctx.fillRect(23, 21, 8, 1);            // lintel stone (lit)
+    recess(ctx, 24, 22, 6, 6, '#161a20', S[0]);
+    ctx.fillStyle = RAMPS.GLASS[1]; ctx.fillRect(25, 23, 4, 4);
+    ctx.fillStyle = RAMPS.GLASS[2]; ctx.fillRect(25, 23, 2, 2);
+    ctx.fillStyle = shade(RAMPS.GLASS[2], 1.25); ctx.fillRect(25, 23, 1, 1);   // glint
+    // doorway — recessed with a plank door, seams, handle, threshold AO + lintel
+    ctx.fillStyle = S[4]; ctx.fillRect(10, 42, 9, 1);           // door lintel
+    recess(ctx, 11, 43, 7, 11, '#161310', S[0]);
+    ctx.fillStyle = W[1]; ctx.fillRect(12, 44, 5, 10);          // plank door
+    ctx.fillStyle = shade(W[1], 1.1); ctx.fillRect(12, 44, 1, 10);
+    ctx.fillStyle = shade(W[0], 0.9); ctx.fillRect(14, 44, 1, 10); ctx.fillRect(16, 44, 1, 10);   // door seams
+    ctx.fillStyle = '#2a2620'; ctx.fillRect(15, 49, 1, 1);     // handle
+    ctx.fillStyle = shade(S[0], 0.7); ctx.fillRect(10, 54, 9, 1);   // threshold AO
+    // MILLSTONE wheel on the face — stepped rings, inner groove, cross spokes, lit top, hub (no arc)
+    const mcx = 32, mcy = 37, mr = 9;
+    for (let dy = -mr; dy <= mr; dy++) {
+        const half = Math.round(Math.sqrt(mr * mr - dy * dy));
+        if (half < 1) continue;
+        ctx.fillStyle = dy < -3 ? S[4] : dy > 3 ? S[1] : S[3];     // lit top / shaded bottom
+        ctx.fillRect(mcx - half, mcy + dy, half * 2, 1);
+        ctx.fillStyle = S[0]; ctx.fillRect(mcx - half, mcy + dy, 1, 1); ctx.fillRect(mcx + half - 1, mcy + dy, 1, 1);  // rim
+    }
+    for (let dy = -6; dy <= 6; dy++) {                              // inner ring groove
+        const half = Math.round(Math.sqrt(36 - dy * dy));
+        if (half < 1) continue;
+        ctx.fillStyle = shade(S[2], 0.84); ctx.fillRect(mcx - half, mcy + dy, 1, 1); ctx.fillRect(mcx + half - 1, mcy + dy, 1, 1);
+    }
+    ctx.fillStyle = S[0];
+    ctx.fillRect(mcx - mr + 1, mcy, mr * 2 - 2, 1);               // horizontal spoke
+    ctx.fillRect(mcx, mcy - mr + 1, 1, mr * 2 - 2);               // vertical spoke
+    ctx.fillStyle = shade(S[4], 1.1); ctx.fillRect(mcx - mr + 1, mcy - 1, 4, 1);   // lit top spoke edge
+    ctx.fillStyle = '#2a2620'; ctx.fillRect(mcx - 1, mcy - 1, 2, 2);               // hub
+    ctx.fillStyle = shade(S[4], 1.2); ctx.fillRect(mcx - 1, mcy - 1, 1, 1);        // hub glint
     return c;
 }
 
-// #100 the Hatch House — a warm little brooder hut with a straw nest + eggs showing in the doorway
+// #100 the Hatch House — a warm brooder hut with a straw nest + eggs in the doorway
+// and a warming chimney. ~44px tall. Warm plank walls (GRAIN/PLANK), red roof. (§1b)
 export function makeHatchery() {
-    const [c, ctx] = makeCanvas(24, 22);
-    ctx.fillStyle = '#c8a24a'; ctx.fillRect(4, 10, 16, 12);        // warm plank body
-    ctx.fillStyle = '#b0883a'; ctx.fillRect(4, 19, 16, 3);        // base course
-    ctx.fillStyle = '#7a5a34'; for (let i = 6; i < 20; i += 4) ctx.fillRect(i, 10, 1, 12);   // planks
-    ctx.fillStyle = '#3a2e24'; ctx.fillRect(9, 13, 6, 9);         // doorway (nest opening)
-    ctx.fillStyle = '#8a6a3c'; ctx.fillRect(9, 20, 6, 2);         // straw sill
-    // eggs in the nest
-    ctx.fillStyle = '#f2ead6'; ctx.fillRect(10, 18, 2, 2); ctx.fillRect(12, 17, 2, 3);
-    ctx.fillStyle = '#fffdf6'; ctx.fillRect(10, 18, 1, 1); ctx.fillRect(12, 17, 1, 1);   // egg highlights
-    ctx.fillStyle = '#8a4a3a';                                    // warm roof
-    for (let i = 0; i < 6; i++) ctx.fillRect(2 + i * 2, 10 - i, 20 - i * 4, 2);
-    ctx.fillStyle = '#e0a848'; ctx.fillRect(17, 6, 2, 4);        // little warming chimney
+    const [c, ctx] = makeCanvas(48, 48);
+    const P = RAMPS.PLANK, R = RAMPS.ROOF_RED, G = RAMPS.GRAIN, W = RAMPS.WOOD, OL = RAMPS.OUTLINE.brown;
+    const brick = '#9a5a44';
+    groundShadow(ctx, 24, 45, 20, 5, 0.3);
+    const bx0 = 8, bx1 = 40, wy0 = 18, wy1 = 44;
+    // weathered plank walls + form self-shadow (via drawWall)
+    drawWall(ctx, bx0, bx1, wy0, wy1, { base: P[2], hi: P[3], lo: P[1], ol: OL }, 5);
+    // base course with a lit top edge + ground AO
+    ctx.fillStyle = W[1]; ctx.fillRect(bx0 - 1, wy1 - 2, bx1 - bx0 + 3, 2);
+    ctx.fillStyle = shade(W[2], 1.1); ctx.fillRect(bx0 - 1, wy1 - 2, bx1 - bx0 + 3, 1);
+    ctx.fillStyle = shade(OL, 0.85); ctx.fillRect(bx0 - 1, wy1 + 1, bx1 - bx0 + 3, 1);
+    // warm red roof
+    drawRoof(ctx, 24, 4, 18, (y) => 3 + (y - 4) / 14 * 19, { base: R[3], hi: R[4], lo: R[2], ol: OL });
+    // BRICK chimney — mortar courses, lit-left/shadow-right, warm mouth glow
+    ctx.fillStyle = OL; ctx.fillRect(32, 5, 6, 9);
+    ctx.fillStyle = brick; ctx.fillRect(33, 6, 4, 7);
+    ctx.fillStyle = shade(brick, 1.12); ctx.fillRect(33, 6, 1, 7);   // lit left
+    ctx.fillStyle = shade(brick, 0.8);  ctx.fillRect(36, 6, 1, 7);   // shadow right
+    ctx.fillStyle = shade(brick, 0.68); ctx.fillRect(33, 8, 4, 1); ctx.fillRect(33, 11, 4, 1);   // mortar courses
+    ctx.fillStyle = G[5]; ctx.fillRect(33, 5, 4, 1);               // hot mouth
+    ctx.fillStyle = G[4]; ctx.fillRect(34, 6, 2, 1);
+    // nest doorway — DEEP recess, layered straw, three shaded eggs, speckle
+    recess(ctx, 18, 30, 10, 14, '#1a130d', OL);
+    ctx.fillStyle = shade(P[1], 0.7); ctx.fillRect(17, 44, 12, 1);   // threshold AO
+    ctx.fillStyle = G[0]; ctx.fillRect(18, 40, 10, 4);             // straw nest (layered)
+    ctx.fillStyle = G[1]; ctx.fillRect(18, 40, 10, 2);
+    ctx.fillStyle = G[3]; ctx.fillRect(19, 40, 6, 1);             // lit straw wisps
+    ctx.fillStyle = shade(G[0], 0.8); ctx.fillRect(18, 43, 10, 1);
+    const egg = (ex, ey) => {   // body, UL glint, shadow side, contact AO into straw, speckle
+        ctx.fillStyle = '#efe6d0'; ctx.fillRect(ex, ey, 3, 4); ctx.fillRect(ex + 1, ey - 1, 1, 6);
+        ctx.fillStyle = '#fffdf6'; ctx.fillRect(ex, ey, 1, 1);
+        ctx.fillStyle = '#cfc4a8'; ctx.fillRect(ex + 2, ey + 2, 1, 2);
+        ctx.fillStyle = shade('#cfc4a8', 0.7); ctx.fillRect(ex, ey + 4, 3, 1);
+        ctx.fillStyle = '#d8cdb2'; ctx.fillRect(ex + 1, ey + 3, 1, 1);
+    };
+    egg(20, 39); egg(23, 40); egg(24, 37);
     return c;
 }
 
