@@ -852,17 +852,36 @@ function loadAssetArt() {
 
 // Draw a crop at tile-screen (sx,sy): real sheet frame when available, else procedural fallback.
 function drawCropSprite(crop, sx, sy) {
+    // wind SWAY: mature crops only (skip seedlings + withered). The upper band leans ±1px
+    // on a performance.now sine phased by tile position, so a field ripples out of step.
+    // Display-time only — reads crop.i/j but never writes sim.
+    const sway = (!crop.withered && crop.stage >= 2)
+        ? Math.round(Math.sin(performance.now() / 600 + crop.i * 0.7 + crop.j * 1.3)) : 0;
     const frames = CROP_FRAMES[crop.type];
     if (plantsReady && imageLoaded(plantsSheet) && frames && !crop.withered) {
         const f = frames[Math.min(crop.stage, 3)];
         const w = Math.max(1, Math.round(f[2] * CROP_SCALE)), h = Math.max(1, Math.round(f[3] * CROP_SCALE));
+        const dx = Math.floor(sx - w / 2), dy = Math.floor(sy + 7 - h);
         ctx.imageSmoothingEnabled = false;
-        ctx.drawImage(plantsSheet, f[0], f[1], f[2], f[3], Math.floor(sx - w / 2), Math.floor(sy + 7 - h), w, h);
+        if (sway) {
+            const ss = Math.round(f[3] * 0.45), hs = Math.round(h * 0.45);   // top ~45% leans
+            ctx.drawImage(plantsSheet, f[0], f[1], f[2], ss, dx + sway, dy, w, hs);
+            ctx.drawImage(plantsSheet, f[0], f[1] + ss, f[2], f[3] - ss, dx, dy + hs, w, h - hs);
+        } else {
+            ctx.drawImage(plantsSheet, f[0], f[1], f[2], f[3], dx, dy, w, h);
+        }
         return;
     }
     const sprites = makeCropSprites(crop.type);
     const spr = crop.withered ? sprites[4] : sprites[crop.stage];
-    ctx.drawImage(spr, Math.floor(sx - 6), Math.floor(sy - 7));
+    const dx = Math.floor(sx - 6), dy = Math.floor(sy - 7);
+    if (sway) {
+        const ss = Math.round(spr.height * 0.45);
+        ctx.drawImage(spr, 0, 0, spr.width, ss, dx + sway, dy, spr.width, ss);
+        ctx.drawImage(spr, 0, ss, spr.width, spr.height - ss, dx, dy + ss, spr.width, spr.height - ss);
+    } else {
+        ctx.drawImage(spr, dx, dy);
+    }
 }
 
 // draw a sliced side-profile animal frame at (px,py); returns false if not ready
@@ -2328,9 +2347,23 @@ function collectDrawables() {
         let spr = structSprites[st.type];
         if (st.type === 'windmill') spr = spr[Math.floor(performance.now() / 110) % 4];   // ~9fps sweep (display-time; never sim/seed)
         if (!spr) continue;   // unknown structure type (e.g. statue art still loading)
+        const isTower = st.type === 'tower';   // lightning ward gets the pulsing orb
         list.push({
-            y: sy + TILE_H, draw: () =>
-                ctx.drawImage(spr, Math.floor(sx - spr.width / 2), Math.floor(sy + TILE_H - spr.height))
+            y: sy + TILE_H, draw: () => {
+                const dx = Math.floor(sx - spr.width / 2), dy = Math.floor(sy + TILE_H - spr.height);
+                ctx.drawImage(spr, dx, dy);
+                if (isTower) {
+                    // lightning-ward amber orb: a slow breathing glow (~2s), display-time only
+                    const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 1000 * 3.0);
+                    const ox = dx + 14, oy = dy + 3, rad = 5 + pulse * 4.5;   // orb sits top-centre of the 28×56 sprite
+                    const g = ctx.createRadialGradient(ox, oy, 0, ox, oy, rad);
+                    g.addColorStop(0, `rgba(250,214,110,${0.3 + pulse * 0.4})`);
+                    g.addColorStop(1, 'rgba(250,214,110,0)');
+                    ctx.fillStyle = g; ctx.fillRect(ox - rad, oy - rad, rad * 2, rad * 2);
+                    ctx.fillStyle = `rgba(255,246,232,${0.35 + pulse * 0.5})`;   // hot core bead
+                    ctx.fillRect(ox - 1, oy - 1, 2, 2);
+                }
+            }
         });
     }
 
@@ -2409,7 +2442,14 @@ function collectDrawables() {
                 const bx = cam.x + isoX(b.i + 0.5, b.j + 0.5), by = cam.y + isoY(b.i + 0.5, b.j + 0.5);
                 if (!offScreen(bx, by)) {   // Codex #44 P1 — cull off-screen facility buildings
                     const spr = b.kind === 'barn' ? barnSprite : b.kind === 'mill' ? millSprite : b.kind === 'hatchery' ? hatchSprite : coopSprite;
-                    list.push({ y: by + TILE_H, draw: () => ctx.drawImage(spr, Math.floor(bx - spr.width / 2), Math.floor(by + TILE_H - spr.height)) });
+                    list.push({ y: by + TILE_H, draw: () => {
+                        const dx = Math.floor(bx - spr.width / 2), dy = Math.floor(by + TILE_H - spr.height);
+                        ctx.drawImage(spr, dx, dy);
+                        // chimney smoke drifts up from the hatchery brooder + the mill's roof vent
+                        if (b.kind === 'hatchery') drawChimneySmoke(dx + 35, dy + 5, b.i * 7 + b.j * 13);
+                        else if (b.kind === 'mill') drawChimneySmoke(dx + 34, dy + 8, b.i * 7 + b.j * 13);
+                        else if (b.kind === 'barn') drawRoofPennant(dx + 32, dy - 5, b.i * 5 + b.j * 11);   // pennant on the cupola
+                    } });
                 }
             }
             if (fac.trough) {
@@ -2506,6 +2546,39 @@ const monumentSprite = makeMonument();
 function drawMonument(sx, sy) {
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(monumentSprite, Math.floor(sx - 6), Math.floor(sy + TILE_H / 2 - 19));
+}
+// Procedural chimney smoke: 2–3 soft grey puffs that rise, drift on a sine, grow and
+// fade over a performance.now cycle. Phase is offset by `seed` (a tile-position hash,
+// NOT rng) so neighbouring chimneys don't puff in lockstep. Display-only — no sim/seed.
+function drawChimneySmoke(ox, oy, seed) {
+    const now = performance.now() / 2200;
+    for (let n = 0; n < 3; n++) {
+        const ph = (now + n / 3 + (seed & 7) / 8) % 1;
+        const alpha = Math.sin(ph * Math.PI) * 0.4;              // fade in then out
+        if (alpha <= 0.03) continue;
+        const drift = Math.sin(ph * Math.PI * 2 + n * 1.7 + (seed & 3)) * 3;
+        const sz = 1 + Math.round(ph * 2);                       // grows as it rises
+        const px = Math.round(ox + drift), py = Math.round(oy - 2 - ph * 16);
+        ctx.fillStyle = `rgba(206,208,214,${alpha})`;
+        ctx.fillRect(px - sz, py - sz, sz * 2, sz * 2);
+        ctx.fillStyle = `rgba(230,232,238,${alpha * 0.7})`;      // lighter core
+        const cs = Math.max(1, sz - 1);
+        ctx.fillRect(px - cs + 1, py - cs + 1, cs, cs);
+    }
+}
+// A little pennant on a pole that ripples in the wind — a tapering triangle whose tip
+// waves more than its root, on a performance.now sine (phase offset by `seed`). Reads as
+// a small flag at 1×. Display-only — no sim/seed.
+function drawRoofPennant(px, topY, seed) {
+    ctx.fillStyle = '#5a4028'; ctx.fillRect(px, topY, 1, 9);        // pole
+    ctx.fillStyle = '#7a5433'; ctx.fillRect(px, topY, 1, 1);       // lit pole top
+    const t = performance.now() / 300 + (seed & 7);
+    for (let fx = 1; fx <= 5; fx++) {
+        const yoff = Math.round(Math.sin(t + fx * 0.6) * (fx / 5) * 1.6);   // ripple grows toward the tip
+        const fh = Math.max(1, 3 - (fx >> 1));                              // taper to a point
+        ctx.fillStyle = fx <= 2 ? '#e0603c' : '#c0402c';                    // lit near the pole, deeper red at the fly
+        ctx.fillRect(px + fx, topY + 1 + yoff, 1, fh);
+    }
 }
 // A wild prey animal: a sliced side-profile idle frame of its real sprite, mirrored to face its heading
 // (fallback: a small critter blob). Cycles a little faster while bolting from a hunter.
@@ -2790,7 +2863,16 @@ function drawProducer(p, px, py) {
     if ((p.kind === 'pad' || p.kind === 'fish') && world.isWinter()) return;
     if (p.kind === 'pad') {
         const spr = lilyPadSprites[p.ready ? 1 : 0];
-        ctx.drawImage(spr, Math.floor(px - 7), Math.floor(py - 5));
+        // gentle ±1px bob on the water (phase by world position so pads don't bob in unison)
+        const bob = Math.round(Math.sin(performance.now() / 700 + (p.fx + p.fy) * 0.9));
+        ctx.drawImage(spr, Math.floor(px - 7), Math.floor(py - 5 + bob));
+        // a faint shimmer speck drifting on the water beside the pad (display-time only)
+        const t = performance.now() / 900 + (p.fx - p.fy);
+        const shim = 0.22 + 0.2 * Math.sin(t * 2);
+        if (shim > 0.05) {
+            ctx.fillStyle = `rgba(191,228,240,${shim})`;
+            ctx.fillRect(Math.round(px + Math.cos(t) * 7), Math.round(py + 4 + Math.sin(t) * 2), 1, 1);
+        }
         return;
     }
     // real animal sheets for livestock/poultry
