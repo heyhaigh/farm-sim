@@ -123,7 +123,7 @@
 
 <script type="module">
   // pond life + the procedural facility buildings — built by the game's own sprite module
-  import { makeLilyPad, makeFish, makeCoop, makeBarn, makeMill, makeHatchery, makeWindmill, makeTower, makeToolshed, makeFencePost, makeCropSprites, makeMonument } from './pixel.js';
+  import { makeLilyPad, makeFish, makeCoop, makeBarn, makeMill, makeHatchery, makeWindmill, makeTower, makeToolshed, makeFencePost, makeCropSprites, makeMonument, makeCoopIso, makeWellIso, makeWindmillIso, makeMonumentIso, makeCoopTD } from './pixel.js';
 
   const SW  = 'assets/craftpix-net-180537-free-swordsman-1-3-level-pixel-top-down-sprite-character/PNG/';
   const ORC = 'assets/craftpix-net-363992-free-top-down-orc-game-character-pixel-art/Tiled_files/';
@@ -163,6 +163,23 @@
   const orcAnims = (v) => ACTS.map(a => ({ act: a, src: orcSheet(v, a) }));
 
   const FAMILIES = [
+    {
+      family: 'RESET — PROJECTION CALIBRATION (batch #7g): top-down ¾ vs the abandoned iso', cls: 'creature',
+      chars: [
+        { name: 'makeCoopTD — §S rebuild + CROSS-GABLE CHEVRON roof depth (all seasons)',
+          note: 'The §S coop, reworked so the ROOF reads as a 3-D VOLUME rising to a forward apex — matching the CraftPix cottage / SLYNYRD city-builder depth device instead of the earlier flat symmetric hip+dormer. The mechanism: (A) MAIN ROOF MASS with a higher, wider back ridge that RECEDES up-and-back; (B) a central FORWARD-PROJECTING CROSS-GABLE that reads as a CHEVRON — two short slopes meeting at a near-VERTICAL central APEX RIDGE LINE coming toward the viewer (THE apex of the building’s height), sitting lower + forward over the door; (C) DARKER-RED VALLEY SHADOWS down the chevron diagonals (+ a whisper of black on the main roof just outside) — the key detail that makes the gable read as a SEPARATE projecting volume, not a flat inset; (D) one-light lit-left/shadow-right split across both. Round louver VENT (sphereMask) set into the cross-gable face. Kept TOP-DOWN ¾ (roof from above) — the apex + ridge give the vertical WITHOUT tipping into straight-on-front or corner-on iso. Everything else from the §S build is unchanged: FORM-FIRST restrained texture (3 clean courses — the chevron + valley carry the depth, not shingles); GROUNDING (fixed seatShadow ≤1 tile + base foliage/dirt scuff); OUTLINES via outlineFor; whisper contact shadows; the BUILT-UP WINTER SNOW BLANKET (solid over the upper roof + chevron, uneven lower snow-line, apex ridge stays bright white, valley shadow persists through the snow so the chevron still reads, vent carved through + capped) and ledge snow (sills, door lintel/threshold, foundation sill) + pane frost; and the full season set (SUMMER/SPRING base · FALL warm cached ramp + leaf flecks · WINTER per above). Calibrate against the CraftPix COTTAGE (target), WELL, CHARACTER; the abandoned ISO coop is last as the wrong angle.',
+          anims: [
+            { act: 'CraftPix_COTTAGE_target', src: 'assets/craftpix-net-654184-main-characters-home-free-top-down-pixel-art-asset/PNG/exterior.png', file: 'exterior.png (the top-down ¾ target)', spec: { type: 'crop', sx: 2, sy: 5, sw: 137, sh: 125, zoom: 1 } },
+            { act: 'coopTD_SUMMER', frames: [makeCoopTD('SUMMER')], file: 'pixel.js · makeCoopTD(SUMMER)', spec: { zoom: 2 } },
+            { act: 'coopTD_FALL', frames: [makeCoopTD('FALL')], file: 'makeCoopTD(FALL)', spec: { zoom: 2 } },
+            { act: 'coopTD_WINTER', frames: [makeCoopTD('WINTER')], file: 'makeCoopTD(WINTER)', spec: { zoom: 2 } },
+            { act: 'coopTD_SPRING', frames: [makeCoopTD('SPRING')], file: 'makeCoopTD(SPRING)', spec: { zoom: 2 } },
+            { act: 'CraftPix_WELL', src: 'assets/craftpix-net-654184-main-characters-home-free-top-down-pixel-art-asset/PNG/exterior.png', file: 'exterior.png well slice', spec: { type: 'crop', sx: 48, sy: 498, sw: 38, sh: 38, zoom: 2 } },
+            { act: 'CraftPix_CHARACTER', src: 'assets/craftpix-net-180537-free-swordsman-1-3-level-pixel-top-down-sprite-character/PNG/Swordsman_lvl1/With_shadow/Swordsman_lvl1_Idle_with_shadow.png', file: 'swordsman idle frame 0', spec: { type: 'crop', sx: 0, sy: 0, sw: 64, sh: 64, zoom: 1.5 } },
+            { act: 'makeCoopIso_WRONG_angle', frames: [makeCoopIso('SUMMER')], file: 'pixel.js · makeCoopIso — ABANDONED corner-on iso', spec: { zoom: 2 } },
+          ] },
+      ],
+    },
     {
       family: 'Humans — Swordsman pack', cls: 'human',
       chars: [
@@ -230,6 +247,28 @@
     {
       family: 'Structures — procedural farm buildings (pixel.js)', cls: 'creature',
       chars: [
+        { name: 'ISO PROJECTION — POC (batch #7e): coop redrawn in the iso plane + seasons',
+          note: 'FOUNDATION PROOF-OF-CONCEPT. The reworked buildings were flat FRONT ELEVATIONS, but the game is a top-down ¾ / 2:1 dimetric world (the CraftPix cottage, trees, rocks all show the ROOF from above + walls receding along the iso axes), so flat facades read as cardboard. This redraws the COOP in the iso plane per PROCEDURAL_ART.md §6a: a 2:1 diamond footprint, TWO receding wall faces (front-left LIT / front-right SHADOW) meeting at a near vertical corner, and a hip ROOF seen from above (two planes meeting at a peak, overhanging the eaves ~2px). Every non-vertical edge is 2:1 (2 across:1 down); faces rasterize column-by-column as solid fills so there is NO anti-aliasing. Exemplars: ALttP / Harvest Moon / Stardew ¾ coops (roof-from-above, overhang, short front wall) + Landstalker box geometry. SEASONS (§6b, display read of world.season, cached per season): WINTER caps the up-facing roof band + ridge in snow (same #eef4f4/#fff as the CraftPix snow trees) so the building sits with the winter forest; FALL warms the roof. Compare the flat BEFORE (first card) with the ISO summer + winter. If the owner signs off, this projection rolls out to every building.',
+          anims: [
+            { act: 'Coop_FLAT_before', frames: [makeCoop()], file: 'pixel.js · makeCoop() (flat facade)', spec: { zoom: 2 } },
+            { act: 'Coop_ISO_summer', frames: [makeCoopIso('SUMMER')], file: 'pixel.js · makeCoopIso(SUMMER)', spec: { zoom: 2 } },
+            { act: 'Coop_ISO_winter', frames: [makeCoopIso('WINTER')], file: 'pixel.js · makeCoopIso(WINTER)', spec: { zoom: 2 } },
+            { act: 'Coop_ISO_fall', frames: [makeCoopIso('FALL')], file: 'pixel.js · makeCoopIso(FALL)', spec: { zoom: 2 } },
+          ] },
+        { name: 'GATE-3 POCs (batch #7f): the 3 hardest forms — validate the grammar before rollout',
+          note: 'Three POCs stressing different §6a/§6b clauses, each also clearing an owner item. (1) WELL — ROUND + small: §6a.4 3-band stone cylinder + 2:1 ellipse rim/base caps, §6a.7 footprint→CONTAINER (a small well seated in a bigger SEASONAL ground patch, so its grassy back sits right on snow/autumn — the owner well item), §6b snow on a round form (rim ledge + canopy, NOT the sheer cylinder). (2) WINDMILL — TALL + round + animated: §6a.5 height-decoupling (tall round tower, cap fraction low), §6a.4 iso CONE cap + radial courses, §6a.9 SCREEN-FACING blades. PRESERVATION: the loved animated sails are KEPT VERBATIM — only the BODY moved into the iso plane; compare OLD (flat ashlar tower) vs ISO (round tower, same blades). (3) MONUMENT — ROOFLESS + mythical: §6a.7 silhouette shadow, §6b snow on LEDGES only; folds in the halted mythical redesign — ROUNDED mossy boulders + a glowing GEM (human = warm stone + cyan gem; orc = ashen boulders + BONES + violet gem), NOT steel-gray obelisks. All pure fillRect, deterministic, read at 1×.',
+          anims: [
+            { act: 'Well_ISO_summer', frames: [makeWellIso('SUMMER')], file: 'pixel.js · makeWellIso(SUMMER)', spec: { zoom: 2 } },
+            { act: 'Well_ISO_fall', frames: [makeWellIso('FALL')], file: 'makeWellIso(FALL)', spec: { zoom: 2 } },
+            { act: 'Well_ISO_winter', frames: [makeWellIso('WINTER')], file: 'makeWellIso(WINTER)', spec: { zoom: 2 } },
+            { act: 'Windmill_OLD_flat', frames: [makeWindmill(0), makeWindmill(1), makeWindmill(2), makeWindmill(3)], file: 'pixel.js · makeWindmill (flat ashlar body)', spec: { rate: 1, zoom: 2 } },
+            { act: 'Windmill_ISO_summer', frames: [makeWindmillIso('SUMMER', 0), makeWindmillIso('SUMMER', 1), makeWindmillIso('SUMMER', 2), makeWindmillIso('SUMMER', 3)], file: 'makeWindmillIso(SUMMER, 0..3) — round body, SAME blades', spec: { rate: 1, zoom: 2 } },
+            { act: 'Windmill_ISO_winter', frames: [makeWindmillIso('WINTER', 0), makeWindmillIso('WINTER', 1), makeWindmillIso('WINTER', 2), makeWindmillIso('WINTER', 3)], file: 'makeWindmillIso(WINTER, 0..3)', spec: { rate: 1, zoom: 2 } },
+            { act: 'Monument_human_summer', frames: [makeMonumentIso('human', 'SUMMER')], file: 'makeMonumentIso(human, SUMMER)', spec: { zoom: 3 } },
+            { act: 'Monument_human_winter', frames: [makeMonumentIso('human', 'WINTER')], file: 'makeMonumentIso(human, WINTER)', spec: { zoom: 3 } },
+            { act: 'Monument_orc_summer', frames: [makeMonumentIso('orc', 'SUMMER')], file: 'makeMonumentIso(orc, SUMMER)', spec: { zoom: 3 } },
+            { act: 'Monument_orc_winter', frames: [makeMonumentIso('orc', 'WINTER')], file: 'makeMonumentIso(orc, WINTER)', spec: { zoom: 3 } },
+          ] },
         { name: 'Facility buildings — reworked (batch #1)',
           note: 'Procedural buildings built live by pixel.js — no sheet exists; they sit beside the CraftPix cottage/animals, so they must hit the same bar. Reworked from the old ~24–30px toys to the §2 farm-building size class with hue-shifted RAMPS (ROOF-RED shingles, WOOD/PLANK walls, STONE for the mill), 1px tinted (non-black) outlines, and a baked translucent cast shadow so they no longer float. Old→new cell sizes: barn 30×26→64×60, coop 24×22→54×52, mill 26×26→52×58, hatchery 24×22→48×48 (barn is now the biggest, no longer smaller than the cottage). The mill wheel is stepped fillRect rings (the old ctx.arc/stroke AA is gone); the barn door X is now actually drawn (was a dead fillStyle). These render at 1× density here (bump Scale to inspect pixels). In-game they draw at 1:1, bottom-centered on their pen tile.',
           anims: [
@@ -249,12 +288,20 @@
           note: 'The TINY sprites — near 1× game size + drawn many times per screen, so the lever is ramp quality + minimal form, NOT detail. FENCE POST: 4-shade WOOD ramp, lit-left/shadow-right, top-cap highlight, ground AO (the cheapest total-screen win — hundreds per screen). CROPS: the WITHERED stage (every crop\'s drought look) is now a drooping wilted plant tinted per-type (its own desaturated leaf + shriveled fruit, dried-straw browns) — read as wilted, not just dark; and BEANSTALK gets a bespoke drooping-pod ripe stage instead of borrowing wheat\'s grain heads. POND (see the Pond-life card above, hot-loaded): lily pad + koi now have a water-contact shadow ring so they sit IN the water, plus an extra ramp step + spec glint. All verified to read at true 1×.',
           anims: [
             { act: 'Fence_Post', frames: [makeFencePost()], file: 'pixel.js · makeFencePost()', spec: { zoom: 2 } },
-            { act: 'Monument', frames: [makeMonument()], file: 'pixel.js · makeMonument()', spec: { zoom: 2 } },
             { act: 'Beanstalk_Ripe', frames: [makeCropSprites('beanstalk')[3]], file: 'pixel.js · makeCropSprites(beanstalk)[3]' },
             { act: 'Beanstalk_Withered', frames: [makeCropSprites('beanstalk')[4]], file: 'makeCropSprites(beanstalk)[4]' },
             { act: 'Carrot_Withered', frames: [makeCropSprites('carrot')[4]], file: 'makeCropSprites(carrot)[4]' },
             { act: 'Grapes_Withered', frames: [makeCropSprites('grapes')[4]], file: 'makeCropSprites(grapes)[4]' },
             { act: 'Wheat_Withered', frames: [makeCropSprites('wheat')[4]], file: 'makeCropSprites(wheat)[4]' },
+          ] },
+        { name: 'Monument series — tiered legend memorials (batch #7d)',
+          note: 'A stone is raised where each raider falls; its GRANDEUR scales with the battle it marks. The tier (1–5) is stamped deterministically in farm.js from the already-seeded raid outcome — tier = the HIGHEST of three signals: foe difficulty (common band → returning → named nemesis), lives lost (wounded → a defender downed), and destruction (raider-band size + stores carried off). Never touches rng; monuments are excluded from the determinism digest, so baselines stay byte-identical; old saves default to tier 2. All STONE-ramp, base-anchored, read at 1×; loss/destruction symbols escalate. 1 Cairn (rough pile) · 2 Marker Stone (obelisk + gold plaque) · 3 Sworded Stele (planted blade + laurel) · 4 Cenotaph (twin pillars + broken shield & helm + scorched earth) · 5 War Barrow (mound + marker cluster + crossed shattered weapon + blackened ground).',
+          anims: [
+            { act: 'T1_Cairn', frames: [makeMonument(1)], file: 'pixel.js · makeMonument(1)', spec: { zoom: 2 } },
+            { act: 'T2_Marker', frames: [makeMonument(2)], file: 'makeMonument(2)', spec: { zoom: 2 } },
+            { act: 'T3_Sworded_Stele', frames: [makeMonument(3)], file: 'makeMonument(3)', spec: { zoom: 2 } },
+            { act: 'T4_Cenotaph', frames: [makeMonument(4)], file: 'makeMonument(4)', spec: { zoom: 2 } },
+            { act: 'T5_War_Barrow', frames: [makeMonument(5)], file: 'makeMonument(5)', spec: { zoom: 2 } },
           ] },
       ],
     },
@@ -317,6 +364,8 @@
               entry.cellW = entry.img.naturalWidth / spec.gridCols;
               entry.cellH = entry.img.naturalHeight / spec.gridRows;
               entry.cols = spec.frames || spec.gridCols;
+            } else if (spec.type === 'crop') {
+              entry.cellW = spec.sw; entry.cellH = spec.sh; entry.cols = 1;
             } else {
               entry.cols = Math.max(1, Math.round(entry.img.naturalWidth / CELL));
             }
@@ -376,6 +425,9 @@
       } else if (e.spec.type === 'row') {   // fixed in-game row, N-frame cycle
         e.ctx.drawImage(e.img, f * e.cellW, e.spec.row * e.cellH, e.cellW, e.cellH,
           0, 0, e.cellW * z, e.cellH * z);
+      } else if (e.spec.type === 'crop') {  // a fixed source rect (a reference sprite slice)
+        e.ctx.drawImage(e.img, e.spec.sx, e.spec.sy, e.spec.sw, e.spec.sh,
+          0, 0, e.spec.sw * z, e.spec.sh * z);
       } else {                              // 64px character sheet — direction row
         e.ctx.drawImage(e.img, f * CELL, dir * CELL, CELL, CELL, 0, 0, CELL * z, CELL * z);
       }

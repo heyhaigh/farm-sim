@@ -162,6 +162,7 @@ export const RAMPS = {
     PLANK:    ['#59332a', '#82503f', '#ab7757', '#c9a24a'],
     ROOF_RED: ['#3f1428', '#6d1924', '#8a2a2a', '#9e3931', '#bb4f3c'],
     STONE:    ['#3f4249', '#4f525d', '#565a65', '#6c7a86', '#8b97a2'],
+    MOSS_STONE: ['#463f39', '#5e564a', '#7a7060', '#988c78', '#b8ab92'],   // WARM weathered/lichened rock (mythic relics — not cold steel-gray)
     FOLIAGE:  ['#193926', '#2d603d', '#357137', '#4d843b', '#68963d', '#87ab3e', '#97ba3a'],
     SKIN:     ['#a46f59', '#be865f', '#e1b26e', '#f6ca74'],
     GRAIN:    ['#9a5d48', '#c48355', '#dc9a5c', '#eeb05e', '#f9cb69', '#ffe694'],
@@ -194,6 +195,176 @@ function recess(ctx, x, y, w, h, inner, rim) {
     ctx.fillStyle = inner; ctx.fillRect(x, y, w, h);
     ctx.fillStyle = shade(inner, 1.7);  ctx.fillRect(x + 1, y, w - 1, 1);     // lit inner top lip
     ctx.fillStyle = shade(inner, 0.66); ctx.fillRect(x, y + h - 1, w, 1);     // inner base AO (kept above the outline floor)
+}
+
+// ===========================================================================
+// STRATEGY HELPERS  (PROCEDURAL_ART.md §S — the SLYNYRD top-down strategy).
+// Shared, deterministic, fillRect-only primitives so EVERY builder can inherit the
+// north-star discipline: one committed light, sphere-mask volume, the cluster-unit
+// organic primitive, the darker-adjacent OUTLINE LAW, the fixed SEAT-SHADOW LAW, and
+// the three derivation MOVES (shave / reflect / rampSwap). These are ADDITIVE — no
+// existing builder is refactored to use them yet (that lands next, starting with the
+// coop). Purity contract: no Math.random / Date.now / drawImage / globalAlpha.
+// ===========================================================================
+
+// §S.1.4 — ONE committed light vector for the whole town: UPPER-LEFT. Every shading
+// and shadow helper CONSUMES this so no builder hardcodes its own sun (ties §4 / §0.1
+// pt.7). Screen space is +x RIGHT, +y DOWN, and (x,y) points TOWARD the light source:
+// upper-left => (-1,-1). Shadows / dark crescents fall on the opposite (away) quadrant.
+// NOTE: SLYNYRD's tree example happened to light from the upper-RIGHT; we standardize
+// on upper-LEFT to agree with the rest of our canon, and drive it from THIS constant so
+// nothing is hardcoded either way.
+export const LIGHT = Object.freeze({
+    x: -1, y: -1,        // unit-ish direction TOWARD the sun (screen space)
+    label: 'upper-left',
+    awayX: 1, awayY: 1,  // opposite quadrant — where seat shadows + dark crescents fall
+});
+
+// inscribed-ellipse view of a region: accepts {cx,cy,rx,ry} or a box {x,y,w,h}.
+function _asEllipse(region) {
+    if (region.rx != null && region.ry != null)
+        return { cx: region.cx, cy: region.cy, rx: region.rx, ry: region.ry };
+    const w = region.w, h = region.h;
+    return { cx: region.x + w / 2, cy: region.y + h / 2, rx: w / 2, ry: h / 2 };
+}
+
+// stepped 2:1-safe ellipse, row by row (no arc/AA, §3.5). fn(xLeft, y, width).
+function _ellipseRows(cx, cy, rx, ry, fn) {
+    const RY = Math.round(ry);
+    for (let dy = -RY; dy <= RY; dy++) {
+        const t = ry ? dy / ry : 0, f = 1 - t * t;
+        if (f <= 0) continue;
+        const half = Math.round(rx * Math.sqrt(f));
+        if (half < 1) continue;
+        fn(Math.round(cx - half), Math.round(cy + dy), half * 2);
+    }
+}
+
+// §S.1.4 SPHERE-MASK — the reusable "shade a circle like a sphere" volume shader
+// (SLYNYRD's trees + our canopyBlob, generalized). Paints an ellipse `region` with a
+// MID body, a LIGHT patch (ramp +lift) on the light-facing quadrant, and a DARK crescent
+// (ramp −deepen) on the away/underside quadrant — the tone chosen per pixel by the sphere
+// normal's dot with LIGHT. Stepped, fillRect-only, pure. For canopies, bushes, rounded
+// roofs, animal barrels. `ramp` = a shadow→light RAMPS array; opts {mid,lift,deepen,band}.
+function sphereMask(ctx, region, ramp, opts = {}) {
+    const { cx, cy, rx, ry } = _asEllipse(region);
+    const mid = opts.mid != null ? opts.mid : (ramp.length >> 1);
+    const at = (i) => ramp[Math.max(0, Math.min(ramp.length - 1, i))];
+    const baseC = at(mid), litC = at(mid + (opts.lift ?? 1)), darkC = at(mid - (opts.deepen ?? 1));
+    const band = opts.band ?? 0.45;                        // dot threshold for the two shifts
+    const Lx = LIGHT.x, Ly = LIGHT.y, Ln = Math.hypot(Lx, Ly) || 1;
+    const RY = Math.round(ry);
+    for (let dy = -RY; dy <= RY; dy++) {
+        const ty = ry ? dy / ry : 0, f = 1 - ty * ty;
+        if (f <= 0) continue;
+        const half = Math.round(rx * Math.sqrt(f));
+        for (let dx = -half; dx <= half; dx++) {
+            const nx = rx ? dx / rx : 0, ny = ry ? dy / ry : 0;   // outward sphere normal
+            const dot = (nx * Lx + ny * Ly) / Ln;                 // >0 faces the light
+            ctx.fillStyle = dot > band ? litC : dot < -band ? darkC : baseC;
+            ctx.fillRect(Math.round(cx + dx), Math.round(cy + dy), 1, 1);
+        }
+    }
+}
+export { sphereMask };
+
+// §S.1.2 STAMP-CLUSTER — the reusable ORGANIC unit (SLYNYRD's "bundle o' leaves"): one
+// small geometric leaf-bundle in ≤4–5 ramp colors, dark/mid/light via ramp-shift, lit
+// per LIGHT. Trees, hedges, crops, forage = a DETERMINISTIC scatter of these stamps
+// (dark variants low, light variants high). `seed` drives shape/size jitter (pure hash,
+// no rng); `variant` (0 square · 1 trapezoid · 2 round) overrides the seed's pick.
+function stampCluster(ctx, x, y, seed, ramp, variant) {
+    const s = seed >>> 0;
+    const v = ((variant == null ? s : variant) >>> 0) % 3;
+    const at = (i) => ramp[Math.max(0, Math.min(ramp.length - 1, i))];
+    const mid = ramp.length >> 1;
+    const rim = at(mid - 2), dark = at(mid - 1), base = at(mid), light = at(mid + 1);
+    const w = 5 + (s % 2), h = 4 + ((s >>> 1) % 2);
+    const litCol = LIGHT.x < 0 ? 0 : w - 1;          // lit column (toward light)
+    const shCol = LIGHT.awayX > 0 ? w - 1 : 0;       // shadow column (away)
+    const litRow = LIGHT.y < 0 ? 0 : h - 1;
+    if (v === 2) {                                    // round bundle → little sphere
+        sphereMask(ctx, { cx: x + w / 2, cy: y + h / 2, rx: w / 2, ry: h / 2 }, ramp, { mid });
+        px(ctx, x, y + h - 1, 1, 1, rim);             // seat the underside
+        return;
+    }
+    if (v === 1) {                                    // trapezoid (wide base, narrow top)
+        px(ctx, x + 1, y, w - 2, 1, base);
+        px(ctx, x, y + 1, w, h - 1, base);
+    } else {                                          // rounded square
+        px(ctx, x, y, w, h, base);
+        px(ctx, x, y, 1, 1, rim); px(ctx, x + w - 1, y, 1, 1, rim);   // knock top corners (no AA)
+    }
+    px(ctx, x, y + h - 1, w, 1, dark);                // shadow underside
+    px(ctx, x + shCol, y + 1, 1, h - 1, dark);        // shadow side
+    px(ctx, x + litCol, y + litRow, 1, 1, light);     // lit corner spec
+}
+export { stampCluster };
+
+// §S.2 OUTLINE LAW — the selective outline is ONE ramp step below the ADJACENT fill of
+// the same material, never #000. If `color` is a member of a RAMPS family array, return
+// the next-darker step (index−1, clamped); otherwise darken IN-HUE via shade() (still a
+// tinted dark, never black). Pure/deterministic.
+export function outlineFor(color) {
+    const c = String(color).toLowerCase();
+    for (const key in RAMPS) {
+        const fam = RAMPS[key];
+        if (Array.isArray(fam)) {
+            const i = fam.indexOf(c);
+            if (i >= 0) return fam[Math.max(0, i - 1)];
+        }
+    }
+    return shade(c, 0.72);   // off-ramp fill → in-hue darken, clamped off pure black
+}
+
+// §S.2 SHADOW LAW — the fixed SEAT shadow (supersedes the iso-era height-proportional
+// shadow). A seat shadow SEATS an object; it does not redraw it. Therefore: length
+// NEVER exceeds one tile, size is UNIFORM regardless of the object's height, it is
+// CENTERED under the object, and it is ONE flat translucent tone (stepped rows, no arc).
+// `region` = {cx,cy[,rx,ry]} or a box {x,y,w,h}; rx/ry are clamped to the 1-tile ceiling.
+function seatShadow(ctx, region, opts = {}) {
+    const r = _asEllipse(region);
+    const rx = Math.min(r.rx != null ? r.rx : TILE_W / 2, TILE_W / 2);   // ≤ 1 tile in length
+    const ry = Math.min(r.ry != null ? r.ry : TILE_H / 2, TILE_H / 2);
+    const a = opts.alpha ?? 0.28;
+    ctx.fillStyle = `rgba(12,16,12,${a})`;
+    _ellipseRows(r.cx, r.cy, rx, ry, (x, y, w) => ctx.fillRect(x, y, w, 1));
+}
+export { seatShadow };
+
+// §S.2 DERIVATION MOVE 1 — SHAVE: erase a rectangular portion of an already-drawn base to
+// derive an edge / corner / damage variant (SLYNYRD builds tile side + corner variants by
+// "shaving off portions of the base texture"). fillRect-family (clearRect), pure.
+export function shave(ctx, x, y, w, h) { ctx.clearRect(x, y, w, h); }
+
+// §S.2 DERIVATION MOVE 2 — REFLECT: mirror a draw routine horizontally about `axisX`
+// WITHOUT drawImage (banned) by wrapping ctx so fillRect/clearRect x-coords flip. Optional
+// `recolor(color)→color` remaps fills (e.g. an opposite-lit side, or a rampSwap map). The
+// era way to get an opposite wall / branch / walk-frame from ONE authored source. Because
+// our builders are fillRect-only, the proxy only needs fillStyle + fillRect + clearRect.
+export function reflect(ctx, axisX, drawFn, recolor) {
+    let _fs = null;
+    const proxy = {
+        set fillStyle(v) { _fs = recolor ? recolor(v) : v; ctx.fillStyle = _fs; },
+        get fillStyle() { return _fs; },
+        fillRect(x, y, w, h) { ctx.fillRect(Math.round(2 * axisX - x - w), y, w, h); },
+        clearRect(x, y, w, h) { ctx.clearRect(Math.round(2 * axisX - x - w), y, w, h); },
+    };
+    drawFn(proxy);
+    return proxy;
+}
+
+// §S.2 DERIVATION MOVE 3 — RAMPSWAP: same geometry, DIFFERENT ramp row. Returns a
+// recolor(color) mapping any member of `fromRamp` to the SAME index of `toRamp`
+// (index-preserving), passing non-members through unchanged. The basis for SEASON and
+// CULTURE (orc) variants: redraw the same builder through a swapped ramp — no new
+// geometry. Compose with reflect(...,recolor) or apply standalone. Pure/deterministic.
+export function rampSwap(fromRamp, toRamp) {
+    const from = fromRamp.map((c) => String(c).toLowerCase());
+    return (color) => {
+        const i = from.indexOf(String(color).toLowerCase());
+        return i >= 0 ? toRamp[Math.min(i, toRamp.length - 1)] : color;
+    };
 }
 
 // HAND-LAID ASHLAR tower body — the mill's masonry treatment, generalized to a
@@ -796,48 +967,792 @@ export function makeToolshed() {
     return c;
 }
 
-// #85 legend MEMORIAL — a small gold-plaqued stone raised where a raider was felled
-// (accumulates across a war, permanent on the battlefield). Tiny-sprite discipline:
-// STONE-ramp shaft (lit-left/shadow-right + ashlar-lite block tones + a mortar seam),
-// a pointed lit cap, a plinth with a lit course + ground AO, and a hue-shifted GRAIN
-// plaque with a spec glint. 12×21, cached. Anchor: cap at top, shadow at the base. (§1b)
-let _monument = null;
-export function makeMonument() {
-    if (_monument) return _monument;
-    const [c, ctx] = makeCanvas(12, 21);
-    const S = RAMPS.STONE, G = RAMPS.GRAIN, OL = RAMPS.OUTLINE.warm, cx = 6;
-    groundShadow(ctx, cx, 19, 6, 2, 0.32);                       // soft 2-layer ground shadow
-    // plinth (base block): body + lit top course + shaded lower course + ground AO
-    ctx.fillStyle = OL;  ctx.fillRect(1, 14, 10, 5);
-    ctx.fillStyle = S[2]; ctx.fillRect(1, 15, 10, 3);
-    ctx.fillStyle = S[3]; ctx.fillRect(1, 15, 10, 1);           // lit top course
-    ctx.fillStyle = S[1]; ctx.fillRect(1, 17, 10, 1);           // shaded lower course
-    ctx.fillStyle = shade(OL, 0.9); ctx.fillRect(1, 18, 10, 1); // ground-contact AO
-    // shaft — STONE ramp, lit-left / shadow-right, ashlar-lite blocks + a mortar seam
-    const sx0 = 3, sw = 6, sTop = 2, sBot = 14;
-    ctx.fillStyle = OL;   ctx.fillRect(sx0 - 1, sTop, sw + 2, sBot - sTop);
-    ctx.fillStyle = S[2]; ctx.fillRect(sx0, sTop, sw, sBot - sTop);
-    ctx.fillStyle = S[3]; ctx.fillRect(sx0, sTop, 2, sBot - sTop);              // sunlit left
-    ctx.fillStyle = shade(S[4], 1.05); ctx.fillRect(sx0, sTop, 1, sBot - sTop); // brightest left edge
-    ctx.fillStyle = S[1]; ctx.fillRect(sx0 + sw - 1, sTop, 1, sBot - sTop);     // shadow right
-    ctx.fillStyle = shade(S[2], 1.08); ctx.fillRect(sx0 + 1, sTop + 1, 3, 3);   // lighter block
-    ctx.fillStyle = shade(S[2], 0.9);  ctx.fillRect(sx0 + 2, sTop + 8, 3, 3);   // darker block
-    ctx.fillStyle = S[0]; ctx.fillRect(sx0, sTop + 6, sw, 1);                   // mortar seam
-    ctx.fillStyle = shade(S[3], 1.08); ctx.fillRect(sx0, sTop + 7, sw, 1);      // lit under-seam course
-    // pointed CAP with a lit top
-    ctx.fillStyle = OL;  ctx.fillRect(cx - 3, 1, 6, 1);
-    ctx.fillStyle = S[3]; ctx.fillRect(cx - 2, 1, 4, 1);
-    ctx.fillStyle = shade(S[4], 1.1); ctx.fillRect(cx - 1, 0, 2, 1);            // lit pointed peak
-    ctx.fillStyle = S[1]; ctx.fillRect(cx + 1, 1, 1, 1);                        // cap shadow corner
-    // gold PLAQUE — GRAIN ramp shadow->lit + recessed frame + spec glint + engraving
-    ctx.fillStyle = OL;  ctx.fillRect(cx - 3, 6, 6, 5);                         // recessed frame
-    ctx.fillStyle = G[1]; ctx.fillRect(cx - 2, 7, 4, 3);                        // plaque body (shadow gold)
-    ctx.fillStyle = G[3]; ctx.fillRect(cx - 2, 7, 4, 1);                        // lit top
-    ctx.fillStyle = G[4]; ctx.fillRect(cx - 2, 7, 2, 1);                        // brighter lit-left
-    ctx.fillStyle = shade(G[1], 0.82); ctx.fillRect(cx - 2, 9, 4, 1);          // shaded bottom
-    ctx.fillStyle = shade(G[0], 0.9); ctx.fillRect(cx - 1, 8, 2, 1);           // engraved line
-    ctx.fillStyle = '#fffdf6'; ctx.fillRect(cx - 2, 7, 1, 1);                   // spec glint
-    _monument = c;
+// ---------------------------------------------------------------------------
+// ISOMETRIC BUILDING projection (PROCEDURAL_ART.md §6a) — POC helpers + coop.
+// A building sits in the 2:1 dimetric plane: a diamond footprint, two receding wall
+// faces (front-left LIT / front-right SHADOW) at a near vertical corner, and a hip roof
+// seen from ABOVE (two visible planes meeting at a peak, overhanging the eaves). Every
+// non-vertical edge is 2:1 (2 across:1 down); faces rasterize column-by-column as solid
+// vertical fills → no anti-aliasing. Seasonal: WINTER caps up-facing roof/eaves in snow.
+// ---------------------------------------------------------------------------
+
+// translucent 2:1 diamond ground shadow (offset toward lower-right; light upper-left)
+function isoDiamondShadow(ctx, cx, cy, hw, hh, a) {
+    ctx.fillStyle = `rgba(12,16,12,${a})`;
+    for (let dy = -hh; dy <= hh; dy++) {
+        const half = Math.round(hw * (1 - Math.abs(dy) / hh));
+        if (half < 1) continue;
+        ctx.fillRect(cx - half, cy + dy, half * 2, 1);
+    }
+}
+// scanline a triangle by COLUMNS, calling cb(x, yTop, yBot) per column (solid spans, no AA)
+function isoTriSpan(p1, p2, p3, cb) {
+    const xs = [p1[0], p2[0], p3[0]], x0 = Math.min(...xs), x1 = Math.max(...xs);
+    const edges = [[p1, p2], [p2, p3], [p3, p1]];
+    for (let x = x0; x <= x1; x++) {
+        let lo = Infinity, hi = -Infinity;
+        for (const [[ax, ay], [bx, by]] of edges) {
+            if (ax === bx) { if (x === ax) { lo = Math.min(lo, ay, by); hi = Math.max(hi, ay, by); } continue; }
+            if (x >= Math.min(ax, bx) && x <= Math.max(ax, bx)) {
+                const y = ay + (by - ay) * (x - ax) / (bx - ax);
+                lo = Math.min(lo, y); hi = Math.max(hi, y);
+            }
+        }
+        if (lo <= hi) cb(x, Math.round(lo), Math.round(hi));
+    }
+}
+// 1px 2:1-aware edge line via integer DDA (no AA)
+function isoEdge(ctx, a, b, col) {
+    const dx = b[0] - a[0], dy = b[1] - a[1], n = Math.max(Math.abs(dx), Math.abs(dy)) || 1;
+    ctx.fillStyle = col;
+    for (let i = 0; i <= n; i++) ctx.fillRect(Math.round(a[0] + dx * i / n), Math.round(a[1] + dy * i / n), 1, 1);
+}
+// ---- §6a.4 curved-plan helpers (round forms) — stepped (manually aliased), never ctx.arc ----
+// filled 2:1 ellipse (a round cap/base seen from above); stepped rows, no AA
+function isoEllipseFill(ctx, cx, cy, hw, hh, col) {
+    ctx.fillStyle = col;
+    for (let dy = -hh; dy <= hh; dy++) {
+        const half = Math.round(hw * Math.sqrt(Math.max(0, 1 - (dy / hh) * (dy / hh))));
+        if (half < 1) continue;
+        ctx.fillRect(cx - half, cy + dy, half * 2, 1);
+    }
+}
+// 3-BAND cylinder body between a top ellipse (centre cyTop) and bottom ellipse (centre cyBot),
+// half-width hw, ellipse half-height hh. Vertical fills; tone steps by horizontal position
+// (LIT left band → mid → core-SHADOW right band, +bright/dark edges for roundness). ramp = 5-tone.
+function isoCylinderBody(ctx, cx, cyTop, cyBot, hw, hh, ramp) {
+    for (let x = cx - hw; x <= cx + hw; x++) {
+        const dx = (x - cx) / hw;
+        const ey = Math.round(hh * Math.sqrt(Math.max(0, 1 - dx * dx)));   // front-arc offset at this column
+        const yTop = cyTop + ey, yBot = cyBot + ey;
+        const idx = dx < -0.66 ? 4 : dx < -0.2 ? 3 : dx < 0.33 ? 2 : dx < 0.72 ? 1 : 0;   // lit-left → shadow-right
+        ctx.fillStyle = ramp[idx];
+        ctx.fillRect(x, yTop, 1, yBot - yTop + 1);
+    }
+}
+// CONE cap (windmill/tower/canopy) — radial courses converging on the apex; tone by band,
+// stepped. baseCy = centre y of the base ellipse, apexY above it; ramp = 5-tone.
+function isoConeCap(ctx, cx, baseCy, hw, hh, apexY, ramp) {
+    for (let x = cx - hw; x <= cx + hw; x++) {
+        const dx = (x - cx) / hw;
+        const ey = Math.round(hh * Math.sqrt(Math.max(0, 1 - dx * dx)));   // base front-arc at this column
+        const yBase = baseCy + ey;
+        const idx = dx < -0.5 ? 4 : dx < 0 ? 3 : dx < 0.5 ? 2 : dx < 0.8 ? 1 : 0;
+        ctx.fillStyle = ramp[idx];
+        ctx.fillRect(x, apexY, 1, yBase - apexY + 1);                      // radial run apex → rim
+    }
+    // a couple of stepped ridge courses (concentric) for texture
+    ctx.fillStyle = ramp[1];
+    for (let r = 0.4; r < 1; r += 0.3) {
+        for (let x = cx - Math.round(hw * r); x <= cx + Math.round(hw * r); x++) {
+            const dx = (x - cx) / (hw * r);
+            const ey = Math.round(hh * r * Math.sqrt(Math.max(0, 1 - dx * dx)));
+            ctx.fillRect(x, Math.round(apexY + (baseCy - apexY) * r) + ey, 1, 1);
+        }
+    }
+}
+// CURVED-STONE COURSES (§6a.4 texture convention for stone cylinders — silo/tower/well/
+// windmill): coursed-masonry lines that BOW with the 2:1 curvature (sag toward the viewer
+// at centre so they read as rings on a round body, not straight bands) + staggered vertical
+// block joints (brickwork offset). Rides ON the 3-band shading — thin mortar lines only, so
+// the lit/mid/shadow structure stays intact. hwAt(y) = half-width at level y (supports taper).
+function curvedStoneCourses(ctx, cx, yTop, yBot, hwAt, mortar, litLip) {
+    let ci = 0;
+    for (let yl = yBot - 2; yl >= yTop + 3; yl -= 5, ci++) {
+        const hw = hwAt(yl), ehh = Math.min(3, Math.max(1, Math.round(hw * 0.4)));
+        for (let x = cx - hw + 1; x <= cx + hw - 1; x++) {
+            const dx = (x - cx) / hw, bow = Math.round(ehh * (1 - Math.sqrt(Math.max(0, 1 - dx * dx))));
+            ctx.fillStyle = mortar; ctx.fillRect(x, yl - bow, 1, 1);                        // course seam (bows down at centre)
+            if (litLip && x < cx) { ctx.fillStyle = litLip; ctx.fillRect(x, yl - bow - 1, 1, 1); }  // faint lit lip above, on the lit half only
+        }
+        const stag = (ci % 2) * 3;                                                          // brickwork offset per course
+        for (let jx = cx - hw + 3 + stag; jx < cx + hw - 2; jx += 6) {
+            const dx = (jx - cx) / hw, bow = Math.round(ehh * (1 - Math.sqrt(Math.max(0, 1 - dx * dx))));
+            ctx.fillStyle = mortar; ctx.fillRect(jx, yl - bow - 4, 1, 4);                   // vertical block joint up to the next course
+        }
+    }
+}
+// rounded BOULDER / stacked stone (mythical monument) — layered offset ellipses, lit UL,
+// lichen fleck (deterministic by seed). ramp = 5-tone warm stone.
+function boulder(ctx, cx, cy, rx, ry, ramp, seed) {
+    const OL = RAMPS.OUTLINE.warm, F = RAMPS.FOLIAGE;
+    const ell = (ox, oy, rrx, rry, col) => {
+        if (rrx < 1 || rry < 1) return;
+        for (let dy = -rry; dy <= rry; dy++) {
+            const half = Math.round(rrx * Math.sqrt(Math.max(0, 1 - (dy / rry) * (dy / rry))));
+            if (half < 1) continue;
+            ctx.fillRect(Math.round(cx + ox - half), Math.round(cy + oy + dy), half * 2, 1);
+        }
+    };
+    ctx.fillStyle = OL;      ell(0, 0, rx + 1, ry + 1, OL);                                   // outline
+    ctx.fillStyle = ramp[2]; ell(0, 0, rx, ry, ramp[2]);                                      // base
+    ctx.fillStyle = ramp[1]; ell(Math.round(rx * 0.24), Math.round(ry * 0.3), rx - 1, ry - 1, ramp[1]);   // lower-right shade
+    ctx.fillStyle = ramp[3]; ell(-Math.round(rx * 0.28), -Math.round(ry * 0.32), Math.round(rx * 0.6), Math.round(ry * 0.55), ramp[3]);  // lit cap
+    ctx.fillStyle = ramp[4]; ell(-Math.round(rx * 0.34), -Math.round(ry * 0.44), Math.max(1, Math.round(rx * 0.34)), Math.max(1, Math.round(ry * 0.32)), ramp[4]);  // hot cap
+    ctx.fillStyle = shade(OL, 0.9); ctx.fillRect(cx - rx + 1, cy + ry, rx * 2 - 2, 1);        // base contact AO
+    const h = ((seed * 2654435761) >>> 0);                                                    // deterministic lichen
+    ctx.fillStyle = F[3]; ctx.fillRect(cx - Math.round(rx * 0.3) + (h % 3), cy + Math.round(ry * 0.15), 1, 1);
+    ctx.fillStyle = F[5]; ctx.fillRect(cx + Math.round(rx * 0.15) - (h % 2), cy - Math.round(ry * 0.05), 1, 1);
+}
+// a soft mystic glow halo (translucent, stepped) — an FX layer, like the tower orb / cast shadow
+function mysticHalo(ctx, cx, cy, r, a, rgb) {
+    ctx.fillStyle = `rgba(${rgb},${a})`;
+    for (let dy = -r; dy <= r; dy++) {
+        const half = Math.round(r * Math.sqrt(Math.max(0, 1 - (dy / r) * (dy / r))));
+        if (half < 1) continue;
+        ctx.fillRect(cx - half, cy + dy, half * 2, 1);
+    }
+}
+
+// A warm-shifted CACHED ramp (for FALL) — pure hue rotation toward amber + a small
+// value/sat lift, per tone. NOT an alpha overlay (that would blend colours + break the
+// solid-fill/no-AA palette discipline); this stays a set of authored solid tones. Pure.
+function warmRamp(ramp, deg, satF, valF) {
+    return ramp.map(hex => {
+        const [r, g, b] = _hexToRgb(hex);
+        let [h, s, l] = _rgbToHsl(r, g, b);
+        h = _hueToward(h, 32, deg); s = Math.min(1, s * satF); l = Math.min(1, l * valF);
+        const [R2, G2, B2] = _hslToRgb(h, s, l);
+        return _rgbToHex(R2, G2, B2);
+    });
+}
+
+// POC (corrected, §6a/§6b): the CHICKEN COOP in the iso plane, per season. A 2:1 diamond
+// footprint, two receding wall faces (front-left LIT / front-right SHADOW) at a near
+// vertical corner, and a hip roof from above (two planes → apex, overhanging), with a
+// crisp lower-RIGHT diamond shadow, shingle COURSES (not checker), a committed light
+// split, framed openings, a warm cached FALL ramp, and rounded WINTER snow. Cached per
+// season. Exemplars: ALttP/Harvest Moon/Stardew ¾ coops + Landstalker box geometry.
+const _coopIso = {};
+export function makeCoopIso(season = 'SUMMER') {
+    if (_coopIso[season]) return _coopIso[season];
+    const [c, ctx] = makeCanvas(48, 46);
+    const winter = season === 'WINTER', fall = season === 'FALL';
+    // FALL = warmer CACHED ramps (fix #4); other seasons use the base ramps
+    const P = fall ? warmRamp(RAMPS.PLANK, 12, 1.05, 1.05) : RAMPS.PLANK;
+    const R = fall ? warmRamp(RAMPS.ROOF_RED, 16, 1.04, 1.06) : RAMPS.ROOF_RED;
+    const OL = RAMPS.OUTLINE.brown, F = RAMPS.FOLIAGE;
+    const corner = '#cdb890';                              // value accent in the wood family (fix #5 — not gold)
+    const cx = 24, gy = 32, hw = 20, hh = 10, wallH = 14, roofH = 10;   // peak dropped (fix #9)
+    const L = [cx - hw, gy], Rr = [cx + hw, gy], Fr = [cx, gy + hh];
+    const Lp = [cx - hw, gy - wallH], Rp = [cx + hw, gy - wallH], Fp = [cx, gy + hh - wallH];
+    const RL = [cx - hw - 2, gy - wallH + 1], RR = [cx + hw + 2, gy - wallH + 1], RF = [cx, gy + hh - wallH + 2];
+    const Pk = [cx, gy - wallH - roofH];
+
+    // ---- CAST SHADOW: crisp 2:1 diamond, two stacked layers (~0.28), offset lower-RIGHT (fix #1) ----
+    isoDiamondShadow(ctx, cx + 3, gy + 2, hw, hh, 0.14);
+    isoDiamondShadow(ctx, cx + 2, gy + 2, hw - 3, hh - 1, 0.18);
+
+    // ---- WALLS: committed light split (fix #3) — front-left LIT (+1), front-right SHADOW (−2) ----
+    const wallFace = (gA, gB, tone, seam) => {
+        const x0 = Math.min(gA[0], gB[0]), x1 = Math.max(gA[0], gB[0]);
+        for (let x = x0; x <= x1; x++) {
+            const t = (x - gA[0]) / (gB[0] - gA[0]);
+            const yb = Math.round(gA[1] + (gB[1] - gA[1]) * t), yt = yb - wallH;
+            ctx.fillStyle = tone; ctx.fillRect(x, yt, 1, wallH);
+            ctx.fillStyle = shade(tone, 0.82); ctx.fillRect(x, yb - 1, 1, 1);      // base AO
+            if ((x - x0) % 5 === 2) { ctx.fillStyle = seam; ctx.fillRect(x, yt + 1, 1, wallH - 2); }
+        }
+    };
+    wallFace(L, Fr, P[3], P[2]);      // front-left LIT
+    wallFace(Fr, Rr, P[1], P[0]);     // front-right SHADOW (2 full steps down, seams too)
+
+    // ---- ROOF: two planes, shingle COURSES (fix #2), plane split under the texture ----
+    const roofPlane = (a, b, base, snowTone, snowLit) => isoTriSpan(a, b, Pk, (x, yt, yb) => {
+        for (let y = yt; y <= yb; y++) {
+            const above = yb - y, course = Math.floor(above / 3);
+            let col = base;
+            if (above % 3 === 2) col = shade(base, 0.8);                          // course seam — a 2:1 line parallel to the eave
+            else if ((x + course * 2) % 4 === 0) col = shade(base, 0.9);          // offset shingle divisions (half-course brickwork)
+            ctx.fillStyle = col; ctx.fillRect(x, y, 1, 1);
+        }
+        ctx.fillStyle = shade(base, 1.14); ctx.fillRect(x, yt, 1, 1);             // ridge-lit top
+        ctx.fillStyle = shade(base, 0.72); ctx.fillRect(x, yb, 1, 1);            // eave-shadow lip
+        if ((x * 7 + yt * 5) % 13 === 0 && yb - yt > 3) { ctx.fillStyle = shade(base, 1.1); ctx.fillRect(x, yt + 2, 1, 1); }   // sparse highlight
+        if (winter) {                                                            // snow on the upper band, itself lit/shadowed per plane
+            const cap = Math.max(1, Math.round((yb - yt) * 0.4));
+            for (let y = yt; y < yt + cap; y++) { ctx.fillStyle = snowTone; ctx.fillRect(x, y, 1, 1); }
+            ctx.fillStyle = snowLit; ctx.fillRect(x, yt, 1, 1);
+            ctx.fillStyle = shade(snowTone, 0.9); ctx.fillRect(x, yt + cap - 1, 1, 1);   // snow underside
+        }
+    });
+    roofPlane(RL, RF, R[3], '#eef4f4', '#ffffff');   // left plane LIT — snow warmer
+    roofPlane(RF, RR, R[1], '#dbe8ec', '#eef4f4');   // right plane SHADOW — snow cooler
+
+    // rounded apex cap + finial so the peak is never a bare point (fix #9); WINTER rounds it (fix #7)
+    ctx.fillStyle = shade(R[2], 1.12); ctx.fillRect(cx - 2, Pk[1] + 1, 4, 1);
+    ctx.fillStyle = R[3]; ctx.fillRect(cx - 1, Pk[1], 2, 1);
+    if (winter) { ctx.fillStyle = '#f4fafa'; ctx.fillRect(cx - 2, Pk[1], 4, 2); ctx.fillStyle = '#ffffff'; ctx.fillRect(cx - 1, Pk[1], 2, 1); }
+
+    // ---- eave-AO line (roof meets wall) + WINTER snow-ledge 1px above it, along BOTH eaves (fix #7) ----
+    isoEdge(ctx, RL, RF, shade(OL, 1.0)); isoEdge(ctx, RF, RR, shade(OL, 1.0));
+    if (winter) {
+        for (let x = RL[0]; x <= RF[0]; x++) { const t = (x - RL[0]) / (RF[0] - RL[0]); ctx.fillStyle = '#eef4f4'; ctx.fillRect(x, Math.round(RL[1] + (RF[1] - RL[1]) * t) - 1, 1, 1); }
+        for (let x = RF[0]; x <= RR[0]; x++) { const t = (x - RF[0]) / (RR[0] - RF[0]); ctx.fillStyle = '#dbe8ec'; ctx.fillRect(x, Math.round(RF[1] + (RR[1] - RF[1]) * t) - 1, 1, 1); }
+    }
+
+    // ---- near vertical CORNER edge (value accent, wood family) ----
+    isoEdge(ctx, Fp, Fr, corner);
+
+    // ---- DOOR on the front-left LIT wall: bottom ON the base 2:1 line, top follows the slope, lit jambs (fix #6) ----
+    for (let x = 12; x <= 19; x++) {
+        const t = (x - L[0]) / (Fr[0] - L[0]);
+        const yb = Math.round(gy + (Fr[1] - gy) * t);
+        const jamb = (x === 12 || x === 19);
+        ctx.fillStyle = jamb ? shade(P[3], 1.08) : '#1c1510';
+        ctx.fillRect(x, yb - 9, 1, jamb ? 9 : 8);
+    }
+    // ---- WINDOW on the front-right SHADOW wall: 1px wood frame + blue-grey panes + one glint, no orphans (fix #6) ----
+    for (let x = 30; x <= 35; x++) {
+        const t = (x - Fr[0]) / (Rr[0] - Fr[0]);
+        const yb = Math.round((gy + hh) + (gy - (gy + hh)) * t), top = yb - 10;
+        if (x === 30 || x === 35) { ctx.fillStyle = shade(P[1], 1.14); ctx.fillRect(x, top, 1, 6); continue; }
+        ctx.fillStyle = shade(P[1], 1.14); ctx.fillRect(x, top, 1, 1); ctx.fillRect(x, top + 5, 1, 1);   // frame top+sill
+        ctx.fillStyle = winter ? '#bcd4dc' : RAMPS.GLASS[1]; ctx.fillRect(x, top + 1, 1, 2);              // upper panes
+        ctx.fillStyle = winter ? '#a9c4ce' : RAMPS.GLASS[0]; ctx.fillRect(x, top + 3, 1, 2);              // lower panes (shadow)
+    }
+    { const x = 31, t = (x - Fr[0]) / (Rr[0] - Fr[0]), yb = Math.round((gy + hh) + (gy - (gy + hh)) * t);
+      ctx.fillStyle = winter ? '#e8f4f8' : RAMPS.GLASS[2]; ctx.fillRect(x, yb - 9, 1, 1); }               // single glint / frost
+
+    // ---- silhouette outline (crisp box; clean overhang wedges, fix #8) ----
+    isoEdge(ctx, L, Fr, OL); isoEdge(ctx, Fr, Rr, OL);          // wall bottoms
+    isoEdge(ctx, L, RL, OL); isoEdge(ctx, Rr, RR, OL);          // outer side edges (wall → roof overhang tip)
+    isoEdge(ctx, RL, Pk, OL); isoEdge(ctx, Pk, RR, OL);         // roof ridges
+
+    // ---- FALL dry-leaf flecks near the eaves (deterministic: seeded by index, no rng) ----
+    if (fall) {
+        const leaves = [['#c9782a', 6, 26], ['#a8531e', 40, 26], ['#d89a34', 15, 30], ['#b8641a', 33, 31]];
+        for (const [col, lx, ly] of leaves) { ctx.fillStyle = col; ctx.fillRect(lx, ly, 1, 1); }
+    }
+
+    _coopIso[season] = c;
+    return c;
+}
+
+// makeCoopTD — the coop in TOP-DOWN ¾ / FRONT-FACING projection (ALttP / Stardew /
+// Harvest Moon) — round 6: LOWER, FLATTER, GENUINELY OBLIQUE. Round 5 passed the
+// flip-test checklist on paper (horizontal ridge, low widest eave, 2px overhang)
+// but the reviewer still read a tall bilaterally-symmetric pyramid seen HEAD-ON:
+// the topmost rows sat near the sprite's center axis, the hip form kept two
+// mirror-ish flanker wedges, and the roof band ran 30 rows (~65%) — a TENT, not
+// a roof slab seen from above AND from an angle. Round 6 reworks the MASSING,
+// the reviewer's items 1–5 in order:
+//   (1) SYMMETRY KILLED STRUCTURALLY — the LEFT hip wedge is DELETED: the broad
+//       lit front slope runs all the way out to the left silhouette rake, one
+//       LONG SHALLOW diagonal (16px of run over 21 rows — the dominant plane's
+//       own foreshortened edge), while the RIGHT hip-end survives as the single
+//       visible SIDE PLANE: a narrow FLAT SHADED sliver behind a steep short
+//       rake (8px of run). Ridge (14px, x21..34, center 27.5) sits 4px RIGHT of
+//       the eave center (23.5). Two genuinely different edges + ONE visible
+//       side facet = "a roof seen at an angle", structurally not a pyramid.
+//   (2) FAR-SLOPE SLIVER over the top — 2 rows of the DARKEST roof tones
+//       (y8–9, skewed with the ridge) ABOVE the +1 bright ridge crease (y10):
+//       the topmost silhouette pixels are the BACK plane glimpsed over the top,
+//       dark — never the ridge highlight. Dark-above / bright-below = two
+//       planes at a crease, and the strip visually caps the height.
+//   (3) LOWER + FLATTER — roof band cut 30 → 25 rows (~61% of the y7..47
+//       silhouette, inside the 55–62% target): the top drops from y2 to y7,
+//       the ridge widens 12 → 14px, and the eave pulls in 1px/side (x5..42) so
+//       both rakes are GENTLER. Wall stays 12 rows (~29%, at the cap). A broad
+//       low slab you look down on, not a steep tent.
+//   (4) COURSE COMPRESSION — 2px pitch under the ridge OPENING to 3px at the
+//       eave (bottoms 12,14,16,18,21,24,27,30): the forward tilt made visible.
+//   (5) KEPT what worked — exact 2px overhang step per side, continuous 1px
+//       dark fascia at the eave, eave-AO whisper on the wall beneath it, short
+//       quiet wall with off-center openings, and the WINTER snow-load slab
+//       sitting on the top-facing plane (it helps the from-above read).
+// Surface light per §6a.3 (lit roof ≥ lit wall > shadow roof > shadow wall):
+// vertical ridge→eave grade on the dominant slope (never a left-to-right facade
+// gradient), a lit 1px left-rake edge, and a flat darkest right facet — red-on-
+// red variety comes from the grade + course lit-tops/undersides + seam ticks.
+// Pure fillRect, cached per season.
+// deterministic position hash → 0..1 (snow drifts / flecks; NEVER Math.random / Date). Pure.
+function _phash(a, b) {
+    let n = ((a * 73856093) ^ (b * 19349663)) >>> 0;
+    n ^= n >>> 15; n = (n * 2246822519) >>> 0; n ^= n >>> 13;
+    return (n % 1024) / 1024;
+}
+const _coopTD = {};
+export function makeCoopTD(season = 'SUMMER') {
+    if (_coopTD[season]) return _coopTD[season];
+    // Hand-authored oblique 3/4 pass. The prior loop kept reading as a SYMMETRIC
+    // TENT because the ridge was only 14px (37% of the eave) — a roof that tapers
+    // to a near-point is a triangle seen head-on. Fix: a BROAD ridge (27px, ~71%
+    // of the eave) so the near plane is a wide SLAB you look DOWN onto, plus a
+    // genuinely oblique/asymmetric read (long shallow LEFT rake = the dominant
+    // plane's own edge; short steep RIGHT rake with a darker SIDE facet = the roof
+    // turning away), a clean DARK far-slope sliver over the top, a bright ridge
+    // crease, and a low WIDE eave overhanging a short wall. Pure fillRect, cached.
+    const [c, ctx] = makeCanvas(48, 48);
+    const winter = season === 'WINTER', fall = season === 'FALL';
+    const P = fall ? warmRamp(RAMPS.PLANK, 12, 1.05, 1.05) : RAMPS.PLANK;
+    const R = fall ? warmRamp(RAMPS.ROOF_RED, 16, 1.04, 1.06) : RAMPS.ROOF_RED;
+    const W = fall ? warmRamp(RAMPS.WOOD, 12, 1.04, 1.05) : RAMPS.WOOD;
+    const G = RAMPS.GLASS, cx = 24;
+    const OLwall = outlineFor(P[1]), OLwood = outlineFor(W[1]), OLroof = outlineFor(R[1]);
+    const SNOW_DEEP = '#ffffff', SNOW_MID = '#eef4f4', SNOW_THIN = '#dbe8ec', SNOW_TINT = '#dfeaec';
+
+    // ---- grounding first (behind): fixed <=1-tile seat shadow ----
+    seatShadow(ctx, { cx, cy: 46, rx: 15, ry: 3 }, { alpha: 0.30 });
+
+    // ---- GEOMETRY — a broad oblique roof slab over a short wall ----
+    const eaveY = 31, eaveL = 5, eaveR = 42;                                        // the WIDEST low line (38px, ~63% down)
+    const wx0 = 8, wx1 = 39, wy0 = 32, wy1 = 44, ww = wx1 - wx0 + 1, wh = wy1 - wy0 + 1;   // short wall 32x13; eave overhangs 3px/side
+    const ridgeY = 11, ridgeL = 14, ridgeR = 40;                                    // BROAD ridge (27px ~71% of eave — a slab, NOT a taper). center 27 = right of eave center 23.5 (oblique)
+    const farY0 = 8, farY1 = 10, farL = 17, farR = 38;                             // far-slope sliver: the back plane glimpsed over the top (dark, narrower than the ridge)
+    const lerp = (a, b, t) => a + (b - a) * t;
+    const tAt = (y) => (y - ridgeY) / (eaveY - ridgeY);                            // 0 at ridge -> 1 at eave
+    const lxAt = (y) => Math.round(lerp(ridgeL, eaveL, tAt(y)));                   // LEFT rake: long shallow (14->5, 9px) = the dominant plane's edge
+    const rxAt = (y) => Math.round(lerp(ridgeR, eaveR, tAt(y)));                   // RIGHT rake: short steep (40->42, 2px)
+    const hipAt = (y) => Math.round(lerp(ridgeR - 6, eaveR - 5, tAt(y)));         // hip crease: front plane | right SIDE facet
+
+    // ---- FRONT WALL (short footer; drawn first so the eave slab overhangs it) ----
+    ctx.fillStyle = OLwall; ctx.fillRect(wx0 - 1, wy0, ww + 2, wh + 1);
+    ctx.fillStyle = P[2]; ctx.fillRect(wx0, wy0, ww, wh);
+    ctx.fillStyle = P[3]; ctx.fillRect(wx0, wy0, 3, wh);                            // lit-left
+    ctx.fillStyle = P[1]; ctx.fillRect(wx1 - 5, wy0, 6, wh);                        // shadow-right (wider than lit — same 3/4 camera as the roof)
+    ctx.fillStyle = P[0]; ctx.fillRect(wx1 - 1, wy0, 2, wh);                        // 2px shadow side-reveal (never a receding wall)
+    for (const x of [wx0 + 24, wx0 + 28]) {                                        // plank seams, right of the openings — nothing mirrors
+        ctx.fillStyle = shade(P[1], 0.85); ctx.fillRect(x, wy0 + 2, 1, wh - 3);
+        ctx.fillStyle = shade(P[3], 1.05); ctx.fillRect(x + 1, wy0 + 2, 1, wh - 3);
+    }
+    ctx.fillStyle = W[1]; ctx.fillRect(wx0 - 1, wy1 - 1, ww + 2, 2);                // foundation sill
+    ctx.fillStyle = shade(W[2], 1.1); ctx.fillRect(wx0 - 1, wy1 - 1, ww + 2, 1);
+    ctx.fillStyle = OLwood; ctx.fillRect(wx0, wy1 + 1, ww, 1);                      // ground AO
+    if (winter) for (let x = wx0; x <= wx1; x++) if (_phash(x, 23) > 0.5) { ctx.fillStyle = _phash(x, 24) > 0.6 ? SNOW_TINT : SNOW_MID; ctx.fillRect(x, wy1 - 1, 1, 1); }
+    ctx.fillStyle = 'rgba(0,0,0,0.08)'; ctx.fillRect(wx0, wy0, ww, 2);              // eave-AO whisper under the overhang
+
+    // ---- ROOF ----
+    const courseBottoms = [13, 15, 17, 19, 22, 25, 28];                            // 2px pitch under the ridge OPENING to 3px at the eave (foreshortening)
+    const seam = new Set(courseBottoms);
+    const courseIdx = (y) => { let n = 0; for (const b of courseBottoms) if (b < y) n++; return n; };
+    const gradeAt = (y) => { const f = tAt(y); return f < 0.16 ? shade(R[3], 1.12) : f < 0.38 ? R[3] : f < 0.6 ? shade(R[3], 0.92) : f < 0.82 ? R[2] : shade(R[2], 0.9); };
+
+    // far-slope sliver (dark, above the ridge) — the top of the silhouette is the BACK plane, never a bright cap
+    for (let y = farY0; y <= farY1; y++) {
+        const inset = y - farY0, a = farL + inset, b = farR - inset;
+        ctx.fillStyle = y === farY1 ? shade(R[1], 0.92) : R[0];
+        ctx.fillRect(a, y, b - a + 1, 1);
+    }
+    ctx.fillStyle = OLroof; ctx.fillRect(farL - 1, farY0 - 1, (farR - farL) + 3, 1);   // dark silhouette cap over the top
+    ctx.fillStyle = R[0]; for (let x = farL + 2; x <= farR - 1; x += 4) if (_phash(x, 7) > 0.45) ctx.fillRect(x, farY1, 1, 1);   // sparse ticks on the far plane
+    ctx.fillStyle = shade(R[4], 1.06); ctx.fillRect(ridgeL, ridgeY, ridgeR - ridgeL + 1, 1);   // bright ridge crease between the two planes
+
+    for (let y = ridgeY + 1; y <= eaveY - 1; y++) {
+        const lx = lxAt(y), rx = rxAt(y), hip = hipAt(y);
+        const isBot = seam.has(y), isLitTop = seam.has(y - 1), ci = courseIdx(y);
+        for (let x = lx; x <= rx; x++) {
+            let col;
+            if (x > hip) { col = tAt(y) > 0.55 ? shade(R[1], 0.9) : R[1]; }         // right SIDE facet — flat darker, the roof turning away (one visible side plane)
+            else {
+                col = gradeAt(y);                                                  // dominant front plane: vertical ridge->eave grade
+                if (!isBot && ((x + (ci % 2) * 3) % 6 === 0)) col = shade(col, 0.95);   // half-offset shingle seams
+                if (isBot) col = shade(col, 0.88); else if (isLitTop) col = shade(col, 1.05);
+            }
+            ctx.fillStyle = col; ctx.fillRect(x, y, 1, 1);
+        }
+        ctx.fillStyle = shade(R[1], 0.85); ctx.fillRect(hip, y, 1, 1);              // the single hip crease (front|side) — no mirror twin
+        ctx.fillStyle = shade(R[3], 1.08); ctx.fillRect(lx, y, 1, 1);              // lit LEFT rake edge (upper-left light on the dominant plane's own edge)
+        ctx.fillStyle = OLroof; ctx.fillRect(lx - 1, y, 1, 1); ctx.fillRect(rx + 1, y, 1, 1);   // silhouette rakes: long-shallow left, short-steep right
+    }
+    // EAVE — widest row: dark fascia (slab edge) + 3px overhang step per side
+    ctx.fillStyle = shade(R[1], 0.85); ctx.fillRect(eaveL, eaveY, eaveR - eaveL + 1, 1);
+    ctx.fillStyle = OLroof; ctx.fillRect(eaveL - 1, eaveY, 1, 1); ctx.fillRect(eaveR + 1, eaveY, 1, 1);
+    ctx.fillStyle = OLroof; ctx.fillRect(eaveL, eaveY + 1, wx0 - eaveL, 1); ctx.fillRect(wx1 + 1, eaveY + 1, eaveR - wx1, 1);   // overhang underside
+
+    // ---- WINTER snow slab on the near plane (far sliver stays dark; side facet sheds early) ----
+    if (winter) {
+        const step = 1 / (eaveY - ridgeY);
+        for (let y = ridgeY + 1; y <= eaveY - 1; y++) {
+            const lx = lxAt(y), rx = rxAt(y), hip = hipAt(y), f = tAt(y);
+            for (let x = lx; x <= rx; x++) {
+                const onSide = x > hip;
+                const reach = (onSide ? 0.5 : 0.74) + _phash(x >> 1, 3) * 0.10;
+                if (f > reach) { if (f - step <= reach) { ctx.fillStyle = 'rgba(0,0,0,0.10)'; ctx.fillRect(x, y, 1, 1); } continue; }
+                ctx.fillStyle = onSide ? SNOW_THIN : (f < 0.28 ? SNOW_DEEP : f < 0.55 ? SNOW_MID : SNOW_THIN);
+                ctx.fillRect(x, y, 1, 1);
+                if (seam.has(y) && f >= 0.28 && !onSide) { ctx.fillStyle = 'rgba(0,0,0,0.07)'; ctx.fillRect(x, y, 1, 1); }
+            }
+            ctx.fillStyle = 'rgba(70,40,52,0.35)'; ctx.fillRect(hip, y, 1, 1);      // hip crease persists through the snow
+        }
+        ctx.fillStyle = SNOW_DEEP; ctx.fillRect(ridgeL, ridgeY, ridgeR - ridgeL + 1, 1);   // bright ridge; the dark far sliver stays above it (no white cap)
+    }
+
+    // ---- one small WINDOW under the roof, pushed LEFT of center ----
+    { const x = 11, y = 35, sz = 6, gx = x + 1, gy = y + 1, gs = 4;
+      ctx.fillStyle = OLwood; ctx.fillRect(x - 1, y - 1, sz + 2, sz + 2);
+      ctx.fillStyle = W[2]; ctx.fillRect(x, y, sz, sz);
+      ctx.fillStyle = shade(W[3], 1.06); ctx.fillRect(x, y, 1, sz);
+      ctx.fillStyle = shade(W[1], 0.9); ctx.fillRect(x + sz - 1, y, 1, sz);
+      ctx.fillStyle = shade(W[3], 1.1); ctx.fillRect(x, y, sz, 1);
+      ctx.fillStyle = winter ? '#b6cdd6' : G[1]; ctx.fillRect(gx, gy, gs, gs);
+      ctx.fillStyle = winter ? '#a2bcc6' : G[0]; ctx.fillRect(gx, gy + 3, gs, gs - 3);
+      ctx.fillStyle = W[1]; ctx.fillRect(gx + 2, gy, 1, gs); ctx.fillRect(gx, gy + 2, gs, 1);
+      ctx.fillStyle = winter ? '#e8f4f8' : G[2]; ctx.fillRect(gx + 1, gy + 1, 1, 1);
+      ctx.fillStyle = 'rgba(0,0,0,0.12)'; ctx.fillRect(x, y + sz, sz, 1);
+      if (winter) { for (let k = 0; k < sz; k++) { const up = _phash(x + k, 17) > 0.62 ? 1 : 0; ctx.fillStyle = SNOW_MID; ctx.fillRect(x + k, y - 1 - up, 1, 1 + up); } ctx.fillStyle = SNOW_DEEP; ctx.fillRect(x + 1, y - 1, 2, 1); }
+    }
+
+    // ---- DOOR (recessed pop-hole), bottom on the ground line, left of center ----
+    ctx.fillStyle = OLwood; ctx.fillRect(20, 35, 9, 9);
+    ctx.fillStyle = '#241c18'; ctx.fillRect(21, 36, 7, 8);
+    ctx.fillStyle = shade(W[2], 1.08); ctx.fillRect(20, 35, 9, 1);
+    ctx.fillStyle = shade(P[3], 1.06); ctx.fillRect(21, 36, 1, 8);
+    ctx.fillStyle = shade(W[1], 0.85); ctx.fillRect(24, 36, 1, 8);
+    ctx.fillStyle = shade(W[3], 1.1); ctx.fillRect(26, 40, 1, 1);
+    ctx.fillStyle = 'rgba(0,0,0,0.13)'; ctx.fillRect(20, 44, 9, 1);
+    if (winter) { for (let k = 0; k < 9; k++) { const up = _phash(20 + k, 19) > 0.6 ? 1 : 0; ctx.fillStyle = SNOW_MID; ctx.fillRect(20 + k, 34 - up, 1, 1 + up); } for (let k = 0; k < 9; k++) if (_phash(20 + k, 21) > 0.5) { ctx.fillStyle = SNOW_TINT; ctx.fillRect(20 + k, 44, 1, 1); } }
+
+    // ---- GROUNDING scuff at the foundation ----
+    const scuff = (x, col) => { ctx.fillStyle = col; ctx.fillRect(x, 43, 1, 2); ctx.fillRect(x - 1, 44, 1, 1); ctx.fillRect(x + 1, 44, 1, 1); };
+    if (winter) { scuff(10, SNOW_MID); scuff(38, SNOW_MID); ctx.fillStyle = SNOW_TINT; ctx.fillRect(15, 45, 18, 1); }
+    else {
+        const gA = fall ? '#7d6a2c' : RAMPS.FOLIAGE[4], gB = fall ? '#5f5322' : RAMPS.FOLIAGE[3];
+        scuff(10, gA); scuff(14, gB); scuff(36, gB); scuff(38, gA);
+        ctx.fillStyle = shade(W[1], 0.9); for (let x = 16; x <= 30; x++) if (_phash(x, 31) > 0.55) ctx.fillRect(x, 45, 1, 1);
+    }
+
+    // ---- FALL dry-leaf flecks near the eave ----
+    if (fall) for (const [col, lx, ly] of [['#c9782a', 8, 30], ['#a8531e', 40, 30], ['#d89a34', 15, 29], ['#b8641a', 35, 30]]) { ctx.fillStyle = col; ctx.fillRect(lx, ly, 1, 1); }
+
+    _coopTD[season] = c;
+    return c;
+}
+
+// GATE-3 POC · WELL (round, small) — validates §6a.4 curved-plan (3-band stone cylinder +
+// 2:1 ellipse rim/base caps), §6a.7 footprint→CONTAINER (a small well seated in a larger
+// seasonal ground patch) + silhouette shadow, and §6b snow on a round form. Cached per
+// season; pure fillRect. The grassy back seasons (green / autumn / snow) so it sits right.
+const _wellIso = {};
+export function makeWellIso(season = 'SUMMER') {
+    if (_wellIso[season]) return _wellIso[season];
+    const [c, ctx] = makeCanvas(40, 44);
+    const winter = season === 'WINTER', fall = season === 'FALL';
+    const S = RAMPS.STONE, WAT = RAMPS.WATER, OL = RAMPS.OUTLINE.warm, F = RAMPS.FOLIAGE;
+    const W = fall ? warmRamp(RAMPS.WOOD, 12, 1.04, 1.05) : RAMPS.WOOD;
+    const Rr = fall ? warmRamp(RAMPS.ROOF_RED, 16, 1.04, 1.06) : RAMPS.ROOF_RED;
+    const cx = 20;
+
+    // ---- CONTAINER: the seasonal ground patch (the grassy back) — bigger than the well (§6a.7) ----
+    const gnd = winter ? ['#b6c6cc', '#d2dee2', '#eef4f4'] : fall ? ['#5a4028', '#79603f', '#94733f'] : ['#2d603d', '#3f7a34', '#4f9438'];
+    isoEllipseFill(ctx, cx, 37, 17, 8, gnd[0]);
+    isoEllipseFill(ctx, cx - 1, 36, 15, 7, gnd[1]);
+    isoEllipseFill(ctx, cx - 2, 35, 9, 4, gnd[2]);                     // lit upper-left patch
+    // seasonal ground flecks (deterministic: fixed positions, §6a.10)
+    const flecks = fall ? [['#c9782a', 6, 39], ['#a8531e', 30, 40], ['#d89a34', 13, 41]]
+        : winter ? [['#ffffff', 8, 39], ['#ffffff', 28, 40], ['#e8f0f2', 15, 41]]
+            : [['#e85888', 7, 39], ['#f0c838', 29, 40], ['#eef0f8', 14, 41]];
+    for (const [col, fx, fy] of flecks) { ctx.fillStyle = col; ctx.fillRect(fx, fy, 1, 1); }
+
+    // ---- cast shadow (sized to the SILHOUETTE, offset lower-right) ----
+    isoDiamondShadow(ctx, cx + 3, 38, 12, 6, 0.14);
+    isoDiamondShadow(ctx, cx + 2, 38, 9, 5, 0.18);
+
+    // ---- STONE RING cylinder body (3-band) + coursed masonry (§6a.4 curved-stone texture) ----
+    isoCylinderBody(ctx, cx, 22, 32, 9, 4, S);
+    curvedStoneCourses(ctx, cx, 24, 34, () => 9, S[0], S[4]);
+    // side outline + base contact
+    isoEdge(ctx, [cx - 9, 22], [cx - 9, 32], OL); isoEdge(ctx, [cx + 9, 22], [cx + 9, 32], OL);
+    isoEllipseFill(ctx, cx, 33, 9, 4, 'rgba(12,16,12,0.0)');           // (base seat handled by shadow)
+    ctx.fillStyle = shade(OL, 0.95); for (let x = cx - 8; x <= cx + 8; x++) { const dx = (x - cx) / 9, ey = Math.round(4 * Math.sqrt(Math.max(0, 1 - dx * dx))); ctx.fillRect(x, 32 + ey, 1, 1); }
+
+    // ---- top RIM (2:1 ellipse of stone) + water / ice ----
+    isoEllipseFill(ctx, cx, 22, 9, 4, S[3]);                           // rim stone (up-facing → lit)
+    isoEllipseFill(ctx, cx - 1, 21, 6, 3, S[4]);                       // lit upper-left of the rim
+    ctx.fillStyle = OL; for (let dy = -4; dy <= 4; dy++) { const half = Math.round(9 * Math.sqrt(Math.max(0, 1 - (dy / 4) * (dy / 4)))); if (half < 1) continue; ctx.fillRect(cx - half, 22 + dy, 1, 1); ctx.fillRect(cx + half - 1, 22 + dy, 1, 1); }  // rim outline ring
+    isoEllipseFill(ctx, cx, 22, 6, 3, winter ? '#c2d4da' : WAT[1]);    // water (ice in winter)
+    isoEllipseFill(ctx, cx - 1, 21, 3, 2, winter ? '#dfeced' : WAT[3]); // water/ice highlight
+    if (winter) { ctx.fillStyle = '#eef4f4'; for (let dy = -4; dy <= 4; dy++) { const half = Math.round(9 * Math.sqrt(Math.max(0, 1 - (dy / 4) * (dy / 4)))); if (half < 3) continue; ctx.fillRect(cx - half, 22 + dy - 1, 1, 1); ctx.fillRect(cx + half - 1, 22 + dy - 1, 1, 1); } }  // snow on the rim ledge
+
+    // ---- posts + a small hip CANOPY (roof fraction modest on this short body) ----
+    ctx.fillStyle = W[1]; ctx.fillRect(10, 12, 2, 9); ctx.fillRect(28, 12, 2, 9);
+    ctx.fillStyle = W[2]; ctx.fillRect(10, 12, 1, 9); ctx.fillRect(28, 12, 1, 9);        // lit post edges
+    const RL = [8, 12], RRt = [32, 12], RF = [cx, 16], Pk = [cx, 3];
+    const canopy = (a, b, base) => isoTriSpan(a, b, Pk, (x, yt, yb) => {
+        for (let y = yt; y <= yb; y++) { const above = yb - y; ctx.fillStyle = (above % 3 === 2) ? shade(base, 0.8) : base; ctx.fillRect(x, y, 1, 1); }
+        ctx.fillStyle = shade(base, 1.14); ctx.fillRect(x, yt, 1, 1);
+        if (winter) { const cap = Math.max(1, Math.round((yb - yt) * 0.4)); ctx.fillStyle = base === Rr[3] ? '#eef4f4' : '#dbe8ec'; ctx.fillRect(x, yt, 1, cap); ctx.fillStyle = '#ffffff'; ctx.fillRect(x, yt, 1, 1); }
+    });
+    canopy(RL, RF, Rr[3]); canopy(RF, RRt, Rr[1]);                     // lit + shadow canopy planes
+    ctx.fillStyle = shade(OL, 1.0); isoEdge(ctx, RL, RF, shade(OL, 1.0)); isoEdge(ctx, RF, RRt, shade(OL, 1.0));   // eave AO
+    isoEdge(ctx, RL, Pk, OL); isoEdge(ctx, Pk, RRt, OL);              // ridges
+    ctx.fillStyle = Rr[3]; ctx.fillRect(cx - 1, Pk[1], 2, 1);        // finial
+    if (winter) { ctx.fillStyle = '#f4fafa'; ctx.fillRect(cx - 1, Pk[1], 2, 2); }
+
+    _wellIso[season] = c;
+    return c;
+}
+
+// GATE-3 POC · WINDMILL (tall, round, animated) — validates §6a.5 height-decoupling (tall
+// body, roof/cap fraction ~20–25%), §6a.4 round 3-band tapered tower + iso CONE cap, and
+// §6a.9 SCREEN-FACING blades (the sanctioned era cheat). PRESERVATION MANDATE: the loved
+// animated sails are KEPT VERBATIM from makeWindmill — only the BODY moves into the iso
+// plane. Cached per (season, frame); pure fillRect. season affects only the wood/cap ramp.
+const _windmillIso = {};
+export function makeWindmillIso(season = 'SUMMER', frame = 0) {
+    const key = season + ':' + (frame | 0);
+    if (_windmillIso[key]) return _windmillIso[key];
+    const [c, ctx] = makeCanvas(44, 64);
+    const winter = season === 'WINTER', fall = season === 'FALL';
+    const S = RAMPS.STONE, OL = RAMPS.OUTLINE.warm;
+    const W = fall ? warmRamp(RAMPS.WOOD, 12, 1.04, 1.05) : RAMPS.WOOD;
+    const cx = 22, hubY = 20;
+
+    // cast shadow (silhouette-sized, offset lower-right)
+    isoDiamondShadow(ctx, cx + 4, 61, 13, 6, 0.16);
+    isoDiamondShadow(ctx, cx + 3, 61, 10, 5, 0.2);
+
+    // ---- ROUND 3-BAND tapered TOWER (row-based so it can taper: wider at the base) ----
+    const tTop = 24, tBot = 60, hwTop = 7, hwBot = 10;
+    for (let y = tTop; y <= tBot; y++) {
+        const hwY = Math.round(hwTop + (hwBot - hwTop) * (y - tTop) / (tBot - tTop));
+        for (let x = cx - hwY; x <= cx + hwY; x++) {
+            const dx = (x - cx) / hwY;
+            const idx = dx < -0.66 ? 4 : dx < -0.2 ? 3 : dx < 0.33 ? 2 : dx < 0.72 ? 1 : 0;
+            ctx.fillStyle = S[idx]; ctx.fillRect(x, y, 1, 1);
+        }
+    }
+    // coursed masonry (§6a.4 curved-stone texture) — bowing courses + staggered joints ride on the 3 bands
+    curvedStoneCourses(ctx, cx, tTop, tBot, (y) => Math.round(hwTop + (hwBot - hwTop) * (y - tTop) / (tBot - tTop)), S[0], S[4]);
+    // side outline + base front-arc
+    for (let y = tTop; y <= tBot; y++) { const hwY = Math.round(hwTop + (hwBot - hwTop) * (y - tTop) / (tBot - tTop)); ctx.fillStyle = OL; ctx.fillRect(cx - hwY, y, 1, 1); ctx.fillRect(cx + hwY, y, 1, 1); }
+    isoEllipseFill(ctx, cx, tBot, hwBot, 5, 'rgba(0,0,0,0)'); ctx.fillStyle = shade(OL, 0.95); for (let x = cx - hwBot; x <= cx + hwBot; x++) { const dx = (x - cx) / hwBot, ey = Math.round(5 * Math.sqrt(Math.max(0, 1 - dx * dx))); ctx.fillRect(x, tBot + ey, 1, 1); }
+
+    // door + window (recesses read on the round front)
+    ctx.fillStyle = S[4]; ctx.fillRect(cx - 4, 50, 8, 1);
+    recess(ctx, cx - 3, 51, 6, 9, '#171310', S[0]);
+    ctx.fillStyle = W[1]; ctx.fillRect(cx - 2, 52, 4, 8); ctx.fillStyle = shade(W[0], 0.9); ctx.fillRect(cx, 52, 1, 8);
+    recess(ctx, cx - 2, 38, 4, 4, '#161a20', S[0]); ctx.fillStyle = RAMPS.GLASS[1]; ctx.fillRect(cx - 2, 38, 4, 4); ctx.fillStyle = shade(RAMPS.GLASS[2], 1.2); ctx.fillRect(cx - 2, 38, 1, 1);
+
+    // ---- iso CONE cap (radial courses → apex), overhanging the tower top; winter snow-capped ----
+    isoConeCap(ctx, cx, 24, 9, 4, 9, W);
+    ctx.fillStyle = OL; for (let x = cx - 9; x <= cx + 9; x++) { const dx = (x - cx) / 9, ey = Math.round(4 * Math.sqrt(Math.max(0, 1 - dx * dx))); ctx.fillRect(x, 24 + ey, 1, 1); }   // eave rim
+    ctx.fillStyle = shade(W[3], 1.1); ctx.fillRect(cx - 1, 9, 2, 1);         // apex finial
+    if (winter) {
+        for (let x = cx - 8; x <= cx + 8; x++) { const dx = (x - cx) / 9, top = Math.round(9 + (24 - 9) * 0); const ey = Math.round(4 * Math.sqrt(Math.max(0, 1 - dx * dx)));
+            const yBase = 24 + ey, snow = Math.max(1, Math.round((yBase - 9) * 0.4));
+            ctx.fillStyle = dx < 0 ? '#eef4f4' : '#dbe8ec'; ctx.fillRect(x, 9, 1, snow); }
+        ctx.fillStyle = '#f4fafa'; ctx.fillRect(cx - 1, 9, 2, 2);            // rounded snow apex (never a cone hat)
+    }
+
+    // ---- SAILS (KEPT VERBATIM from makeWindmill — the loved screen-facing animation; §6a.9) ----
+    const cloth = '#e8e0d0', spar = W[1], sparHi = W[3];
+    const len = 18, baseAng = (frame | 0) * (Math.PI / 8);
+    for (let k = 0; k < 4; k++) {
+        const a = baseAng + k * (Math.PI / 2), dx = Math.cos(a), dy = Math.sin(a), nx = -dy, ny = dx;
+        for (let r = 2; r <= len; r += 0.5) {
+            ctx.fillStyle = spar; ctx.fillRect(Math.round(cx + dx * r), Math.round(hubY + dy * r), 1, 1);
+            ctx.fillStyle = sparHi; ctx.fillRect(Math.round(cx + dx * r + nx), Math.round(hubY + dy * r + ny), 1, 1);
+        }
+        for (let r = 4; r <= len; r += 0.5) {
+            const wsail = 1 + Math.floor((r / len) * 3);
+            for (let w = 1; w <= wsail; w++) { ctx.fillStyle = cloth; ctx.fillRect(Math.round(cx + dx * r + nx * w), Math.round(hubY + dy * r + ny * w), 1, 1); }
+            if (Math.round(r) % 3 === 0) { for (let w = 1; w <= wsail; w++) { ctx.fillStyle = shade(cloth, 0.82); ctx.fillRect(Math.round(cx + dx * r + nx * w), Math.round(hubY + dy * r + ny * w), 1, 1); } }
+        }
+        ctx.fillStyle = '#fffdf6'; ctx.fillRect(Math.round(cx + dx * len), Math.round(hubY + dy * len), 1, 1);
+    }
+    ctx.fillStyle = W[0]; ctx.fillRect(cx - 2, hubY - 2, 4, 4);
+    ctx.fillStyle = shade(W[2], 1.1); ctx.fillRect(cx - 2, hubY - 2, 2, 1);
+    ctx.fillStyle = '#2a2620'; ctx.fillRect(cx - 1, hubY - 1, 2, 2);
+
+    _windmillIso[key] = c;
+    return c;
+}
+
+// GATE-3 POC · MONUMENT (roofless, non-architectural) — validates §6a.7 silhouette shadow
+// (no roof) + §6b snow on LEDGES ONLY (a form with no roof planes). Folds in the halted
+// MYTHICAL redesign: NOT monolithic steel-gray sharp angles — ROUNDED mossy boulders +
+// a glowing GEM/orb marker. kind 'human' = warm mossy stone + cyan gem; 'orc' = ashen
+// boulders + BONES + a violet gem. Cached per (kind, season); pure fillRect.
+const _monIso = {};
+export function makeMonumentIso(kind = 'human', season = 'SUMMER') {
+    const key = kind + ':' + season;
+    if (_monIso[key]) return _monIso[key];
+    const [c, ctx] = makeCanvas(24, 30);
+    const winter = season === 'WINTER', orc = kind === 'orc';
+    const cx = 12;
+    const stone = orc ? ['#2a2824', '#3c3833', '#4e4842', '#635c54', '#7a7168'] : RAMPS.MOSS_STONE;
+    const gem = orc ? { d: '#3a1c4a', m: '#7a3a9a', l: '#b878d8', c: '#e8c0f8', rgb: '170,90,220' }
+        : { d: '#1c6e7a', m: '#2fb0c0', l: '#7fe0ec', c: '#d0f6fa', rgb: '120,230,245' };
+
+    // ---- cast shadow (silhouette diamond, offset lower-right; no roof, so from the stones) ----
+    isoDiamondShadow(ctx, cx + 3, 27, 9, 4, 0.16);
+    isoDiamondShadow(ctx, cx + 2, 27, 6, 3, 0.2);
+
+    // ---- stacked ROUNDED boulders (roofless mythical cairn) ----
+    const stack = [[8, 22, 5, 4], [16, 23, 4, 3], [11, 18, 5, 4], [12, 13, 4, 3]];
+    for (let i = 0; i < stack.length; i++) { const [bx, by, rx, ry] = stack[i]; boulder(ctx, bx, by, rx, ry, stone, i + 1); }
+
+    // ---- orc: BONES + a skull at the base ----
+    if (orc) {
+        const bone = '#d8d0bc', boneHi = '#efe8d4', boneLo = '#a89a80';
+        ctx.fillStyle = bone; ctx.fillRect(4, 15, 1, 8); ctx.fillRect(3, 14, 2, 1); ctx.fillRect(4, 23, 2, 1);   // a long bone leaning
+        ctx.fillStyle = boneHi; ctx.fillRect(4, 15, 1, 1);
+        ctx.fillStyle = bone; ctx.fillRect(18, 22, 3, 3); ctx.fillRect(19, 21, 1, 1);                            // skull lump
+        ctx.fillStyle = '#241c18'; ctx.fillRect(19, 23, 1, 1); ctx.fillRect(21, 23, 1, 1);                       // eye sockets
+        ctx.fillStyle = boneLo; ctx.fillRect(18, 24, 3, 1);
+    }
+
+    // ---- WINTER: snow on the up-facing TOP of each boulder (ledges only — no roof) ----
+    if (winter) {
+        for (const [bx, by, rx, ry] of stack) {
+            ctx.fillStyle = '#eef4f4';
+            for (let x = bx - Math.round(rx * 0.55); x <= bx + Math.round(rx * 0.35); x++) ctx.fillRect(x, by - ry, 1, 1);
+            ctx.fillStyle = '#ffffff'; ctx.fillRect(bx - Math.round(rx * 0.3), by - ry, 1, 1);
+        }
+    }
+
+    // ---- the glowing GEM / orb marker (enchanted; a soft pulsing glow is added in main.js) ----
+    const gx = 12, gy = 10, sz = 2;
+    mysticHalo(ctx, gx, gy, sz + 2, winter ? 0.16 : 0.13, gem.rgb);
+    mysticHalo(ctx, gx, gy, sz + 1, 0.22, gem.rgb);
+    for (let dy = -sz; dy <= sz; dy++) { const half = sz - Math.abs(dy); if (half < 0) continue; ctx.fillStyle = gem.m; ctx.fillRect(gx - half, gy + dy, half * 2 + 1, 1); }
+    ctx.fillStyle = gem.l; ctx.fillRect(gx - 1, gy - sz, 1, sz + 1);      // lit-left facet
+    ctx.fillStyle = gem.d; ctx.fillRect(gx + 1, gy, 1, sz);              // shadow-right facet
+    ctx.fillStyle = gem.c; ctx.fillRect(gx - 1, gy - 1, 1, 1);           // core
+    ctx.fillStyle = '#ffffff'; ctx.fillRect(gx - 1, gy - sz, 1, 1);      // spec glint
+
+    _monIso[key] = c;
+    return c;
+}
+
+// #85/#7d legend MEMORIAL SERIES — a stone raised where a raider fell, its GRANDEUR
+// scaling with the battle it marks (tier 1..5, stamped deterministically in farm.js):
+//   1 Cairn (rough stone pile) · 2 Marker Stone (obelisk + gold plaque — the clean stand)
+//   3 Sworded Stele (taller stone + planted blade + laurel — defenders wounded)
+//   4 Cenotaph (twin/stepped + broken shield & helm + scorched earth — heavy losses)
+//   5 War Barrow (mound + obelisk cluster + crossed shattered weapon + blackened ground)
+// Tiny-sprite discipline throughout: STONE ramp, lit-left/shadow-right, ground AO, reads
+// at 1×. Each tier cached once. All BASE-anchored (bottom row = ground) so main.js can
+// drop any tier on the same spot. (§1b)
+const _monuments = {};
+export function makeMonument(tier = 2) {
+    tier = Math.max(1, Math.min(5, tier | 0));
+    if (_monuments[tier]) return _monuments[tier];
+    const S = RAMPS.STONE, G = RAMPS.GRAIN, F = RAMPS.FOLIAGE, W = RAMPS.WOOD, OL = RAMPS.OUTLINE.warm;
+    const steel = '#8a94a2', steelHi = '#b6c0cc', steelLo = '#5a626e';   // muted weapon metal
+    let c, ctx;
+    // small lit-left / shadow-right stone block (top bevel + base AO)
+    const block = (x, y, w, h, idx) => {
+        ctx.fillStyle = OL; ctx.fillRect(x - 1, y, w + 2, h + 1);
+        ctx.fillStyle = S[idx]; ctx.fillRect(x, y, w, h);
+        ctx.fillStyle = shade(S[idx], 1.14); ctx.fillRect(x, y, w, 1);          // lit top bevel
+        ctx.fillStyle = shade(S[idx], 1.08); ctx.fillRect(x, y, 1, h);          // sunlit left
+        ctx.fillStyle = shade(S[idx], 0.82); ctx.fillRect(x + w - 1, y, 1, h);  // shadow right
+        ctx.fillStyle = shade(OL, 0.9); ctx.fillRect(x, y + h, w, 1);           // base AO
+    };
+
+    if (tier === 1) {                 // CAIRN — a low pile of rough field stones
+        [c, ctx] = makeCanvas(12, 14);
+        groundShadow(ctx, 6, 12, 5, 2, 0.3);
+        block(2, 8, 5, 4, 2); block(6, 9, 4, 3, 1); block(4, 5, 4, 4, 3); block(5, 2, 3, 3, 2);
+        ctx.fillStyle = F[3]; ctx.fillRect(3, 11, 1, 1); ctx.fillRect(8, 10, 1, 1);   // lichen flecks
+
+    } else if (tier === 2) {          // MARKER STONE — obelisk + gold plaque (the original sprite)
+        [c, ctx] = makeCanvas(12, 21);
+        const cx = 6;
+        groundShadow(ctx, cx, 19, 6, 2, 0.32);
+        ctx.fillStyle = OL;  ctx.fillRect(1, 14, 10, 5);
+        ctx.fillStyle = S[2]; ctx.fillRect(1, 15, 10, 3);
+        ctx.fillStyle = S[3]; ctx.fillRect(1, 15, 10, 1);
+        ctx.fillStyle = S[1]; ctx.fillRect(1, 17, 10, 1);
+        ctx.fillStyle = shade(OL, 0.9); ctx.fillRect(1, 18, 10, 1);
+        const sx0 = 3, sw = 6, sTop = 2, sBot = 14;
+        ctx.fillStyle = OL;   ctx.fillRect(sx0 - 1, sTop, sw + 2, sBot - sTop);
+        ctx.fillStyle = S[2]; ctx.fillRect(sx0, sTop, sw, sBot - sTop);
+        ctx.fillStyle = S[3]; ctx.fillRect(sx0, sTop, 2, sBot - sTop);
+        ctx.fillStyle = shade(S[4], 1.05); ctx.fillRect(sx0, sTop, 1, sBot - sTop);
+        ctx.fillStyle = S[1]; ctx.fillRect(sx0 + sw - 1, sTop, 1, sBot - sTop);
+        ctx.fillStyle = shade(S[2], 1.08); ctx.fillRect(sx0 + 1, sTop + 1, 3, 3);
+        ctx.fillStyle = shade(S[2], 0.9);  ctx.fillRect(sx0 + 2, sTop + 8, 3, 3);
+        ctx.fillStyle = S[0]; ctx.fillRect(sx0, sTop + 6, sw, 1);
+        ctx.fillStyle = shade(S[3], 1.08); ctx.fillRect(sx0, sTop + 7, sw, 1);
+        ctx.fillStyle = OL;  ctx.fillRect(cx - 3, 1, 6, 1);
+        ctx.fillStyle = S[3]; ctx.fillRect(cx - 2, 1, 4, 1);
+        ctx.fillStyle = shade(S[4], 1.1); ctx.fillRect(cx - 1, 0, 2, 1);
+        ctx.fillStyle = S[1]; ctx.fillRect(cx + 1, 1, 1, 1);
+        ctx.fillStyle = OL;  ctx.fillRect(cx - 3, 6, 6, 5);
+        ctx.fillStyle = G[1]; ctx.fillRect(cx - 2, 7, 4, 3);
+        ctx.fillStyle = G[3]; ctx.fillRect(cx - 2, 7, 4, 1);
+        ctx.fillStyle = G[4]; ctx.fillRect(cx - 2, 7, 2, 1);
+        ctx.fillStyle = shade(G[1], 0.82); ctx.fillRect(cx - 2, 9, 4, 1);
+        ctx.fillStyle = shade(G[0], 0.9); ctx.fillRect(cx - 1, 8, 2, 1);
+        ctx.fillStyle = '#fffdf6'; ctx.fillRect(cx - 2, 7, 1, 1);
+
+    } else if (tier === 3) {          // SWORDED STELE — taller stone + a blade planted point-down + laurel
+        [c, ctx] = makeCanvas(12, 24);
+        const cx = 6;
+        groundShadow(ctx, cx, 22, 6, 2, 0.32);
+        ctx.fillStyle = OL;  ctx.fillRect(1, 18, 10, 4);              // plinth
+        ctx.fillStyle = S[2]; ctx.fillRect(1, 19, 10, 2);
+        ctx.fillStyle = S[3]; ctx.fillRect(1, 19, 10, 1);
+        ctx.fillStyle = shade(OL, 0.9); ctx.fillRect(1, 21, 10, 1);
+        const sx0 = 3, sw = 6, sTop = 3, sBot = 18;                   // taller shaft
+        ctx.fillStyle = OL;   ctx.fillRect(sx0 - 1, sTop, sw + 2, sBot - sTop);
+        ctx.fillStyle = S[2]; ctx.fillRect(sx0, sTop, sw, sBot - sTop);
+        ctx.fillStyle = S[3]; ctx.fillRect(sx0, sTop, 2, sBot - sTop);
+        ctx.fillStyle = shade(S[4], 1.05); ctx.fillRect(sx0, sTop, 1, sBot - sTop);
+        ctx.fillStyle = S[1]; ctx.fillRect(sx0 + sw - 1, sTop, 1, sBot - sTop);
+        ctx.fillStyle = S[0]; ctx.fillRect(sx0, sTop + 7, sw, 1);     // seam
+        ctx.fillStyle = shade(S[2], 1.08); ctx.fillRect(sx0 + 1, sTop + 1, 3, 3);
+        ctx.fillStyle = OL;  ctx.fillRect(cx - 2, 1, 4, 2);           // rounded top
+        ctx.fillStyle = S[3]; ctx.fillRect(cx - 2, 2, 4, 1);
+        ctx.fillStyle = shade(S[4], 1.1); ctx.fillRect(cx - 1, 1, 2, 1);
+        // planted SWORD in front, point-down into the plinth (hilt up)
+        ctx.fillStyle = steelLo; ctx.fillRect(cx, 9, 1, 11);
+        ctx.fillStyle = steel;   ctx.fillRect(cx - 1, 9, 1, 11);
+        ctx.fillStyle = steelHi; ctx.fillRect(cx - 1, 9, 1, 6);       // lit upper blade
+        ctx.fillStyle = W[1]; ctx.fillRect(cx - 2, 7, 4, 1);          // crossguard (bronze/wood)
+        ctx.fillStyle = W[3]; ctx.fillRect(cx - 2, 7, 1, 1);
+        ctx.fillStyle = W[2]; ctx.fillRect(cx - 1, 4, 1, 3);          // grip
+        ctx.fillStyle = G[3]; ctx.fillRect(cx - 1, 3, 1, 1);          // pommel (gold)
+        // small laurel sprigs at the base
+        ctx.fillStyle = F[3]; ctx.fillRect(1, 16, 2, 1); ctx.fillRect(2, 15, 1, 1); ctx.fillRect(9, 16, 2, 1); ctx.fillRect(9, 15, 1, 1);
+        ctx.fillStyle = F[5]; ctx.fillRect(1, 16, 1, 1); ctx.fillRect(10, 16, 1, 1);
+
+    } else if (tier === 4) {          // CENOTAPH — twin/stepped memorial + broken shield & helm + scorched earth
+        [c, ctx] = makeCanvas(14, 22);
+        const cx = 7;
+        ctx.fillStyle = 'rgba(30,22,16,0.5)';                         // scorched-earth speckle
+        for (const [x, y] of [[1, 19], [3, 20], [11, 19], [12, 20], [5, 21], [9, 20], [2, 18]]) ctx.fillRect(x, y, 1, 1);
+        groundShadow(ctx, cx, 19, 7, 2, 0.32);
+        block(1, 15, 12, 3, 1); block(2, 12, 10, 3, 2);              // stepped base (2 courses)
+        block(3, 4, 3, 9, 3); block(8, 6, 3, 7, 2);                  // twin pillars (tall + short)
+        ctx.fillStyle = OL; ctx.fillRect(3, 2, 8, 1);                // lintel
+        ctx.fillStyle = S[3]; ctx.fillRect(3, 3, 8, 2);
+        ctx.fillStyle = shade(S[4], 1.1); ctx.fillRect(3, 3, 8, 1);
+        ctx.fillStyle = G[1]; ctx.fillRect(5, 3, 4, 1); ctx.fillStyle = G[3]; ctx.fillRect(5, 3, 2, 1);   // plaque
+        // broken shield at the foot-left (cracked, boss)
+        ctx.fillStyle = W[1]; ctx.fillRect(1, 16, 3, 3); ctx.fillStyle = W[2]; ctx.fillRect(1, 16, 2, 1);
+        ctx.fillStyle = steel; ctx.fillRect(2, 17, 1, 1);
+        ctx.fillStyle = OL; ctx.fillRect(2, 16, 1, 3);               // crack
+        // helm at the foot-right (visor slit)
+        ctx.fillStyle = steelLo; ctx.fillRect(10, 17, 3, 2); ctx.fillStyle = steel; ctx.fillRect(10, 16, 3, 1);
+        ctx.fillStyle = steelHi; ctx.fillRect(10, 16, 1, 1);
+        ctx.fillStyle = OL; ctx.fillRect(11, 17, 1, 2);
+
+    } else {                          // 5 · WAR BARROW — mound + obelisk cluster + crossed shattered weapon + blackened ground
+        [c, ctx] = makeCanvas(16, 24);
+        const cx = 8;
+        ctx.fillStyle = 'rgba(24,18,14,0.55)';                       // blackened ground
+        for (const [x, y] of [[1, 21], [3, 22], [5, 21], [7, 22], [9, 21], [11, 22], [13, 21], [14, 22], [2, 20], [12, 20]]) ctx.fillRect(x, y, 1, 1);
+        groundShadow(ctx, cx, 21, 8, 2, 0.34);
+        for (let dy = 0; dy < 5; dy++) { const hw = 7 - dy; ctx.fillStyle = W[1]; ctx.fillRect(cx - hw, 16 + dy, hw * 2, 1); }   // earth barrow mound
+        ctx.fillStyle = W[2]; ctx.fillRect(cx - 6, 16, 5, 1);        // lit mound crest
+        ctx.fillStyle = W[0]; ctx.fillRect(cx - 7, 20, 14, 1);       // mound base shadow
+        ctx.fillStyle = F[3]; ctx.fillRect(cx - 4, 16, 1, 1); ctx.fillRect(cx + 2, 17, 1, 1);   // grass tufts
+        block(1, 13, 2, 4, 1); block(13, 14, 2, 3, 1); block(4, 12, 2, 3, 2);   // small markers per life lost
+        block(cx - 2, 3, 4, 14, 2);                                  // central obelisk
+        ctx.fillStyle = shade(S[4], 1.05); ctx.fillRect(cx - 2, 3, 1, 14);
+        ctx.fillStyle = OL; ctx.fillRect(cx - 2, 1, 4, 2); ctx.fillStyle = S[3]; ctx.fillRect(cx - 1, 1, 2, 1);   // cap
+        // crossed SHATTERED weapons (broken swords, an X with a gap in the middle)
+        ctx.fillStyle = steel;
+        for (let d = 0; d < 6; d++) { if (d === 2 || d === 3) continue; ctx.fillRect(cx - 3 + d, 6 + d, 1, 1); ctx.fillRect(cx + 2 - d, 6 + d, 1, 1); }
+        ctx.fillStyle = steelHi; ctx.fillRect(cx - 3, 6, 1, 1); ctx.fillRect(cx + 2, 6, 1, 1);   // lit tips
+        ctx.fillStyle = G[1]; ctx.fillRect(cx - 2, 12, 4, 2); ctx.fillStyle = G[3]; ctx.fillRect(cx - 2, 12, 4, 1);   // plaque
+        ctx.fillStyle = '#fffdf6'; ctx.fillRect(cx - 2, 12, 1, 1);
+    }
+    _monuments[tier] = c;
     return c;
 }
 

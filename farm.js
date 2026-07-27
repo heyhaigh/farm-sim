@@ -6179,6 +6179,36 @@ export class World {
         if (this.monuments.length > 40) this.monuments.shift();
     }
 
+    // #7d MONUMENT TIER (1..5) — the grandeur of a memorial reflects the battle it marks.
+    // Tier = the HIGHEST of three signals, each derived ONLY from the already-seeded raid
+    // outcome `out` (+ the deterministic nemesis arc) — never world.rand / Math.random.
+    // Monuments are excluded from the determinism digest, so stamping this changes no baseline.
+    #raidMonumentTier(out, e) {
+        const nem = this.nemesis;
+        // (1) FOE DIFFICULTY: a returning foe rates above a common band; a long-running named nemesis higher still.
+        const rc = (nem && !nem.ended && nem.pairKey && e && nem.pairKey === e.pairKey) ? (nem.raidCount || 0) : 0;
+        let fd = 2;                                   // an organized raid band is at least a Marker Stone
+        if (rc >= 4) fd = 4; else if (rc >= 2) fd = 3;
+        // (2) LIVES LOST: none → wounded → a defender downed → downed with heavy wounds.
+        const w = (out.woundSeeds && out.woundSeeds.length) || 0;
+        let ll = 1;
+        if (out.guardDowned && w >= 3) ll = 5; else if (out.guardDowned || w >= 3) ll = 4; else if (w >= 1) ll = 3;
+        // (3) DESTRUCTION: raider-band size + stores carried off.
+        const n = out.n || 0, lost = out.harvestLost || 0;
+        let de = n >= 8 ? 4 : n >= 6 ? 3 : n >= 3 ? 2 : 1;
+        if (lost >= 24) de = Math.max(de, 4); else if (lost >= 12) de = Math.max(de, 3); else if (lost >= 4) de = Math.max(de, 2);
+        return Math.max(1, Math.min(5, Math.max(fd, ll, de)));
+    }
+    // A wilderness FOE STAND (orc/assassin felled by a posse) — usually no losses, so smaller:
+    // a Cairn by default, a Marker for a full posse, a Sworded Stele for besting a lone duelist.
+    #standMonumentTier(e, fighters) {
+        const nm = e && e.def && e.def.name ? String(e.def.name) : '';
+        let t = 1;
+        if (/assassin|swordsman|duel/i.test(nm) || /assassin/i.test(e.foeName || '')) t = 3;
+        else if (fighters && fighters.length >= 3) t = 2;
+        return Math.max(1, Math.min(5, t));
+    }
+
     // #133 — the AUTHORITATIVE raid resolution + a FROZEN COUNTERFACTUAL. `#scoreRaid` is a pure scorer over the
     // rolls; we run it TWICE on the SAME seeded stream (identical rolls) — once with the guard on the line, once
     // WITHOUT — so the delta is the guard's honest marginal effect (never roll-variance). The counterfactual is a
@@ -6285,7 +6315,7 @@ export class World {
             const d = 7 + (hashString('raidmd:' + rid + ':' + k) % 4);   // 7-10 tiles out — the town's edge, where the warband is met
             const mi = Math.round(CENTER + Math.cos(ang) * d), mj = Math.round(CENTER + Math.sin(ang) * d);
             const spot = this.nearestOpenTile({ i: mi, j: mj }) || { i: mi, j: mj };
-            this.#addMonument({ i: spot.i, j: spot.j, heroSeed: out.heroSeed, hero: hero ? shortName(hero) : 'the Watch', foe: out.felledNames[k] || 'a raider', day: this.day, party: 1, raid: true });
+            this.#addMonument({ i: spot.i, j: spot.j, heroSeed: out.heroSeed, hero: hero ? shortName(hero) : 'the Watch', foe: out.felledNames[k] || 'a raider', day: this.day, party: 1, raid: true, tier: this.#raidMonumentTier(out, e) });
             monSpots.push(spot);
         }
         for (const seed of out.woundSeeds) { const f = this.farmers.find(x => x.sheet.seed === seed); if (f && !f.downed) { f.hp = Math.max(1, Math.round(f.maxHp * 0.45)); f._wasHurt = true; f.threatAlert = Math.max(f.threatAlert || 0, 2); } }
@@ -7658,7 +7688,7 @@ export class World {
                     if (!taken(ni, nj) && this.isRevealed(ni, nj) && !this.pathBlocked(ni, nj)) { mi = ni; mj = nj; break outer; }
                 }
             }
-            this.monuments.push({ i: mi, j: mj, heroSeed: f.sheet.seed, hero: f.sheet.name.split(' ')[0], foe: e.foeName || e.def.name, day: this.day, party: fighters.length });
+            this.monuments.push({ i: mi, j: mj, heroSeed: f.sheet.seed, hero: f.sheet.name.split(' ')[0], foe: e.foeName || e.def.name, day: this.day, party: fighters.length, tier: this.#standMonumentTier(e, fighters) });
             if (this.monuments.length > 40) this.monuments.shift();
             for (const ff of fighters) ff.gainXP(6);
             this.reveal(mi, mj, 3);

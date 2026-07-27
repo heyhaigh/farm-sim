@@ -7,7 +7,7 @@ import {
     TILE_W, TILE_H, makeCanvas, drawText, textWidth,
     makeFarmerSprites, makeCropSprites, makeHouse, makeWell, makeBoard, makeFencePost,
     makeScaffold, makeToolshed, makeWindmill, makeTower, makeLantern, makeMonument,
-    makeLilyPad, makeFish, makeChicken, makeCow, makePig, makeGoat, makeSheep, makeCoop, makeBarn, makeMill, makeHatchery, makeTrough,
+    makeLilyPad, makeFish, makeChicken, makeCow, makePig, makeGoat, makeSheep, makeCoop, makeCoopTD, makeBarn, makeMill, makeHatchery, makeTrough,
     makeTree, makeStump, makeWildWheat, makeWildFlowers,
     fillDiamond, strokeDiamond,
 } from './pixel.js';
@@ -289,7 +289,13 @@ const structSprites = {
 };
 
 // facility sprites
-const coopSprite = makeCoop();
+const coopSprite = makeCoop();   // legacy flat coop (fallback)
+// top-down ¾ coop is season-dependent — cache one variant per season name (display-only, deterministic)
+const coopTDCache = new Map();
+function coopTDSprite(seasonName) {
+    if (!coopTDCache.has(seasonName)) coopTDCache.set(seasonName, makeCoopTD(seasonName));
+    return coopTDCache.get(seasonName);
+}
 const barnSprite = makeBarn();
 const millSprite = makeMill();
 const hatchSprite = makeHatchery();
@@ -756,7 +762,15 @@ const MERCHANT_SHEETS = ['Citizen1_Walk', 'Citizen2_Walk', 'Fighter2_Walk'].map(
 const MERCHANT_ROW = [0, 2, 3, 1];
 const WELL_SRC = { x: 48, y: 498, w: 38, h: 38 };    // grass-base stone well in exterior.png
 const ORC_WELL_SRC = { x: 1, y: 497, w: 34, h: 41 };   // #94 the grass-FREE stone well (brown dirt base) for orc towns
-function wellArt() { return (typeof world !== 'undefined' && world && world.culture === 'orc') ? ORC_WELL_SRC : WELL_SRC; }
+function wellArt() {
+    // orc towns always use the grass-FREE well; also use it in FALL/WINTER so the grass-base
+    // well (WELL_SRC) doesn't clash with the autumn/snow ground in human towns (to-do #2).
+    const w = (typeof world !== 'undefined') ? world : null;
+    if (!w) return WELL_SRC;
+    const season = w.seasonDef && w.seasonDef.name;
+    if (w.culture === 'orc' || season === 'FALL' || season === 'WINTER') return ORC_WELL_SRC;
+    return WELL_SRC;
+}
 const SCARECROW_SRC = { x: 4, y: 547, w: 52, h: 53 };   // scarecrow in exterior.png
 const SMOKE_ENABLED = false;   // chimney smoke off until per-house (sheet-row) alignment is nailed
 const smokeSheet = new Image();
@@ -2441,7 +2455,7 @@ function collectDrawables() {
                 const b = fac.struct;
                 const bx = cam.x + isoX(b.i + 0.5, b.j + 0.5), by = cam.y + isoY(b.i + 0.5, b.j + 0.5);
                 if (!offScreen(bx, by)) {   // Codex #44 P1 — cull off-screen facility buildings
-                    const spr = b.kind === 'barn' ? barnSprite : b.kind === 'mill' ? millSprite : b.kind === 'hatchery' ? hatchSprite : coopSprite;
+                    const spr = b.kind === 'barn' ? barnSprite : b.kind === 'mill' ? millSprite : b.kind === 'hatchery' ? hatchSprite : coopTDSprite(world.seasonDef.name);
                     list.push({ y: by + TILE_H, draw: () => {
                         const dx = Math.floor(bx - spr.width / 2), dy = Math.floor(by + TILE_H - spr.height);
                         ctx.drawImage(spr, dx, dy);
@@ -2534,7 +2548,7 @@ function collectDrawables() {
     // legend monuments — lasting stones where a raider was felled (#85)
     for (const m of (world.monuments || [])) {
         const sx = cam.x + isoX(m.i, m.j), sy = cam.y + isoY(m.i, m.j);
-        list.push({ y: sy + TILE_H * 0.5, draw: () => drawMonument(sx, sy) });
+        list.push({ y: sy + TILE_H * 0.5, draw: () => drawMonument(sx, sy, m.tier) });
     }
 
     return list;
@@ -2542,10 +2556,15 @@ function collectDrawables() {
 // A commemorative stone raised where a raider fell — the procedural gold-plaqued obelisk
 // (pixel.js makeMonument, RAMPS.STONE + GRAIN). Anchored: cap at the top of the sprite,
 // shadow at its base, centred on the tile (matches the 12×21 hover hit-rect below).
-const monumentSprite = makeMonument();
-function drawMonument(sx, sy) {
+// #7d the tiered memorial set (1 Cairn .. 5 War Barrow) — pre-built + cached; the tier
+// is stamped deterministically in farm.js, old saves default to 2. All base-anchored.
+const monumentTiers = [null, makeMonument(1), makeMonument(2), makeMonument(3), makeMonument(4), makeMonument(5)];
+function monumentSpr(tier) { return monumentTiers[Math.max(1, Math.min(5, tier || 2))]; }
+function drawMonument(sx, sy, tier) {
     ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(monumentSprite, Math.floor(sx - 6), Math.floor(sy + TILE_H / 2 - 19));
+    const spr = monumentSpr(tier);
+    const baseY = Math.floor(sy + TILE_H / 2 + 2);          // shared ground line across all tiers
+    ctx.drawImage(spr, Math.floor(sx - spr.width / 2), baseY - spr.height);
 }
 // Procedural chimney smoke: 2–3 soft grey puffs that rise, drift on a sine, grow and
 // fade over a performance.now cycle. Phase is offset by `seed` (a tile-position hash,
@@ -4478,8 +4497,11 @@ function buildingUnder(mx, my) {
     // legend monuments — hover to read the deed they mark (#85)
     for (const m of (world.monuments || [])) {
         const sx = cam.x + isoX(m.i, m.j), sy = cam.y + isoY(m.i, m.j);
-        push(Math.floor(sx - 6), Math.floor(sy + TILE_H / 2 - 19), 12, 21,
-            [{ t: 'MONUMENT', c: TT_G }, { t: `${m.hero} felled ${m.foe}`, c: TT_L }, { t: `a stand on day ${m.day}`, c: TT_GR }]);
+        const spr = monumentSpr(m.tier), tg = m.tier ?? 2, bY = Math.floor(sy + TILE_H / 2 + 2);
+        const grav = tg >= 5 ? `a war remembered · day ${m.day}` : tg === 4 ? `a grievous day · day ${m.day}`
+            : tg === 3 ? `a costly stand · day ${m.day}` : `a stand · day ${m.day}`;
+        push(Math.floor(sx - spr.width / 2), bY - spr.height, spr.width, spr.height,
+            [{ t: 'MONUMENT', c: TT_G }, { t: `${m.hero} felled ${m.foe}`, c: TT_L }, { t: grav, c: TT_GR }]);
     }
     if (world.board && boardScreen.w) push(boardScreen.x, boardScreen.y, boardScreen.w, boardScreen.h,
         [{ t: 'BULLETIN BOARD', c: TT_G }, { t: 'Town structure', c: TT_L }, { t: 'Farmers post & take jobs', c: TT_GR }]);
