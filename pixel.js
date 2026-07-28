@@ -2378,8 +2378,8 @@ export function makeBarn(season = 'SUMMER') {
     // §S.2c the roof KINKS to a shallower pitch past the break rather than the bay having a
     // roof of its own: same band depth, so the rake, the eave and the courses carry through.
     const bTop = (d) => (d <= BHALF
-        ? 3 + Math.floor(d * 0.38)
-        : 3 + Math.floor(BHALF * 0.38) + Math.floor((d - BHALF) * EXT_PITCH));
+        ? 8 + Math.floor(d * 0.38)
+        : 8 + Math.floor(BHALF * 0.38) + Math.floor((d - BHALF) * EXT_PITCH));
     const bBot = (d) => bTop(d) + BDEPTH;
     const litLeftB = LIGHT.x < 0;
     const maxDB = (x) => (x > CXRb ? BHALF + EXT_LEN : BHALF);   // the bay is on the RIGHT flank
@@ -2502,14 +2502,32 @@ export function makeBarn(season = 'SUMMER') {
         ctx.fillStyle = 'rgba(0,0,0,0.16)'; ctx.fillRect(x, ey + 1, 1, 1);
     }
     // ridge cupola: louvered box (lit-left/shadow-right), cap, vent, base shadow onto roof
-    ctx.fillStyle = OL; ctx.fillRect(28, 3, 8, 6);
-    ctx.fillStyle = R[2]; ctx.fillRect(29, 4, 6, 4);
-    ctx.fillStyle = R[4]; ctx.fillRect(29, 4, 2, 4);                // lit left
-    ctx.fillStyle = R[1]; ctx.fillRect(33, 4, 2, 4);                // shadow right
-    ctx.fillStyle = shade(R[1], 0.82); ctx.fillRect(30, 5, 4, 1); ctx.fillRect(30, 7, 4, 1);  // louver slats
+    ctx.fillStyle = OL; ctx.fillRect(27, 3, 10, 6);
+    ctx.fillStyle = R[2]; ctx.fillRect(28, 4, 8, 4);
+    ctx.fillStyle = R[4]; ctx.fillRect(28, 4, 3, 4);                // lit left
+    ctx.fillStyle = R[1]; ctx.fillRect(34, 4, 2, 4);                // shadow right
+    ctx.fillStyle = shade(R[1], 0.82); ctx.fillRect(29, 5, 6, 1); ctx.fillRect(29, 7, 6, 1);  // louver slats
     ctx.fillStyle = '#241c18'; ctx.fillRect(31, 5, 2, 1);          // vent slit
-    ctx.fillStyle = shade(R[2], 1.06); ctx.fillRect(27, 2, 10, 1);   // cap — was cream `trim`, which read as a stray white accent on the ridge
-    ctx.fillStyle = shade(R[0], 0.85); ctx.fillRect(28, 9, 8, 1);   // cupola base shadow on roof
+    // CUPOLA CAP — a miniature roof drawn in the SAME 3/4 top-down projection: a lit top
+    // plane, a graded body, a dark front fascia, the committed lit-left/shadow-right split,
+    // and a 2px overhang past the box. A 1px horizontal bar (what was here) reads as a
+    // flat straight-on accent and fights the projection everything else is drawn in.
+    { const capX0 = 27, capX1 = 36, capT = 0, capB = 3, capMid = (capX0 + capX1) >> 1;
+      for (let x = capX0; x <= capX1; x++) {
+          const litC = (x <= capMid) === litLeftB;
+          for (let y = capT; y <= capB; y++) {
+              const f = (y - capT) / (capB - capT);
+              let col = litC ? R[3] : R[1];
+              if (f < 0.3) col = shade(col, 1.12);                    // top plane, tipped to the sky
+              else if (f > 0.7) col = shade(col, 0.9);
+              if (y === capB) col = litC ? shade(R[1], 0.82) : R[0];  // front fascia
+              ctx.fillStyle = col; ctx.fillRect(x, y, 1, 1);
+          }
+      }
+      ctx.fillStyle = shade(R[4], 1.10); ctx.fillRect(capMid, capT, 1, capB - capT);   // ridge crease
+      ctx.fillStyle = 'rgba(0,0,0,0.22)'; ctx.fillRect(28, capB + 1, 8, 1);            // its shadow on the box below
+    }
+    ctx.fillStyle = shade(R[0], 0.85); ctx.fillRect(27, 9, 10, 1);   // cupola base shadow on the roof
     // HOIST — the loft opening moved out to the hay bay, so the facade keeps only the
     // pulley beam and its block, which reads as the barn's working gear.
     { const hy = bBot(dOfB(31)) + 2;
@@ -2545,7 +2563,8 @@ export function makeBarn(season = 'SUMMER') {
             eaveIcicles(ctx, x, bBot(d), SNOW);
         }
         ctx.fillStyle = SNOW.deep; ctx.fillRect(CXLb, bRidge, 2, 3);
-        ctx.fillStyle = SNOW.mid;  ctx.fillRect(27, 1, 10, 1);                     // snow on the cupola cap
+        ctx.fillStyle = SNOW.mid;  ctx.fillRect(27, 0, 10, 1);                     // snow lying on the cap's top plane
+        ctx.fillStyle = SNOW.deep; ctx.fillRect(30, 0, 5, 1);
     }
     if (fall) leafDrift(ctx, 1, 74, (x) => bTop(dOfB(x)), (x) => bBot(dOfB(x)), onRoofB);
 
