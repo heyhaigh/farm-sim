@@ -1482,44 +1482,37 @@ export function makeCoopTD(season = 'SUMMER', opts = {}) {
       for (let ry = hyB + 2; ry < 43; ry += 2) { ctx.fillStyle = TEX_DARK; ctx.fillRect(rx, ry, rw, 1); }   // rungs across the full width
       ctx.fillStyle = 'rgba(0,0,0,0.16)'; ctx.fillRect(rx, 43, rw, 1);               // contact with the ground
     }
-    // NEST BOXES — a bank of WIDE, LOW cubbies with straw spilling over the lip. The first
-    // version was a pair of framed squares at window height, which simply read as WINDOWS:
-    // same proportion, same framing, same position. Nest boxes are wide-and-short, sit
-    // lower, have no glass, and show straw — that is what separates them at a glance.
-    { const eggs = Math.max(0, Math.min(3, opts.eggs ?? 2));
+    // NEST BOXES — one either side of the pop-hole. Wide-and-low cubbies under a lit
+    // ledge with straw spilling over the lip: no glass, lower than a window would sit,
+    // and the straw is what makes them read as nesting rather than glazing. The earlier
+    // framed squares at window height simply read as WINDOWS.
+    // An egg shows ONLY when one is actually harvestable (driven by opts.eggs, which the
+    // game feeds from the coop's ready producers) — so the sprite reports real state.
+    { const eggs = Math.max(0, Math.min(2, opts.eggs ?? 0));
       const GRN = RAMPS.GRAIN;
-      const bx0 = 28, bx1 = 40, ledgeY = 32, bodyY = 33, bodyB = 40;
-      ctx.fillStyle = OLwood; ctx.fillRect(bx0 - 1, ledgeY, (bx1 - bx0) + 3, (bodyB - ledgeY) + 2);
-      ctx.fillStyle = shade(W[3], 1.08); ctx.fillRect(bx0 - 1, ledgeY, (bx1 - bx0) + 3, 1);   // lit ledge overhanging the bank
-      ctx.fillStyle = W[1]; ctx.fillRect(bx0, bodyY, (bx1 - bx0) + 1, (bodyB - bodyY) + 1);
-      const cubs = [[bx0 + 1, 5], [bx0 + 7, 5]];                                   // two wide, low openings
-      cubs.forEach(([cx0, cw], i) => {
-          ctx.fillStyle = '#1c1510'; ctx.fillRect(cx0, bodyY + 1, cw, 5);          // dark cubby
-          ctx.fillStyle = TEX_DARK;  ctx.fillRect(cx0, bodyY + 1, cw, 1);          // shadow under the lip
-          // STRAW — ragged, spilling slightly over the front edge
-          for (let k = 0; k < cw; k++) {
-              const h = 1 + (hash2d(cx0 + k, 3) > 0.55 ? 1 : 0);
+      const nestBox = (bx0, hasEgg) => {
+          const bw = 8, ledgeY = 32, bodyY = 33, bodyB = 39;
+          ctx.fillStyle = OLwood; ctx.fillRect(bx0 - 1, ledgeY, bw + 2, (bodyB - ledgeY) + 2);
+          ctx.fillStyle = shade(W[3], 1.08); ctx.fillRect(bx0 - 1, ledgeY, bw + 2, 1);   // lit ledge
+          ctx.fillStyle = W[1]; ctx.fillRect(bx0, bodyY, bw, (bodyB - bodyY) + 1);
+          ctx.fillStyle = '#1c1510'; ctx.fillRect(bx0 + 1, bodyY + 1, bw - 2, 5);        // the cubby
+          ctx.fillStyle = TEX_DARK;  ctx.fillRect(bx0 + 1, bodyY + 1, bw - 2, 1);        // shadow under the lip
+          for (let k = 0; k < bw - 2; k++) {                                             // ragged straw over the front lip
+              const h = 1 + (hash2d(bx0 + k, 3) > 0.55 ? 1 : 0);
               ctx.fillStyle = GRN[3 + (k % 2)];
-              ctx.fillRect(cx0 + k, bodyY + 6 - h, 1, h);
+              ctx.fillRect(bx0 + 1 + k, bodyY + 6 - h, 1, h);
           }
-          if (hash2d(cx0, 9) > 0.4) { ctx.fillStyle = GRN[5]; ctx.fillRect(cx0 + 1, bodyY + 5, 1, 1); }
-          if (i < eggs) {                                                          // an egg nestled in the straw
-              ctx.fillStyle = '#efe4cf'; ctx.fillRect(cx0 + 2, bodyY + 3, 2, 2);
-              ctx.fillStyle = '#fffaf0'; ctx.fillRect(cx0 + 2, bodyY + 3, 1, 1);   // lit upper-left
-              ctx.fillStyle = 'rgba(0,0,0,0.22)'; ctx.fillRect(cx0 + 2, bodyY + 5, 2, 1);
+          ctx.fillStyle = GRN[5]; ctx.fillRect(bx0 + 2, bodyY + 5, 1, 1);
+          if (hasEgg) {                                                                  // only when one is ready to collect
+              const ex = bx0 + 3;
+              ctx.fillStyle = '#efe4cf'; ctx.fillRect(ex, bodyY + 3, 2, 2);
+              ctx.fillStyle = '#fffaf0'; ctx.fillRect(ex, bodyY + 3, 1, 1);              // lit upper-left
+              ctx.fillStyle = 'rgba(0,0,0,0.22)'; ctx.fillRect(ex, bodyY + 5, 2, 1);     // seats it in the straw
           }
-      });
-      ctx.fillStyle = W[2]; ctx.fillRect(bx0 + 6, bodyY, 1, (bodyB - bodyY) + 1);   // divider post
-      ctx.fillStyle = TEX_LIGHT; ctx.fillRect(bx0 + 6, bodyY, 1, 3);
-      ctx.fillStyle = 'rgba(0,0,0,0.14)'; ctx.fillRect(bx0, bodyB + 1, (bx1 - bx0) + 1, 1);   // the bank's own shadow on the wall
-      if (eggs > 2) { ctx.fillStyle = '#efe4cf'; ctx.fillRect(19, 41, 2, 2); ctx.fillStyle = '#fffaf0'; ctx.fillRect(19, 41, 1, 1); }
-    }
-    { const wx = 13, wy = 32;                                                        // nest window
-      ctx.fillStyle = OLwood; ctx.fillRect(wx - 1, wy - 1, 7, 7);
-      ctx.fillStyle = W[2]; ctx.fillRect(wx, wy, 5, 5);
-      recess(ctx, wx + 1, wy + 1, 3, 3, winter ? '#a2bcc6' : G[0], W[1]);
-      ctx.fillStyle = winter ? '#b6cdd6' : G[1]; ctx.fillRect(wx + 1, wy + 1, 3, 1);
-      ctx.fillStyle = 'rgba(0,0,0,0.12)'; ctx.fillRect(wx - 1, wy + 6, 7, 1);
+          ctx.fillStyle = 'rgba(0,0,0,0.14)'; ctx.fillRect(bx0, bodyB + 1, bw, 1);       // the box's shadow on the wall
+      };
+      nestBox(12, eggs >= 1);        // LEFT of the pop-hole (the window used to sit here)
+      nestBox(32, eggs >= 2);        // RIGHT
     }
 
     // ---- ROOF — committed upper-left split + shingle courses + the §S.2b lighting pass ----

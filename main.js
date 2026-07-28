@@ -290,11 +290,21 @@ const structSprites = {
 
 // facility sprites
 const coopSprite = makeCoop();   // legacy flat coop (fallback)
-// top-down ¾ coop is season-dependent — cache one variant per season name (display-only, deterministic)
+// top-down ¾ coop — season-dependent AND egg-state-dependent. The nest boxes show an egg
+// only when one is actually harvestable, so the building reports real production state at a
+// glance instead of decoratively always holding eggs. Cached per (season, eggs);
+// display-only and deterministic — reads sim state, never writes it.
 const coopTDCache = new Map();
-function coopTDSprite(seasonName) {
-    if (!coopTDCache.has(seasonName)) coopTDCache.set(seasonName, makeCoopTD(seasonName));
-    return coopTDCache.get(seasonName);
+function coopTDSprite(seasonName, eggs = 0) {
+    const key = seasonName + ':' + eggs;
+    if (!coopTDCache.has(key)) coopTDCache.set(key, makeCoopTD(seasonName, { eggs }));
+    return coopTDCache.get(key);
+}
+// how many of this facility's producers are ready to collect (0..2 — one egg per nest box)
+function readyEggCount(fac) {
+    let n = 0;
+    for (const p of fac.producers) if (p.ready) { n++; if (n >= 2) break; }
+    return n;
 }
 const barnSprite = makeBarn();
 const millSprite = makeMill();
@@ -2455,7 +2465,8 @@ function collectDrawables() {
                 const b = fac.struct;
                 const bx = cam.x + isoX(b.i + 0.5, b.j + 0.5), by = cam.y + isoY(b.i + 0.5, b.j + 0.5);
                 if (!offScreen(bx, by)) {   // Codex #44 P1 — cull off-screen facility buildings
-                    const spr = b.kind === 'barn' ? barnSprite : b.kind === 'mill' ? millSprite : b.kind === 'hatchery' ? hatchSprite : coopTDSprite(world.seasonDef.name);
+                    const spr = b.kind === 'barn' ? barnSprite : b.kind === 'mill' ? millSprite : b.kind === 'hatchery' ? hatchSprite
+                        : coopTDSprite(world.seasonDef.name, readyEggCount(fac));
                     list.push({ y: by + TILE_H, draw: () => {
                         const dx = Math.floor(bx - spr.width / 2), dy = Math.floor(by + TILE_H - spr.height);
                         ctx.drawImage(spr, dx, dy);
