@@ -651,6 +651,12 @@ lit jamb in the wall's material, +1 value step). **Window** = frame + 2×2+ blue
 bottom on the base line, top on the slope, 1px lighter jamb. Doors on the LIT (front-left)
 wall, windows on either.
 
+> **Depth-model note — `recess()` is for DOORS, not glazing.** The shared `recess()` helper's
+> lit lip (`shade(inner, 1.7)`) is right for a wood/stone reveal but wrong for glass. Windows
+> and oculi instead hand-roll their set-in depth per §6a-D.3: a 1px `shade(glass, 0.75)`
+> shadow row directly under the top frame, then the reflection streak/gradient. So the rule
+> "recess() on openings" formally reads: **`recess()` for doors; §6a-D.3 treatment for glazing.**
+
 ### §6a.9 Attachments / protrusions contract
 
 - **Lean-tos attach to the RIGHT (shadow) wall** (keeps the door + lit wall clean); a

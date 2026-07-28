@@ -143,7 +143,7 @@ function _hueToward(h, target, deg) {
 // hue toward a cool blue shadow anchor and DESATURATES, lightening (f>1) rotates toward
 // a warm anchor and SATURATES — the era's hue-shift, not a flat darken. Pure/deterministic.
 // For surfaces with 3+ steps prefer the authored RAMPS table over stacking shade() calls.
-function shade(hex, f) {
+export function shade(hex, f) {
     let [r, g, b] = _hexToRgb(hex);
     r = Math.min(255, r * f); g = Math.min(255, g * f); b = Math.min(255, b * f);   // preserve prior value
     let [h, s, l] = _rgbToHsl(r, g, b);
@@ -190,7 +190,7 @@ function groundShadow(ctx, cx, cy, rx, ry, alpha = 0.3) {
 
 // A recessed opening (door / window / nest): a rim, a dark interior, a faint lit top
 // lip + a deeper base AO so the eye reads real DEPTH behind the hole. (§1b, §4.2)
-function recess(ctx, x, y, w, h, inner, rim) {
+export function recess(ctx, x, y, w, h, inner, rim) {
     ctx.fillStyle = rim;   ctx.fillRect(x - 1, y - 1, w + 2, h + 2);
     ctx.fillStyle = inner; ctx.fillRect(x, y, w, h);
     ctx.fillStyle = shade(inner, 1.7);  ctx.fillRect(x + 1, y, w - 1, 1);     // lit inner top lip

@@ -1,0 +1,149 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Propagate — Coop Projection: ISO vs TOP-DOWN, in a real town</title>
+<style>
+  :root { --bg:#12140f; --ink:#e6e8ee; --dim:#98a08c; --accent:#7dd069; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+    font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace; padding:22px 26px 60px; }
+  h1 { font-size:18px; letter-spacing:0.06em; color:var(--accent); margin:0 0 4px; }
+  .sub { color:var(--dim); font-size:12.5px; line-height:1.55; margin:0 0 20px; max-width:900px; }
+  .seasonlabel { color:var(--accent); font-size:13px; letter-spacing:0.12em; margin:22px 0 8px; }
+  .pair { display:flex; gap:18px; flex-wrap:wrap; }
+  .col { background:#181b13; border:1px solid #2a2f22; border-radius:10px; padding:12px 12px 8px; }
+  .tag { font-size:11px; letter-spacing:0.14em; color:var(--dim); margin:0 0 8px; }
+  .iso .tag  { color:#e0a848; }
+  .td  .tag  { color:#6fc7ff; }
+  canvas { image-rendering:pixelated; display:block; }
+  .foot { color:var(--dim); font-size:12px; line-height:1.6; margin-top:24px; max-width:900px; }
+  .foot b { color:var(--ink); }
+</style>
+</head>
+<body>
+<h1>PROPAGATE — COOP PROJECTION · ISO vs TOP-DOWN, IN A REAL TOWN</h1>
+<p class="sub">Both coops drawn by the CURRENT <code>pixel.js</code> (<code>makeCoopIso</code> vs <code>makeCoopTD</code>),
+placed on the SAME iso ground grid, next to the SAME CraftPix cottage + well (the anchor art the coop must belong beside),
+same trees, same chickens, same anchor formula (<code>dy = by + TILE_H − h</code>), same ×4 scale.
+The question isn't which sprite looks nicer on black — it's <b>which one belongs in this scene.</b></p>
+<div id="host"></div>
+<p class="foot"><b>Read it for BELONGING, not polish:</b> does the coop's roof pitch, footprint, and "camera angle"
+sit in the same world as the cottage + well beside it, or does it look like it's from a different game? That's the
+call that unlocks the whole building set.</p>
+
+<script type="module">
+const P = await import('./pixel.js?t=' + Date.now());
+const { makeCanvas, fillDiamond, makeCoopIso, makeCoopTD, makeTree, makeChicken, TILE_W, TILE_H } = P;
+
+// CraftPix anchor art — the cottage + well the coop must sit beside (exact in-game slices + scale).
+const HOME = './assets/craftpix-net-654184-main-characters-home-free-top-down-pixel-art-asset/Tiled_files/exterior.png';
+const HOUSE_SRC = { x: 2, y: 5, w: 137, h: 125 };
+const WELL_SRC  = { x: 48, y: 498, w: 38, h: 38 };
+const ASSET_SCALE = 0.76;
+const home = new Image();
+await new Promise((res) => { home.onload = res; home.onerror = res; home.src = HOME; });
+
+const isoX = (i, j) => (i - j) * (TILE_W / 2);
+const isoY = (i, j) => (i + j) * (TILE_H / 2);
+
+// Ground colours per season (from farm.js SEASONS[].ground)
+const GROUND = {
+  SUMMER: ['#5f8a38', '#578235'],
+  FALL:   ['#8a7038', '#7c6634'],
+  WINTER: ['#c6ced6', '#bac2ca'],
+};
+
+const OX = 150, OY = 34;   // scene origin (screen px)
+const NW = 300, NH = 210;  // native canvas size
+
+function scene(coopMode, season) {
+  const [c, ctx] = makeCanvas(NW, NH);
+  ctx.imageSmoothingEnabled = false;
+  const [GA, GB] = GROUND[season];
+
+  // --- ground: iso grass diamonds, 8x8 patch ---
+  for (let i = 0; i <= 7; i++) for (let j = 0; j <= 7; j++) {
+    const sx = OX + isoX(i, j) - TILE_W / 2, sy = OY + isoY(i, j);
+    fillDiamond(ctx, sx, sy, (i + j) % 2 ? GA : GB);
+  }
+
+  // --- y-sorted drawables ---
+  const list = [];
+
+  // CraftPix cottage (back-left) — exact in-game anchor
+  const cottage = (i, j) => {
+    const sx = OX + isoX(i, j), sy = OY + isoY(i, j);
+    const dw = Math.round(HOUSE_SRC.w * ASSET_SCALE), dh = Math.round(dw * HOUSE_SRC.h / HOUSE_SRC.w);
+    const hx = Math.floor(sx - dw / 2), hy = Math.floor(sy + TILE_H - dh + 13);
+    list.push({ y: sy + TILE_H, draw: () => home.naturalWidth &&
+      ctx.drawImage(home, HOUSE_SRC.x, HOUSE_SRC.y, HOUSE_SRC.w, HOUSE_SRC.h, hx, hy, dw, dh) });
+  };
+  // CraftPix well
+  const well = (i, j) => {
+    const sx = OX + isoX(i, j), sy = OY + isoY(i, j);
+    const dw = Math.round(WELL_SRC.w * ASSET_SCALE), dh = Math.round(dw * WELL_SRC.h / WELL_SRC.w);
+    const hx = Math.floor(sx - dw / 2), hy = Math.floor(sy + TILE_H - dh);
+    list.push({ y: sy + TILE_H, draw: () => home.naturalWidth &&
+      ctx.drawImage(home, WELL_SRC.x, WELL_SRC.y, WELL_SRC.w, WELL_SRC.h, hx, hy, dw, dh) });
+  };
+  // procedural tree (survived the reset; projection-independent context)
+  const tree = (i, j, species) => {
+    const spr = makeTree(species, season);
+    const sx = OX + isoX(i, j), sy = OY + isoY(i, j);
+    const dx = Math.floor(sx - spr.width / 2), dy = Math.floor(sy + TILE_H - spr.height + 2);
+    list.push({ y: sy + TILE_H, draw: () => ctx.drawImage(spr, dx, dy) });
+  };
+  // chicken (it's a chicken coop — real neighbours for scale)
+  const chicken = (i, j, frame) => {
+    const spr = makeChicken(frame);
+    const sx = OX + isoX(i, j), sy = OY + isoY(i, j);
+    const dx = Math.floor(sx - spr.width / 2), dy = Math.floor(sy + TILE_H - spr.height);
+    list.push({ y: sy + TILE_H + 1, draw: () => ctx.drawImage(spr, dx, dy) });
+  };
+  // the coop under test — EXACT in-game anchor (bx/by at tile centre, dy = by+TILE_H-h)
+  const coop = (i, j) => {
+    const spr = coopMode === 'iso' ? makeCoopIso(season) : makeCoopTD(season);
+    const bx = OX + isoX(i + 0.5, j + 0.5), by = OY + isoY(i + 0.5, j + 0.5);
+    const dx = Math.floor(bx - spr.width / 2), dy = Math.floor(by + TILE_H - spr.height);
+    list.push({ y: by + TILE_H, draw: () => ctx.drawImage(spr, dx, dy) });
+  };
+
+  cottage(1, 1);
+  well(6, 1);
+  tree(0, 0, 'oak');
+  tree(7, 0, 'pine');
+  tree(0, 6, 'birch');
+  tree(7, 6, 'oak');
+  coop(4, 4);
+  chicken(3, 5, 0);
+  chicken(5, 5, 1);
+  chicken(4, 6, 0);
+
+  list.sort((a, b) => a.y - b.y);
+  for (const d of list) d.draw();
+
+  // upscale ×4 for viewing
+  const S = 4;
+  const [d, dx] = makeCanvas(NW * S, NH * S);
+  dx.imageSmoothingEnabled = false;
+  dx.drawImage(c, 0, 0, NW * S, NH * S);
+  return d;
+}
+
+const host = document.getElementById('host');
+for (const season of ['SUMMER', 'WINTER', 'FALL']) {
+  const lab = document.createElement('div'); lab.className = 'seasonlabel'; lab.textContent = season;
+  host.appendChild(lab);
+  const pair = document.createElement('div'); pair.className = 'pair';
+  for (const [mode, cls, tag] of [['iso', 'iso', 'ISO COOP (makeCoopIso)'], ['td', 'td', 'TOP-DOWN COOP (makeCoopTD)']]) {
+    const col = document.createElement('div'); col.className = 'col ' + cls;
+    col.innerHTML = `<div class="tag">${tag}</div>`;
+    col.appendChild(scene(mode, season));
+    pair.appendChild(col);
+  }
+  host.appendChild(pair);
+}
+</script>
+</body>
+</html>
