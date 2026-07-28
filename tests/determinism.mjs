@@ -81,10 +81,17 @@ const BASELINE = {
     // so sprite and collision agree, stock turned out into the yard IN FRONT of the building instead of
     // the paddock centre, and an asymmetric containment inset scaled by build. All placement + producer
     // trajectories, so every seed but 20260706 re-fingerprints; same-twice held on all four.
+    // re-pinned 2026-07-28 for the Codex #45 fixes, all of them sim-affecting: a facility's fence and
+    // building are now quoted and paid as ONE bill (a farmer holding just the fence cost could build and
+    // finish in debt), the paddock lattice anchors on the house-CONNECTED yard rather than all cropland
+    // (a detached frontier field dragged the anchor off into open country), the lattice commits only once
+    // ground has changed hands rather than at plan time, the kin weight is derived so it actually dominates
+    // position + timber, and the house-upgrade acreage gate measures cropland to match its own cap.
+    // same-twice held on all four seeds; 20260706 unchanged (no farm reaches a facility inside 30 days).
     20260706: '39aa030b',
-    42: '101027dd',
-    7: '915be5b0',
-    3: '68921bf5',
+    42: '10fe0fd5',
+    7: 'f91faa32',
+    3: '6d3d58c5',
 };
 
 function boot(seed, culture) {

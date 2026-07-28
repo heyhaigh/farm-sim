@@ -890,37 +890,22 @@ function loadAssetArt() {
 }
 
 // Draw a crop at tile-screen (sx,sy): real sheet frame when available, else procedural fallback.
+// Crops stand STILL. There was a wind sway here — the top ~45% of every mature plant leaning ±1px on a
+// performance.now sine phased by tile position — and it read as jitter rather than wind: at this sprite
+// scale a 1px lean is a large fraction of the plant, and slicing the sprite in two to do it left a visible
+// seam across the stem. A still field is the better picture (owner's call).
 function drawCropSprite(crop, sx, sy) {
-    // wind SWAY: mature crops only (skip seedlings + withered). The upper band leans ±1px
-    // on a performance.now sine phased by tile position, so a field ripples out of step.
-    // Display-time only — reads crop.i/j but never writes sim.
-    const sway = (!crop.withered && crop.stage >= 2)
-        ? Math.round(Math.sin(performance.now() / 600 + crop.i * 0.7 + crop.j * 1.3)) : 0;
     const frames = CROP_FRAMES[crop.type];
     if (plantsReady && imageLoaded(plantsSheet) && frames && !crop.withered) {
         const f = frames[Math.min(crop.stage, 3)];
         const w = Math.max(1, Math.round(f[2] * CROP_SCALE)), h = Math.max(1, Math.round(f[3] * CROP_SCALE));
-        const dx = Math.floor(sx - w / 2), dy = Math.floor(sy + 7 - h);
         ctx.imageSmoothingEnabled = false;
-        if (sway) {
-            const ss = Math.round(f[3] * 0.45), hs = Math.round(h * 0.45);   // top ~45% leans
-            ctx.drawImage(plantsSheet, f[0], f[1], f[2], ss, dx + sway, dy, w, hs);
-            ctx.drawImage(plantsSheet, f[0], f[1] + ss, f[2], f[3] - ss, dx, dy + hs, w, h - hs);
-        } else {
-            ctx.drawImage(plantsSheet, f[0], f[1], f[2], f[3], dx, dy, w, h);
-        }
+        ctx.drawImage(plantsSheet, f[0], f[1], f[2], f[3], Math.floor(sx - w / 2), Math.floor(sy + 7 - h), w, h);
         return;
     }
     const sprites = makeCropSprites(crop.type);
     const spr = crop.withered ? sprites[4] : sprites[crop.stage];
-    const dx = Math.floor(sx - 6), dy = Math.floor(sy - 7);
-    if (sway) {
-        const ss = Math.round(spr.height * 0.45);
-        ctx.drawImage(spr, 0, 0, spr.width, ss, dx + sway, dy, spr.width, ss);
-        ctx.drawImage(spr, 0, ss, spr.width, spr.height - ss, dx, dy + ss, spr.width, spr.height - ss);
-    } else {
-        ctx.drawImage(spr, dx, dy);
-    }
+    ctx.drawImage(spr, Math.floor(sx - 6), Math.floor(sy - 7));
 }
 
 // draw a sliced side-profile animal frame at (px,py); returns false if not ready

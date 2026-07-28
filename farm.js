@@ -4450,16 +4450,20 @@ export class World {
     //
     // The lattice is anchored the first time a farm annexes anything and then kept, so the farm's
     // paddock district stays square with itself no matter how the fields grow afterwards.
+    // NOTE: this COMPUTES the lattice; it does not commit it. `plot.padGrid` is only written once a paddock
+    // has actually been annexed (see buildNextFacility) — merely PLANNING a facility used to anchor the grid
+    // permanently, so a plan that then failed on wood or standing timber could leave a farm pinned to a
+    // lattice measured off a boundary it has since expanded past, with its early slots stale or blocked.
     #paddockGrid(plot, farmer) {
         if (plot.padGrid) return plot.padGrid;
         const C = PADDOCK_CELL;
-        // Anchor on the YARD's own edge, not on plot.x/w. The bounding box spans every cell the farm owns
-        // INCLUDING detached frontier fields staked out in open country, so anchoring to it could start the
-        // lattice a couple of tiles — or a couple of fields — clear of the fence the paddocks are supposed
-        // to butt against. Measuring the fenced homestead directly is what keeps lane 0 flush with it.
+        // Anchor on the FENCED HOMESTEAD's edge — the cells reachable from the house — not on plot.x/w and
+        // not on all cropland. A plot owns detached frontier fields staked out in open country; both the
+        // bounding box AND a plain min/max over every non-paddock cell are dragged off by them, which
+        // anchors the lattice on empty ground nowhere near the fence the paddocks must butt against.
+        const home = this.#homeCells(plot);
         let minI = Infinity, maxI = -Infinity, minJ = Infinity, maxJ = -Infinity;
-        for (const key of plot.cells) {
-            if (plot.padCells && plot.padCells.has(key)) continue;
+        for (const key of home) {
             const c = key.indexOf(','), i = +key.slice(0, c), j = +key.slice(c + 1);
             if (i < minI) minI = i; if (i > maxI) maxI = i;
             if (j < minJ) minJ = j; if (j > maxJ) maxJ = j;
@@ -4486,8 +4490,31 @@ export class World {
             if (score > bestScore) { bestScore = score; best = { ...s, len }; }
         }
         if (!best) return null;
-        plot.padGrid = { side: best.k, ox: best.ox, oy: best.oy, aI: best.aI, aJ: best.aJ, lI: best.lI, lJ: best.lJ, len: best.len };
-        return plot.padGrid;
+        return { side: best.k, ox: best.ox, oy: best.oy, aI: best.aI, aJ: best.aJ, lI: best.lI, lJ: best.lJ, len: best.len };
+    }
+
+    // The fenced homestead proper: the plot cells 4-connected to the house, paddocks excluded. A farm's
+    // `cells` also holds detached annex fields out on the frontier, and those must not count as "the yard"
+    // when we're looking for the fence line to build against. Deterministic — a plain BFS over sorted keys.
+    #homeCells(plot) {
+        const seen = new Set();
+        if (!plot.house) return seen;
+        const isYard = (i, j) => plot.cells.has(pkey(i, j)) && !(plot.padCells && plot.padCells.has(pkey(i, j)));
+        // seed from the house footprint (its own tiles are plot cells); fall back to any yard cell near it
+        const c = this.houseCentre(plot), queue = [];
+        for (let dj = -2; dj <= 2; dj++) for (let di = -2; di <= 2; di++) {
+            if (isYard(c.i + di, c.j + dj) && !seen.has(pkey(c.i + di, c.j + dj))) {
+                seen.add(pkey(c.i + di, c.j + dj)); queue.push([c.i + di, c.j + dj]);
+            }
+        }
+        for (let n = 0; n < queue.length; n++) {
+            const [i, j] = queue[n];
+            for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+                const ni = i + di, nj = j + dj, k = pkey(ni, nj);
+                if (!seen.has(k) && isYard(ni, nj)) { seen.add(k); queue.push([ni, nj]); }
+            }
+        }
+        return seen;
     }
 
     // The rect for lattice slot n, filling one lane down before stepping out to the next.
@@ -4534,6 +4561,8 @@ export class World {
         const kinWeight = new Map(kinList.map((t, idx) => [t, kinList.length - idx]));
         const partners = plot.facilities.filter(f => kinWeight.has(f.type));
         const MAX_LANES = 6;
+        // strictly greater than the worst position + timber penalty any reachable slot can carry
+        const KIN_WEIGHT = g.len * MAX_LANES + PADDOCK_CELL * PADDOCK_CELL * 0.4 + 1;
         let best = null, bestScore = -Infinity;
         for (let n = 0; n < g.len * MAX_LANES; n++) {
             const r = this.#slotRect(g, n);
@@ -4555,10 +4584,13 @@ export class World {
                             (Math.abs(p.y - r.y) === PADDOCK_CELL && p.x === r.x);
                 if (adj) kinScore += kinWeight.get(p.type);
             }
-            // Kinship dominates; among equals the EARLIEST slot wins, which is what keeps the grid packing
-            // lane by lane instead of leaving holes. Standing timber is a mild deterrent, not a veto.
-            const score = kinScore * 100 - n - trees.length * 0.4;
-            if (score > bestScore) { bestScore = score; best = { rect: r, trees, slot: n }; }
+            // Kinship dominates ABSOLUTELY; among equals the EARLIEST slot wins, which is what keeps the
+            // grid packing lane by lane instead of leaving holes. Standing timber is a mild deterrent, not
+            // a veto. KIN_WEIGHT is derived, not a magic number: it must exceed the largest possible
+            // position-plus-timber penalty (the last reachable slot, every tile of it wooded) or a distant
+            // clear slot can outscore an adjacent wooded one and the stated rule quietly stops holding.
+            const score = kinScore * KIN_WEIGHT - n - trees.length * 0.4;
+            if (score > bestScore) { bestScore = score; best = { rect: r, trees, slot: n, grid: g }; }
         }
         return best;
     }
@@ -4566,12 +4598,29 @@ export class World {
     // Take a sited paddock into the plot: pay for the fence line it adds, claim the tiles, and record
     // them as paddock ground. Crops never grow here and the acreage they occupy doesn't count against
     // the farmer's cropland cap — a farm shouldn't have to choose between a barn and a field.
-    #annexPaddock(farmer, plot, rect) {
+    // The tiles a paddock rect covers, and what its fence line NETS out at in wood (posts torn down on the
+    // shared edge are reclaimed, so butting onto the existing line is cheaper than fencing open ground).
+    #paddockCells(rect) {
         const cells = [];
         for (let j = rect.y; j < rect.y + rect.h; j++) for (let i = rect.x; i < rect.x + rect.w; i++) cells.push({ i, j });
+        return cells;
+    }
+    // What raising this facility costs ALL IN: the fence line plus the building itself. The two used to be
+    // charged in different places — #annexPaddock paid the fence, then the caller subtracted FACILITY_WOOD
+    // afterwards — so a farmer holding exactly the fence cost could build and go NEGATIVE. Callers must
+    // gate on this, not on FACILITY_WOOD alone.
+    paddockWoodCost(plot, rect) {
+        const { removed, added } = this.fenceDelta(plot, this.#paddockCells(rect));
+        return (added - removed) * FENCE_POST_WOOD + FACILITY_WOOD;
+    }
+
+    #annexPaddock(farmer, plot, rect) {
+        const cells = this.#paddockCells(rect);
         const { removed, added } = this.fenceDelta(plot, cells);
-        if (farmer && farmer.wood + removed * FENCE_POST_WOOD < added * FENCE_POST_WOOD) return false;
-        if (farmer) farmer.wood = Math.max(0, farmer.wood + removed * FENCE_POST_WOOD - added * FENCE_POST_WOOD);
+        // the FULL bill — fence + building — must be on hand, or nothing is spent and nothing is claimed.
+        // Both halves are paid HERE so there is exactly one place wood leaves the farmer for a facility.
+        if (farmer && farmer.wood < (added - removed) * FENCE_POST_WOOD + FACILITY_WOOD) return false;
+        if (farmer) farmer.wood = farmer.wood + removed * FENCE_POST_WOOD - added * FENCE_POST_WOOD - FACILITY_WOOD;
         if (!plot.padCells) plot.padCells = new Set();
         for (const { i, j } of cells) {
             plot.cells.add(pkey(i, j));
@@ -4792,7 +4841,11 @@ export class World {
         const plan = this.facilityPlan(farmer);
         if (!plan || !plan.rect || plan.trees.length) return false;
         const plot = farmer.plot;
-        if (!this.#annexPaddock(farmer, plot, plan.rect)) return false;   // couldn't pay for the new fence line
+        if (!this.#annexPaddock(farmer, plot, plan.rect)) return false;   // couldn't pay for fence + building
+        // The lattice is COMMITTED here and nowhere else — only once ground has actually changed hands. A
+        // plan that fell through on wood or timber leaves the farm free to re-measure against its boundary
+        // as it is then, rather than being pinned to one it may since have grown past.
+        if (!plot.padGrid && plan.grid) plot.padGrid = { ...plan.grid };
         this.#buildFacility(plot, farmer.sheet, plan.type, { ...plan.rect });
         this.#clearPlotWildBuffer(plot, 1);
         this.#rebuildFields(plot);
@@ -5155,12 +5208,20 @@ export class World {
     penYardSpot(fac, k, rnd) {
         const s = fac.struct;
         if (!s) return { x: fac.x + fac.w / 2, y: fac.y + fac.h / 2 };   // pond: no building, whole region
+        // A struct from a PRE-PADDOCK save carries only {i,j,kind} — no footprint, because buildings had
+        // none. Without these defaults the arithmetic below yields NaN, and the first rooster or hatched
+        // chick on an old farm gets teleported to nowhere. Those buildings were one tile.
+        const sw = s.w || 1, sh = s.h || 1;
         const span = (a, b) => a + rnd() * Math.max(0.2, b - a);
-        const eastX0 = s.i + s.w + 0.2, eastX1 = fac.x + fac.w - 0.7;
-        const southY0 = s.j + s.h + 0.2, southY1 = fac.y + fac.h - 0.7;
-        return (k % 2 === 0 && eastX1 > eastX0)
-            ? { x: span(eastX0, eastX1), y: span(s.j, fac.y + fac.h - 0.7) }
-            : { x: span(fac.x + 1.5, fac.x + fac.w - 0.7), y: span(southY0, southY1) };
+        const eastX0 = s.i + sw + 0.2, eastX1 = fac.x + fac.w - 0.7;
+        const southY0 = s.j + sh + 0.2, southY1 = fac.y + fac.h - 0.7;
+        // A legacy pen can be as small as 3x3 with its building at one corner, so either strip may be
+        // degenerate. Fall back to the region's own middle rather than emitting a point outside the fence.
+        const east = k % 2 === 0 && eastX1 > eastX0, south = southY1 > southY0;
+        if (!east && !south) return { x: fac.x + fac.w / 2, y: fac.y + fac.h / 2 };
+        return east
+            ? { x: span(eastX0, eastX1), y: span(s.j, Math.max(s.j + 0.2, fac.y + fac.h - 0.7)) }
+            : { x: span(fac.x + 1.5, Math.max(fac.x + 1.7, fac.x + fac.w - 0.7)), y: span(southY0, southY1) };
     }
 
     #makeProducer(kind, fx, fy, region) {
@@ -10946,8 +11007,13 @@ export class Farmer {
         // EVERY upgrade demands ELBOW ROOM: a bigger house needs a bigger farm around it, so before a
         // yurt OR a cottage rises the farmer must first EXPAND the homestead past a threshold (no grand
         // house crammed into a cramped starter yard). Ambition turns to LAND first; the house waits on it.
+        // #paddock measured in CROPLAND, matching the cap in expansionInfo. Counting total owned cells here
+        // while the cap counts only cropland was the most permissive reading of both: paddock ground was
+        // exempt from the ceiling AND credited toward the floor, so a farm could annex two 9x9 pens and
+        // unlock a cottage without ever widening its fields — the opposite of the "expand the farm first,
+        // then raise the grand house" rule this gate exists to enforce.
         const minCells = next >= 3 ? World.COTTAGE_MIN_CELLS : World.YURT_MIN_CELLS;
-        if (p.cells.size < minCells) {
+        if (w.cropAcreage(p) < minCells) {
             const info = w.expansionInfo(p);
             if (info.state !== 'blocked') {   // there's room to grow — annex land first, then build
                 this.wantExpand = true;
@@ -11700,14 +11766,17 @@ export class Farmer {
                     const src = w.nearestWood(this.pos, plan.trees);
                     if (src) { this.think(this.#tr('CLEARING GROUND FOR THE PEN', 'CLEARING GROUND FOR A NEW PADDOCK')); this.#goToWood(src); return true; }
                 }
-                if (this.wood >= FACILITY_WOOD && w.buildNextFacility(this)) {
-                    this.wood -= FACILITY_WOOD;
+                // The bill is the fence line PLUS the building, quoted together and paid together. Gating on
+                // FACILITY_WOOD alone let a farmer who could just afford the fence build anyway and finish in
+                // debt (a 9x9 paddock's first fence runs ~36 wood against a building cost of 6).
+                const cost = plan && plan.rect ? w.paddockWoodCost(this.plot, plan.rect) : FACILITY_WOOD;
+                if (this.wood >= cost && w.buildNextFacility(this)) {
                     this.nextFacility = Math.round(this.sheet.harvested + 22 + this.rand() * 12);
                     this.wantFacility = false;
                     return true;
                 }
                 // not enough timber for the building + its fence line -> go chop
-                if (this.wood < FACILITY_WOOD) { this.#goChop(); return true; }
+                if (this.wood < cost) { this.think(this.#tr(`NEED ${cost} WOOD FOR THE PEN`, `NEED ${cost} WOOD FOR THE NEW PADDOCK`)); this.#goChop(); return true; }
                 // had wood but nowhere legal to annex: fall through to expansion
                 this.wantExpand = true;
             } else this.wantFacility = false;
