@@ -625,7 +625,12 @@ function tileNoise(i, j, scale, seed = 0) {
 // let paddocks pack into rows and columns off the property line with their fences shared, instead of each
 // one being individually placed and the farm sprawling outward in every direction. Facilities differ by
 // what stands in the cell, not by how much ground they take.
-const PADDOCK_CELL = 7;
+//
+// 9, raised from 7 so the livestock pens have real grazing room around the barn. The cell has to stay
+// uniform for the lattice to tile with shared fences, so this is the size EVERY paddock gets; on the
+// smaller facilities the extra tiles read as yard. Paddock ground doesn't count against the cropland cap
+// (see cropAcreage), so the bigger cell costs a farm nothing it was saving for fields.
+const PADDOCK_CELL = 9;
 const FACILITY_DEFS = {
     pond: { label: 'water garden', w: PADDOCK_CELL, h: PADDOCK_CELL, produce: 'lily & fish' },
     // #pens (player direction): livestock get REAL, roomier enclosures — a fenced run/pen/fold drawn around
@@ -636,16 +641,20 @@ const FACILITY_DEFS = {
     mill: { label: 'mill', w: PADDOCK_CELL, h: PADDOCK_CELL, struct: { w: 3, h: 3 }, produce: null, workstation: true },   // #99b: grinds wheat -> grain (chicken/fish feed)
     hatchery: { label: 'hatch house', w: PADDOCK_CELL, h: PADDOCK_CELL, struct: { w: 3, h: 3 }, produce: null, workstation: true },   // #100: hatches eggs -> chickens
 };
-// Where a building sits inside its paddock. The SOLID footprint has to be whole tiles, so it snaps to the
-// tile grid; but the building is DRAWN from cx/cy, the paddock's true centre. Keeping those separate means
-// an odd footprint in an even cell (or the reverse) still renders dead centre instead of half a tile off —
-// so cell size and footprint size are free to be chosen on their own merits.
+// Where a building sits inside its paddock: centred, snapped to whole tiles (the SOLID footprint can't be
+// fractional). cx/cy is the drawn anchor and is the FOOTPRINT's centre, deliberately not the paddock's.
+// The two differ by half a tile whenever footprint and cell disagree in parity — a 4x4 barn in a 9-cell —
+// and the footprint is the one that has to win: the sprite must sit exactly over the ground it blocks, or
+// an animal standing just past the solid tiles renders underneath the barn's near wall. Half a tile off
+// paddock-centre is invisible; a sprite offset from its own collision is not.
+//
+// The leftover ring is the yard. Flooring the offset puts the SMALLER half of it on the far side, which is
+// what we want: the far ring is where a tall animal rears over the fence behind it (see #tickProducers),
+// so the herd grazes in front of the barn instead of behind it.
 function structRect(def, region) {
     const s = def.struct || { w: 1, h: 1 };
-    return {
-        i: region.x + ((region.w - s.w) >> 1), j: region.y + ((region.h - s.h) >> 1), w: s.w, h: s.h,
-        cx: region.x + region.w / 2, cy: region.y + region.h / 2,
-    };
+    const i = region.x + ((region.w - s.w) >> 1), j = region.y + ((region.h - s.h) >> 1);
+    return { i, j, w: s.w, h: s.h, cx: i + s.w / 2, cy: j + s.h / 2 };
 }
 
 // #100 Hatch House — a coop owner sets a clutch of EGGS incubating; ~HATCH_DAYS later they hatch into new
@@ -1061,7 +1070,8 @@ export class World {
                 const hens = fac.producers.filter(pr => pr.kind === 'chicken').length;
                 if (hens < 2 || this.rand() > 0.15) continue;
                 const r = fac.producers[0].region;
-                fac.producers.push(this.#makeProducer('rooster', r.x + r.w / 2, r.y + r.h / 2, r));
+                const sp = this.penYardSpot(fac, 0, this.rand);   // into the run, not on top of the coop
+                fac.producers.push(this.#makeProducer('rooster', sp.x, sp.y, r));
                 const owner = this.farmers.find(f => f.plot === plot);
                 if (owner) {
                     this.addLog(`A rooster has joined ${owner.sheet.name}'s flock!`, '#f0d060');
@@ -5092,6 +5102,7 @@ export class World {
         };
         // The trough goes in a paddock CORNER, clear of the centred building — the SE inside corner.
         const troughAt = () => ({ i: region.x + region.w - 1, j: region.y + region.h - 1 });
+        const yardSpot = (k) => this.penYardSpot(fac, k, rand);
 
         if (type === 'pond') {
             for (let j = region.y; j < region.y + region.h; j++)
@@ -5107,13 +5118,13 @@ export class World {
             raise('coop', T.COOP);
             fac.trough = troughAt();
             const n = 4 + Math.floor(rand() * 3);
-            for (let k = 0; k < n; k++) fac.producers.push(this.#makeProducer('chicken', cx + (rand() - 0.5) * region.w * 0.6, cy + (rand() - 0.5) * region.h * 0.6, region));
+            for (let k = 0; k < n; k++) { const s = yardSpot(k); fac.producers.push(this.#makeProducer('chicken', s.x, s.y, region)); }
         } else if (type === 'pen' || type === 'sheeppen') {
             raise('barn', T.BARN);
             fac.trough = troughAt();
             const kind = type === 'sheeppen' ? 'sheep' : (sheet.penAnimal || 'cow');
             const n = 3 + Math.floor(rand() * 2);
-            for (let k = 0; k < n; k++) fac.producers.push(this.#makeProducer(kind, cx + (rand() - 0.5) * region.w * 0.6, cy + (rand() - 0.5) * region.h * 0.6, region));
+            for (let k = 0; k < n; k++) { const s = yardSpot(k); fac.producers.push(this.#makeProducer(kind, s.x, s.y, region)); }
         } else if (type === 'mill') {   // #99b a workstation, no producers — the miller stands at it to grind wheat
             raise('mill', T.MILL);
         } else if (type === 'hatchery') {   // #100 a workstation that incubates a clutch of eggs into chickens
@@ -5132,6 +5143,24 @@ export class World {
             }
         }
         this.#rebuildFields(plot);   // facility tiles removed from crop fields
+    }
+
+    // Where stock is turned out: the L of yard IN FRONT of a facility's building (east + south of it),
+    // never the strip behind. Animals used to be seeded at the paddock's CENTRE — which is where the
+    // building now stands — and the "you can't stand there" sweep shunted them to the nearest free tile,
+    // as often behind the barn as in front. They then stayed there for good: the wander bounces off a
+    // solid block rather than rounding it, so wherever a beast starts is roughly where it lives. Behind
+    // the barn is the one place it must not be — that's the far edge, where a tall sprite rears over the
+    // rail behind it and reads as loose outside the pen (see the inset note in #tickProducers).
+    penYardSpot(fac, k, rnd) {
+        const s = fac.struct;
+        if (!s) return { x: fac.x + fac.w / 2, y: fac.y + fac.h / 2 };   // pond: no building, whole region
+        const span = (a, b) => a + rnd() * Math.max(0.2, b - a);
+        const eastX0 = s.i + s.w + 0.2, eastX1 = fac.x + fac.w - 0.7;
+        const southY0 = s.j + s.h + 0.2, southY1 = fac.y + fac.h - 0.7;
+        return (k % 2 === 0 && eastX1 > eastX0)
+            ? { x: span(eastX0, eastX1), y: span(s.j, fac.y + fac.h - 0.7) }
+            : { x: span(fac.x + 1.5, fac.x + fac.w - 0.7), y: span(southY0, southY1) };
     }
 
     #makeProducer(kind, fx, fy, region) {
@@ -5625,8 +5654,9 @@ export class World {
                 if (!coop) continue;   // no coop to receive them (shouldn't happen — hatchery is built off a coop)
                 const cur = coop.producers.filter(p => p.kind === 'chicken').length;
                 const hatched = Math.min(chicks, Math.max(0, FLOCK_CAP - cur));
-                const cx = coop.x + coop.w / 2, cy = coop.y + coop.h / 2;
-                for (let k = 0; k < hatched; k++) coop.producers.push(this.#makeProducer('chicken', cx + (f.rand() - 0.5) * coop.w * 0.6, cy + (f.rand() - 0.5) * coop.h * 0.6, coop));
+                // into the run in FRONT of the coop, not the paddock centre (that's the coop itself now)
+                for (let k = 0; k < hatched; k++) { const sp = this.penYardSpot(coop, k, f.rand);
+                    coop.producers.push(this.#makeProducer('chicken', sp.x, sp.y, coop)); }
                 if (hatched > 0) this.addChronicle('build', `${hatched} chick${hatched > 1 ? 's' : ''} hatched at ${shortName(f)}'s farm.`, f, null, '#eef0f4', { tier: 'callout', tone: 'triumph' });
             }
         }
@@ -5979,9 +6009,23 @@ export class World {
                             // #pens stay INSIDE the animal's own enclosure (the pond-life treatment, at last
                             // applied to the land animals too — they no longer roam the crops); producers
                             // from an old save without a region fall back to the whole fenced yard.
-                            const rr = p.region, pad = 0.4;
-                            const bx0 = rr ? rr.x + pad : plot.x + pad, bx1 = rr ? rr.x + rr.w - pad : plot.x + plot.w - pad;
-                            const by0 = rr ? rr.y + pad : plot.y + pad, by1 = rr ? rr.y + rr.h - pad : plot.y + plot.h - pad;
+                            //
+                            // The inset is ASYMMETRIC, and it has to be. A sprite is drawn upward from the
+                            // tile its feet stand on — a bull is ~42px of body over its hooves — while one
+                            // tile of iso depth is only TILE_H/2 = 5px. So an animal at the FAR edge (low
+                            // i / low j, the two up-screen sides) rears clean over the rail behind it and
+                            // reads as standing outside its own pen, however much ground the pen has. No
+                            // inset fully contains that; what fixes it is keeping the feet a couple of
+                            // tiles in, so the body overlaps the rail as something standing BEHIND it.
+                            // The near edges (high i / high j) draw in front of the animal and occlude it
+                            // correctly, so they only need enough to keep hooves off the fence line.
+                            // Scaled by build: the hens' small sprites barely overhang, and their freedom
+                            // to fill the run is what makes a coop look alive.
+                            const rr = p.region;
+                            const bulky = p.kind !== 'chicken' && p.kind !== 'rooster';
+                            const padFar = bulky ? 1.35 : 0.7, padNear = bulky ? 0.55 : 0.4;
+                            const bx0 = (rr ? rr.x : plot.x) + padFar, bx1 = (rr ? rr.x + rr.w : plot.x + plot.w) - padNear;
+                            const by0 = (rr ? rr.y : plot.y) + padFar, by1 = (rr ? rr.y + rr.h : plot.y + plot.h) - padNear;
                             if (p.fx < bx0) { p.fx = bx0; p.vx = Math.abs(p.vx); }
                             if (p.fx > bx1) { p.fx = bx1; p.vx = -Math.abs(p.vx); }
                             if (p.fy < by0) { p.fy = by0; p.vy = Math.abs(p.vy); }

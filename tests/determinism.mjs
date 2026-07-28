@@ -76,10 +76,15 @@ const BASELINE = {
     // lane, then the next lane out) instead of being scored one at a time, with kin facilities preferring
     // adjacent slots, and grazing livestock ambling across their pens rather than holding one spot. Only
     // seed 7 moved again; same-twice held throughout.
+    // Amended again — PADDOCK_CELL 7 -> 9 (livestock pens needed real grazing room; the cell stays uniform
+    // so the lattice keeps tiling), buildings anchored on their FOOTPRINT centre rather than the paddock's
+    // so sprite and collision agree, stock turned out into the yard IN FRONT of the building instead of
+    // the paddock centre, and an asymmetric containment inset scaled by build. All placement + producer
+    // trajectories, so every seed but 20260706 re-fingerprints; same-twice held on all four.
     20260706: '39aa030b',
-    42: '2b151660',
-    7: '57659601',
-    3: '6af5dfa7',
+    42: '101027dd',
+    7: '915be5b0',
+    3: '68921bf5',
 };
 
 function boot(seed, culture) {
