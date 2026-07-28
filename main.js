@@ -306,7 +306,12 @@ function readyEggCount(fac) {
     for (const p of fac.producers) if (p.ready) { n++; if (n >= 2) break; }
     return n;
 }
-const barnSprite = makeBarn();
+// barn is season-aware now — cache one variant per season
+const barnCache = new Map();
+function barnSprite_(seasonName) {
+    if (!barnCache.has(seasonName)) barnCache.set(seasonName, makeBarn(seasonName));
+    return barnCache.get(seasonName);
+}
 // mill is season-aware now (roof snow / fall leaves) — cache one variant per season
 const millCache = new Map();
 function millSprite_(seasonName) {
@@ -2470,7 +2475,7 @@ function collectDrawables() {
                 const b = fac.struct;
                 const bx = cam.x + isoX(b.i + 0.5, b.j + 0.5), by = cam.y + isoY(b.i + 0.5, b.j + 0.5);
                 if (!offScreen(bx, by)) {   // Codex #44 P1 — cull off-screen facility buildings
-                    const spr = b.kind === 'barn' ? barnSprite : b.kind === 'mill' ? millSprite_(world.seasonDef.name) : b.kind === 'hatchery' ? hatchSprite
+                    const spr = b.kind === 'barn' ? barnSprite_(world.seasonDef.name) : b.kind === 'mill' ? millSprite_(world.seasonDef.name) : b.kind === 'hatchery' ? hatchSprite
                         : coopTDSprite(world.seasonDef.name, readyEggCount(fac));
                     list.push({ y: by + TILE_H, draw: () => {
                         const dx = Math.floor(bx - spr.width / 2), dy = Math.floor(by + TILE_H - spr.height);

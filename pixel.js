@@ -2355,21 +2355,152 @@ export function makeCoop() {
 // Classic gambrel RED BARN — the town's biggest farm building; must not read smaller
 // than the cottage. White cross-plank doors, hayloft, ridge cupola. ~58px tall.
 // Exemplar: ALttP / Harvest Moon barns (warm→wine shingle planes). (§2 relative-order)
-export function makeBarn() {
-    const [c, ctx] = makeCanvas(64, 60);
-    const R = RAMPS.ROOF_RED, W = RAMPS.WOOD, S = RAMPS.STONE, OL = RAMPS.OUTLINE.warm;
+const _barn = {};
+export function makeBarn(season = 'SUMMER') {
+    if (_barn[season]) return _barn[season];
+    const [c, ctx] = makeCanvas(76, 60);   // widened for the hay bay on the right
+    const winter = season === 'WINTER', fall = season === 'FALL';
+    const S = RAMPS.STONE, OL = RAMPS.OUTLINE.warm, GRN = RAMPS.GRAIN;
+    const R = fall ? warmRamp(RAMPS.ROOF_RED, 16, 1.04, 1.06) : RAMPS.ROOF_RED;
+    const W = fall ? warmRamp(RAMPS.WOOD, 12, 1.04, 1.05) : RAMPS.WOOD;
+    const SNOW = { deep: '#ffffff', mid: '#eef4f4', thin: '#dbe8ec' };
     const trim = '#e8e0d0', trimLo = '#b9ae95', trimHi = '#fffdf6';
-    groundShadow(ctx, 32, 57, 28, 7, 0.32);
+    // NO ground/seat shadow (§S.2) — a 28px-radius ellipse under a building reads as a smudge.
     const bx0 = 12, bx1 = 52, wy0 = 27, wy1 = 55;
-    // barn-red walls with weathered planks + form self-shadow (via drawWall)
-    drawWall(ctx, bx0, bx1, wy0, wy1, { base: R[3], hi: R[4], lo: R[2], ol: OL }, 7);
+    // ---- ROOF GEOMETRY (declared first: the WALL follows the roofline) ----
+    // The wall used to be a plain rectangle from wy0, but the gable end is a CHEVRON, so
+    // its eave sits higher at the centre than at the flanks — leaving a wedge of empty
+    // canvas between roof and wall. The wall is now a pentagon whose top tracks the eave,
+    // the same as the house and the coop.
+    const CXLb = 31, CXRb = 32, BHALF = 24, BDEPTH = 18, KNEE = 0.44;
+    const EXT_LEN = 15, EXT_PITCH = 0.12;                  // the HAY BAY: an open-sided lean-to
+    const dOfB = (x) => (x <= CXLb ? CXLb - x : x - CXRb);
+    // §S.2c the roof KINKS to a shallower pitch past the break rather than the bay having a
+    // roof of its own: same band depth, so the rake, the eave and the courses carry through.
+    const bTop = (d) => (d <= BHALF
+        ? 3 + Math.floor(d * 0.38)
+        : 3 + Math.floor(BHALF * 0.38) + Math.floor((d - BHALF) * EXT_PITCH));
+    const bBot = (d) => bTop(d) + BDEPTH;
+    const litLeftB = LIGHT.x < 0;
+    const maxDB = (x) => (x > CXRb ? BHALF + EXT_LEN : BHALF);   // the bay is on the RIGHT flank
+    const onRoofB = (x) => dOfB(x) <= maxDB(x);
+    const bayX0 = bx1 + 1, bayX1 = CXRb + BHALF + EXT_LEN;       // open bay: no wall, posts + hay
+    const OLroofB = outlineFor(R[1]);
+    // ---- HAY BAY — an open-sided lean-to on the right: posts, stacked bales, no wall.
+    // This is where the hayloft went. Buried in the facade it read as a dark smudge; as an
+    // open bay under the continued roofline the bales are the feature. ----
+    for (let x = bayX0; x <= bayX1; x++) {
+        const yTop = bBot(dOfB(x)) + 1, h = 55 - yTop + 1;
+        if (h <= 0) continue;
+        ctx.fillStyle = 'rgba(0,0,0,0.30)'; ctx.fillRect(x, yTop, 1, h);          // the bay is in shade
+    }
+    { // STACKED BALES — three courses filling the bay, offset like real stacking, with a
+      // hint of plank back-wall behind them so the bay reads as a shaded interior rather
+      // than a black void.
+      for (let x = bayX0 + 2; x <= bayX1 - 2; x++) {                              // back wall behind the stack
+          const yTop = bBot(dOfB(x)) + 2;
+          ctx.fillStyle = shade(R[1], 0.72); ctx.fillRect(x, yTop, 1, 55 - yTop);
+          if ((x - bayX0) % 4 === 0) { ctx.fillStyle = 'rgba(0,0,0,0.22)'; ctx.fillRect(x, yTop, 1, 55 - yTop); }
+      }
+      const baleW = 8, baleH = 5;
+      const bale = (bxp, by, w) => {
+          if (bxp < bayX0 + 1 || bxp + w - 1 > bayX1) return;
+          ctx.fillStyle = GRN[2]; ctx.fillRect(bxp, by, w, baleH);
+          ctx.fillStyle = GRN[4]; ctx.fillRect(bxp, by, w, 1);                    // lit top
+          ctx.fillStyle = GRN[1]; ctx.fillRect(bxp, by + baleH - 1, w, 1);        // shaded underside
+          ctx.fillStyle = GRN[0]; ctx.fillRect(bxp + w - 1, by, 1, baleH);        // away edge
+          for (const t of [2, w - 3]) { ctx.fillStyle = TEX_DARK; ctx.fillRect(bxp + t, by, 1, baleH); }   // twine
+          for (let k = 1; k < w - 1; k += 3) { ctx.fillStyle = GRN[5]; ctx.fillRect(bxp + k, by + 1, 1, 1); }  // straw glints
+          ctx.fillStyle = 'rgba(0,0,0,0.18)'; ctx.fillRect(bxp, by + baleH, w, 1);   // seats on the one below
+      };
+      // three courses: two full, then a part course on top so the stack has a silhouette
+      bale(bayX0 + 1, 49, baleW); bale(bayX0 + 10, 49, baleW);                   // bottom course, full width
+      bale(bayX0 + 2, 44, baleW); bale(bayX0 + 11, 44, baleW);                    // middle course, offset
+      bale(bayX0 + 4, 39, baleW); bale(bayX0 + 13, 39, 6);                        // top course, part-stacked
+      ctx.fillStyle = GRN[3];                                                     // loose straw spilling at the foot
+      for (let k = 0; k < 10; k++) {
+          const lx = bayX0 + 2 + k, h = hash2d(lx, 11) > 0.5 ? 2 : 1;
+          if (lx > bayX1 - 1) break;
+          ctx.fillRect(lx, 55 - h, 1, h);
+      }
+    }
+    for (const px of [bayX0 + 1, bayX1 - 1]) {                                     // support posts
+        const yTop = bBot(dOfB(px)) + 1;
+        ctx.fillStyle = W[2]; ctx.fillRect(px, yTop, 2, 55 - yTop + 1);
+        ctx.fillStyle = shade(W[3], 1.08); ctx.fillRect(px, yTop, 1, 55 - yTop + 1);
+        ctx.fillStyle = TEX_DARK; ctx.fillRect(px + 1, yTop, 1, 55 - yTop + 1);
+    }
+    ctx.fillStyle = shade(OL, 0.9); ctx.fillRect(bayX0, 56, bayX1 - bayX0 + 1, 1); // bay ground line
+
+    // ---- WALL — barn red, top following the eave ----
+    for (let x = bx0; x <= bx1; x++) {
+        const yTop = bBot(dOfB(x)) + 1, h = wy1 - yTop + 1;
+        if (h <= 0) continue;
+        let col = R[3];
+        if (litLeftB ? x <= bx0 + 3 : x >= bx1 - 3) col = R[4];              // lit flank
+        else if (litLeftB ? x >= bx1 - 7 : x <= bx0 + 7) col = R[2];         // shadow band
+        if (litLeftB ? x >= bx1 - 1 : x <= bx0 + 1) col = R[1];              // side reveal
+        ctx.fillStyle = col; ctx.fillRect(x, yTop, 1, h);
+    }
+    for (const sx of [18, 24, 42, 48]) {                                     // plank seams, proportional (§S.2)
+        const yTop = bBot(dOfB(sx)) + 3, hgt = wy1 - 3 - yTop;
+        if (hgt <= 0) continue;
+        ctx.fillStyle = TEX_DARK;  ctx.fillRect(sx, yTop, 1, hgt);
+        ctx.fillStyle = TEX_LIGHT; ctx.fillRect(sx + 1, yTop, 1, hgt);
+    }
+    ctx.fillStyle = OL;
+    ctx.fillRect(bx0 - 1, bBot(dOfB(bx0)) + 1, 1, wy1 - bBot(dOfB(bx0)));
+    ctx.fillRect(bx1 + 1, bBot(dOfB(bx1)) + 1, 1, wy1 - bBot(dOfB(bx1)));
     // stone foundation: course band with a lit top edge + ground AO
     ctx.fillStyle = S[1]; ctx.fillRect(bx0 - 1, wy1 - 2, bx1 - bx0 + 3, 2);
     ctx.fillStyle = shade(S[2], 1.1); ctx.fillRect(bx0 - 1, wy1 - 2, bx1 - bx0 + 3, 1);   // foundation top relief
     ctx.fillStyle = S[0]; ctx.fillRect(bx0 - 1, wy1 + 1, bx1 - bx0 + 3, 1);               // ground AO
-    // gambrel roof: shallow upper slope (y8–14), steep lower slope (y14–27), overhanging eaves
-    drawRoof(ctx, 32, 8, 27, (y) => (y <= 14 ? 5 + (y - 8) * 1.5 : 14 + (y - 14) * 1.0),
-        { base: R[1], hi: R[3], lo: R[0], ol: OL });
+    // ---- GAMBREL ROOF — the barn's signature two-pitch form, rebuilt on the shared
+    // grammar (§S.2b/§S.2d). The KNEE is expressed as two sub-planes within one band:
+    // the upper slope is shallower so it tips further skyward and reads BRIGHTER, the
+    // lower slope is steeper and darker, with a lit crease where they meet.
+    for (let x = 1; x <= 74; x++) {
+        if (!onRoofB(x)) continue;
+        const d = dOfB(x), t0 = bTop(d), b0 = bBot(d);
+        const lit = (x <= CXLb) === litLeftB;
+        let firstY = -1;
+        for (let y = t0; y <= b0; y++) {
+            if (d > maxDB(x) - overhangInset(y)) continue;
+            const f = (y - t0) / Math.max(1, b0 - t0);
+            const onBay = d > BHALF;                                  // the bay plane is shallower -> tips skyward -> brighter
+            const upper = f < KNEE;                                   // the gambrel's two planes
+            // The committed lit-left / shadow-right split comes FIRST; the gambrel knee then
+            // MODULATES within each side. Picking tones per sub-plane instead made the shadow
+            // side's upper slope the same value as the lit side's lower slope, so the top half
+            // of the right gable stopped reading as shadow at all.
+            let col = lit ? R[3] : R[1];
+            if (!upper) col = shade(col, 0.86);                       // the steeper lower pitch catches less light
+            if (onBay) col = shade(lit ? R[3] : R[1], 1.06);          // the bay is shallower -> brighter
+            if (f < 0.10) col = shade(col, 1.08);
+            else if (f > 0.86) col = shade(col, 0.86);
+            const sh = shingleTile(col, x, y - t0, lit);
+            col = roofLightPass(sh.col, sh.tcol, sh.rr, d / BHALF, f,
+                                { strokeA: lit ? 1.10 : 1.05, strokeB: lit ? 1.04 : 1.02,
+                                  lift: lit ? 1.05 : 1.0, fallX: lit ? 0.08 : 0.05, fallY: 0.05 });
+            const kneeY = t0 + Math.round((b0 - t0) * KNEE);
+            if (!onBay && y === kneeY) col = shade(col, 1.14);        // lit crease at the gambrel's pitch break
+            else if (!onBay && y === kneeY + 1) col = shade(col, 0.82);
+            if (y === b0) col = lit ? shade(R[1], 0.8) : R[0];        // eave fascia
+            if (firstY < 0) firstY = y;
+            ctx.fillStyle = col; ctx.fillRect(x, y, 1, 1);
+        }
+        if (firstY >= 0) { ctx.fillStyle = OLroofB; ctx.fillRect(x, firstY - 1, 1, 1); }
+    }
+    const bRidge = bTop(0);
+    ctx.fillStyle = shade(R[4], 1.08); ctx.fillRect(litLeftB ? CXLb : CXRb, bRidge, 1, BDEPTH);
+    ctx.fillStyle = R[0];              ctx.fillRect(litLeftB ? CXRb : CXLb, bRidge, 1, BDEPTH + 1);
+    ctx.fillStyle = OLroofB;           ctx.fillRect(CXLb, bRidge - 1, 2, 1);
+    // graded soffit shadow where the eave overhangs the wall (§S.2c)
+    for (let x = bx0; x <= bx1; x++) {
+        const ey = bBot(dOfB(x)) + 1;
+        ctx.fillStyle = 'rgba(0,0,0,0.30)'; ctx.fillRect(x, ey, 1, 1);
+        ctx.fillStyle = 'rgba(0,0,0,0.16)'; ctx.fillRect(x, ey + 1, 1, 1);
+    }
     // ridge cupola: louvered box (lit-left/shadow-right), cap, vent, base shadow onto roof
     ctx.fillStyle = OL; ctx.fillRect(28, 3, 8, 6);
     ctx.fillStyle = R[2]; ctx.fillRect(29, 4, 6, 4);
@@ -2377,15 +2508,16 @@ export function makeBarn() {
     ctx.fillStyle = R[1]; ctx.fillRect(33, 4, 2, 4);                // shadow right
     ctx.fillStyle = shade(R[1], 0.82); ctx.fillRect(30, 5, 4, 1); ctx.fillRect(30, 7, 4, 1);  // louver slats
     ctx.fillStyle = '#241c18'; ctx.fillRect(31, 5, 2, 1);          // vent slit
-    ctx.fillStyle = trim; ctx.fillRect(27, 2, 10, 1);               // cap
+    ctx.fillStyle = shade(R[2], 1.06); ctx.fillRect(27, 2, 10, 1);   // cap — was cream `trim`, which read as a stray white accent on the ridge
     ctx.fillStyle = shade(R[0], 0.85); ctx.fillRect(28, 9, 8, 1);   // cupola base shadow on roof
-    // hayloft: recessed opening with baled hay + a pulley beam
-    recess(ctx, 29, 29, 7, 7, '#241c14', OL);
-    ctx.fillStyle = RAMPS.GRAIN[2]; ctx.fillRect(30, 32, 5, 3);     // hay bale inside
-    ctx.fillStyle = RAMPS.GRAIN[4]; ctx.fillRect(30, 32, 3, 1);     // lit straw
-    ctx.fillStyle = W[3]; ctx.fillRect(31, 26, 2, 3);              // pulley beam
-    ctx.fillStyle = W[1]; ctx.fillRect(31, 26, 1, 3);
-    ctx.fillStyle = '#2a2620'; ctx.fillRect(31, 29, 1, 1);        // pulley
+    // HOIST — the loft opening moved out to the hay bay, so the facade keeps only the
+    // pulley beam and its block, which reads as the barn's working gear.
+    { const hy = bBot(dOfB(31)) + 2;
+      ctx.fillStyle = W[3]; ctx.fillRect(30, hy, 3, 3);
+      ctx.fillStyle = shade(W[4], 1.08); ctx.fillRect(30, hy, 3, 1);
+      ctx.fillStyle = '#2a2620'; ctx.fillRect(31, hy + 3, 1, 2);                  // rope
+      ctx.fillStyle = W[1]; ctx.fillRect(30, hy + 5, 3, 2);                       // block
+      ctx.fillStyle = TEX_DARK; ctx.fillRect(31, hy + 5, 1, 2); }
     // big white DOORS — recessed, framed planks, beveled X-braces, hinges, threshold AO
     const dx0 = 25, dx1 = 39, dy0 = 37, dy1 = 55, dw = dx1 - dx0, dh = dy1 - dy0;
     ctx.fillStyle = OL; ctx.fillRect(dx0 - 1, dy0 - 1, dw + 3, dh + 2);
@@ -2403,6 +2535,21 @@ export function makeBarn() {
     }
     ctx.fillStyle = '#2a2620'; ctx.fillRect(dx0 + 1, dy0 + 3, 2, 1); ctx.fillRect(dx0 + 1, dy1 - 3, 2, 1);   // hinges
     ctx.fillStyle = shade(trimLo, 0.6); ctx.fillRect(dx0 - 1, dy1 + 1, dw + 3, 1);   // threshold ground AO
+
+    // ---- SEASONS (§6b0) — the barn had none ----
+    if (winter) {
+        for (let x = 1; x <= 74; x++) {
+            if (!onRoofB(x)) continue;
+            const d = dOfB(x), lit = (x <= CXLb) === litLeftB;
+            snowCourses(ctx, x, bTop(d), bBot(d), { frac: lit ? 0.62 : 0.52, bright: lit, tone: SNOW });
+            eaveIcicles(ctx, x, bBot(d), SNOW);
+        }
+        ctx.fillStyle = SNOW.deep; ctx.fillRect(CXLb, bRidge, 2, 3);
+        ctx.fillStyle = SNOW.mid;  ctx.fillRect(27, 1, 10, 1);                     // snow on the cupola cap
+    }
+    if (fall) leafDrift(ctx, 1, 74, (x) => bTop(dOfB(x)), (x) => bBot(dOfB(x)), onRoofB);
+
+    _barn[season] = c;
     return c;
 }
 
