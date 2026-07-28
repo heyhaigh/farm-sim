@@ -641,6 +641,20 @@ const FACILITY_DEFS = {
     mill: { label: 'mill', w: PADDOCK_CELL, h: PADDOCK_CELL, struct: { w: 3, h: 3 }, produce: null, workstation: true },   // #99b: grinds wheat -> grain (chicken/fish feed)
     hatchery: { label: 'hatch house', w: PADDOCK_CELL, h: PADDOCK_CELL, struct: { w: 3, h: 3 }, produce: null, workstation: true },   // #100: hatches eggs -> chickens
 };
+// The WATER inside a pond paddock: the paddock inset by a one-tile bank, so a farmer can always walk
+// round the pond rather than through it. `fac.water` is stored per pond and this is the fallback for a
+// facility that predates it — a legacy pond was water edge-to-edge, so its own rect IS its water.
+const POND_BANK = 1;
+function pondWater(fac) {
+    if (fac.water) return fac.water;
+    if (fac.w <= POND_BANK * 2 + 1 || fac.h <= POND_BANK * 2 + 1) return { x: fac.x, y: fac.y, w: fac.w, h: fac.h };
+    return { x: fac.x + POND_BANK, y: fac.y + POND_BANK, w: fac.w - POND_BANK * 2, h: fac.h - POND_BANK * 2 };
+}
+// The ground a facility's producers are confined to: the water for a pond, the paddock for everything else.
+function producerRegion(fac) {
+    return fac.type === 'pond' ? pondWater(fac) : { x: fac.x, y: fac.y, w: fac.w, h: fac.h };
+}
+
 // Where a building sits inside its paddock: centred, snapped to whole tiles (the SOLID footprint can't be
 // fractional). cx/cy is the drawn anchor and is the FOOTPRINT's centre, deliberately not the paddock's.
 // The two differ by half a tile whenever footprint and cell disagree in parity — a 4x4 barn in a 9-cell —
@@ -2929,6 +2943,7 @@ export class World {
                 padGrid: p.padGrid ? { ...p.padGrid } : undefined,   // the paddock lattice, anchored once and kept
                 facilities: p.facilities.map(f => ({
                     type: f.type, x: f.x, y: f.y, w: f.w, h: f.h,
+                    water: f.water ? { ...f.water } : undefined,   // #paddock the pond's inset water rect
                     struct: f.struct ? { ...f.struct } : null, trough: f.trough ? { ...f.trough } : null,
                     clutch: f.clutch ? { ...f.clutch } : null,   // #100 incubating clutch persists
                     producers: f.producers.map(pr => { const { region, ...rest } = pr; return { ...rest, busy: false }; }),
@@ -3081,9 +3096,10 @@ export class World {
             if (pd.padCells) plot.padCells = new Set(pd.padCells);   // #paddock annexed pen ground
             if (pd.padGrid) plot.padGrid = { ...pd.padGrid };        // #paddock the lattice this farm laid out on
             plot.facilities = pd.facilities.map(fd => {
-                const region = { x: fd.x, y: fd.y, w: fd.w, h: fd.h };
+                const region = producerRegion(fd);   // #paddock a pond confines its life to the WATER, not the bank
                 return {
-                    type: fd.type, ...region,
+                    type: fd.type, x: fd.x, y: fd.y, w: fd.w, h: fd.h,
+                    water: fd.water ? { ...fd.water } : undefined,
                     struct: fd.struct ? { ...fd.struct } : null, trough: fd.trough ? { ...fd.trough } : null,
                     clutch: fd.clutch ? { ...fd.clutch } : null,   // #100 restore an incubating clutch
                     producers: fd.producers.map(pr => ({ ...pr, region })),
@@ -5112,11 +5128,14 @@ export class World {
         // the target may hold crops (reflow claims field ground) — clear them; the farmers replant elsewhere
         for (let j = target.y; j < target.y + target.h; j++)
             for (let i = target.x; i < target.x + target.w; i++) this.crops.delete(`${i},${j}`);
-        if (fac.type === 'pond') {   // re-carve the water
-            for (let j = fac.y; j < fac.y + fac.h; j++)
-                for (let i = fac.x; i < fac.x + fac.w; i++) if (this.get(i, j) === T.WATER) this.set(i, j, T.GRASS);
-            for (let j = target.y; j < target.y + target.h; j++)
-                for (let i = target.x; i < target.x + target.w; i++) this.set(i, j, T.WATER);
+        if (fac.type === 'pond') {   // re-carve the water, keeping the pond's own inset bank
+            const from = pondWater(fac);
+            for (let j = from.y; j < from.y + from.h; j++)
+                for (let i = from.x; i < from.x + from.w; i++) if (this.get(i, j) === T.WATER) this.set(i, j, T.GRASS);
+            const to = pondWater({ ...fac, ...target, water: fac.water ? { x: fac.water.x + dx, y: fac.water.y + dy, w: fac.water.w, h: fac.water.h } : undefined });
+            fac.water = { ...to };
+            for (let j = to.y; j < to.y + to.h; j++)
+                for (let i = to.x; i < to.x + to.w; i++) this.set(i, j, T.WATER);
         }
         if (fac.struct) {
             const TILE = { coop: T.COOP, barn: T.BARN, mill: T.MILL, hatchery: T.HATCH };
@@ -5126,7 +5145,7 @@ export class World {
         }
         if (fac.trough) { fac.trough.i = target.x + target.w - 1; fac.trough.j = target.y + target.h - 1; }
         fac.x = target.x; fac.y = target.y; fac.w = target.w; fac.h = target.h;   // legacy 3x3 pens grow to the roomier defs
-        const region = { x: fac.x, y: fac.y, w: fac.w, h: fac.h };
+        const region = producerRegion(fac);   // a pond's life stays in the water, not on the new bank
         for (const pr of fac.producers) { pr.fx += dx; pr.fy += dy; pr.region = region; }
         // anything now stranded on a blocked tile hops to valid ground inside its own pen
         for (const pr of fac.producers) {
@@ -5137,6 +5156,43 @@ export class World {
             }
         }
         this._tilesChanged = true;
+    }
+
+    // Lily pads grow in RAFTS, not rows. The old placement stamped one on every other tile CENTRE
+    // (`(i+j) % 2` with a 70% roll) — a checkerboard, which in this projection is a perfect diamond
+    // lattice, ~28 of them on a pond with every pad squared to its neighbours. Pads are `wander: false`,
+    // so that arrangement was permanent.
+    //
+    // Real pads spread from a rootstock: a few clumps, densest at the heart and thinning outward, open
+    // water between them, and a couple of strays off on their own. Radius is scaled by a LINEAR roll, not
+    // its square root — sqrt would spread them evenly across the disc, whereas linear piles them toward
+    // the middle, which is what makes a clump read as a clump. A minimum separation keeps them crowding
+    // without overlapping, and rejected candidates are simply dropped, so a pond ends up with roughly a
+    // third of the pads it used to carry. Deterministic: seeded rand, fixed order.
+    #lilyRafts(region, rand) {
+        const spots = [];
+        const MARGIN = 0.9, MIN_SEP = 0.72;                       // off the bank; crowding but not overlapping
+        const x0 = region.x + MARGIN, x1 = region.x + region.w - MARGIN;
+        const y0 = region.y + MARGIN, y1 = region.y + region.h - MARGIN;
+        if (x1 <= x0 || y1 <= y0) return spots;                   // a pond too small to float anything
+        const place = (x, y) => {
+            if (x < x0 || x > x1 || y < y0 || y > y1) return;
+            for (const s of spots) if ((s.x - x) ** 2 + (s.y - y) ** 2 < MIN_SEP * MIN_SEP) return;
+            spots.push({ x, y });
+        };
+        const rafts = 2 + Math.floor(rand() * 3);                 // 2..4 clumps
+        for (let c = 0; c < rafts; c++) {
+            const rx = x0 + rand() * (x1 - x0), ry = y0 + rand() * (y1 - y0);
+            const spread = 0.9 + rand() * 1.2;
+            place(rx, ry);                                        // the rootstock the raft grew from
+            const n = 3 + Math.floor(rand() * 3);                 // 3..5 more around it
+            for (let k = 0; k < n; k++) {
+                const ang = rand() * Math.PI * 2, r = rand() * spread;
+                place(rx + Math.cos(ang) * r, ry + Math.sin(ang) * r);
+            }
+        }
+        for (let k = 0; k < 2; k++) place(x0 + rand() * (x1 - x0), y0 + rand() * (y1 - y0));   // strays
+        return spots;
     }
 
     #buildFacility(plot, sheet, type, region) {
@@ -5158,15 +5214,18 @@ export class World {
         const yardSpot = (k) => this.penYardSpot(fac, k, rand);
 
         if (type === 'pond') {
-            for (let j = region.y; j < region.y + region.h; j++)
-                for (let i = region.x; i < region.x + region.w; i++) this.set(i, j, T.WATER);
-            // lily pads on a scattering of tiles
-            for (let j = region.y; j < region.y + region.h; j++) {
-                for (let i = region.x; i < region.x + region.w; i++) {
-                    if ((i + j) % 2 === 0 && rand() < 0.7) fac.producers.push(this.#makeProducer('pad', i + 0.5, j + 0.5, region));
-                }
-            }
-            for (let k = 0; k < 3; k++) fac.producers.push(this.#makeProducer('fish', cx + (rand() - 0.5), cy + (rand() - 0.5), region));
+            // The water is INSET one tile inside the paddock, leaving a walkable bank all the way round.
+            // Filling the paddock edge-to-edge put water flush against the fence with no way past it, so
+            // the only route to the far side was over the pond — and water is pathable when it's the goal
+            // tile, so farmers waded across to collect. A bank gives them somewhere to stand instead.
+            const wr = pondWater(fac);
+            fac.water = { ...wr };   // stored, so a legacy pond (water edge-to-edge) keeps its own shape
+            for (let j = wr.y; j < wr.y + wr.h; j++)
+                for (let i = wr.x; i < wr.x + wr.w; i++) this.set(i, j, T.WATER);
+            // pond life is confined to the WATER, not the paddock — no fish flopping on the bank
+            for (const s of this.#lilyRafts(wr, rand)) fac.producers.push(this.#makeProducer('pad', s.x, s.y, wr));
+            const wcx = wr.x + wr.w / 2, wcy = wr.y + wr.h / 2;
+            for (let k = 0; k < 3; k++) fac.producers.push(this.#makeProducer('fish', wcx + (rand() - 0.5), wcy + (rand() - 0.5), wr));
         } else if (type === 'coop') {
             raise('coop', T.COOP);
             fac.trough = troughAt();
@@ -12368,8 +12427,17 @@ export class Farmer {
     }
 
     #pursuePoach(loot) {
-        const ti = loot.prod ? loot.prod.fx : loot.crop.i + 0.5;
-        const tj = loot.prod ? loot.prod.fy : loot.crop.j + 0.5;
+        let ti = loot.prod ? loot.prod.fx : loot.crop.i + 0.5;
+        let tj = loot.prod ? loot.prod.fy : loot.crop.j + 0.5;
+        // Same shore rule as honest work (#pursue): findPath always permits the GOAL tile so a bot can
+        // reach the thing it means to act on, which means targeting a fish or a lily pad walks the thief
+        // out onto the water. A poacher gets no special dispensation to walk on water — take it from the
+        // bank. (This guard existed only on the work path; the poach path went straight in.)
+        if (loot.prod && this.world.pathBlocked(Math.floor(ti), Math.floor(tj))) {
+            const spot = this.world.nearestOpenTile({ i: ti, j: tj });
+            if (!spot) return;
+            ti = spot.i + 0.5; tj = spot.j + 0.5;
+        }
         if (!this.#goTo(ti, tj, 'poach')) return;   // unreachable — don't claim the loot
         this.poachLoot = loot;
         if (loot.prod) { loot.prod.busy = true; this.targetProd = loot.prod; }
