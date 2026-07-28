@@ -49,8 +49,8 @@ export function makeBuilding(season = 'SUMMER') {
     const dR = () => 57;                               // (no camera splay; screen-aligned per 6a.2)
     const cx = 32;
 
-    // ---- grounding FIRST (behind): fixed <=1-tile seat shadow, rows 72-73 peek below the plinth ----
-    seatShadow(ctx, { cx, cy: 71, rx: 10, ry: 3 }, { alpha: 0.30 });
+    // NO SEAT SHADOW (§S.2). The <=1-tile clamp seats a prop; under a building it renders a
+    // ~20px smudge unrelated to the footprint. The plinth + base outline do the grounding.
 
     // ---- DECK — the light TOP-PLANE (roof from above) with a parapet rim ----
     const deckLit = STONE_LIT, deckMid = S[4], deckAway = S[3];                       // ramp steps, no plane multiplies (§1a)
@@ -59,12 +59,23 @@ export function makeBuilding(season = 'SUMMER') {
         const lipX = litLeft ? lx + 1 : rx - 1;                                       // lit inner lip hugs the LIGHT side
         const farX = litLeft ? rx : lx;                                               // rim edge away from LIGHT
         for (let x = lx; x <= rx; x++) {
-            let col;
-            if (x === lx || x === rx || y === dTop) col = S[3];                       // parapet rim
+            let col, isRim = false;
+            if (x === lx || x === rx || y === dTop) { col = S[3]; isRim = true; }      // parapet rim
             else if (y === dTop + 1 || x === lipX) col = deckLit;                     // lit inner lip toward LIGHT
             else {
                 const towardSun = litLeft ? x < lx + (rx - lx) * 0.4 : x > rx - (rx - lx) * 0.4;
                 col = t > 0.72 ? deckAway : (towardSun && t < 0.45 ? deckLit : deckMid);
+            }
+            if (!isRim) {
+                // §S.2b LIGHTING PASS — the deck was flat tile work with no diagonal stroke
+                // and no broad gradient, which is exactly what makes a flat plane read dead.
+                const ci = Math.floor((y - dTop) / 4), rr = ((y - dTop) % 4 + 4) % 4;
+                const tcol = (x + (ci % 2) * 2) % 5;
+                if ((tcol + rr) % 4 === 1) col = shade(col, 1.07);                     // (a) diagonal stroke
+                else if ((tcol + rr) % 4 === 2) col = shade(col, 1.03);
+                const gx = litLeft ? (x - lx) / Math.max(1, rx - lx)
+                                   : 1 - (x - lx) / Math.max(1, rx - lx);              // 0 toward the sun .. 1 away
+                col = shade(col, 1.05 - gx * 0.11 - t * 0.07);                         // (b)+(c) broad falloff + lift
             }
             ctx.fillStyle = col; ctx.fillRect(x, y, 1, 1);
         }
@@ -92,6 +103,13 @@ export function makeBuilding(season = 'SUMMER') {
     ctx.fillStyle = S[3]; ctx.fillRect(litStripX, wy0, 3, wy1 - wy0 + 1);             // lit strip toward LIGHT
     ctx.fillStyle = shade(S[2], 0.9); ctx.fillRect(shadowBandX, wy0, 4, wy1 - wy0 + 1); // shadow band
     ctx.fillStyle = S[1]; ctx.fillRect(sliverX, wy0, 2, wy1 - wy0 + 1);               // 2px DEPTH-SLIVER (away from LIGHT) — never a receding wall
+    // §S.2b broad gradient across the FACE, keyed to LIGHT and applied as a translucent
+    // wash so it scales with the lit strip, the mid field and the sliver alike (§S.2).
+    for (let x = wx0; x <= wx1; x++) {
+        const gx = litLeft ? (x - wx0) / ww : 1 - (x - wx0) / ww;                     // 0 toward the sun .. 1 away
+        ctx.fillStyle = `rgba(0,0,0,${(0.11 * gx).toFixed(3)})`;
+        ctx.fillRect(x, wy0, 1, wy1 - wy0 + 1);
+    }
     // overhang underside: the deck sticks 2px past the wall each side
     ctx.fillStyle = OL; ctx.fillRect(dL(dBot), wy0, wx0 - dL(dBot), 1); ctx.fillRect(wx1 + 1, wy0, dR(dBot) - wx1, 1);
     // eave-AO whisper on the wall under the overhang
@@ -102,8 +120,8 @@ export function makeBuilding(season = 'SUMMER') {
     // sparse stone brick ticks (hashed; the openings paint over them)
     for (let x = wx0 + 1; x <= wx1 - 3; x += 2) for (let y = wy0 + 3; y <= wy1 - 2; y += 3) {
         const r = _h(x, y);
-        if (r > 0.82) { ctx.fillStyle = shade(S[2], 0.9); ctx.fillRect(x, y, 2, 1); }
-        else if (r < 0.08) { ctx.fillStyle = shade(S[2], 1.07); ctx.fillRect(x, y, 1, 1); }
+        if (r > 0.82) { ctx.fillStyle = 'rgba(0,0,0,0.11)'; ctx.fillRect(x, y, 2, 1); }
+        else if (r < 0.08) { ctx.fillStyle = 'rgba(255,238,210,0.07)'; ctx.fillRect(x, y, 1, 1); }
     }
 
     // ---- FLOOR BANDS — horizontal cornice ledges splitting the face into stories ----
@@ -132,16 +150,7 @@ export function makeBuilding(season = 'SUMMER') {
         }
     }
 
-    // ---- GROUND STORY — a tall recessed double door + two slit windows ----
-    { const dx = 27, dyT = 55, dw = 10, dh = 13;
-      ctx.fillStyle = '#3a2818'; ctx.fillRect(dx - 1, dyT - 1, dw + 2, dh + 2);       // WOOD-family surround (§3.2: never a stone outline around wood)
-      ctx.fillStyle = '#3a2818'; ctx.fillRect(dx, dyT, dw, dh);                       // dark interior (never below OUTLINE-BROWN)
-      ctx.fillStyle = shade(W[2], 1.08); ctx.fillRect(dx - 1, dyT - 1, dw + 2, 1);    // lit wood lintel
-      ctx.fillStyle = W[2]; ctx.fillRect(dx, dyT, 1, dh); ctx.fillRect(dx + dw - 1, dyT, 1, dh);   // jamb posts
-      ctx.fillStyle = W[1]; ctx.fillRect(dx + dw / 2, dyT + 1, 1, dh - 1);            // center seam (double door)
-      ctx.fillStyle = shade(W[3], 1.1); ctx.fillRect(dx + 3, dyT + 6, 1, 1); ctx.fillRect(dx + 6, dyT + 6, 1, 1);   // handles
-      ctx.fillStyle = 'rgba(0,0,0,0.13)'; ctx.fillRect(dx - 1, dyT + dh + 1, dw + 2, 1);   // threshold whisper
-    }
+    // ---- GROUND STORY — slit windows (the DOOR is drawn after the plinth, below) ----
     for (const x of [14, 44]) {                                                       // ground slits
         recess(ctx, x, 57, 4, 5, paneCol, S[1]);                                      // frosted in winter like the upper glass
         ctx.fillStyle = G[0]; ctx.fillRect(x, 60, 4, 1);
@@ -152,14 +161,26 @@ export function makeBuilding(season = 'SUMMER') {
     // ---- FOUNDATION PLINTH + base outline (lower half only, per the OUTLINE LAW) ----
     ctx.fillStyle = S[1]; ctx.fillRect(wx0, py0, ww, py1 - py0 + 1);
     ctx.fillStyle = S[3]; ctx.fillRect(wx0, py0, ww, 1);                              // plinth top lit course (ramp step, not a multiply)
-    ctx.fillStyle = shade(S[1], 0.9);
-    for (let x = wx0 + 3; x <= wx1 - 3; x += 6) ctx.fillRect(x, py0 + 1, 1, 2);       // plinth block seams
-    ctx.fillStyle = 'rgba(0,0,0,0.13)'; ctx.fillRect(26, 68, 12, 1);                  // re-stamp the door threshold OVER the plinth (breaks the lit course under the doorway)
+    ctx.fillStyle = 'rgba(0,0,0,0.14)';
+    for (let x = wx0 + 3; x <= wx1 - 3; x += 6) ctx.fillRect(x, py0 + 1, 1, 2);       // plinth block seams (proportional, §S.2)
     ctx.fillStyle = outlineFor(S[3]);                                                 // lit column sits against the S[3] lit strip — one step, not three
     ctx.fillRect(litLeft ? wx0 - 1 : wx1 + 1, 44, 1, py1 - 44 + 1);                   // side outline (lit side), lower half down
     ctx.fillStyle = OL;
     ctx.fillRect(litLeft ? wx1 + 1 : wx0 - 1, 44, 1, py1 - 44 + 1);                   // side outline (shadow side) — adjacent fill IS the S[1] sliver
     ctx.fillRect(wx0, py1 + 1, ww, 1);                                                // ground AO row
+
+    // ---- DOOR — drawn AFTER the plinth so it RUNS THROUGH it to the ground (§S.2).
+    // Previously it ended at y67 and the plinth was then painted over its base, so the
+    // doorway both stopped short of the ground AND got clipped by the foundation.
+    { const dx = 27, dyT = 55, dw = 10, dBottom = py1, dh = dBottom - dyT + 1;
+      ctx.fillStyle = '#3a2818'; ctx.fillRect(dx - 1, dyT - 1, dw + 2, dh + 1);       // WOOD-family surround (§3.2)
+      ctx.fillStyle = '#3a2818'; ctx.fillRect(dx, dyT, dw, dh);                       // dark interior
+      ctx.fillStyle = shade(W[2], 1.08); ctx.fillRect(dx - 1, dyT - 1, dw + 2, 1);    // lit wood lintel
+      ctx.fillStyle = W[2]; ctx.fillRect(dx, dyT, 1, dh); ctx.fillRect(dx + dw - 1, dyT, 1, dh);   // jamb posts
+      ctx.fillStyle = W[1]; ctx.fillRect(dx + dw / 2, dyT + 1, 1, dh - 1);            // center seam (double door)
+      ctx.fillStyle = shade(W[3], 1.1); ctx.fillRect(dx + 3, dyT + 6, 1, 1); ctx.fillRect(dx + 6, dyT + 6, 1, 1);   // handles
+      ctx.fillStyle = 'rgba(0,0,0,0.16)'; ctx.fillRect(dx, dBottom, dw, 1);           // contact shadow where it meets the ground
+    }
 
     // ---- SEASONS ----
     if (winter) {
