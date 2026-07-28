@@ -1563,13 +1563,9 @@ export function makeCoopTD(season = 'SUMMER', opts = {}) {
     }
     if (fall) leafDrift(ctx, 1, 50, (x) => topAt(dOf(x)), (x) => botAt(dOf(x)), onRoof);
 
-    // ---- grounding tufts ----
-    if (!winter) {
-        const gA = fall ? '#7d6a2c' : RAMPS.FOLIAGE[4], gB = fall ? '#5f5322' : RAMPS.FOLIAGE[3];
-        for (const [gx, gc] of [[14, gA], [18, gB], [36, gB], [39, gA]]) {
-            ctx.fillStyle = gc; ctx.fillRect(gx, 40, 1, 2); ctx.fillRect(gx - 1, 41, 1, 1); ctx.fillRect(gx + 1, 41, 1, 1);
-        }
-    }
+    // (no grounding tufts) — they sat directly beneath the nest boxes and cluttered the
+    // one part of the frontage that has to stay readable, since the straw and the egg
+    // are what report the coop's state. Ground planting belongs in the terrain anyway.
 
     _coopTD[_k] = c;
     return c;
