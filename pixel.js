@@ -2467,21 +2467,28 @@ export function makeBarn(season = 'SUMMER') {
         for (let y = t0; y <= b0; y++) {
             if (d > maxDB(x) - overhangInset(y)) continue;
             const f = (y - t0) / Math.max(1, b0 - t0);
-            const onBay = d > BHALF;                                  // the bay plane is shallower -> tips skyward -> brighter
+            const onBay = d > BHALF;
             const upper = f < KNEE;                                   // the gambrel's two planes
             // The committed lit-left / shadow-right split comes FIRST; the gambrel knee then
             // MODULATES within each side. Picking tones per sub-plane instead made the shadow
             // side's upper slope the same value as the lit side's lower slope, so the top half
             // of the right gable stopped reading as shadow at all.
-            let col = lit ? R[3] : R[1];
-            if (!upper) col = shade(col, 0.86);                       // the steeper lower pitch catches less light
-            if (onBay) col = shade(lit ? R[3] : R[1], 1.06);          // the bay is shallower -> brighter
+            // THE BAY is near-flat, so it tips toward the SKY and reads BRIGHT whichever flank
+            // it sits on — the same rule the house's flat wings follow (§S.2c). Basing it on
+            // the shadow ramp (because it happens to be the right-hand side) made the bay roof
+            // as dark as the gable's shadow slope, which is exactly what a flat plane is not.
+            let col;
+            if (onBay) col = EXT_PITCH <= 0.15 ? R[3] : R[2];
+            else { col = lit ? R[3] : R[1]; if (!upper) col = shade(col, 0.86); }
             if (f < 0.10) col = shade(col, 1.08);
             else if (f > 0.86) col = shade(col, 0.86);
-            const sh = shingleTile(col, x, y - t0, lit);
-            col = roofLightPass(sh.col, sh.tcol, sh.rr, d / BHALF, f,
-                                { strokeA: lit ? 1.10 : 1.05, strokeB: lit ? 1.04 : 1.02,
-                                  lift: lit ? 1.05 : 1.0, fallX: lit ? 0.08 : 0.05, fallY: 0.05 });
+            const sh = shingleTile(col, x, y - t0, lit || onBay);
+            // a RIGHT-hand extension runs AWAY from the sun, so it darkens outward (§S.2)
+            const across = onBay ? Math.min(1, (d - BHALF) / EXT_LEN) : d / BHALF;
+            col = roofLightPass(sh.col, sh.tcol, sh.rr, across, f,
+                                { strokeA: (lit || onBay) ? 1.10 : 1.05, strokeB: (lit || onBay) ? 1.04 : 1.02,
+                                  lift: onBay ? 1.06 : lit ? 1.05 : 1.0,
+                                  fallX: onBay ? 0.14 : lit ? 0.08 : 0.05, fallY: 0.05 });
             const kneeY = t0 + Math.round((b0 - t0) * KNEE);
             if (!onBay && y === kneeY) col = shade(col, 1.14);        // lit crease at the gambrel's pitch break
             else if (!onBay && y === kneeY + 1) col = shade(col, 0.82);
@@ -2502,17 +2509,17 @@ export function makeBarn(season = 'SUMMER') {
         ctx.fillStyle = 'rgba(0,0,0,0.16)'; ctx.fillRect(x, ey + 1, 1, 1);
     }
     // ridge cupola: louvered box (lit-left/shadow-right), cap, vent, base shadow onto roof
-    ctx.fillStyle = OL; ctx.fillRect(27, 3, 10, 6);
-    ctx.fillStyle = R[2]; ctx.fillRect(28, 4, 8, 4);
-    ctx.fillStyle = R[4]; ctx.fillRect(28, 4, 3, 4);                // lit left
-    ctx.fillStyle = R[1]; ctx.fillRect(34, 4, 2, 4);                // shadow right
-    ctx.fillStyle = shade(R[1], 0.82); ctx.fillRect(29, 5, 6, 1); ctx.fillRect(29, 7, 6, 1);  // louver slats
-    ctx.fillStyle = '#241c18'; ctx.fillRect(31, 5, 2, 1);          // vent slit
+    ctx.fillStyle = OL; ctx.fillRect(27, 14, 10, 6);
+    ctx.fillStyle = R[2]; ctx.fillRect(28, 15, 8, 4);
+    ctx.fillStyle = R[4]; ctx.fillRect(28, 15, 3, 4);               // lit left
+    ctx.fillStyle = R[1]; ctx.fillRect(34, 15, 2, 4);               // shadow right
+    ctx.fillStyle = shade(R[1], 0.82); ctx.fillRect(29, 16, 6, 1); ctx.fillRect(29, 18, 6, 1);  // louver slats
+    ctx.fillStyle = '#241c18'; ctx.fillRect(31, 16, 2, 1);         // vent slit
     // CUPOLA CAP — a miniature roof drawn in the SAME 3/4 top-down projection: a lit top
     // plane, a graded body, a dark front fascia, the committed lit-left/shadow-right split,
     // and a 2px overhang past the box. A 1px horizontal bar (what was here) reads as a
     // flat straight-on accent and fights the projection everything else is drawn in.
-    { const capX0 = 27, capX1 = 36, capT = 0, capB = 3, capMid = (capX0 + capX1) >> 1;
+    { const capX0 = 27, capX1 = 36, capT = 11, capB = 14, capMid = (capX0 + capX1) >> 1;
       for (let x = capX0; x <= capX1; x++) {
           const litC = (x <= capMid) === litLeftB;
           for (let y = capT; y <= capB; y++) {
@@ -2527,7 +2534,7 @@ export function makeBarn(season = 'SUMMER') {
       ctx.fillStyle = shade(R[4], 1.10); ctx.fillRect(capMid, capT, 1, capB - capT);   // ridge crease
       ctx.fillStyle = 'rgba(0,0,0,0.22)'; ctx.fillRect(28, capB + 1, 8, 1);            // its shadow on the box below
     }
-    ctx.fillStyle = shade(R[0], 0.85); ctx.fillRect(27, 9, 10, 1);   // cupola base shadow on the roof
+    ctx.fillStyle = shade(R[0], 0.85); ctx.fillRect(27, 20, 10, 1);  // cupola base shadow on the roof
     // HOIST — the loft opening moved out to the hay bay, so the facade keeps only the
     // pulley beam and its block, which reads as the barn's working gear.
     { const hy = bBot(dOfB(31)) + 2;
@@ -2559,12 +2566,13 @@ export function makeBarn(season = 'SUMMER') {
         for (let x = 1; x <= 74; x++) {
             if (!onRoofB(x)) continue;
             const d = dOfB(x), lit = (x <= CXLb) === litLeftB;
-            snowCourses(ctx, x, bTop(d), bBot(d), { frac: lit ? 0.62 : 0.52, bright: lit, tone: SNOW });
+            const bay = d > BHALF;
+            snowCourses(ctx, x, bTop(d), bBot(d), { frac: bay ? 0.80 : lit ? 0.62 : 0.52, bright: bay || lit, tone: SNOW });
             eaveIcicles(ctx, x, bBot(d), SNOW);
         }
         ctx.fillStyle = SNOW.deep; ctx.fillRect(CXLb, bRidge, 2, 3);
-        ctx.fillStyle = SNOW.mid;  ctx.fillRect(27, 0, 10, 1);                     // snow lying on the cap's top plane
-        ctx.fillStyle = SNOW.deep; ctx.fillRect(30, 0, 5, 1);
+        ctx.fillStyle = SNOW.mid;  ctx.fillRect(27, 11, 10, 1);                    // snow lying on the cap's top plane
+        ctx.fillStyle = SNOW.deep; ctx.fillRect(30, 11, 5, 1);
     }
     if (fall) leafDrift(ctx, 1, 74, (x) => bTop(dOfB(x)), (x) => bBot(dOfB(x)), onRoofB);
 
