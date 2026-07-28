@@ -859,6 +859,44 @@ summer. Fall needs actual **material on the roof**.
   looked like a deliberate pattern. **Always hash the two axes separately** (`phash(x, y)`),
   never a linear combination of them. This applies to every scatter: flecks, moss, wear, tufts.
 
+### §6b0.1 THE HASH MUST ACTUALLY BE UNIFORM 0..1 — verify it, don't assume (2026-07-28)
+
+`hash2d` shipped with two bugs that together made **~half of all values negative**:
+
+1. `n * 2246822519` exceeds 2^53, so the low bits were silently rounded away — use
+   `Math.imul` for any 32-bit multiply in a hash.
+2. `^` yields a **signed int32**, and JS `%` keeps the sign. The last `n ^= n >>> 13` left
+   `n` negative, and `(n % 1024) / 1024` returned things like `-0.94`. **Always
+   `>>> 0` after the final XOR.**
+
+Why this matters far beyond the hash itself:
+
+- **Every `hash(...) > t` test fired at roughly HALF its nominal rate**, because a negative
+  value fails every threshold. Leaf density, icicle frequency, weathered-tile rate — all of
+  it was tuned against a distribution that was half dead.
+- **Every `hash(...) * n` offset was skewed negative**, so scatter that was meant to jitter
+  symmetrically (`floor(h*5) - 2`) actually pulled clusters up and to the left.
+- **Signed drift blew past its intended range.** The snow-band drift is written to be
+  `-1..1`; with negative input it reached `-3`, which zeroed whole courses and tore wide
+  bare stripes across the mill's flat roof. That artefact is what led back to the hash.
+
+**Fixing the hash re-rolls every texture in the file**, so a fix is a two-part job: correct
+the function, then **re-derive each threshold to the value that reproduces the approved
+frequency** under a genuinely uniform hash. Measured mapping: `0.55 → 0.77`, `0.62 → 0.81`,
+`0.74 → 0.87`, `0.80 → 0.90`, `0.82 → 0.91`, `0.86 → 0.93`; and clump counts halve
+(`3 + floor(h*5)` → `1 + floor(h*5)`). **Sanity-check any new hash by sampling its min/max
+over a few thousand inputs before tuning a single constant against it.**
+
+### §6b0.2 TWO MORE BANDING LAWS
+
+- **DRIFT MUST VARY PER COURSE.** Keyed to `x` alone, every band breaks at the same columns
+  and the roof reads as identical stacked stripes — obvious on a flat roof, where no taper
+  disguises it. Seed the drift with the course index (`hash2d(cell, 5 + ci*3)`) so each band
+  gets its own edge while staying smooth along `x`.
+- **TAPER BELONGS TO PITCH.** The downslope thinning models snow *sliding toward the eave*.
+  A flat top plane sheds nothing, so a flat roof passes a near-zero taper and keeps even
+  coverage — but then needs a **lower `frac`**, or the even bands become a barcode.
+
 ## §6b. Seasonality (buildings adapt to `world.season`) — testable
 
 **Display-only, deterministic:** the season is a *read* of `world.season` in the draw path

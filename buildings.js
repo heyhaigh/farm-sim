@@ -18,7 +18,7 @@
 // band (DEPTH) — a shallow band reads as a shed, not a house with interior volume.
 import {
     makeCanvas, RAMPS, LIGHT, shade, outlineFor, seatShadow, sphereMask,
-    stampCluster, recess, fillDiamond, TILE_W, TILE_H,
+    stampCluster, recess, fillDiamond, TILE_W, TILE_H, snowCourses, eaveIcicles,
 } from './pixel.js';
 
 // Approved 2026-07-27. The canonical procedural top-down dwelling.
@@ -26,8 +26,8 @@ import {
 // deterministic position hash -> 0..1 (snow drift / scuff jitter; never Math.random).
 function phash(a, b) {
     let n = ((a * 73856093) ^ (b * 19349663)) >>> 0;
-    n ^= n >>> 15; n = (n * 2246822519) >>> 0; n ^= n >>> 13;
-    return (n % 1024) / 1024;
+    n ^= n >>> 15; n = Math.imul(n, 2246822519) >>> 0; n ^= n >>> 13;
+    return ((n >>> 0) % 1024) / 1024;
 }
 
 // MASSING RULE (§S.2c): a SINGLE-STOREY building takes the FLAT wing (extPitch 0) — a
@@ -283,7 +283,7 @@ export function makeGableHouse(season = 'SUMMER', opts = {}) {
             else if (rr === 0 && (lit || onWing)) col = shade(col, 1.1);                   // lit top edge of the scale
             if (tcol === 0) col = shade(col, 0.9);                              // seam between neighbouring tiles
             if (rr === CH - 1 && (tcol === 0 || tcol === TWs - 1)) col = shade(col, 0.84);   // knocked corners -> rounded tip
-            if (phash(tid, ci) > 0.86) col = shade(col, 0.95);                  // sparse weathered tile (organic variety)
+            if (phash(tid, ci) > 0.93) col = shade(col, 0.95);                  // sparse weathered tile (organic variety)
             // ---- SLYNYRD LIGHTING PASS (57-House, frames ~170 -> 190) ----
             // He lays FLAT dull tile work, then lights the whole plane in ONE pass:
             //   (a) a per-tile DIAGONAL highlight stroke — the biggest single source of
@@ -375,45 +375,24 @@ export function makeGableHouse(season = 'SUMMER', opts = {}) {
             if (!onRoof(x)) continue;
             const d = dOf(x), t0 = topAt(d), b0 = botAt(d), band = b0 - t0;
             const lit = (x <= CXL) === litLeft, onWing = d > HALF;
-            const frac = onWing ? 0.86 : lit ? 0.60 : 0.50;
-            // smooth low-frequency drift so the band edges undulate instead of forming teeth
-            const cell = Math.floor(x / 6), tw = (x % 6) / 6;
-            const dA = phash(cell, 5), dB = phash(cell + 1, 5);
-            const drift = Math.round((dA + (dB - dA) * tw) * 2) - 1;
-            const courses = Math.max(1, Math.ceil(band / SNOW_CH));
-            for (let ci = 0; ci < courses; ci++) {
-                const tDown = ci / Math.max(1, courses - 1);        // 0 at the rake .. 1 at the eave
-                let cover = Math.round((frac - tDown * 0.75) * SNOW_CH * 1.4) + drift;
-                cover = Math.max(0, Math.min(SNOW_CH, cover));      // rows of THIS course holding snow
-                for (let rr = 0; rr < cover; rr++) {
-                    const y = t0 + ci * SNOW_CH + rr;
-                    if (y > b0) break;
-                    let col = onWing || lit ? SNOW_MID : SNOW_THIN;
-                    if (rr === 0) col = SNOW_DEEP;                  // the course's exposed lip catches the most
-                    else if (rr === cover - 1) col = shade(col, 0.86);   // where it slips off the tilted face
-                    ctx.fillStyle = col; ctx.fillRect(x, y, 1, 1);
-                }
-                if (cover > 0 && cover < SNOW_CH) {                 // damp shingle just under each band
-                    const wy = t0 + ci * SNOW_CH + cover;
-                    if (wy <= b0) { ctx.fillStyle = 'rgba(0,0,0,0.10)'; ctx.fillRect(x, wy, 1, 1); }
-                }
-            }
-            // ICICLES belong at the EAVE — meltwater runs down and refreezes at the edge
-            if (phash(x, 31) > 0.74) {
-                const len = 1 + (phash(x, 37) > 0.55 ? 1 : 0) + (phash(x, 41) > 0.86 ? 1 : 0);
-                for (let k = 1; k <= len; k++) {
-                    ctx.fillStyle = k === len ? SNOW_THIN : SNOW_MID;
-                    ctx.fillRect(x, b0 + k, 1, 1);
-                }
-            }
+            // The band logic itself now lives in pixel.js `snowCourses` — this used to be a
+            // hand-rolled copy, and it silently missed the per-course drift and the CH-1 cap
+            // that were fixed in the shared helper. One implementation, one place to fix.
+            snowCourses(ctx, x, t0, b0, {
+                courseH: SNOW_CH,
+                frac: onWing ? 0.68 : lit ? 0.52 : 0.42,
+                bright: onWing || lit,
+                tone: { deep: SNOW_DEEP, mid: SNOW_MID, thin: SNOW_THIN },
+            });
+            eaveIcicles(ctx, x, b0, { mid: SNOW_MID, thin: SNOW_THIN });
         }
         ctx.fillStyle = SNOW_DEEP; ctx.fillRect(CXL, ridgeTop, 2, 3);               // snow piled on the apex
         ctx.fillStyle = SNOW_MID;  ctx.fillRect(CXL, ridgeTop + 3, 2, 2);
         for (const wx of [11, 36]) for (let k = 0; k < 9; k++) {                    // sill ledges
-            const up = phash(wx + k, 17) > 0.62 ? 1 : 0;
+            const up = phash(wx + k, 17) > 0.81 ? 1 : 0;
             ctx.fillStyle = SNOW_MID; ctx.fillRect(wx + k, 37 - up, 1, 1 + up);
         }
-        for (let k = 0; k < 8; k++) if (phash(24 + k, 19) > 0.55) { ctx.fillStyle = SNOW_MID; ctx.fillRect(24 + k, 39, 1, 1); }
+        for (let k = 0; k < 8; k++) if (phash(24 + k, 19) > 0.77) { ctx.fillStyle = SNOW_MID; ctx.fillRect(24 + k, 39, 1, 1); }
     }
 
     // ---- FALL — leaves gather in DRIFTS on the roof ----
@@ -429,8 +408,8 @@ export function makeGableHouse(season = 'SUMMER', opts = {}) {
             for (let gy = tG + 1; gy <= bG; gy += 3) {
                 const down = (gy - tG) / Math.max(1, bG - tG);          // 0 rake .. 1 eave
                 const valley = dG > HALF - 3 && dG < HALF + 3 ? 0.12 : 0;   // the wing/gable valley catches them
-                if (phash(gx, gy) <= 0.74 - down * 0.30 - valley) continue;
-                const n = 3 + Math.floor(phash(gx, gy + 7) * 5);        // a clump, not a speck
+                if (phash(gx, gy) <= 0.87 - down * 0.30 - valley) continue;
+                const n = 1 + Math.floor(phash(gx, gy + 7) * 5);        // a clump, not a speck
                 for (let k = 0; k < n; k++) {
                     const lx = gx + Math.floor(phash(gx + k, gy) * 5) - 2;
                     const ly = gy + Math.floor(phash(gx, gy + k * 3) * 4) - 1;

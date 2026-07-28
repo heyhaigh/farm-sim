@@ -379,8 +379,19 @@ export function rampSwap(fromRamp, toRamp) {
 // (x*3 + y) is CONSTANT along a line of that slope and paints diagonal streaks.
 export function hash2d(a, b) {
     let n = ((a * 73856093) ^ (b * 19349663)) >>> 0;
-    n ^= n >>> 15; n = (n * 2246822519) >>> 0; n ^= n >>> 13;
-    return (n % 1024) / 1024;
+    // TWO bugs lived here, and both broke the 0..1 contract every caller assumes:
+    //   1. `n * 2246822519` overflows 2^53, so the low bits were rounded away — use imul.
+    //   2. `^` yields a SIGNED int32, so the final XOR could leave n negative, and JS keeps
+    //      the sign through `%`. hash2d was returning values like -0.94.
+    // Downstream that read as a snow drift of -3 where the range is meant to be -1..1,
+    // which is what tore wide bare stripes into the mill's banding. buildings.js `phash` is
+    // a copy of this function and carries the same fix.
+    // NOTE: every `hash2d(...) > t` threshold in this file was tuned against the BROKEN
+    // distribution, where ~half the values were negative and so failed every test. They
+    // have all been re-derived to the value that reproduces the approved frequency under a
+    // genuinely uniform hash. Do not "restore" the old constants.
+    n ^= n >>> 15; n = Math.imul(n, 2246822519) >>> 0; n ^= n >>> 13;
+    return ((n >>> 0) % 1024) / 1024;
 }
 
 // §S.2b THE LIGHTING PASS — flat tile work first, then light the WHOLE plane in one
@@ -411,7 +422,7 @@ export function shingleTile(col, x, row, lit, opts = {}) {
     else if (rr === 0 && lit) col = shade(col, 1.10);                // lit lip
     if (tcol === 0) col = shade(col, 0.90);                          // seam
     if (rr === CH - 1 && (tcol === 0 || tcol === TW - 1)) col = shade(col, 0.84);   // rounded tip
-    if (hash2d(tid, ci) > 0.86) col = shade(col, 0.95);              // weathered tile
+    if (hash2d(tid, ci) > 0.93) col = shade(col, 0.95);              // weathered tile
     return { col, tcol, rr };
 }
 
@@ -443,13 +454,26 @@ export function snowCourses(ctx, x, top, bot, opts = {}) {
     // the drift edge must UNDULATE SMOOTHLY — per-column random cuts it into vertical
     // TEETH, which read as icicles and kill the top-down illusion
     const cell = Math.floor(x / 6), tw = (x % 6) / 6;
-    const dA = hash2d(cell, 5), dB = hash2d(cell + 1, 5);
-    const drift = Math.round((dA + (dB - dA) * tw) * 2) - 1;
     const courses = Math.max(1, Math.ceil(band / CH));
     for (let ci = 0; ci < courses; ci++) {
+        // DRIFT IS PER COURSE. Keyed to x alone, every band broke at the same columns and
+        // the roof came out as identical stacked stripes — most obvious on the mill's flat
+        // roof, where there is no taper to disguise it. Seeding with the course index gives
+        // each band its own edge while each stays smooth along x.
+        const dA = hash2d(cell, 5 + ci * 3), dB = hash2d(cell + 1, 5 + ci * 3);
+        const drift = Math.round((dA + (dB - dA) * tw) * 2) - 1;
         const tDown = ci / Math.max(1, courses - 1);
-        let cover = Math.round((frac - tDown * 0.75) * CH * 1.4) + drift;
-        cover = Math.max(0, Math.min(CH, cover));
+        // TAPER models snow SLIPPING toward the eave — it belongs to a PITCHED roof. On a
+        // flat top plane nothing slides, so the cover should stay even the whole way down;
+        // the pitched default left the mill bare below the second course with a few stray
+        // pixels dribbling toward the eave. Flat roofs pass a near-zero taper.
+        let cover = Math.round((frac - tDown * (opts.taper ?? 0.75)) * CH * 1.4) + drift;
+        // NEVER let a course fill completely. A full course leaves no gap below it, so it
+        // merges with the next one — and because `drift` is per-column, the columns that
+        // drew +1 merged two or three courses at once and came out as a VERTICAL WHITE
+        // STREAK down the roof (visible on the mill's flat roof). Capping at CH-1 keeps a
+        // 1px gap under every band, so the banding survives whatever the drift does.
+        cover = Math.max(0, Math.min(CH - 1, cover));
         for (let rr = 0; rr < cover; rr++) {
             const y = top + ci * CH + rr;
             if (y > bot) break;
@@ -468,8 +492,13 @@ export function snowCourses(ctx, x, top, bot, opts = {}) {
 // §6b0 ICICLES BELONG AT THE EAVE, never the ridge — meltwater runs down and refreezes
 // at the edge. At the ridge they destroy the top-down read outright.
 export function eaveIcicles(ctx, x, eaveY, tone = { mid: '#eef4f4', thin: '#dbe8ec' }) {
-    if (hash2d(x, 31) <= 0.74) return;
-    const len = 1 + (hash2d(x, 37) > 0.55 ? 1 : 0) + (hash2d(x, 41) > 0.86 ? 1 : 0);
+    // Thresholds RE-DERIVED after the hash2d sign fix. The broken hash was negative ~half
+    // the time, so every `> t` test fired at half its nominal rate and the whole set was
+    // tuned against that. Each constant here is the value that reproduces the approved
+    // frequency under a genuinely uniform 0..1 hash (old 0.74 -> 0.87, 0.55 -> 0.77,
+    // 0.86 -> 0.93).
+    if (hash2d(x, 31) <= 0.87) return;
+    const len = 1 + (hash2d(x, 37) > 0.77 ? 1 : 0) + (hash2d(x, 41) > 0.93 ? 1 : 0);
     for (let k = 1; k <= len; k++) {
         ctx.fillStyle = k === len ? tone.thin : tone.mid;
         ctx.fillRect(x, eaveY + k, 1, 1);
@@ -481,14 +510,18 @@ export function eaveIcicles(ctx, x, eaveY, tone = { mid: '#eef4f4', thin: '#dbe8
 // ramp alone is invisible at this scale; fall needs material ON the roof.
 const LEAF_PALETTE = ['#c9782a', '#a8531e', '#d89a34', '#b8641a', '#8f4a1c'];
 export function leafDrift(ctx, x0, x1, topAt, botAt, inside, opts = {}) {
-    const step = opts.step ?? 3, base = opts.density ?? 0.74;
+    // density 0.74 -> 0.87 for the same reason as eaveIcicles: under the fixed hash the old
+    // constant doubled the number of seeded clusters and buried the roof in leaves.
+    const step = opts.step ?? 3, base = opts.density ?? 0.87;
     for (let gx = x0; gx <= x1; gx += step) {
         if (!inside(gx)) continue;
         const tG = topAt(gx), bG = botAt(gx);
         for (let gy = tG + 1; gy <= bG; gy += step) {
             const down = (gy - tG) / Math.max(1, bG - tG);
             if (hash2d(gx, gy) <= base - down * 0.30) continue;       // they pile at the eave
-            const n = 3 + Math.floor(hash2d(gx, gy + 7) * 5);
+            // clump size 3..7 -> 1..5: the old hash's negative half made this loop skip
+            // outright about half the time, so the effective mean was ~2.5, not 5.
+            const n = 1 + Math.floor(hash2d(gx, gy + 7) * 5);
             for (let k = 0; k < n; k++) {
                 const lx = gx + Math.floor(hash2d(gx + k, gy) * 5) - 2;
                 const ly = gy + Math.floor(hash2d(gx, gy + k * 3) * 4) - 1;
@@ -1406,12 +1439,7 @@ export function makeCoopIso(season = 'SUMMER') {
 // gradient), a lit 1px left-rake edge, and a flat darkest right facet — red-on-
 // red variety comes from the grade + course lit-tops/undersides + seam ticks.
 // Pure fillRect, cached per season.
-// deterministic position hash → 0..1 (snow drifts / flecks; NEVER Math.random / Date). Pure.
-function _phash(a, b) {
-    let n = ((a * 73856093) ^ (b * 19349663)) >>> 0;
-    n ^= n >>> 15; n = (n * 2246822519) >>> 0; n ^= n >>> 13;
-    return (n % 1024) / 1024;
-}
+// (a local _phash copy lived here and had no callers — deleted. Use the exported hash2d.)
 const _coopTD = {};
 export function makeCoopTD(season = 'SUMMER', opts = {}) {
     const _k = season + ':' + (opts.eggs ?? 2);
@@ -1501,7 +1529,7 @@ export function makeCoopTD(season = 'SUMMER', opts = {}) {
           ctx.fillStyle = '#1c1510'; ctx.fillRect(bx0 + 1, bodyY + 1, bw - 2, 5);        // the cubby
           ctx.fillStyle = TEX_DARK;  ctx.fillRect(bx0 + 1, bodyY + 1, bw - 2, 1);        // shadow under the lip
           for (let k = 0; k < bw - 2; k++) {                                             // ragged straw over the front lip
-              const h = 1 + (hash2d(bx0 + k, 3) > 0.55 ? 1 : 0);
+              const h = 1 + (hash2d(bx0 + k, 3) > 0.77 ? 1 : 0);
               ctx.fillStyle = GRN[3 + (k % 2)];
               ctx.fillRect(bx0 + 1 + k, bodyY + 6 - h, 1, h);
           }
@@ -1558,7 +1586,7 @@ export function makeCoopTD(season = 'SUMMER', opts = {}) {
         for (let x = 1; x <= 50; x++) {
             if (!onRoof(x)) continue;
             const d = dOf(x), lit = (x <= CXL) === litLeft;
-            snowCourses(ctx, x, topAt(d), botAt(d), { frac: lit ? 0.66 : 0.56, bright: lit, tone: SNOW });
+            snowCourses(ctx, x, topAt(d), botAt(d), { frac: lit ? 0.52 : 0.42, bright: lit, tone: SNOW });
             eaveIcicles(ctx, x, botAt(d), SNOW);
         }
         ctx.fillStyle = SNOW.deep; ctx.fillRect(CXL, ridgeTop, 2, 3);
@@ -2545,7 +2573,7 @@ export function makeBarn(season = 'SUMMER') {
             if (!onRoofB(x)) continue;
             const d = dOfB(x), lit = (x <= CXLb) === litLeftB;
             const bay = d > BHALF;
-            snowCourses(ctx, x, bTop(d), bBot(d), { frac: bay ? 0.80 : lit ? 0.62 : 0.52, bright: bay || lit, tone: SNOW });
+            snowCourses(ctx, x, bTop(d), bBot(d), { frac: bay ? 0.56 : lit ? 0.42 : 0.34, bright: bay || lit, tone: SNOW });
             eaveIcicles(ctx, x, bBot(d), SNOW);
         }
         ctx.fillStyle = SNOW.deep; ctx.fillRect(CXLb, bRidge, 2, 3);
@@ -2659,10 +2687,7 @@ export function makeMill(season = 'SUMMER') {
     ctx.fillStyle = 'rgba(0,0,0,0.34)'; ctx.fillRect(bx0, rBot + 1, bw, 1);
     ctx.fillStyle = 'rgba(0,0,0,0.20)'; ctx.fillRect(bx0, rBot + 2, bw, 1);
     ctx.fillStyle = 'rgba(0,0,0,0.10)'; ctx.fillRect(bx0, rBot + 3, bw, 1);
-    // roof vent
-    ctx.fillStyle = W[0]; ctx.fillRect(16, 7, 4, 4);
-    ctx.fillStyle = shade(W[2], 1.10); ctx.fillRect(16, 7, 4, 1);
-    ctx.fillStyle = 'rgba(0,0,0,0.20)'; ctx.fillRect(16, 11, 4, 1);
+    // (roof vent moved BELOW the season passes — see the note there)
 
     // ---- WATER WHEEL — the mill's signature. The old millstone was a flat grey disc that
     // read as a decal; a spoked wheel with paddles round the rim reads as machinery.
@@ -2738,12 +2763,42 @@ export function makeMill(season = 'SUMMER') {
         for (let x = rx0; x <= rx1; x++) {
             const edge = Math.min(x - rx0, rx1 - x);
             if (edge < overhangInset(x)) continue;
-            snowCourses(ctx, x, rTop, rBot, { frac: 0.55, bright: true, tone: SNOW });   // a flat roof holds a lot, but 0.86 + the small-band size boost exceeded FULL coverage and collapsed the banding into a slab
+            // FLAT roof: nothing slides, so no taper — even banding the whole way down.
+            // (0.86 + the small-band size boost had exceeded full coverage and collapsed
+            // the banding into a slab; the pitched taper then left it bare below course 2.)
+            snowCourses(ctx, x, rTop, rBot, { frac: 0.30, taper: 0.35, bright: true, tone: SNOW });
             eaveIcicles(ctx, x, rBot, SNOW);
         }
         ctx.fillStyle = SNOW.mid; ctx.fillRect(13, 19, 8, 1);                     // ledge snow on the lintel
     }
     if (fall) leafDrift(ctx, rx0, rx1, () => rTop, () => rBot, (x) => x >= rx0 && x <= rx1);
+
+    // ---- ROOF VENT — drawn LAST, after the season passes (same law as the barn cupola:
+    // the weather passes sweep every roof column, so anything drawn before them gets snow
+    // and leaves painted onto a VERTICAL face). Rebuilt as a small top-down CUBE — a light
+    // top plane over a markedly darker front face, the value gap doing the volume — instead
+    // of the flat 4×4 patch, which read as a sticker on the roof.
+    { const cx0 = 14, cx1 = 19, topY = 6, midY = 8, botY = 12;
+      const OLc = outlineFor(W[1]);
+      ctx.fillStyle = OLc; ctx.fillRect(cx0 - 1, topY - 1, (cx1 - cx0) + 3, (botY - topY) + 3);
+      for (let x = cx0; x <= cx1; x++) {                                            // TOP PLANE, tipped to the sky
+          const t = (x - cx0) / (cx1 - cx0);
+          for (let y = topY; y < midY; y++) { ctx.fillStyle = shade(W[4], 1.16 - t * 0.12); ctx.fillRect(x, y, 1, 1); }
+      }
+      ctx.fillStyle = shade(W[4], 1.22); ctx.fillRect(cx0, topY, (cx1 - cx0) + 1, 1);   // lit deck rim
+      for (let x = cx0; x <= cx1; x++) {                                            // FRONT FACE, in shadow
+          const litC = (x <= ((cx0 + cx1) >> 1)) === (LIGHT.x < 0);
+          for (let y = midY; y <= botY; y++) { ctx.fillStyle = litC ? W[1] : shade(W[0], 0.94); ctx.fillRect(x, y, 1, 1); }
+      }
+      ctx.fillStyle = 'rgba(0,0,0,0.34)'; ctx.fillRect(cx0, midY, (cx1 - cx0) + 1, 1);  // plane break in shadow
+      ctx.fillStyle = '#241c18'; ctx.fillRect(cx0 + 2, midY + 1, 2, 2);                 // vent slot
+      ctx.fillStyle = shade(W[3], 1.10); ctx.fillRect(cx0 + 2, midY + 1, 2, 1);         // lit lintel
+      ctx.fillStyle = 'rgba(0,0,0,0.30)'; ctx.fillRect(cx0 - 1, botY + 1, (cx1 - cx0) + 3, 1);  // shadow on the roof
+      if (winter) {                                                                 // its OWN cap, top plane only
+          ctx.fillStyle = SNOW.mid;  ctx.fillRect(cx0, topY, (cx1 - cx0) + 1, 1);
+          ctx.fillStyle = SNOW.deep; ctx.fillRect(cx0 + 1, topY, (cx1 - cx0) - 1, 1);
+      }
+    }
 
     _mill[season] = c;
     return c;
