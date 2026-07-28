@@ -1,5 +1,15 @@
 // pm_2.js — ARCHETYPE 2: FLAT TOP-PLANE (civic/tower). PM-QA pass.
 //
+// STATUS: an EXERCISE, not a shipping asset. Owner: "I don't think we'd ever actually use
+// this flat building in-game." Its value was proving the §S laws transfer to a second
+// archetype — they do. Warmed out of corporate-grey into the fantasy family (MOSS_STONE,
+// arched timber-lintelled bays, half-timbered posts, a guild banner).
+// KNOWN ISSUES if it is ever revived:
+//   1. the banner is drawn BEFORE the front face, so the face paints over it — move it
+//      after the face/window block;
+//   2. three even storeys of identical arched bays still read townhouse, not guild hall;
+//      it wants varied storey heights or a stepped/gabled crown instead of a flat deck.
+//
 // The trick here is NOT an apex — the flat-top archetype earns its volume purely
 // from the VALUE GAP between two planes (the grey-tower zoom crop, 4.42.39 PM):
 //   * a LIGHT stone DECK (the roof seen from above) — a straight-sided slab
@@ -20,8 +30,8 @@ export const meta = { name: 'Flat-top Civic Block (PM-QA)', pm: true };
 // side choices DERIVE from the light constant — the builder can't silently disagree with it
 const litLeft = LIGHT.x < 0;
 // hand-tuned warm-rotated step ABOVE the STONE ramp (§1a: no shade()-multiply on big planes):
-// S[4] #8b97a2 (~205deg) rotated toward warm neutral + value lift (~200deg)
-const STONE_LIT = '#a3aeb4';
+// a warm lit step above MOSS_STONE[4]; the cold #a3aeb4 read as corporate glass-and-steel
+const STONE_LIT = '#cdbfa4';   // warm lit step above MOSS_STONE[4] — lichened rock, not steel
 
 // deterministic position hash -> 0..1 (brick ticks / snow jitter; never Math.random)
 function _h(a, b) {
@@ -36,7 +46,7 @@ export function makeBuilding(season = 'SUMMER') {
     if (_cache[season]) return _cache[season];
     const [c, ctx] = makeCanvas(64, 74);
     const winter = season === 'WINTER', fall = season === 'FALL';
-    const S = RAMPS.STONE, G = RAMPS.GLASS, W = RAMPS.WOOD;
+    const S = RAMPS.MOSS_STONE, G = RAMPS.GLASS, W = RAMPS.WOOD, R = RAMPS.ROOF_RED;
     const OL = outlineFor(S[1]);                       // one ramp step below the adjacent dark fill — never #000
     const SNOW_DEEP = '#ffffff', SNOW_MID = '#eef4f4', SNOW_THIN = '#dbe8ec';
 
@@ -91,6 +101,20 @@ export function makeBuilding(season = 'SUMMER') {
     ctx.fillStyle = S[1]; ctx.fillRect(48, 10, 1, 3);                                 // away side
     ctx.fillStyle = shade(S[3], 0.88); ctx.fillRect(45, 13, 5, 1);                    // its own contact shadow (falls away from LIGHT)
 
+    // ---- BANNER — a guild pennant hung from the fascia. One warm red note ties the civic
+    // block to the red-roofed houses; a mythic hall flies colours, an office does not. ----
+    const banX = 20;
+    ctx.fillStyle = R[1]; ctx.fillRect(banX, 27, 7, 16);
+    ctx.fillStyle = R[2]; ctx.fillRect(banX, 27, 3, 16);                              // lit half (toward LIGHT)
+    ctx.fillStyle = shade(R[0], 0.95); ctx.fillRect(banX + 6, 27, 1, 16);             // away edge
+    ctx.fillStyle = shade(W[3], 1.06); ctx.fillRect(banX - 1, 26, 9, 1);              // hanging rail
+    for (let k = 0; k < 7; k++) {                                                     // swallow-tail hem
+        const cut = (k === 3) ? 0 : (k === 2 || k === 4) ? 1 : (k === 1 || k === 5) ? 2 : 3;
+        ctx.clearRect(banX + k, 43 - cut, 1, cut + 1);
+    }
+    ctx.fillStyle = shade(R[3], 1.08); ctx.fillRect(banX + 2, 32, 3, 3);              // emblem
+    ctx.fillStyle = R[0]; ctx.fillRect(banX + 3, 33, 1, 1);
+
     // ---- FASCIA — the roof slab's edge seen head-on (a real edge, full contrast) ----
     ctx.fillStyle = S[1]; ctx.fillRect(dL(dBot), dBot + 1, dR(dBot) - dL(dBot) + 1, 1);
     ctx.fillStyle = OL; ctx.fillRect(dL(dBot) - 1, dBot + 1, 1, 1); ctx.fillRect(dR(dBot) + 1, dBot + 1, 1, 1);
@@ -133,30 +157,32 @@ export function makeBuilding(season = 'SUMMER') {
         ctx.fillStyle = S[1]; ctx.fillRect(sliverX, by, 2, 2);                        // sliver runs THROUGH the ledge (depth continuity)
     }
 
-    // ---- WINDOW GRID — slit COLONNADE: 8 narrow teal slits per story (the tower's grammar) ----
-    const winW = 2, winH = 6;
-    const paneCol = winter ? SNOW_THIN : G[1];                                        // winter pane frost (§6b.5)
-    const glintCol = winter ? SNOW_MID : G[2];                                        // reflection stays, lighter under frost
-    for (const wy of [30, 43]) {
-        ctx.fillStyle = S[3];                                                          // ONE continuous string-course, not per-slit lintels
-        ctx.fillRect(wx0 + 3, wy - 2, (wx1 - 6) - (wx0 + 3) + 1, 1);
-        for (let k = 0; k < 8; k++) {
-            const x = 12 + 5 * k;                                                      // 12..47; rims reach x11..x49
-            recess(ctx, x, wy, winW, winH, paneCol, S[1]);
-            ctx.fillStyle = G[0]; ctx.fillRect(x, wy + winH - 1, winW, 1);             // one darker bottom row
-            ctx.fillStyle = glintCol; ctx.fillRect(x, wy, 1, 1);                       // exactly ONE glint px (§6a.8)
-            ctx.fillStyle = 'rgba(0,0,0,0.12)'; ctx.fillRect(x - 1, wy + winH + 1, winW + 2, 1);  // sill drop shadow
-            if (winter) { ctx.fillStyle = SNOW_MID; ctx.fillRect(x - 1, wy + winH, winW + 2, 1); } // snow on the sill
-        }
+    // ---- WINDOW BAYS — ARCHED and timber-lintelled. The 8-slit colonnade per storey read
+    // as an office block; a mythic hall wants fewer, larger, arched openings. ----
+    const paneCol = winter ? SNOW_THIN : G[1];
+    const glintCol = winter ? SNOW_MID : G[2];
+    function archWindow(x, y, w, h) {
+        ctx.fillStyle = shade(W[1], 0.9); ctx.fillRect(x - 1, y - 1, w + 2, h + 2);       // timber surround
+        ctx.fillStyle = paneCol; ctx.fillRect(x, y, w, h);
+        for (const k of [0, w - 1]) { ctx.fillStyle = shade(W[1], 0.9); ctx.fillRect(x + k, y, 1, 1); }   // knock the top corners -> ARCH
+        ctx.fillStyle = G[0]; ctx.fillRect(x, y + h - 1, w, 1);                            // darker bottom
+        ctx.fillStyle = W[1]; ctx.fillRect(x + (w >> 1), y + 1, 1, h - 2);                 // mullion
+        ctx.fillStyle = glintCol; ctx.fillRect(x + 1, y + 1, 1, 1);                        // one glint
+        ctx.fillStyle = shade(W[2], 1.08); ctx.fillRect(x - 2, y - 2, w + 4, 1);           // lit timber lintel over the arch
+        ctx.fillStyle = 'rgba(0,0,0,0.13)'; ctx.fillRect(x - 1, y + h + 1, w + 2, 1);      // sill drop shadow
+        if (winter) { ctx.fillStyle = SNOW_MID; ctx.fillRect(x - 1, y + h, w + 2, 1); }
+    }
+    for (const wy of [31, 44]) {
+        for (let k = 0; k < 4; k++) archWindow(13 + 11 * k, wy, 7, 8);
+    }
+    // half-timbered posts between the bays — ties the civic to the timber family
+    for (const px of [11, 22, 33, 44, 55]) {
+        ctx.fillStyle = 'rgba(0,0,0,0.13)'; ctx.fillRect(px, wy0 + 3, 1, wy1 - wy0 - 3);
+        ctx.fillStyle = 'rgba(255,238,210,0.06)'; ctx.fillRect(px + 1, wy0 + 3, 1, wy1 - wy0 - 3);
     }
 
     // ---- GROUND STORY — slit windows (the DOOR is drawn after the plinth, below) ----
-    for (const x of [14, 44]) {                                                       // ground slits
-        recess(ctx, x, 57, 4, 5, paneCol, S[1]);                                      // frosted in winter like the upper glass
-        ctx.fillStyle = G[0]; ctx.fillRect(x, 60, 4, 1);
-        ctx.fillStyle = 'rgba(0,0,0,0.12)'; ctx.fillRect(x, 63, 4, 1);
-        if (winter) { ctx.fillStyle = SNOW_MID; ctx.fillRect(x - 1, 62, 6, 1); }      // sill snow, same as the upper windows
-    }
+    for (const x of [14, 43]) archWindow(x, 57, 7, 7);                                // ground bays, same arched grammar
 
     // ---- FOUNDATION PLINTH + base outline (lower half only, per the OUTLINE LAW) ----
     ctx.fillStyle = S[1]; ctx.fillRect(wx0, py0, ww, py1 - py0 + 1);
