@@ -431,9 +431,12 @@ export function overhangInset(y) {
 // Call per roof column. `tone` = {deep, mid, thin}.
 export function snowCourses(ctx, x, top, bot, opts = {}) {
     const CH = opts.courseH ?? 4;
-    const frac = opts.frac ?? 0.6;                     // flat ~0.86 · lit slope ~0.60 · shadow ~0.50
     const tone = opts.tone || { deep: '#ffffff', mid: '#eef4f4', thin: '#dbe8ec' };
     const band = bot - top;
+    // SIZE-SCALED coverage: the same frac on a SHORT band yields only 1-2px bands, which
+    // read as streaks rather than settled snow. Small roofs need proportionally more.
+    const sizeBoost = Math.max(0, (22 - band) * 0.02);
+    const frac = (opts.frac ?? 0.6) + sizeBoost;       // flat ~0.86 · lit slope ~0.60 · shadow ~0.50
     // the drift edge must UNDULATE SMOOTHLY — per-column random cuts it into vertical
     // TEETH, which read as icicles and kill the top-down illusion
     const cell = Math.floor(x / 6), tw = (x % 6) / 6;
@@ -1407,8 +1410,9 @@ function _phash(a, b) {
     return (n % 1024) / 1024;
 }
 const _coopTD = {};
-export function makeCoopTD(season = 'SUMMER') {
-    if (_coopTD[season]) return _coopTD[season];
+export function makeCoopTD(season = 'SUMMER', opts = {}) {
+    const _k = season + ':' + (opts.eggs ?? 2);
+    if (_coopTD[_k]) return _coopTD[_k];
     // REBUILT on the approved GABLE grammar (buildings.js · makeGableHouse), scaled down to
     // a farm outbuilding. The previous version was the "broad oblique slab" experiment that
     // predates the projection being settled. Everything law-shaped now comes from the shared
@@ -1460,16 +1464,55 @@ export function makeCoopTD(season = 'SUMMER') {
     ctx.fillRect(WX0 - 1, botAt(dOf(WX0)) + 1, 1, WY1 - botAt(dOf(WX0)));
     ctx.fillRect(WX1 + 1, botAt(dOf(WX1)) + 1, 1, WY1 - botAt(dOf(WX1)));
 
-    // ---- OPENINGS — a pop-hole with its ramp, and a nest window (§S.2: doors reach the ground)
-    { const dx = 22, dyT = 33;
-      ctx.fillStyle = OLwood; ctx.fillRect(dx - 1, dyT - 1, 8, 12);
-      ctx.fillStyle = '#1c1510'; ctx.fillRect(dx, dyT, 6, 11);                       // dark interior
-      for (const k of [0, 5]) { ctx.fillStyle = OLwood; ctx.fillRect(dx + k, dyT, 1, 1); }   // arched shoulders
-      ctx.fillStyle = shade(W[2], 1.08); ctx.fillRect(dx - 1, dyT - 1, 8, 1);        // lit lintel
-      ctx.fillStyle = 'rgba(0,0,0,0.16)'; ctx.fillRect(dx, 43, 6, 1);                // contact shadow
-      ctx.fillStyle = W[2]; ctx.fillRect(dx + 1, 40, 4, 4);                          // the ramp up to the hole
-      ctx.fillStyle = shade(W[3], 1.06); ctx.fillRect(dx + 1, 40, 4, 1);
-      ctx.fillStyle = TEX_DARK; ctx.fillRect(dx + 2, 41, 1, 3);
+    // ---- COOP FURNITURE — what makes it read as a COOP and not a small house ----
+    // A chicken POP-HOLE is small and low, with a plank ramp up to it. Seen top-down the
+    // ramp is a short vertical shape rising from the ground into the hole, its rungs
+    // reading as horizontal ticks.
+    { const hx = 23, hyT = 35, hw = 5, hyB = 39;                                     // small chicken-scale hole
+      ctx.fillStyle = OLwood; ctx.fillRect(hx - 1, hyT - 1, hw + 2, (hyB - hyT) + 3);
+      ctx.fillStyle = '#1c1510'; ctx.fillRect(hx, hyT, hw, hyB - hyT + 1);           // dark interior
+      for (const k of [0, hw - 1]) { ctx.fillStyle = OLwood; ctx.fillRect(hx + k, hyT, 1, 1); }   // arched shoulders
+      ctx.fillStyle = shade(W[2], 1.10); ctx.fillRect(hx - 1, hyT - 1, hw + 2, 1);   // lit lintel
+      ctx.fillStyle = 'rgba(0,0,0,0.18)'; ctx.fillRect(hx, hyB, hw, 1);              // shadow in the mouth
+      // RAMP: rises from the ground into the hole
+      const rx = hx, rw = hw;                                                    // ramp spans the FULL hole width
+      ctx.fillStyle = W[2]; ctx.fillRect(rx, hyB + 1, rw, 43 - hyB);
+      ctx.fillStyle = shade(W[3], 1.08); ctx.fillRect(rx, hyB + 1, 1, 43 - hyB);     // lit edge (upper-left)
+      ctx.fillStyle = TEX_DARK; ctx.fillRect(rx + rw - 1, hyB + 1, 1, 43 - hyB);     // away edge
+      for (let ry = hyB + 2; ry < 43; ry += 2) { ctx.fillStyle = TEX_DARK; ctx.fillRect(rx, ry, rw, 1); }   // rungs across the full width
+      ctx.fillStyle = 'rgba(0,0,0,0.16)'; ctx.fillRect(rx, 43, rw, 1);               // contact with the ground
+    }
+    // NEST BOXES — a bank of WIDE, LOW cubbies with straw spilling over the lip. The first
+    // version was a pair of framed squares at window height, which simply read as WINDOWS:
+    // same proportion, same framing, same position. Nest boxes are wide-and-short, sit
+    // lower, have no glass, and show straw — that is what separates them at a glance.
+    { const eggs = Math.max(0, Math.min(3, opts.eggs ?? 2));
+      const GRN = RAMPS.GRAIN;
+      const bx0 = 28, bx1 = 40, ledgeY = 32, bodyY = 33, bodyB = 40;
+      ctx.fillStyle = OLwood; ctx.fillRect(bx0 - 1, ledgeY, (bx1 - bx0) + 3, (bodyB - ledgeY) + 2);
+      ctx.fillStyle = shade(W[3], 1.08); ctx.fillRect(bx0 - 1, ledgeY, (bx1 - bx0) + 3, 1);   // lit ledge overhanging the bank
+      ctx.fillStyle = W[1]; ctx.fillRect(bx0, bodyY, (bx1 - bx0) + 1, (bodyB - bodyY) + 1);
+      const cubs = [[bx0 + 1, 5], [bx0 + 7, 5]];                                   // two wide, low openings
+      cubs.forEach(([cx0, cw], i) => {
+          ctx.fillStyle = '#1c1510'; ctx.fillRect(cx0, bodyY + 1, cw, 5);          // dark cubby
+          ctx.fillStyle = TEX_DARK;  ctx.fillRect(cx0, bodyY + 1, cw, 1);          // shadow under the lip
+          // STRAW — ragged, spilling slightly over the front edge
+          for (let k = 0; k < cw; k++) {
+              const h = 1 + (hash2d(cx0 + k, 3) > 0.55 ? 1 : 0);
+              ctx.fillStyle = GRN[3 + (k % 2)];
+              ctx.fillRect(cx0 + k, bodyY + 6 - h, 1, h);
+          }
+          if (hash2d(cx0, 9) > 0.4) { ctx.fillStyle = GRN[5]; ctx.fillRect(cx0 + 1, bodyY + 5, 1, 1); }
+          if (i < eggs) {                                                          // an egg nestled in the straw
+              ctx.fillStyle = '#efe4cf'; ctx.fillRect(cx0 + 2, bodyY + 3, 2, 2);
+              ctx.fillStyle = '#fffaf0'; ctx.fillRect(cx0 + 2, bodyY + 3, 1, 1);   // lit upper-left
+              ctx.fillStyle = 'rgba(0,0,0,0.22)'; ctx.fillRect(cx0 + 2, bodyY + 5, 2, 1);
+          }
+      });
+      ctx.fillStyle = W[2]; ctx.fillRect(bx0 + 6, bodyY, 1, (bodyB - bodyY) + 1);   // divider post
+      ctx.fillStyle = TEX_LIGHT; ctx.fillRect(bx0 + 6, bodyY, 1, 3);
+      ctx.fillStyle = 'rgba(0,0,0,0.14)'; ctx.fillRect(bx0, bodyB + 1, (bx1 - bx0) + 1, 1);   // the bank's own shadow on the wall
+      if (eggs > 2) { ctx.fillStyle = '#efe4cf'; ctx.fillRect(19, 41, 2, 2); ctx.fillStyle = '#fffaf0'; ctx.fillRect(19, 41, 1, 1); }
     }
     { const wx = 13, wy = 32;                                                        // nest window
       ctx.fillStyle = OLwood; ctx.fillRect(wx - 1, wy - 1, 7, 7);
@@ -1519,7 +1562,7 @@ export function makeCoopTD(season = 'SUMMER') {
         for (let x = 1; x <= 50; x++) {
             if (!onRoof(x)) continue;
             const d = dOf(x), lit = (x <= CXL) === litLeft;
-            snowCourses(ctx, x, topAt(d), botAt(d), { frac: lit ? 0.60 : 0.50, bright: lit, tone: SNOW });
+            snowCourses(ctx, x, topAt(d), botAt(d), { frac: lit ? 0.66 : 0.56, bright: lit, tone: SNOW });
             eaveIcicles(ctx, x, botAt(d), SNOW);
         }
         ctx.fillStyle = SNOW.deep; ctx.fillRect(CXL, ridgeTop, 2, 3);
@@ -1535,7 +1578,7 @@ export function makeCoopTD(season = 'SUMMER') {
         }
     }
 
-    _coopTD[season] = c;
+    _coopTD[_k] = c;
     return c;
 }
 
