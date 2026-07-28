@@ -95,11 +95,85 @@ convincing enough."
   silhouette must separate from busy ground (lower half + base); sky-facing edges may stay open.
   Interior lines (seams, courses) use the material's *shadow* step, not the outline color —
   outlines frame, seams texture (§3.2–3.3).
+- **PROPORTIONAL-TEXTURE LAW (the most-violated rule; learned the hard way 2026-07-27).**
+  Surface *texture* — seams, striations, rafter tails, wear, scuffs — must darken or lighten
+  the surface **RELATIVE to whatever is underneath it**, never as an absolute colour. An
+  absolute tone is calibrated against one lighting condition and breaks the moment it crosses
+  a boundary: the *same* paint on a lit wall and a shadowed wall reads as harsh striations on
+  one and vanishes on the other. Use a translucent wash (`rgba(0,0,0,~0.15)` /
+  `rgba(255,238,210,~0.07)`) or a ramp-relative step. Absolute tones are for *structure*
+  (a plank, a frame, a door); relative tones are for *texture on* structure. Four separate
+  defects in one session traced to this: wing gradient, rafter tails, wall seams, base line.
+- **LIGHT-RELATIVE MASSING LAW.** Any gradient across an appendage must key off the **world
+  light** (`LIGHT`, upper-left), never off distance-from-the-parent-form — that is
+  mirror-symmetric and therefore wrong on one side. A **RIGHT** extension runs *away* from the
+  sun and must **darken** outward; a **LEFT** extension runs *toward* it and is the most
+  intensely lit plane on the whole building, so it must **BRIGHTEN** outward. Applies to every
+  wing, lean-to, dormer and annex.
+- **NO SEAT SHADOW ON BUILDINGS.** The SHADOW LAW's ≤1-tile clamp correctly seats a *prop*, but
+  under a ~90px building it renders a ~20px ellipse floating beneath the centre, unrelated to
+  the footprint — it reads as a stray smudge, not a shadow. Buildings ground themselves with
+  the base outline + their own eave shadows. (A true footprint-width building shadow is an
+  open question; revisit against real terrain, not a test patch.)
+- **OPENINGS MEET THE GROUND.** A door runs to the building's base line. If a foundation /
+  plinth band crosses in front of it, the door reads as floating above a planter. The band
+  stops either side of the opening; the door gets a contact shadow on its bottom row.
+- **DRAW-ORDER HYGIENE.** The grounding pass runs LAST, so anything it draws lands on top of
+  finished work. Re-check it whenever earlier geometry moves — two defects (debris strewn
+  across doors that had since been extended to the ground; a base outline made redundant by a
+  shadow added later) were correct when written and wrong after the surrounding art changed.
+  Ground *wear* belongs in the terrain anyway, not stamped into the sprite: baked in, every
+  instance in the world wears identically.
 - **DERIVATION MOVES (the only sanctioned ways to make a variant).** **SHAVE** — erase portions
   of a drawn base to get edge/corner/damage variants (`shave`); **REFLECT** — mirror a draw
   routine (+ optional recolor) for an opposite side/branch/walk-frame without `drawImage`
   (`reflect`); **RAMP-SWAP** — redraw the *same* geometry through a different `RAMPS` row for
   season + culture (orc) variants (`rampSwap`). Prefer a derivation over a new bespoke drawing.
+
+### §S.2b THE LIGHTING PASS — flat tiles first, then light the whole plane
+
+From SLYNYRD's *57 — House* build (frames ~170 → 190), the single most useful thing in the
+reference. He does **not** shade tile-by-tile. He lays **flat, dull** tile work, then lights
+the entire plane in **one pass** over the top of it. Three components, in order:
+
+1. **A per-tile DIAGONAL highlight stroke.** The biggest single source of visual density.
+   Courses/seams alone read as stripes; the diagonal stroke is what makes a plane look like
+   *material*. Without it a flat plane reads as a dead slab no matter how correct its value is.
+2. **A BROAD gradient that IGNORES tile boundaries** — brightest toward the light, falling off
+   with distance across the whole plane. Per-tile shading alone can never produce this.
+3. **A value/saturation LIFT** so the plane reads *lit*, not merely pale.
+
+Order matters: apply the pass as the **base tone + an overlay**, never as a final overwrite —
+writing the lift after the tile shading flattens the plane into a solid block (observed).
+
+### §S.2c BUILDING MASSING — additions are CONTINUATIONS
+
+- **A wing is a KINK in the roof, not a second roof.** Give the band a shallower pitch past a
+  break point while keeping the same depth: the far rake, the eave, and the shingle courses
+  then all carry straight through, and the result reads as one building that grew (a
+  catslide/saltbox). A wing drawn with its own independent roof always reads as two buildings
+  pushed together, however carefully it is aligned.
+- **Wing pitch by storey count.** SINGLE-storey → **flat** wing; a pitched wing competes with a
+  small gable and the two slopes fight. TWO-storey or taller → a **pitched** (~0.22 vs the main
+  0.6) wing; there is enough mass above for the slope to read as subordinate.
+- **The wing plane is LIGHTER than the main shadow plane** — a shallower pitch tips toward the
+  sky. Flat = brightest. (The CraftPix cottage does exactly this.)
+- **The eave junction is a SOFFIT SHADOW, not a lit beam.** An overhang shades what is beneath
+  it. A lit timber highlight under a dark fascia reads as neither shadow nor beam. Grade it
+  (~30% → ~16%) and keep any rafter tails *subordinate* to it.
+
+### §S.2d ROOF EDGES — three edges, three jobs
+
+- **Far rake (top): CLEAN.** No jitter.
+- **Near rake (bottom eave): CLEAN.** It is a structural line, not tile tips.
+- **Left/right OVERHANG: scalloped.** This is the only edge that should be irregular. It is the
+  **shingles' own silhouette** — each tile is a rounded scallop, so the edge bulges through a
+  tile's belly and tucks at the seams. Profile `[1,0,0,1]` (1px deep, tucked both seams).
+  Do **not** subtract chunks from a straight edge: silhouette insets at this scale read as
+  damage. Random per-tile amplitude also fails — it collapses to 0–1px, which is invisible
+  against a rake that already stair-steps ~1px per column.
+- The roof must have **margin inside the canvas**. Flush against the edge, the outer tiles have
+  nowhere to sit and the silhouette gets sliced into a flat vertical wall.
 
 ### §S.3 The shared helpers (every builder inherits the strategy through these)
 
