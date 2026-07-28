@@ -120,14 +120,28 @@ export function makeBuilding(season = 'SUMMER') {
         if (litLeft ? x >= WX1 - 1 : x <= WX0 + 1) col = P[0];                    // side reveal
         ctx.fillStyle = col; ctx.fillRect(x, yTop, 1, h);
     }
-    for (const sx of [17, 21, 33]) {                     // plank seams (off the openings)
-        const yTop = botAt(dOf(sx)) + 3;
-        ctx.fillStyle = shade(P[1], 0.85); ctx.fillRect(sx, yTop, 1, 49 - yTop);
-        ctx.fillStyle = shade(P[2], 1.12); ctx.fillRect(sx + 1, yTop, 1, 49 - yTop);
+    // PLANK SEAMS — texture, so (like the rafter tails) they must darken/lighten the wall
+    // PROPORTIONALLY. These were absolute tones — the lit companion line shade(P[2],1.12)
+    // in particular sat too bright on the mid-wall regardless of what was underneath.
+    // A translucent pair scales with the surface and stays subordinate to it everywhere.
+    for (const sx of [17, 21, 33]) {
+        const yTop = botAt(dOf(sx)) + 3, hgt = 49 - yTop;
+        ctx.fillStyle = 'rgba(0,0,0,0.16)';           ctx.fillRect(sx, yTop, 1, hgt);
+        ctx.fillStyle = 'rgba(255,238,210,0.07)';     ctx.fillRect(sx + 1, yTop, 1, hgt);
     }
     // foundation sill + ground AO (base row at the BOTTOM — never broken)
-    ctx.fillStyle = W[1]; ctx.fillRect(WX0E - 1, 51, WX1E - WX0E + 3, 3);
-    ctx.fillStyle = shade(W[2], 1.1); ctx.fillRect(WX0E - 1, 51, WX1E - WX0E + 3, 1);
+    // The base ran as ONE flat tone with a uniformly bright top row straight across the
+    // whole footprint — the only element on the building not obeying the light. Grade it
+    // along the sun so the left (lit) end is warmest and it falls off to the right.
+    {
+        const bx0 = WX0E - 1, bx1 = WX1E + 1;
+        for (let x = bx0; x <= bx1; x++) {
+            const t = (x - bx0) / Math.max(1, bx1 - bx0);       // 0 at the lit end .. 1 at the shadow end
+            const base = shade(W[1], 1.07 - t * 0.15);
+            ctx.fillStyle = base;                ctx.fillRect(x, 51, 1, 3);
+            ctx.fillStyle = shade(base, 1.10);   ctx.fillRect(x, 51, 1, 1);   // top edge catches the light
+        }
+    }
     ctx.fillStyle = OLwood; ctx.fillRect(WX0E, 54, WX1E - WX0E + 1, 1);
     // wall side outlines (lower half + base per OUTLINE LAW; sky edges stay open)
     ctx.fillStyle = OLwall;
@@ -136,14 +150,18 @@ export function makeBuilding(season = 'SUMMER') {
 
     // ---- OPENINGS (recessed; framed; whisper shadows) ----
     // door — centered under the apex, seated on the foundation
-    ctx.fillStyle = OLwood; ctx.fillRect(24, 40, 8, 11);
-    ctx.fillStyle = W[2]; ctx.fillRect(25, 41, 6, 10);
-    ctx.fillStyle = shade(W[3], 1.06); ctx.fillRect(25, 41, 1, 10);   // lit jamb
-    ctx.fillStyle = shade(W[1], 0.9); ctx.fillRect(30, 41, 1, 10);    // shadow jamb
+    // A door has to MEET THE GROUND. This one stopped at y50 while the base band runs to
+    // y53, so the foundation crossed in front of it and the door read as floating above
+    // a planter. It now runs all the way down to the base line; the foundation simply
+    // stops either side of it.
+    ctx.fillStyle = OLwood; ctx.fillRect(24, 40, 8, 14);
+    ctx.fillStyle = W[2]; ctx.fillRect(25, 41, 6, 13);
+    ctx.fillStyle = shade(W[3], 1.06); ctx.fillRect(25, 41, 1, 13);   // lit jamb
+    ctx.fillStyle = shade(W[1], 0.9); ctx.fillRect(30, 41, 1, 13);    // shadow jamb
     ctx.fillStyle = shade(W[2], 1.1); ctx.fillRect(25, 41, 6, 1);     // lit lintel
-    ctx.fillStyle = W[1]; ctx.fillRect(28, 42, 1, 9);                 // leaf seam
+    ctx.fillStyle = W[1]; ctx.fillRect(28, 42, 1, 12);                // leaf seam
     ctx.fillStyle = shade(W[4], 1.1); ctx.fillRect(29, 46, 1, 1);     // handle
-    ctx.fillStyle = 'rgba(0,0,0,0.12)'; ctx.fillRect(24, 51, 8, 1);   // threshold whisper
+    ctx.fillStyle = 'rgba(0,0,0,0.16)'; ctx.fillRect(25, 53, 6, 1);   // contact shadow where it meets the ground
     // two windows flanking the door — frame + 2x2 panes + streak (§6a-D.3)
     for (const wx of [12, 37]) {
         ctx.fillStyle = OLwood; ctx.fillRect(wx - 1, 38, 9, 9);
@@ -170,7 +188,7 @@ export function makeBuilding(season = 'SUMMER') {
         const wallTopAt = (x) => botAt(dOf(x)) + 1;
         // ARCHED BARN DOOR (a different doorway to the main house's square one)
         const bdx = wingMid - 1, bdw = 9;
-        const bdTop = wallTopAt(bdx) + 4, bdBot = 52;
+        const bdTop = wallTopAt(bdx) + 4, bdBot = 53;      // down to the base line, not stopping above it
         for (let k = 0; k < bdw; k++) {
             const x = bdx + k;
             // arch: shoulders tucked in 2 rows, crown flat
@@ -184,7 +202,7 @@ export function makeBuilding(season = 'SUMMER') {
         ctx.fillStyle = shade(W[0], 0.9); ctx.fillRect(bdx + bdw - 2, bdTop + 1, 1, bdBot - bdTop - 1); // shadow jamb
         for (let k = 2; k < bdw - 2; k += 2) { ctx.fillStyle = shade(W[1], 0.82); ctx.fillRect(bdx + k, bdTop + 3, 1, bdBot - bdTop - 3); } // plank seams
         ctx.fillStyle = shade(W[3], 1.1); ctx.fillRect(bdx + 2, bdTop + 2, bdw - 4, 1);   // lit lintel across the arch
-        ctx.fillStyle = 'rgba(0,0,0,0.14)'; ctx.fillRect(bdx, 53, bdw, 1);                // threshold
+        ctx.fillStyle = 'rgba(0,0,0,0.16)'; ctx.fillRect(bdx + 1, 53, bdw - 2, 1);        // contact shadow at the ground
         // small square window on the far side of the wing
         const wwx = dir > 0 ? bdx + bdw + 3 : bdx - 8;
         if (wwx > WX0E && wwx + 5 < WX1E) {
@@ -255,6 +273,34 @@ export function makeBuilding(season = 'SUMMER') {
             if (tcol === 0) col = shade(col, 0.9);                              // seam between neighbouring tiles
             if (rr === CH - 1 && (tcol === 0 || tcol === TWs - 1)) col = shade(col, 0.84);   // knocked corners -> rounded tip
             if (phash(tid, ci) > 0.86) col = shade(col, 0.95);                  // sparse weathered tile (organic variety)
+            // ---- SLYNYRD LIGHTING PASS (57-House, frames ~170 -> 190) ----
+            // He lays FLAT dull tile work, then lights the whole plane in ONE pass:
+            //   (a) a per-tile DIAGONAL highlight stroke — the biggest single source of
+            //       visual density (courses alone read as stripes);
+            //   (b) a BROAD gradient across the plane that IGNORES tile boundaries;
+            //   (c) a value lift so the plane reads lit rather than merely pale.
+            {
+                const strokeA = onWing ? 1.12 : lit ? 1.10 : 1.05;
+                const strokeB = onWing ? 1.05 : lit ? 1.04 : 1.02;
+                if ((tcol + rr) % 4 === 1) col = shade(col, strokeA);      // (a) stroke across the tile face
+                else if ((tcol + rr) % 4 === 2) col = shade(col, strokeB); //     softer trailing edge
+                const gv = (y - t0) / Math.max(1, b0 - t0);                // 0 at the rake .. 1 at the eave
+                if (onWing) {
+                    // LATERAL falloff follows the WORLD LIGHT (upper-left), NOT distance from
+                    // the house — that was mirror-symmetric and therefore wrong on one side.
+                    // A RIGHT wing runs AWAY from the sun -> darkens outward. A LEFT wing runs
+                    // TOWARD the sun -> it is the most intensely lit plane on the whole
+                    // building and must BRIGHTEN outward. Universal rule for every left-hand
+                    // extension, inherited from the one light the sprites already establish.
+                    const gx = (d - HALF) / Math.max(1, EXT.len);
+                    const lateral = extSide(x) < 0 ? +gx * 0.10 : -gx * 0.16;
+                    col = shade(col, 1.10 + lateral - gv * 0.10);          // (b)+(c)
+                } else {
+                    // main gable planes: brightest at the ridge, easing toward the outer rake
+                    const gd = d / HALF;
+                    col = shade(col, (lit ? 1.05 : 1.0) - gd * (lit ? 0.08 : 0.05) - gv * 0.06);
+                }
+            }
             if (y === bot) col = onWing ? shade(R[1], 0.92) : lit ? shade(R[1], 0.8) : R[0];                // near-rake FASCIA — the dark overhanging eave edge
             if (firstY < 0) firstY = y;
             ctx.fillStyle = col; ctx.fillRect(x, y, 1, 1);
@@ -280,17 +326,28 @@ export function makeBuilding(season = 'SUMMER') {
     for (let x = RX0; x < WX0E; x++) if (onRoof(x)) ctx.fillRect(x, botAt(dOf(x)) + 1, 1, 1);
     for (let x = WX1E + 1; x <= RX1; x++) if (onRoof(x)) ctx.fillRect(x, botAt(dOf(x)) + 1, 1, 1);
 
-    // ---- WING EAVE BEAM — a warm timber band with beam ENDS poking below it, the
-    // detail the cottage uses where its extension roof lands on the wall ----
+    // ---- WING EAVE: SOFFIT SHADOW (not a lit beam) ----
+    // The eave OVERHANGS, so whatever sits directly beneath it is in SHADOW. The first
+    // version put a LIT timber highlight (#a27b4a) hard against the dark fascia — a
+    // light-on-dark band that read as neither a drop shadow nor a beam, just a stripe.
+    // Now: the roofline casts a genuine graded shadow onto the wall, and the only timber
+    // left is a few dark beam-END ticks poking below it, which read as structure.
     for (const dir of ACTIVE_SIDES) {
         const bx0 = dir > 0 ? WX1 + 1 : WX0E;
         const bx1 = dir > 0 ? WX1E : WX0 - 1;
         for (let x = bx0; x <= bx1; x++) {
             const y = botAt(dOf(x)) + 1;
-            ctx.fillStyle = W[2]; ctx.fillRect(x, y, 1, 2);
-            ctx.fillStyle = shade(W[3], 1.08); ctx.fillRect(x, y, 1, 1);          // lit top of the beam
-            if ((x - bx0) % 5 === 2) { ctx.fillStyle = W[1]; ctx.fillRect(x, y + 2, 1, 2); }   // beam end
-            if ((x - bx0) % 5 === 3) { ctx.fillStyle = shade(W[0], 0.95); ctx.fillRect(x, y + 2, 1, 1); }
+            ctx.fillStyle = 'rgba(0,0,0,0.30)'; ctx.fillRect(x, y, 1, 1);       // darkest right at the roofline
+            ctx.fillStyle = 'rgba(0,0,0,0.16)'; ctx.fillRect(x, y + 1, 1, 1);   // easing out of shadow
+            // RAFTER TAILS — texture, so they must darken the wall PROPORTIONALLY rather
+            // than stamp an absolute near-black on it. The fixed W[0] tone read as harsh
+            // striations, worst on the LEFT wing where the wall is lit and the contrast
+            // jump was largest. A translucent wash scales with whatever it lands on, so
+            // one value now works on both the lit and the shadowed flank.
+            if ((x - bx0) % 5 === 2) {
+                ctx.fillStyle = 'rgba(0,0,0,0.15)'; ctx.fillRect(x, y + 2, 1, 2);
+                ctx.fillStyle = 'rgba(255,238,210,0.07)'; ctx.fillRect(x + 1, y + 2, 1, 2);   // faint lit edge gives the tail form
+            }
         }
     }
 
