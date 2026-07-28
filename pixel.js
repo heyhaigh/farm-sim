@@ -367,6 +367,140 @@ export function rampSwap(fromRamp, toRamp) {
     };
 }
 
+// ===========================================================================
+// §S.2b/§6b0 SHARED TOP-DOWN BUILDING HELPERS — the laws, inherited not re-typed.
+// Every code-drawn structure should route its roof through these so the lighting
+// pass, the proportional-texture rule and the seasonal treatments stay identical
+// across the set (and future buildings get them for free). Pure, deterministic,
+// fillRect-only. See PROCEDURAL_ART.md §S.2, §S.2b, §S.2d, §6b0.
+// ===========================================================================
+
+// deterministic 2-axis hash. HASH THE AXES SEPARATELY — a linear combination like
+// (x*3 + y) is CONSTANT along a line of that slope and paints diagonal streaks.
+export function hash2d(a, b) {
+    let n = ((a * 73856093) ^ (b * 19349663)) >>> 0;
+    n ^= n >>> 15; n = (n * 2246822519) >>> 0; n ^= n >>> 13;
+    return (n % 1024) / 1024;
+}
+
+// §S.2b THE LIGHTING PASS — flat tile work first, then light the WHOLE plane in one
+// pass. Returns the lit colour for one roof pixel. Three components:
+//   (a) a per-tile DIAGONAL highlight stroke — the biggest source of visual density;
+//   (b) a BROAD gradient that ignores tile boundaries;
+//   (c) a value lift so the plane reads lit, not merely pale.
+// MUST be applied as base+overlay, never as a final overwrite (that flattens the
+// plane into a solid block). `across` / `down` are 0..1 across the plane.
+export function roofLightPass(col, tcol, rr, across, down, opts = {}) {
+    const strokeA = opts.strokeA ?? 1.10, strokeB = opts.strokeB ?? 1.04;
+    if ((tcol + rr) % 4 === 1) col = shade(col, strokeA);
+    else if ((tcol + rr) % 4 === 2) col = shade(col, strokeB);
+    const lift = opts.lift ?? 1.05, fallX = opts.fallX ?? 0.10, fallY = opts.fallY ?? 0.07;
+    return shade(col, lift - across * fallX - down * fallY);
+}
+
+// §S.2b shingle COURSE shading for one roof pixel: chunky scallop tiles in staggered
+// courses — lit lip on the exposed top row, dark overlap beneath, a seam between
+// neighbours, knocked corners for a rounded tip, and a sparse weathered tile.
+// Returns {col, tcol, rr} so the caller can hand tcol/rr straight to roofLightPass.
+export function shingleTile(col, x, row, lit, opts = {}) {
+    const CH = opts.courseH ?? 4, TW = opts.tileW ?? 5;
+    const ci = Math.floor(row / CH), rr = ((row % CH) + CH) % CH;
+    const stag = (ci % 2) * 2;
+    const tcol = ((x + stag) % TW + TW) % TW, tid = Math.floor((x + stag) / TW);
+    if (rr === CH - 1) col = shade(col, lit ? 0.78 : 0.87);          // overlap shadow
+    else if (rr === 0 && lit) col = shade(col, 1.10);                // lit lip
+    if (tcol === 0) col = shade(col, 0.90);                          // seam
+    if (rr === CH - 1 && (tcol === 0 || tcol === TW - 1)) col = shade(col, 0.84);   // rounded tip
+    if (hash2d(tid, ci) > 0.86) col = shade(col, 0.95);              // weathered tile
+    return { col, tcol, rr };
+}
+
+// §S.2d the ONLY edge that should be irregular: the left/right OVERHANG, scalloped as
+// the shingles' own silhouette. Far rake and near eave stay CLEAN. Never subtract
+// chunks from a straight edge — at this scale that reads as damage.
+const SCALLOP_PROFILE = [1, 0, 0, 1];
+export function overhangInset(y) {
+    const n = SCALLOP_PROFILE.length;
+    return SCALLOP_PROFILE[((y % n) + n) % n];
+}
+
+// §6b0 SNOW — bands that FOLLOW THE SHINGLE COURSES. Snow catches on each course's
+// exposed lip and slides off the tilted face below, so it stacks as horizontal bands
+// with the roof showing through between them; the form stays legible and the read is
+// top-down. Coverage thins downslope and by PITCH: flat holds, steep sheds.
+// Call per roof column. `tone` = {deep, mid, thin}.
+export function snowCourses(ctx, x, top, bot, opts = {}) {
+    const CH = opts.courseH ?? 4;
+    const frac = opts.frac ?? 0.6;                     // flat ~0.86 · lit slope ~0.60 · shadow ~0.50
+    const tone = opts.tone || { deep: '#ffffff', mid: '#eef4f4', thin: '#dbe8ec' };
+    const band = bot - top;
+    // the drift edge must UNDULATE SMOOTHLY — per-column random cuts it into vertical
+    // TEETH, which read as icicles and kill the top-down illusion
+    const cell = Math.floor(x / 6), tw = (x % 6) / 6;
+    const dA = hash2d(cell, 5), dB = hash2d(cell + 1, 5);
+    const drift = Math.round((dA + (dB - dA) * tw) * 2) - 1;
+    const courses = Math.max(1, Math.ceil(band / CH));
+    for (let ci = 0; ci < courses; ci++) {
+        const tDown = ci / Math.max(1, courses - 1);
+        let cover = Math.round((frac - tDown * 0.75) * CH * 1.4) + drift;
+        cover = Math.max(0, Math.min(CH, cover));
+        for (let rr = 0; rr < cover; rr++) {
+            const y = top + ci * CH + rr;
+            if (y > bot) break;
+            let col = opts.bright ? tone.mid : tone.thin;
+            if (rr === 0) col = tone.deep;                            // exposed lip
+            else if (rr === cover - 1) col = shade(col, 0.86);        // slips off the tilted face
+            ctx.fillStyle = col; ctx.fillRect(x, y, 1, 1);
+        }
+        if (cover > 0 && cover < CH) {
+            const wy = top + ci * CH + cover;
+            if (wy <= bot) { ctx.fillStyle = 'rgba(0,0,0,0.10)'; ctx.fillRect(x, wy, 1, 1); }
+        }
+    }
+}
+
+// §6b0 ICICLES BELONG AT THE EAVE, never the ridge — meltwater runs down and refreezes
+// at the edge. At the ridge they destroy the top-down read outright.
+export function eaveIcicles(ctx, x, eaveY, tone = { mid: '#eef4f4', thin: '#dbe8ec' }) {
+    if (hash2d(x, 31) <= 0.74) return;
+    const len = 1 + (hash2d(x, 37) > 0.55 ? 1 : 0) + (hash2d(x, 41) > 0.86 ? 1 : 0);
+    for (let k = 1; k <= len; k++) {
+        ctx.fillStyle = k === len ? tone.thin : tone.mid;
+        ctx.fillRect(x, eaveY + k, 1, 1);
+    }
+}
+
+// §6b0 FALL — leaves gather in DRIFTS, not as an even sprinkle. Seeds clusters on a
+// coarse grid and grows a clump outward from each, denser toward the eave. A ~5% warm
+// ramp alone is invisible at this scale; fall needs material ON the roof.
+const LEAF_PALETTE = ['#c9782a', '#a8531e', '#d89a34', '#b8641a', '#8f4a1c'];
+export function leafDrift(ctx, x0, x1, topAt, botAt, inside, opts = {}) {
+    const step = opts.step ?? 3, base = opts.density ?? 0.74;
+    for (let gx = x0; gx <= x1; gx += step) {
+        if (!inside(gx)) continue;
+        const tG = topAt(gx), bG = botAt(gx);
+        for (let gy = tG + 1; gy <= bG; gy += step) {
+            const down = (gy - tG) / Math.max(1, bG - tG);
+            if (hash2d(gx, gy) <= base - down * 0.30) continue;       // they pile at the eave
+            const n = 3 + Math.floor(hash2d(gx, gy + 7) * 5);
+            for (let k = 0; k < n; k++) {
+                const lx = gx + Math.floor(hash2d(gx + k, gy) * 5) - 2;
+                const ly = gy + Math.floor(hash2d(gx, gy + k * 3) * 4) - 1;
+                if (!inside(lx) || ly < topAt(lx) || ly > botAt(lx)) continue;
+                ctx.fillStyle = LEAF_PALETTE[(lx * 2 + ly + k) % LEAF_PALETTE.length];
+                ctx.fillRect(lx, ly, 1, 1);
+            }
+        }
+    }
+}
+
+// §S.2 PROPORTIONAL TEXTURE — seams/striations/wear must darken or lighten the surface
+// RELATIVE to whatever is under them. An absolute tone is calibrated to one lighting
+// condition and breaks the moment it crosses a boundary (harsh on a lit wall, invisible
+// on a shadowed one). These are the two washes the whole set should use.
+export const TEX_DARK = 'rgba(0,0,0,0.15)';
+export const TEX_LIGHT = 'rgba(255,238,210,0.07)';
+
 // HAND-LAID ASHLAR tower body — the mill's masonry treatment, generalized to a
 // (possibly tapered) tower: running-bond blocks, per-block tone by horizontal
 // position + deterministic ±1-step jitter, mortar relief (lit top bevel + base AO),
@@ -1275,145 +1409,131 @@ function _phash(a, b) {
 const _coopTD = {};
 export function makeCoopTD(season = 'SUMMER') {
     if (_coopTD[season]) return _coopTD[season];
-    // Hand-authored oblique 3/4 pass. The prior loop kept reading as a SYMMETRIC
-    // TENT because the ridge was only 14px (37% of the eave) — a roof that tapers
-    // to a near-point is a triangle seen head-on. Fix: a BROAD ridge (27px, ~71%
-    // of the eave) so the near plane is a wide SLAB you look DOWN onto, plus a
-    // genuinely oblique/asymmetric read (long shallow LEFT rake = the dominant
-    // plane's own edge; short steep RIGHT rake with a darker SIDE facet = the roof
-    // turning away), a clean DARK far-slope sliver over the top, a bright ridge
-    // crease, and a low WIDE eave overhanging a short wall. Pure fillRect, cached.
-    const [c, ctx] = makeCanvas(48, 48);
+    // REBUILT on the approved GABLE grammar (buildings.js · makeGableHouse), scaled down to
+    // a farm outbuilding. The previous version was the "broad oblique slab" experiment that
+    // predates the projection being settled. Everything law-shaped now comes from the shared
+    // helpers so the coop, the house and every later structure stay identical in treatment.
+    const [c, ctx] = makeCanvas(52, 46);
     const winter = season === 'WINTER', fall = season === 'FALL';
     const P = fall ? warmRamp(RAMPS.PLANK, 12, 1.05, 1.05) : RAMPS.PLANK;
     const R = fall ? warmRamp(RAMPS.ROOF_RED, 16, 1.04, 1.06) : RAMPS.ROOF_RED;
     const W = fall ? warmRamp(RAMPS.WOOD, 12, 1.04, 1.05) : RAMPS.WOOD;
-    const G = RAMPS.GLASS, cx = 24;
+    const G = RAMPS.GLASS;
     const OLwall = outlineFor(P[1]), OLwood = outlineFor(W[1]), OLroof = outlineFor(R[1]);
-    const SNOW_DEEP = '#ffffff', SNOW_MID = '#eef4f4', SNOW_THIN = '#dbe8ec', SNOW_TINT = '#dfeaec';
+    const SNOW = { deep: '#ffffff', mid: '#eef4f4', thin: '#dbe8ec' };
 
-    // ---- grounding first (behind): fixed <=1-tile seat shadow ----
-    seatShadow(ctx, { cx, cy: 46, rx: 15, ry: 3 }, { alpha: 0.30 });
+    // ---- GEOMETRY — gable end to camera; the ridge recedes as a vertical apex ----
+    const CXL = 25, CXR = 26;
+    const dOf = (x) => (x <= CXL ? CXL - x : x - CXR);
+    const HALF = 18, DEPTH = 18;                      // a TALL band: depth is what separates a house from a shed
+    const topAt = (d) => 3 + Math.floor(d * 0.6);
+    const botAt = (d) => topAt(d) + DEPTH;
+    const litLeft = LIGHT.x < 0;
+    const WX0 = 11, WX1 = 40, WY1 = 43;
+    const onRoof = (x) => dOf(x) <= HALF;
 
-    // ---- GEOMETRY — a broad oblique roof slab over a short wall ----
-    const eaveY = 31, eaveL = 5, eaveR = 42;                                        // the WIDEST low line (38px, ~63% down)
-    const wx0 = 8, wx1 = 39, wy0 = 32, wy1 = 44, ww = wx1 - wx0 + 1, wh = wy1 - wy0 + 1;   // short wall 32x13; eave overhangs 3px/side
-    const ridgeY = 11, ridgeL = 14, ridgeR = 40;                                    // BROAD ridge (27px ~71% of eave — a slab, NOT a taper). center 27 = right of eave center 23.5 (oblique)
-    const farY0 = 8, farY1 = 10, farL = 17, farR = 38;                             // far-slope sliver: the back plane glimpsed over the top (dark, narrower than the ridge)
-    const lerp = (a, b, t) => a + (b - a) * t;
-    const tAt = (y) => (y - ridgeY) / (eaveY - ridgeY);                            // 0 at ridge -> 1 at eave
-    const lxAt = (y) => Math.round(lerp(ridgeL, eaveL, tAt(y)));                   // LEFT rake: long shallow (14->5, 9px) = the dominant plane's edge
-    const rxAt = (y) => Math.round(lerp(ridgeR, eaveR, tAt(y)));                   // RIGHT rake: short steep (40->42, 2px)
-    const hipAt = (y) => Math.round(lerp(ridgeR - 6, eaveR - 5, tAt(y)));         // hip crease: front plane | right SIDE facet
-
-    // ---- FRONT WALL (short footer; drawn first so the eave slab overhangs it) ----
-    ctx.fillStyle = OLwall; ctx.fillRect(wx0 - 1, wy0, ww + 2, wh + 1);
-    ctx.fillStyle = P[2]; ctx.fillRect(wx0, wy0, ww, wh);
-    ctx.fillStyle = P[3]; ctx.fillRect(wx0, wy0, 3, wh);                            // lit-left
-    ctx.fillStyle = P[1]; ctx.fillRect(wx1 - 5, wy0, 6, wh);                        // shadow-right (wider than lit — same 3/4 camera as the roof)
-    ctx.fillStyle = P[0]; ctx.fillRect(wx1 - 1, wy0, 2, wh);                        // 2px shadow side-reveal (never a receding wall)
-    for (const x of [wx0 + 24, wx0 + 28]) {                                        // plank seams, right of the openings — nothing mirrors
-        ctx.fillStyle = shade(P[1], 0.85); ctx.fillRect(x, wy0 + 2, 1, wh - 3);
-        ctx.fillStyle = shade(P[3], 1.05); ctx.fillRect(x + 1, wy0 + 2, 1, wh - 3);
+    // ---- WALL (drawn first; the eave overhangs it) ----
+    for (let x = WX0; x <= WX1; x++) {
+        const yTop = botAt(dOf(x)) + 1, h = WY1 - yTop + 1;
+        if (h <= 0) continue;
+        let col = P[2];
+        if (litLeft ? x <= WX0 + 2 : x >= WX1 - 2) col = shade(P[2], 1.14);
+        else if (litLeft ? x >= WX1 - 5 : x <= WX0 + 5) col = P[1];
+        if (litLeft ? x >= WX1 - 1 : x <= WX0 + 1) col = P[0];
+        ctx.fillStyle = col; ctx.fillRect(x, yTop, 1, h);
     }
-    ctx.fillStyle = W[1]; ctx.fillRect(wx0 - 1, wy1 - 1, ww + 2, 2);                // foundation sill
-    ctx.fillStyle = shade(W[2], 1.1); ctx.fillRect(wx0 - 1, wy1 - 1, ww + 2, 1);
-    ctx.fillStyle = OLwood; ctx.fillRect(wx0, wy1 + 1, ww, 1);                      // ground AO
-    if (winter) for (let x = wx0; x <= wx1; x++) if (_phash(x, 23) > 0.5) { ctx.fillStyle = _phash(x, 24) > 0.6 ? SNOW_TINT : SNOW_MID; ctx.fillRect(x, wy1 - 1, 1, 1); }
-    ctx.fillStyle = 'rgba(0,0,0,0.08)'; ctx.fillRect(wx0, wy0, ww, 2);              // eave-AO whisper under the overhang
-
-    // ---- ROOF ----
-    const courseBottoms = [13, 15, 17, 19, 22, 25, 28];                            // 2px pitch under the ridge OPENING to 3px at the eave (foreshortening)
-    const seam = new Set(courseBottoms);
-    const courseIdx = (y) => { let n = 0; for (const b of courseBottoms) if (b < y) n++; return n; };
-    const gradeAt = (y) => { const f = tAt(y); return f < 0.16 ? shade(R[3], 1.12) : f < 0.38 ? R[3] : f < 0.6 ? shade(R[3], 0.92) : f < 0.82 ? R[2] : shade(R[2], 0.9); };
-
-    // far-slope sliver (dark, above the ridge) — the top of the silhouette is the BACK plane, never a bright cap
-    for (let y = farY0; y <= farY1; y++) {
-        const inset = y - farY0, a = farL + inset, b = farR - inset;
-        ctx.fillStyle = y === farY1 ? shade(R[1], 0.92) : R[0];
-        ctx.fillRect(a, y, b - a + 1, 1);
+    for (const sx of [17, 33]) {                      // plank seams — PROPORTIONAL (§S.2)
+        const yTop = botAt(dOf(sx)) + 3, hgt = WY1 - 3 - yTop;
+        if (hgt <= 0) continue;
+        ctx.fillStyle = TEX_DARK;  ctx.fillRect(sx, yTop, 1, hgt);
+        ctx.fillStyle = TEX_LIGHT; ctx.fillRect(sx + 1, yTop, 1, hgt);
     }
-    ctx.fillStyle = OLroof; ctx.fillRect(farL - 1, farY0 - 1, (farR - farL) + 3, 1);   // dark silhouette cap over the top
-    ctx.fillStyle = R[0]; for (let x = farL + 2; x <= farR - 1; x += 4) if (_phash(x, 7) > 0.45) ctx.fillRect(x, farY1, 1, 1);   // sparse ticks on the far plane
-    ctx.fillStyle = shade(R[4], 1.06); ctx.fillRect(ridgeL, ridgeY, ridgeR - ridgeL + 1, 1);   // bright ridge crease between the two planes
+    // base, graded along the sun (§S.2) — no seat shadow on buildings
+    for (let x = WX0 - 1; x <= WX1 + 1; x++) {
+        const t = (x - (WX0 - 1)) / Math.max(1, (WX1 + 1) - (WX0 - 1));
+        const base = shade(W[1], 1.07 - t * 0.15);
+        ctx.fillStyle = base;              ctx.fillRect(x, 41, 1, 3);
+        ctx.fillStyle = shade(base, 1.10); ctx.fillRect(x, 41, 1, 1);
+    }
+    ctx.fillStyle = OLwood; ctx.fillRect(WX0, 44, WX1 - WX0 + 1, 1);
+    ctx.fillStyle = OLwall;
+    ctx.fillRect(WX0 - 1, botAt(dOf(WX0)) + 1, 1, WY1 - botAt(dOf(WX0)));
+    ctx.fillRect(WX1 + 1, botAt(dOf(WX1)) + 1, 1, WY1 - botAt(dOf(WX1)));
 
-    for (let y = ridgeY + 1; y <= eaveY - 1; y++) {
-        const lx = lxAt(y), rx = rxAt(y), hip = hipAt(y);
-        const isBot = seam.has(y), isLitTop = seam.has(y - 1), ci = courseIdx(y);
-        for (let x = lx; x <= rx; x++) {
-            let col;
-            if (x > hip) { col = tAt(y) > 0.55 ? shade(R[1], 0.9) : R[1]; }         // right SIDE facet — flat darker, the roof turning away (one visible side plane)
-            else {
-                col = gradeAt(y);                                                  // dominant front plane: vertical ridge->eave grade
-                if (!isBot && ((x + (ci % 2) * 3) % 6 === 0)) col = shade(col, 0.95);   // half-offset shingle seams
-                if (isBot) col = shade(col, 0.88); else if (isLitTop) col = shade(col, 1.05);
-            }
+    // ---- OPENINGS — a pop-hole with its ramp, and a nest window (§S.2: doors reach the ground)
+    { const dx = 22, dyT = 33;
+      ctx.fillStyle = OLwood; ctx.fillRect(dx - 1, dyT - 1, 8, 12);
+      ctx.fillStyle = '#1c1510'; ctx.fillRect(dx, dyT, 6, 11);                       // dark interior
+      for (const k of [0, 5]) { ctx.fillStyle = OLwood; ctx.fillRect(dx + k, dyT, 1, 1); }   // arched shoulders
+      ctx.fillStyle = shade(W[2], 1.08); ctx.fillRect(dx - 1, dyT - 1, 8, 1);        // lit lintel
+      ctx.fillStyle = 'rgba(0,0,0,0.16)'; ctx.fillRect(dx, 43, 6, 1);                // contact shadow
+      ctx.fillStyle = W[2]; ctx.fillRect(dx + 1, 40, 4, 4);                          // the ramp up to the hole
+      ctx.fillStyle = shade(W[3], 1.06); ctx.fillRect(dx + 1, 40, 4, 1);
+      ctx.fillStyle = TEX_DARK; ctx.fillRect(dx + 2, 41, 1, 3);
+    }
+    { const wx = 13, wy = 32;                                                        // nest window
+      ctx.fillStyle = OLwood; ctx.fillRect(wx - 1, wy - 1, 7, 7);
+      ctx.fillStyle = W[2]; ctx.fillRect(wx, wy, 5, 5);
+      recess(ctx, wx + 1, wy + 1, 3, 3, winter ? '#a2bcc6' : G[0], W[1]);
+      ctx.fillStyle = winter ? '#b6cdd6' : G[1]; ctx.fillRect(wx + 1, wy + 1, 3, 1);
+      ctx.fillStyle = 'rgba(0,0,0,0.12)'; ctx.fillRect(wx - 1, wy + 6, 7, 1);
+    }
+
+    // ---- ROOF — committed upper-left split + shingle courses + the §S.2b lighting pass ----
+    for (let x = 1; x <= 50; x++) {
+        if (!onRoof(x)) continue;
+        const d = dOf(x), t0 = topAt(d), b0 = botAt(d);
+        const lit = (x <= CXL) === litLeft;
+        let firstY = -1;
+        for (let y = t0; y <= b0; y++) {
+            if (d > HALF - overhangInset(y)) continue;          // §S.2d only the overhang is irregular
+            let col = lit ? R[3] : R[1];
+            const f = (y - t0) / Math.max(1, b0 - t0);
+            if (f < 0.12) col = shade(col, lit ? 1.08 : 1.03);
+            else if (f > 0.85) col = shade(col, 0.86);
+            const sh = shingleTile(col, x, y - t0, lit);
+            col = roofLightPass(sh.col, sh.tcol, sh.rr, d / HALF, f,
+                                { strokeA: lit ? 1.10 : 1.05, strokeB: lit ? 1.04 : 1.02,
+                                  lift: lit ? 1.05 : 1.0, fallX: lit ? 0.08 : 0.05, fallY: 0.06 });
+            if (y === b0) col = lit ? shade(R[1], 0.8) : R[0];   // eave fascia
+            if (firstY < 0) firstY = y;
             ctx.fillStyle = col; ctx.fillRect(x, y, 1, 1);
         }
-        ctx.fillStyle = shade(R[1], 0.85); ctx.fillRect(hip, y, 1, 1);              // the single hip crease (front|side) — no mirror twin
-        ctx.fillStyle = shade(R[3], 1.08); ctx.fillRect(lx, y, 1, 1);              // lit LEFT rake edge (upper-left light on the dominant plane's own edge)
-        ctx.fillStyle = OLroof; ctx.fillRect(lx - 1, y, 1, 1); ctx.fillRect(rx + 1, y, 1, 1);   // silhouette rakes: long-shallow left, short-steep right
+        if (firstY >= 0) { ctx.fillStyle = OLroof; ctx.fillRect(x, firstY - 1, 1, 1); }
     }
-    // EAVE — widest row: dark fascia (slab edge) + 3px overhang step per side
-    ctx.fillStyle = shade(R[1], 0.85); ctx.fillRect(eaveL, eaveY, eaveR - eaveL + 1, 1);
-    ctx.fillStyle = OLroof; ctx.fillRect(eaveL - 1, eaveY, 1, 1); ctx.fillRect(eaveR + 1, eaveY, 1, 1);
-    ctx.fillStyle = OLroof; ctx.fillRect(eaveL, eaveY + 1, wx0 - eaveL, 1); ctx.fillRect(wx1 + 1, eaveY + 1, eaveR - wx1, 1);   // overhang underside
+    // apex crease + cap
+    const ridgeTop = topAt(0);
+    ctx.fillStyle = shade(R[4], 1.08); ctx.fillRect(litLeft ? CXL : CXR, ridgeTop, 1, DEPTH);
+    ctx.fillStyle = R[0];              ctx.fillRect(litLeft ? CXR : CXL, ridgeTop, 1, DEPTH + 1);
+    ctx.fillStyle = OLroof;            ctx.fillRect(CXL, ridgeTop - 1, 2, 1);
+    // graded soffit shadow under the overhang (§S.2c) + eave tips
+    for (let x = WX0; x <= WX1; x++) {
+        ctx.fillStyle = 'rgba(0,0,0,0.13)'; ctx.fillRect(x, botAt(dOf(x)) + 1, 1, 2);
+    }
+    ctx.fillStyle = OLroof;
+    for (let x = 1; x < WX0; x++) if (onRoof(x)) ctx.fillRect(x, botAt(dOf(x)) + 1, 1, 1);
+    for (let x = WX1 + 1; x <= 50; x++) if (onRoof(x)) ctx.fillRect(x, botAt(dOf(x)) + 1, 1, 1);
 
-    // ---- WINTER snow slab on the near plane (far sliver stays dark; side facet sheds early) ----
+    // ---- SEASONS (§6b0) — both inherited from the shared helpers ----
     if (winter) {
-        const step = 1 / (eaveY - ridgeY);
-        for (let y = ridgeY + 1; y <= eaveY - 1; y++) {
-            const lx = lxAt(y), rx = rxAt(y), hip = hipAt(y), f = tAt(y);
-            for (let x = lx; x <= rx; x++) {
-                const onSide = x > hip;
-                const reach = (onSide ? 0.5 : 0.74) + _phash(x >> 1, 3) * 0.10;
-                if (f > reach) { if (f - step <= reach) { ctx.fillStyle = 'rgba(0,0,0,0.10)'; ctx.fillRect(x, y, 1, 1); } continue; }
-                ctx.fillStyle = onSide ? SNOW_THIN : (f < 0.28 ? SNOW_DEEP : f < 0.55 ? SNOW_MID : SNOW_THIN);
-                ctx.fillRect(x, y, 1, 1);
-                if (seam.has(y) && f >= 0.28 && !onSide) { ctx.fillStyle = 'rgba(0,0,0,0.07)'; ctx.fillRect(x, y, 1, 1); }
-            }
-            ctx.fillStyle = 'rgba(70,40,52,0.35)'; ctx.fillRect(hip, y, 1, 1);      // hip crease persists through the snow
+        for (let x = 1; x <= 50; x++) {
+            if (!onRoof(x)) continue;
+            const d = dOf(x), lit = (x <= CXL) === litLeft;
+            snowCourses(ctx, x, topAt(d), botAt(d), { frac: lit ? 0.60 : 0.50, bright: lit, tone: SNOW });
+            eaveIcicles(ctx, x, botAt(d), SNOW);
         }
-        ctx.fillStyle = SNOW_DEEP; ctx.fillRect(ridgeL, ridgeY, ridgeR - ridgeL + 1, 1);   // bright ridge; the dark far sliver stays above it (no white cap)
+        ctx.fillStyle = SNOW.deep; ctx.fillRect(CXL, ridgeTop, 2, 3);
+        ctx.fillStyle = SNOW.mid;  ctx.fillRect(CXL, ridgeTop + 3, 2, 2);
     }
+    if (fall) leafDrift(ctx, 1, 50, (x) => topAt(dOf(x)), (x) => botAt(dOf(x)), onRoof);
 
-    // ---- one small WINDOW under the roof, pushed LEFT of center ----
-    { const x = 11, y = 35, sz = 6, gx = x + 1, gy = y + 1, gs = 4;
-      ctx.fillStyle = OLwood; ctx.fillRect(x - 1, y - 1, sz + 2, sz + 2);
-      ctx.fillStyle = W[2]; ctx.fillRect(x, y, sz, sz);
-      ctx.fillStyle = shade(W[3], 1.06); ctx.fillRect(x, y, 1, sz);
-      ctx.fillStyle = shade(W[1], 0.9); ctx.fillRect(x + sz - 1, y, 1, sz);
-      ctx.fillStyle = shade(W[3], 1.1); ctx.fillRect(x, y, sz, 1);
-      ctx.fillStyle = winter ? '#b6cdd6' : G[1]; ctx.fillRect(gx, gy, gs, gs);
-      ctx.fillStyle = winter ? '#a2bcc6' : G[0]; ctx.fillRect(gx, gy + 3, gs, gs - 3);
-      ctx.fillStyle = W[1]; ctx.fillRect(gx + 2, gy, 1, gs); ctx.fillRect(gx, gy + 2, gs, 1);
-      ctx.fillStyle = winter ? '#e8f4f8' : G[2]; ctx.fillRect(gx + 1, gy + 1, 1, 1);
-      ctx.fillStyle = 'rgba(0,0,0,0.12)'; ctx.fillRect(x, y + sz, sz, 1);
-      if (winter) { for (let k = 0; k < sz; k++) { const up = _phash(x + k, 17) > 0.62 ? 1 : 0; ctx.fillStyle = SNOW_MID; ctx.fillRect(x + k, y - 1 - up, 1, 1 + up); } ctx.fillStyle = SNOW_DEEP; ctx.fillRect(x + 1, y - 1, 2, 1); }
-    }
-
-    // ---- DOOR (recessed pop-hole), bottom on the ground line, left of center ----
-    ctx.fillStyle = OLwood; ctx.fillRect(20, 35, 9, 9);
-    ctx.fillStyle = '#241c18'; ctx.fillRect(21, 36, 7, 8);
-    ctx.fillStyle = shade(W[2], 1.08); ctx.fillRect(20, 35, 9, 1);
-    ctx.fillStyle = shade(P[3], 1.06); ctx.fillRect(21, 36, 1, 8);
-    ctx.fillStyle = shade(W[1], 0.85); ctx.fillRect(24, 36, 1, 8);
-    ctx.fillStyle = shade(W[3], 1.1); ctx.fillRect(26, 40, 1, 1);
-    ctx.fillStyle = 'rgba(0,0,0,0.13)'; ctx.fillRect(20, 44, 9, 1);
-    if (winter) { for (let k = 0; k < 9; k++) { const up = _phash(20 + k, 19) > 0.6 ? 1 : 0; ctx.fillStyle = SNOW_MID; ctx.fillRect(20 + k, 34 - up, 1, 1 + up); } for (let k = 0; k < 9; k++) if (_phash(20 + k, 21) > 0.5) { ctx.fillStyle = SNOW_TINT; ctx.fillRect(20 + k, 44, 1, 1); } }
-
-    // ---- GROUNDING scuff at the foundation ----
-    const scuff = (x, col) => { ctx.fillStyle = col; ctx.fillRect(x, 43, 1, 2); ctx.fillRect(x - 1, 44, 1, 1); ctx.fillRect(x + 1, 44, 1, 1); };
-    if (winter) { scuff(10, SNOW_MID); scuff(38, SNOW_MID); ctx.fillStyle = SNOW_TINT; ctx.fillRect(15, 45, 18, 1); }
-    else {
+    // ---- grounding tufts ----
+    if (!winter) {
         const gA = fall ? '#7d6a2c' : RAMPS.FOLIAGE[4], gB = fall ? '#5f5322' : RAMPS.FOLIAGE[3];
-        scuff(10, gA); scuff(14, gB); scuff(36, gB); scuff(38, gA);
-        ctx.fillStyle = shade(W[1], 0.9); for (let x = 16; x <= 30; x++) if (_phash(x, 31) > 0.55) ctx.fillRect(x, 45, 1, 1);
+        for (const [gx, gc] of [[14, gA], [18, gB], [36, gB], [39, gA]]) {
+            ctx.fillStyle = gc; ctx.fillRect(gx, 40, 1, 2); ctx.fillRect(gx - 1, 41, 1, 1); ctx.fillRect(gx + 1, 41, 1, 1);
+        }
     }
-
-    // ---- FALL dry-leaf flecks near the eave ----
-    if (fall) for (const [col, lx, ly] of [['#c9782a', 8, 30], ['#a8531e', 40, 30], ['#d89a34', 15, 29], ['#b8641a', 35, 30]]) { ctx.fillStyle = col; ctx.fillRect(lx, ly, 1, 1); }
 
     _coopTD[season] = c;
     return c;
