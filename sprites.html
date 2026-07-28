@@ -124,6 +124,7 @@
 <script type="module">
   // pond life + the procedural facility buildings — built by the game's own sprite module
   import { makeLilyPad, makeFish, makeCoop, makeBarn, makeMill, makeHatchery, makeWindmill, makeTower, makeToolshed, makeFencePost, makeCropSprites, makeMonument, makeCoopIso, makeWellIso, makeWindmillIso, makeMonumentIso, makeCoopTD } from './pixel.js';
+  import { makeGableHouse } from './buildings.js';
 
   const SW  = 'assets/craftpix-net-180537-free-swordsman-1-3-level-pixel-top-down-sprite-character/PNG/';
   const ORC = 'assets/craftpix-net-363992-free-top-down-orc-game-character-pixel-art/Tiled_files/';
@@ -163,6 +164,22 @@
   const orcAnims = (v) => ACTS.map(a => ({ act: a, src: orcSheet(v, a) }));
 
   const FAMILIES = [
+    {
+      family: 'APPROVED — top-down GABLE HOUSE + wing massing (buildings.js)', cls: 'creature',
+      chars: [
+        { name: 'makeGableHouse — the first approved procedural building',
+          note: 'The canonical procedural top-down dwelling, approved 2026-07-27, drawn to the §S laws. ADDITIVE — this does NOT replace any CraftPix sheet art; it is the vocabulary for structures the game grows into. Roof: tall band (DEPTH 22) so it reads as a house rather than a shed; a committed upper-left light with the WHOLE left plane lit and the WHOLE right plane in shadow (an earlier per-column gradient mirrored itself and fought the sun); hand-laid scallop shingles; the SLYNYRD lighting pass (§S.2b) over the top — per-tile diagonal stroke + a broad gradient that ignores tile boundaries + a value lift. Edges do three different jobs (§S.2d): far rake CLEAN, near eave CLEAN, and only the left/right overhang scalloped [1,0,0,1]. WINGS are a CONTINUATION, not a bolt-on (§S.2c): the roof band KINKS to a shallower pitch past a break, keeping its depth, so the rake, the eave and the shingle courses all carry through — a catslide. Wing pitch follows storey count: FLAT for single-storey, pitched (~0.22) only when there is enough mass above. A LEFT wing runs toward the sun and BRIGHTENS outward; a RIGHT wing darkens. Texture is proportional throughout (§S.2), no seat shadow (§S.2), doors meet the ground. Compare against the CraftPix cottage — the target it was calibrated to with ImageMagick.',
+          anims: [
+            { act: 'CraftPix_COTTAGE_target', src: 'assets/craftpix-net-654184-main-characters-home-free-top-down-pixel-art-asset/PNG/exterior.png', file: 'exterior.png (the calibration target)', spec: { type: 'crop', sx: 2, sy: 5, sw: 137, sh: 125, zoom: 1 } },
+            { act: 'gable_RIGHT_wing', frames: [makeGableHouse('SUMMER', { extSide: 1, extPitch: 0 })], file: 'buildings.js · makeGableHouse(SUMMER, {extSide:1})', spec: { zoom: 2 } },
+            { act: 'gable_LEFT_wing', frames: [makeGableHouse('SUMMER', { extSide: -1, extPitch: 0 })], file: 'makeGableHouse({extSide:-1}) — brightens toward the sun', spec: { zoom: 2 } },
+            { act: 'gable_BOTH_wings', frames: [makeGableHouse('SUMMER', { extSide: 0, extPitch: 0 })], file: 'makeGableHouse({extSide:0})', spec: { zoom: 2 } },
+            { act: 'gable_PITCHED_wing', frames: [makeGableHouse('SUMMER', { extSide: 1, extPitch: 0.22 })], file: 'makeGableHouse({extPitch:0.22}) — two-storey+ only', spec: { zoom: 2 } },
+            { act: 'gable_FALL', frames: [makeGableHouse('FALL', { extSide: 0, extPitch: 0 })], file: 'makeGableHouse(FALL)', spec: { zoom: 2 } },
+            { act: 'gable_WINTER', frames: [makeGableHouse('WINTER', { extSide: 0, extPitch: 0 })], file: 'makeGableHouse(WINTER)', spec: { zoom: 2 } },
+          ] },
+      ],
+    },
     {
       family: 'RESET — PROJECTION CALIBRATION (batch #7g): top-down ¾ vs the abandoned iso', cls: 'creature',
       chars: [
