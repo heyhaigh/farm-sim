@@ -142,7 +142,11 @@ export function makeBuilding(season = 'SUMMER') {
             ctx.fillStyle = shade(base, 1.10);   ctx.fillRect(x, 51, 1, 1);   // top edge catches the light
         }
     }
-    ctx.fillStyle = OLwood; ctx.fillRect(WX0E, 54, WX1E - WX0E + 1, 1);
+    // (removed) A hard 1px base outline ran the full footprint width. On grass the soft
+    // seat shadow already grounds the building, so it was redundant — and being a
+    // dead-straight rule across both wings it was the last element ignoring the light
+    // and the building's own form. The base band's dark bottom row terminates the
+    // silhouette on its own, and the house now sits INTO the ground rather than on it.
     // wall side outlines (lower half + base per OUTLINE LAW; sky edges stay open)
     ctx.fillStyle = OLwall;
     ctx.fillRect(WX0E - 1, botAt(dOf(WX0E)) + 1, 1, 53 - botAt(dOf(WX0E)));
@@ -383,8 +387,11 @@ export function makeBuilding(season = 'SUMMER') {
     else {
         const gA = fall ? '#7d6a2c' : RAMPS.FOLIAGE[4], gB = fall ? '#5f5322' : RAMPS.FOLIAGE[3];
         scuff(10, gA); scuff(15, gB); scuff(40, gB); scuff(45, gA);
-        ctx.fillStyle = shade(W[1], 0.9);
-        for (let x = 20; x <= 36; x++) if (phash(x, 31) > 0.55) ctx.fillRect(x, 52, 1, 1);
+        // (removed) A scatter of absolute-dark pixels along y52 in front of the door,
+        // meant as worn threshold dirt. It ran in the grounding pass AFTER the doors, so
+        // once the doors reached the ground it strewed debris across their base — and it
+        // fought the graded base line. Ground wear belongs in the terrain, not stamped
+        // over the building's own footprint.
     }
     if (fall) for (const [col, lx, ly] of [['#c9782a', 3, 37], ['#a8531e', 52, 37], ['#d89a34', 6, 36], ['#b8641a', 49, 36]]) {
         ctx.fillStyle = col; ctx.fillRect(lx, ly, 1, 1);
