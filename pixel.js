@@ -2499,8 +2499,12 @@ export function makeBarn(season = 'SUMMER') {
         if (firstY >= 0) { ctx.fillStyle = OLroofB; ctx.fillRect(x, firstY - 1, 1, 1); }
     }
     const bRidge = bTop(0);
-    ctx.fillStyle = shade(R[4], 1.08); ctx.fillRect(litLeftB ? CXLb : CXRb, bRidge, 1, BDEPTH);
-    ctx.fillStyle = R[0];              ctx.fillRect(litLeftB ? CXRb : CXLb, bRidge, 1, BDEPTH + 1);
+    // Ridge crease. At BDEPTH 25 the old shade(R[4],1.08) ran as a long BRIGHT pole down
+    // the roof, and with the cupola sitting across it the lower half read as a stem
+    // dangling from the box. Toned to a subtle ridge: it should mark the apex, not draw
+    // the eye down the whole roof.
+    ctx.fillStyle = shade(R[3], 1.05); ctx.fillRect(litLeftB ? CXLb : CXRb, bRidge, 1, BDEPTH);
+    ctx.fillStyle = shade(R[1], 0.9);  ctx.fillRect(litLeftB ? CXRb : CXLb, bRidge, 1, BDEPTH + 1);
     ctx.fillStyle = OLroofB;           ctx.fillRect(CXLb, bRidge - 1, 2, 1);
     // graded soffit shadow where the eave overhangs the wall (§S.2c)
     for (let x = bx0; x <= bx1; x++) {
