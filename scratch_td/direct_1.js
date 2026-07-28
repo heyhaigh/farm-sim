@@ -106,7 +106,11 @@ export function makeBuilding(season = 'SUMMER') {
     const onRoof = (x) => dOf(x) <= maxD(x);                         // straight outer bound; the per-course stagger is applied per pixel
 
     // ---- grounding FIRST (behind): fixed <=1-tile seat shadow (SHADOW LAW) ----
-    seatShadow(ctx, { cx: Math.round((WX0E + WX1E) / 2), cy: 54, rx: TILE_W / 2, ry: 2 }, { alpha: 0.3 });
+    // NO SEAT SHADOW on buildings. The SHADOW LAW clamps it to <=1 tile (rx = TILE_W/2),
+    // which correctly seats a PROP but renders a 20px smudge floating under the centre of
+    // a ~90px building — unrelated to the footprint, so it reads as a stray line. The base
+    // outline + the building's own eave shadows do the grounding instead. Revisit a proper
+    // footprint-width shadow when buildings are wired into real terrain.
 
     // ---- FRONT WALL — the gable-end pentagon under the roof's near rake ----
     for (let x = WX0E; x <= WX1E; x++) {
@@ -142,11 +146,9 @@ export function makeBuilding(season = 'SUMMER') {
             ctx.fillStyle = shade(base, 1.10);   ctx.fillRect(x, 51, 1, 1);   // top edge catches the light
         }
     }
-    // (removed) A hard 1px base outline ran the full footprint width. On grass the soft
-    // seat shadow already grounds the building, so it was redundant — and being a
-    // dead-straight rule across both wings it was the last element ignoring the light
-    // and the building's own form. The base band's dark bottom row terminates the
-    // silhouette on its own, and the house now sits INTO the ground rather than on it.
+    // Base outline: terminates the silhouette against the terrain. With the seat shadow
+    // gone this is what grounds the building, so it earns its place.
+    ctx.fillStyle = OLwood; ctx.fillRect(WX0E, 54, WX1E - WX0E + 1, 1);
     // wall side outlines (lower half + base per OUTLINE LAW; sky edges stay open)
     ctx.fillStyle = OLwall;
     ctx.fillRect(WX0E - 1, botAt(dOf(WX0E)) + 1, 1, 53 - botAt(dOf(WX0E)));
