@@ -2406,16 +2406,24 @@ export function makeBarn() {
 // #99b the Mill — a stone grinding house with a big millstone wheel on its face
 // (grinds wheat -> grain). Cool-shifted stone courses; wheel rings are stepped
 // fillRects (no arc/AA). ~52px tall. Exemplar: Chrono Trigger masonry. (§1b, §3.5)
-export function makeMill() {
-    const [c, ctx] = makeCanvas(52, 58);
-    const S = RAMPS.STONE, W = RAMPS.WOOD, F = RAMPS.FOLIAGE, OL = RAMPS.OUTLINE.warm;
-    groundShadow(ctx, 26, 55, 23, 6, 0.3);
-    const bx0 = 8, bx1 = 44, wy0 = 18, wy1 = 54, bw = bx1 - bx0 + 1, bh = wy1 - wy0 + 1;
-    ctx.fillStyle = OL;   ctx.fillRect(bx0 - 1, wy0, bw + 2, bh + 1);   // silhouette
+const _mill = {};
+export function makeMill(season = 'SUMMER') {
+    if (_mill[season]) return _mill[season];
+    // SHORTER body + a FLAT roof (the pitched cap read as a hat perched on a tall box),
+    // and a real WATER WHEEL in place of the flat millstone disc.
+    const [c, ctx] = makeCanvas(52, 52);
+    const winter = season === 'WINTER', fall = season === 'FALL';
+    const S = RAMPS.STONE, F = RAMPS.FOLIAGE, OL = RAMPS.OUTLINE.warm;
+    const W = fall ? warmRamp(RAMPS.WOOD, 12, 1.04, 1.05) : RAMPS.WOOD;
+    const R = fall ? warmRamp(RAMPS.ROOF_RED, 16, 1.04, 1.06) : RAMPS.ROOF_RED;
+    const SNOW = { deep: '#ffffff', mid: '#eef4f4', thin: '#dbe8ec' };
+    // NO ground/seat shadow (§S.2) — a prop-scale ellipse under a building reads as a smudge.
+
+    const bx0 = 9, bx1 = 43, wy0 = 17, wy1 = 46, bw = bx1 - bx0 + 1, bh = wy1 - wy0 + 1;
+    ctx.fillStyle = OL;   ctx.fillRect(bx0 - 1, wy0, bw + 2, bh + 1);
     ctx.fillStyle = S[2]; ctx.fillRect(bx0, wy0, bw, bh);
-    // HAND-LAID ASHLAR: running-bond blocks, tone by horizontal position (light UL) with
-    // deterministic per-block jitter + occasional moss; each block a lit top bevel + base
-    // mortar AO so the wall reads as stacked stone, not a flat face. (§1b Chrono-Trigger)
+    // HAND-LAID ASHLAR (unchanged — the masonry was already to the bar): running-bond
+    // blocks, tone by horizontal position, deterministic jitter, moss, bevel + mortar AO.
     const CH = 5, BW = 9;
     for (let ci = 0, y = wy0; y < wy1; y += CH, ci++) {
         const off = (ci % 2) * (BW >> 1), h2 = Math.min(CH, wy1 - y);
@@ -2427,59 +2435,132 @@ export function makeMill() {
             const hsh = ((gx * 73856093) ^ (y * 19349663)) >>> 0, jit = hsh % 5;
             if (jit === 0) idx = Math.min(4, idx + 1); else if (jit === 1) idx = Math.max(0, idx - 1);
             ctx.fillStyle = S[idx]; ctx.fillRect(gx, y, w2, h2);
-            ctx.fillStyle = shade(S[idx], 1.14); ctx.fillRect(gx, y, w2, 1);           // block top bevel
-            ctx.fillStyle = shade(S[idx], 0.78); ctx.fillRect(gx, y + h2 - 1, w2, 1);  // base mortar AO
-            if (hsh % 11 === 0) { ctx.fillStyle = F[3]; ctx.fillRect(gx + 1, y + 1, 2, 1); ctx.fillStyle = F[4]; ctx.fillRect(gx + 1, y + 1, 1, 1); }  // moss
+            ctx.fillStyle = shade(S[idx], 1.14); ctx.fillRect(gx, y, w2, 1);
+            ctx.fillStyle = shade(S[idx], 0.78); ctx.fillRect(gx, y + h2 - 1, w2, 1);
+            if (hsh % 11 === 0) { ctx.fillStyle = F[3]; ctx.fillRect(gx + 1, y + 1, 2, 1); ctx.fillStyle = F[4]; ctx.fillRect(gx + 1, y + 1, 1, 1); }
         }
     }
-    // vertical mortar seams between blocks
     ctx.fillStyle = S[0];
     for (let ci = 0, y = wy0; y < wy1; y += CH, ci++) {
         const off = (ci % 2) * (BW >> 1);
         for (let x = bx0 - off + BW; x < bx1; x += BW) if (x > bx0 && x < bx1) ctx.fillRect(x - 1, y, 1, Math.min(CH, wy1 - y));
     }
-    // overall form: a soft right-face shadow wash + a bright sunlit left edge
-    ctx.fillStyle = 'rgba(20,26,34,0.24)'; ctx.fillRect(bx1 - 10, wy0, 11, bh);
-    ctx.fillStyle = shade(S[4], 1.14);     ctx.fillRect(bx0, wy0, 1, bh);
-    ctx.fillStyle = shade(S[0], 0.9);      ctx.fillRect(bx0, wy0, bw, 1);   // eave AO
-    ctx.fillStyle = shade(OL, 0.9);        ctx.fillRect(bx0 - 1, wy1 + 1, bw + 2, 1);   // ground AO
-    // dark plank pitched roof + a vent
-    drawRoof(ctx, 26, 4, 18, (y) => 3 + (y - 4) / 14 * 19, { base: W[1], hi: W[3], lo: RAMPS.OUTLINE.brown, ol: OL });
-    ctx.fillStyle = W[0]; ctx.fillRect(33, 8, 3, 4); ctx.fillStyle = RAMPS.GRAIN[2]; ctx.fillRect(33, 8, 3, 1);  // vent
-    // upper window — recessed with a glint + a lintel stone
-    ctx.fillStyle = S[4]; ctx.fillRect(23, 21, 8, 1);            // lintel stone (lit)
-    recess(ctx, 24, 22, 6, 6, '#161a20', S[0]);
-    ctx.fillStyle = RAMPS.GLASS[1]; ctx.fillRect(25, 23, 4, 4);
-    ctx.fillStyle = RAMPS.GLASS[2]; ctx.fillRect(25, 23, 2, 2);
-    ctx.fillStyle = shade(RAMPS.GLASS[2], 1.25); ctx.fillRect(25, 23, 1, 1);   // glint
-    // doorway — recessed with a plank door, seams, handle, threshold AO + lintel
-    ctx.fillStyle = S[4]; ctx.fillRect(10, 42, 9, 1);           // door lintel
-    recess(ctx, 11, 43, 7, 11, '#161310', S[0]);
-    ctx.fillStyle = W[1]; ctx.fillRect(12, 44, 5, 10);          // plank door
-    ctx.fillStyle = shade(W[1], 1.1); ctx.fillRect(12, 44, 1, 10);
-    ctx.fillStyle = shade(W[0], 0.9); ctx.fillRect(14, 44, 1, 10); ctx.fillRect(16, 44, 1, 10);   // door seams
-    ctx.fillStyle = '#2a2620'; ctx.fillRect(15, 49, 1, 1);     // handle
-    ctx.fillStyle = shade(S[0], 0.7); ctx.fillRect(10, 54, 9, 1);   // threshold AO
-    // MILLSTONE wheel on the face — stepped rings, inner groove, cross spokes, lit top, hub (no arc)
-    const mcx = 32, mcy = 37, mr = 9;
-    for (let dy = -mr; dy <= mr; dy++) {
-        const half = Math.round(Math.sqrt(mr * mr - dy * dy));
-        if (half < 1) continue;
-        ctx.fillStyle = dy < -3 ? S[4] : dy > 3 ? S[1] : S[3];     // lit top / shaded bottom
-        ctx.fillRect(mcx - half, mcy + dy, half * 2, 1);
-        ctx.fillStyle = S[0]; ctx.fillRect(mcx - half, mcy + dy, 1, 1); ctx.fillRect(mcx + half - 1, mcy + dy, 1, 1);  // rim
+    ctx.fillStyle = 'rgba(20,26,34,0.24)'; ctx.fillRect(bx1 - 10, wy0, 11, bh);   // right-face form wash
+    ctx.fillStyle = shade(S[4], 1.14);     ctx.fillRect(bx0, wy0, 1, bh);         // sunlit left edge
+    ctx.fillStyle = shade(OL, 0.9);        ctx.fillRect(bx0 - 1, wy1 + 1, bw + 2, 1);   // base outline
+
+    // ---- FLAT ROOF — a top plane seen from above (§S.2b/§S.2c): the flattest plane tips
+    // toward the sky, so it is the BRIGHTEST surface, and it overhangs the body 3px/side.
+    const rx0 = 6, rx1 = 46, rTop = 3, rBot = 16;   // centred on the body (9..43): 3px overhang BOTH sides
+    for (let x = rx0; x <= rx1; x++) {
+        const edge = Math.min(x - rx0, rx1 - x);
+        if (edge < overhangInset(x)) continue;                    // §S.2d scalloped ends only
+        let firstY = -1;
+        for (let y = rTop; y <= rBot; y++) {
+            let col = R[3];
+            const f = (y - rTop) / (rBot - rTop);
+            if (f < 0.12) col = shade(col, 1.08);
+            else if (f > 0.85) col = shade(col, 0.88);
+            const sh = shingleTile(col, x, y - rTop, true);
+            col = roofLightPass(sh.col, sh.tcol, sh.rr, (x - rx0) / (rx1 - rx0), f,
+                                { strokeA: 1.12, strokeB: 1.05, lift: 1.04, fallX: 0.08, fallY: 0.06 });
+            if (y === rBot) col = shade(R[1], 0.8);               // dark fascia along the front edge
+            if (firstY < 0) firstY = y;
+            ctx.fillStyle = col; ctx.fillRect(x, y, 1, 1);
+        }
+        if (firstY >= 0) { ctx.fillStyle = outlineFor(R[1]); ctx.fillRect(x, firstY - 1, 1, 1); }
     }
-    for (let dy = -6; dy <= 6; dy++) {                              // inner ring groove
-        const half = Math.round(Math.sqrt(36 - dy * dy));
+    // graded soffit drop shadow — the roof overhangs, so what sits under it is in shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.34)'; ctx.fillRect(bx0, rBot + 1, bw, 1);
+    ctx.fillStyle = 'rgba(0,0,0,0.20)'; ctx.fillRect(bx0, rBot + 2, bw, 1);
+    ctx.fillStyle = 'rgba(0,0,0,0.10)'; ctx.fillRect(bx0, rBot + 3, bw, 1);
+    // roof vent
+    ctx.fillStyle = W[0]; ctx.fillRect(16, 7, 4, 4);
+    ctx.fillStyle = shade(W[2], 1.10); ctx.fillRect(16, 7, 4, 1);
+    ctx.fillStyle = 'rgba(0,0,0,0.20)'; ctx.fillRect(16, 11, 4, 1);
+
+    // ---- WATER WHEEL — the mill's signature. The old millstone was a flat grey disc that
+    // read as a decal; a spoked wheel with paddles round the rim reads as machinery.
+    const wcx = 31, wcy = 31, wr = 10;
+    // CAST SHADOW FIRST, offset into the away quadrant (LIGHT.awayX/Y) so the wheel reads
+    // as standing PROUD of the wall rather than painted onto it.
+    // Offset only 1px: the wheel is mounted flush against the wall, not standing off it.
+    // At 2px the shadow separated from the rim and read as a second wheel behind the first.
+    ctx.fillStyle = 'rgba(0,0,0,0.22)';
+    for (let dy = -wr; dy <= wr; dy++) {
+        const half = Math.round(Math.sqrt(Math.max(0, wr * wr - dy * dy)));
         if (half < 1) continue;
-        ctx.fillStyle = shade(S[2], 0.84); ctx.fillRect(mcx - half, mcy + dy, 1, 1); ctx.fillRect(mcx + half - 1, mcy + dy, 1, 1);
+        const sy = wcy + dy + LIGHT.awayY;
+        if (sy < wy0 || sy > wy1) continue;
+        const sx0 = Math.max(bx0, wcx - half + LIGHT.awayX);
+        const sx1 = Math.min(bx1, wcx + half + LIGHT.awayX);
+        if (sx1 >= sx0) ctx.fillRect(sx0, sy, sx1 - sx0 + 1, 1);
     }
-    ctx.fillStyle = S[0];
-    ctx.fillRect(mcx - mr + 1, mcy, mr * 2 - 2, 1);               // horizontal spoke
-    ctx.fillRect(mcx, mcy - mr + 1, 1, mr * 2 - 2);               // vertical spoke
-    ctx.fillStyle = shade(S[4], 1.1); ctx.fillRect(mcx - mr + 1, mcy - 1, 4, 1);   // lit top spoke edge
-    ctx.fillStyle = '#2a2620'; ctx.fillRect(mcx - 1, mcy - 1, 2, 2);               // hub
-    ctx.fillStyle = shade(S[4], 1.2); ctx.fillRect(mcx - 1, mcy - 1, 1, 1);        // hub glint
+    const Lx = LIGHT.x, Ly = LIGHT.y, Ln = Math.hypot(Lx, Ly) || 1;
+    for (let dy = -wr; dy <= wr; dy++) {
+        for (let dx = -wr; dx <= wr; dx++) {
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist > wr) continue;
+            let col = null;
+            if (dist >= wr - 1.6) col = W[2];                                     // outer rim
+            else if (dist >= wr - 4.2) {                                          // PADDLE band
+                const seg = Math.floor((Math.atan2(dy, dx) + Math.PI) / (Math.PI * 2) * 12);
+                col = (seg % 2) ? W[1] : W[3];
+            } else if (dist >= 4.2 && dist < 5.4) col = W[2];                     // inner rim
+            else if (dist < 1.8) col = W[0];                                      // hub
+            if (!col) continue;
+            // §S.1.4 shade off the ONE light via the surface normal — not a hardcoded diagonal
+            const dot = ((dx / wr) * Lx + (dy / wr) * Ly) / Ln;                   // >0 faces the light
+            if (dot > 0.42) col = shade(col, 1.16);
+            else if (dot > 0.14) col = shade(col, 1.06);
+            else if (dot < -0.42) col = shade(col, 0.80);
+            else if (dot < -0.14) col = shade(col, 0.90);
+            if (dist >= wr - 1.6 && dot < -0.6) col = shade(col, 0.86);           // rim's away arc reads darkest
+            ctx.fillStyle = col; ctx.fillRect(wcx + dx, wcy + dy, 1, 1);
+        }
+    }
+    for (let a = 0; a < 8; a++) {                                                 // spokes, lit per the same law
+        const th = a * Math.PI / 4;
+        for (let r = 2; r <= 5.4; r += 0.4) {
+            const ux = Math.cos(th), uy = Math.sin(th);
+            const px = Math.round(wcx + ux * r), py = Math.round(wcy + uy * r);
+            const dot = (ux * Lx + uy * Ly) / Ln;
+            ctx.fillStyle = dot > 0.2 ? shade(W[2], 1.12) : dot < -0.2 ? shade(W[1], 0.86) : W[1];
+            ctx.fillRect(px, py, 1, 1);
+        }
+    }
+    ctx.fillStyle = shade(W[4], 1.18); ctx.fillRect(wcx - 1, wcy - 1, 1, 1);      // hub glint, toward the light
+
+    // ---- DOOR — reaches the ground (§S.2) ----
+    { const dx = 12, dyT = 34;
+      ctx.fillStyle = S[4]; ctx.fillRect(dx - 1, dyT - 1, 9, 1);                  // lintel stone
+      ctx.fillStyle = OL; ctx.fillRect(dx - 1, dyT, 9, wy1 - dyT + 1);
+      ctx.fillStyle = W[1]; ctx.fillRect(dx, dyT + 1, 7, wy1 - dyT);
+      ctx.fillStyle = shade(W[2], 1.08); ctx.fillRect(dx, dyT + 1, 1, wy1 - dyT);
+      ctx.fillStyle = TEX_DARK; ctx.fillRect(dx + 3, dyT + 1, 1, wy1 - dyT);
+      ctx.fillStyle = '#2a2620'; ctx.fillRect(dx + 5, dyT + 7, 1, 1);             // handle
+      ctx.fillStyle = 'rgba(0,0,0,0.18)'; ctx.fillRect(dx, wy1, 7, 1);            // contact
+    }
+    // ---- upper window ----
+    ctx.fillStyle = S[4]; ctx.fillRect(13, 20, 8, 1);
+    recess(ctx, 14, 21, 6, 6, '#161a20', S[0]);
+    ctx.fillStyle = RAMPS.GLASS[1]; ctx.fillRect(15, 22, 4, 4);
+    ctx.fillStyle = RAMPS.GLASS[2]; ctx.fillRect(15, 22, 2, 2);
+    ctx.fillStyle = shade(RAMPS.GLASS[2], 1.25); ctx.fillRect(15, 22, 1, 1);
+
+    // ---- SEASONS (§6b0) ----
+    if (winter) {
+        for (let x = rx0; x <= rx1; x++) {
+            const edge = Math.min(x - rx0, rx1 - x);
+            if (edge < overhangInset(x)) continue;
+            snowCourses(ctx, x, rTop, rBot, { frac: 0.55, bright: true, tone: SNOW });   // a flat roof holds a lot, but 0.86 + the small-band size boost exceeded FULL coverage and collapsed the banding into a slab
+            eaveIcicles(ctx, x, rBot, SNOW);
+        }
+        ctx.fillStyle = SNOW.mid; ctx.fillRect(13, 19, 8, 1);                     // ledge snow on the lintel
+    }
+    if (fall) leafDrift(ctx, rx0, rx1, () => rTop, () => rBot, (x) => x >= rx0 && x <= rx1);
+
+    _mill[season] = c;
     return c;
 }
 
