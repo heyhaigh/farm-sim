@@ -362,27 +362,86 @@ export function makeGableHouse(season = 'SUMMER', opts = {}) {
         }
     }
 
-    // ---- WINTER — snow rides the planes from the ridge out; fascia + seams read through ----
+    // ---- WINTER — snow sits in BANDS THAT FOLLOW THE SHINGLE COURSES ----
+    // A solid blanket from the rake down (previous attempt) buried the roof: the form
+    // vanished and it read as a snowy hill behind the house rather than snow lying ON it.
+    // Real roof snow catches on the exposed upper lip of each course and slides off the
+    // tilted face below, so it stacks as horizontal BANDS with the roof showing through
+    // between them — which keeps the structure legible and reads unmistakably top-down.
+    // Coverage thins downslope course by course, and by pitch: flat holds, steep sheds.
     if (winter) {
+        const SNOW_CH = 4;                                          // matches the shingle course height
         for (let x = RX0; x <= RX1; x++) {
-            const d = dOf(x);
             if (!onRoof(x)) continue;
-            const top = topAt(d), bot = botAt(d);
-            const lit = (x <= CXL) === litLeft;
-            const reach = 15 + Math.floor(phash(x, 5) * 5);        // jittered snow line down the slope
-            if (d > reach) continue;
-            ctx.fillStyle = lit ? (d < 8 ? SNOW_DEEP : SNOW_MID) : SNOW_THIN;   // planes still separate under snow
-            ctx.fillRect(x, top, 1, bot - top);                    // keep the fascia row dark
-            if (d > 2 && d % 5 === 0) { ctx.fillStyle = 'rgba(0,0,0,0.07)'; ctx.fillRect(x, top, 1, bot - top); }
-            if (d === reach) { ctx.fillStyle = 'rgba(0,0,0,0.10)'; ctx.fillRect(x, top, 1, bot - top); }   // melt edge
+            const d = dOf(x), t0 = topAt(d), b0 = botAt(d), band = b0 - t0;
+            const lit = (x <= CXL) === litLeft, onWing = d > HALF;
+            const frac = onWing ? 0.86 : lit ? 0.60 : 0.50;
+            // smooth low-frequency drift so the band edges undulate instead of forming teeth
+            const cell = Math.floor(x / 6), tw = (x % 6) / 6;
+            const dA = phash(cell, 5), dB = phash(cell + 1, 5);
+            const drift = Math.round((dA + (dB - dA) * tw) * 2) - 1;
+            const courses = Math.max(1, Math.ceil(band / SNOW_CH));
+            for (let ci = 0; ci < courses; ci++) {
+                const tDown = ci / Math.max(1, courses - 1);        // 0 at the rake .. 1 at the eave
+                let cover = Math.round((frac - tDown * 0.75) * SNOW_CH * 1.4) + drift;
+                cover = Math.max(0, Math.min(SNOW_CH, cover));      // rows of THIS course holding snow
+                for (let rr = 0; rr < cover; rr++) {
+                    const y = t0 + ci * SNOW_CH + rr;
+                    if (y > b0) break;
+                    let col = onWing || lit ? SNOW_MID : SNOW_THIN;
+                    if (rr === 0) col = SNOW_DEEP;                  // the course's exposed lip catches the most
+                    else if (rr === cover - 1) col = shade(col, 0.86);   // where it slips off the tilted face
+                    ctx.fillStyle = col; ctx.fillRect(x, y, 1, 1);
+                }
+                if (cover > 0 && cover < SNOW_CH) {                 // damp shingle just under each band
+                    const wy = t0 + ci * SNOW_CH + cover;
+                    if (wy <= b0) { ctx.fillStyle = 'rgba(0,0,0,0.10)'; ctx.fillRect(x, wy, 1, 1); }
+                }
+            }
+            // ICICLES belong at the EAVE — meltwater runs down and refreezes at the edge
+            if (phash(x, 31) > 0.74) {
+                const len = 1 + (phash(x, 37) > 0.55 ? 1 : 0) + (phash(x, 41) > 0.86 ? 1 : 0);
+                for (let k = 1; k <= len; k++) {
+                    ctx.fillStyle = k === len ? SNOW_THIN : SNOW_MID;
+                    ctx.fillRect(x, b0 + k, 1, 1);
+                }
+            }
         }
-        ctx.fillStyle = SNOW_DEEP; ctx.fillRect(litLeft ? CXL : CXR, ridgeTop, 1, DEPTH);
-        ctx.fillStyle = SNOW_THIN; ctx.fillRect(litLeft ? CXR : CXL, ridgeTop, 1, DEPTH);
-        for (const wx of [11, 36]) for (let k = 0; k < 9; k++) {   // sill snow ticks
+        ctx.fillStyle = SNOW_DEEP; ctx.fillRect(CXL, ridgeTop, 2, 3);               // snow piled on the apex
+        ctx.fillStyle = SNOW_MID;  ctx.fillRect(CXL, ridgeTop + 3, 2, 2);
+        for (const wx of [11, 36]) for (let k = 0; k < 9; k++) {                    // sill ledges
             const up = phash(wx + k, 17) > 0.62 ? 1 : 0;
             ctx.fillStyle = SNOW_MID; ctx.fillRect(wx + k, 37 - up, 1, 1 + up);
         }
         for (let k = 0; k < 8; k++) if (phash(24 + k, 19) > 0.55) { ctx.fillStyle = SNOW_MID; ctx.fillRect(24 + k, 39, 1, 1); }
+    }
+
+    // ---- FALL — leaves gather in DRIFTS on the roof ----
+    // The previous pass hashed (x*3 + y), which is CONSTANT along every line of slope -3 —
+    // so it painted identical diagonal streaks rather than scatter. Leaves are now seeded
+    // as CLUSTERS on a coarse grid and grown outward a few pixels, denser toward the eave
+    // and the wing valleys where they actually pile up.
+    if (fall) {
+        const LEAF = ['#c9782a', '#a8531e', '#d89a34', '#b8641a', '#8f4a1c'];
+        for (let gx = RX0; gx <= RX1; gx += 3) {
+            if (!onRoof(gx)) continue;
+            const dG = dOf(gx), tG = topAt(dG), bG = botAt(dG);
+            for (let gy = tG + 1; gy <= bG; gy += 3) {
+                const down = (gy - tG) / Math.max(1, bG - tG);          // 0 rake .. 1 eave
+                const valley = dG > HALF - 3 && dG < HALF + 3 ? 0.12 : 0;   // the wing/gable valley catches them
+                if (phash(gx, gy) <= 0.74 - down * 0.30 - valley) continue;
+                const n = 3 + Math.floor(phash(gx, gy + 7) * 5);        // a clump, not a speck
+                for (let k = 0; k < n; k++) {
+                    const lx = gx + Math.floor(phash(gx + k, gy) * 5) - 2;
+                    const ly = gy + Math.floor(phash(gx, gy + k * 3) * 4) - 1;
+                    if (!onRoof(lx)) continue;
+                    const dd = dOf(lx);
+                    if (ly < topAt(dd) || ly > botAt(dd)) continue;
+                    ctx.fillStyle = LEAF[(lx * 2 + ly + k) % LEAF.length];
+                    ctx.fillRect(lx, ly, 1, 1);
+                }
+            }
+        }
     }
 
     // ---- GROUNDING scuffs at the foundation (landscape contact, §S.1.6) ----
@@ -399,9 +458,6 @@ export function makeGableHouse(season = 'SUMMER', opts = {}) {
         // once the doors reached the ground it strewed debris across their base — and it
         // fought the graded base line. Ground wear belongs in the terrain, not stamped
         // over the building's own footprint.
-    }
-    if (fall) for (const [col, lx, ly] of [['#c9782a', 3, 37], ['#a8531e', 52, 37], ['#d89a34', 6, 36], ['#b8641a', 49, 36]]) {
-        ctx.fillStyle = col; ctx.fillRect(lx, ly, 1, 1);
     }
 
     _cache[key] = c;

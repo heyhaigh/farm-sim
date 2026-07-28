@@ -781,6 +781,57 @@ later measure the yurts / guild hall, ground them further.)
 
 ---
 
+## §6b0. SEASON ON A ROOF — the two rules that actually matter (2026-07-28)
+
+Learned the hard way on `makeGableHouse`. A season is not a tint; it is **material that has
+landed on the building**, and it must obey the roof's own geometry.
+
+### SNOW — BAND IT ALONG THE SHINGLE COURSES
+
+**Snow catches on the exposed upper lip of each course and slides off the tilted face below,
+so it stacks as horizontal BANDS with the roof showing through between them.** Band it and
+the roof's form stays legible and the read is unmistakably top-down.
+
+Two failures got us here, both worth remembering:
+
+1. **`fillRect(x, top, 1, bot-top)` — flooding the whole band flat white.** Tolerable when
+   the roof band was 12 rows; at DEPTH 22 it is a white waterfall. It also *replaces* the
+   roof instead of resting on it.
+2. **A solid blanket from the rake down.** Better, but it buries the upper silhouette
+   entirely — it reads as a snowy hill *behind* the house, not snow *on* it.
+
+The working shape:
+- Walk the plane **course by course** (`SNOW_CH = 4`, matching the shingle courses). Per
+  course compute how many of its rows hold snow; render only those. The rest shows shingle.
+- **Coverage thins downslope** (`frac − tDown·0.75`) and **by pitch**: flat holds
+  (`frac ≈ 0.86`), lit slope less (`0.60`), shadow slope sheds most (`0.50`). A flat wing
+  under near-solid snow beside a steep gable keeping only its top bands is what sells it.
+- **Per-course tone:** row 0 of each band is the brightest (the exposed lip), the last row
+  is shaded (where it slips off), and a damp shingle row sits just beneath each band.
+- **The drift edge must UNDULATE SMOOTHLY** — sample noise on a coarse grid (every ~6px) and
+  interpolate. Per-column random drift cuts the edge into vertical **teeth**, which read as
+  icicles hanging off the ridge, i.e. as a straight-on elevation rather than a roof from above.
+- **ICICLES BELONG AT THE EAVE**, never the ridge. Meltwater runs down and refreezes at the
+  edge. At the ridge they destroy the top-down read outright.
+
+Open polish: on a steep gable the bands can read as *clean parallel stripes* — like painted
+trim. Breaking each band up per-course (some full, some patchy, occasional gaps) would make
+it look settled rather than striped. Near-solid wing snow does not have this problem.
+
+### FALL — LEAVES GATHER IN DRIFTS, AND MIND YOUR HASH
+
+A ~5% warm ramp is **invisible** at this scale: fall rendered as an indistinguishable
+summer. Fall needs actual **material on the roof**.
+
+- **Seed CLUSTERS, not a sprinkle.** Pick cluster origins on a coarse grid (~3px), then grow
+  3–7 pixels outward from each. Leaves pile; they do not dust evenly.
+- **Denser toward the EAVE** and in the **wing/gable valleys** — the corners where they
+  actually collect.
+- **HASH ALIASING IS A REAL BUG, NOT BAD LUCK.** The first pass hashed `(x*3 + y)`, which is
+  **constant along every line of slope −3** — so it painted identical diagonal streaks and
+  looked like a deliberate pattern. **Always hash the two axes separately** (`phash(x, y)`),
+  never a linear combination of them. This applies to every scatter: flecks, moss, wear, tufts.
+
 ## §6b. Seasonality (buildings adapt to `world.season`) — testable
 
 **Display-only, deterministic:** the season is a *read* of `world.season` in the draw path
