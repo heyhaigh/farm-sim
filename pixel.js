@@ -430,12 +430,15 @@ export function overhangInset(y) {
 // top-down. Coverage thins downslope and by PITCH: flat holds, steep sheds.
 // Call per roof column. `tone` = {deep, mid, thin}.
 export function snowCourses(ctx, x, top, bot, opts = {}) {
-    const CH = opts.courseH ?? 4;
     const tone = opts.tone || { deep: '#ffffff', mid: '#eef4f4', thin: '#dbe8ec' };
     const band = bot - top;
-    // SIZE-SCALED coverage: the same frac on a SHORT band yields only 1-2px bands, which
-    // read as streaks rather than settled snow. Small roofs need proportionally more.
-    const sizeBoost = Math.max(0, (22 - band) * 0.02);
+    // ADAPTIVE COURSE HEIGHT. On a SHORT band a 4-row course leaves only ~3 courses, so the
+    // taper compresses and the 1px gaps between bands stop reading — the mill's 13-row flat
+    // roof came out as a near-solid slab. Finer courses on short roofs keep the alternation
+    // legible; tall roofs keep the 4-row course that matches the shingle grid.
+    const CH = opts.courseH ?? (band >= 18 ? 4 : 3);
+    // a gentle size nudge on top (the adaptive course height now does most of the work)
+    const sizeBoost = Math.max(0, (22 - band) * 0.01);
     const frac = (opts.frac ?? 0.6) + sizeBoost;       // flat ~0.86 · lit slope ~0.60 · shadow ~0.50
     // the drift edge must UNDULATE SMOOTHLY — per-column random cuts it into vertical
     // TEETH, which read as icicles and kill the top-down illusion
@@ -2437,7 +2440,8 @@ export function makeMill(season = 'SUMMER') {
             ctx.fillStyle = S[idx]; ctx.fillRect(gx, y, w2, h2);
             ctx.fillStyle = shade(S[idx], 1.14); ctx.fillRect(gx, y, w2, 1);
             ctx.fillStyle = shade(S[idx], 0.78); ctx.fillRect(gx, y + h2 - 1, w2, 1);
-            if (hsh % 11 === 0) { ctx.fillStyle = F[3]; ctx.fillRect(gx + 1, y + 1, 2, 1); ctx.fillStyle = F[4]; ctx.fillRect(gx + 1, y + 1, 1, 1); }
+            // (moss flecks removed — saturated green on grey read as stray pixels, most
+            // obviously around the wheel. Lichen belongs on relics, not a working mill.)
         }
     }
     ctx.fillStyle = S[0];
