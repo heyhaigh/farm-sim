@@ -2372,7 +2372,7 @@ export function makeBarn(season = 'SUMMER') {
     // its eave sits higher at the centre than at the flanks — leaving a wedge of empty
     // canvas between roof and wall. The wall is now a pentagon whose top tracks the eave,
     // the same as the house and the coop.
-    const CXLb = 31, CXRb = 32, BHALF = 24, BDEPTH = 18, KNEE = 0.44;
+    const CXLb = 31, CXRb = 32, BHALF = 24, BDEPTH = 25, KNEE = 0.44;   // deeper band: at 18 the roof read short against a tall barn wall
     const EXT_LEN = 15, EXT_PITCH = 0.12;                  // the HAY BAY: an open-sided lean-to
     const dOfB = (x) => (x <= CXLb ? CXLb - x : x - CXRb);
     // §S.2c the roof KINKS to a shallower pitch past the break rather than the bay having a
@@ -2508,33 +2508,38 @@ export function makeBarn(season = 'SUMMER') {
         ctx.fillStyle = 'rgba(0,0,0,0.30)'; ctx.fillRect(x, ey, 1, 1);
         ctx.fillStyle = 'rgba(0,0,0,0.16)'; ctx.fillRect(x, ey + 1, 1, 1);
     }
-    // ridge cupola: louvered box (lit-left/shadow-right), cap, vent, base shadow onto roof
-    ctx.fillStyle = OL; ctx.fillRect(27, 14, 10, 6);
-    ctx.fillStyle = R[2]; ctx.fillRect(28, 15, 8, 4);
-    ctx.fillStyle = R[4]; ctx.fillRect(28, 15, 3, 4);               // lit left
-    ctx.fillStyle = R[1]; ctx.fillRect(34, 15, 2, 4);               // shadow right
-    ctx.fillStyle = shade(R[1], 0.82); ctx.fillRect(29, 16, 6, 1); ctx.fillRect(29, 18, 6, 1);  // louver slats
-    ctx.fillStyle = '#241c18'; ctx.fillRect(31, 16, 2, 1);         // vent slit
-    // CUPOLA CAP — a miniature roof drawn in the SAME 3/4 top-down projection: a lit top
-    // plane, a graded body, a dark front fascia, the committed lit-left/shadow-right split,
-    // and a 2px overhang past the box. A 1px horizontal bar (what was here) reads as a
-    // flat straight-on accent and fights the projection everything else is drawn in.
-    { const capX0 = 27, capX1 = 36, capT = 11, capB = 14, capMid = (capX0 + capX1) >> 1;
-      for (let x = capX0; x <= capX1; x++) {
-          const litC = (x <= capMid) === litLeftB;
-          for (let y = capT; y <= capB; y++) {
-              const f = (y - capT) / (capB - capT);
-              let col = litC ? R[3] : R[1];
-              if (f < 0.3) col = shade(col, 1.12);                    // top plane, tipped to the sky
-              else if (f > 0.7) col = shade(col, 0.9);
-              if (y === capB) col = litC ? shade(R[1], 0.82) : R[0];  // front fascia
-              ctx.fillStyle = col; ctx.fillRect(x, y, 1, 1);
+    // ---- RIDGE CUPOLA — a small CUBE (SLYNYRD top-down reference): a LIGHT TOP PLANE over
+    // a DARK FRONT FACE. The value gap between them is the whole volume cue. Two things the
+    // first attempt got wrong: it was far too large for the roof it sits on, and it was
+    // drawn in the SAME red as that roof, so it separated neither by hue nor by value.
+    // Timber against red tile separates on both counts.
+    { const cx0 = 28, cx1 = 35, topY = 14, midY = 18, botY = 23;
+      const OLc = outlineFor(W[1]);
+      ctx.fillStyle = OLc; ctx.fillRect(cx0 - 1, topY - 1, (cx1 - cx0) + 3, (botY - topY) + 3);
+      // TOP PLANE — tipped to the sky, the brightest surface on the cube
+      for (let x = cx0; x <= cx1; x++) {
+          const t = (x - cx0) / (cx1 - cx0);
+          for (let y = topY; y < midY; y++) {
+              ctx.fillStyle = shade(W[4], 1.16 - t * 0.12 - ((y - topY) / (midY - topY)) * 0.08);
+              ctx.fillRect(x, y, 1, 1);
           }
       }
-      ctx.fillStyle = shade(R[4], 1.10); ctx.fillRect(capMid, capT, 1, capB - capT);   // ridge crease
-      ctx.fillStyle = 'rgba(0,0,0,0.22)'; ctx.fillRect(28, capB + 1, 8, 1);            // its shadow on the box below
+      ctx.fillStyle = shade(W[4], 1.22); ctx.fillRect(cx0, topY, (cx1 - cx0) + 1, 1);    // lit deck rim
+      // FRONT FACE — markedly darker; the drop is what reads as a cube
+      for (let x = cx0; x <= cx1; x++) {
+          const litC = (x <= ((cx0 + cx1) >> 1)) === (LIGHT.x < 0);
+          for (let y = midY; y <= botY; y++) {
+              ctx.fillStyle = litC ? W[1] : shade(W[0], 0.94);
+              ctx.fillRect(x, y, 1, 1);
+          }
+      }
+      ctx.fillStyle = 'rgba(0,0,0,0.34)'; ctx.fillRect(cx0, midY, (cx1 - cx0) + 1, 1);   // plane break, in shadow
+      ctx.fillStyle = '#241c18'; ctx.fillRect(cx0 + 2, midY + 1, 4, 2);                  // dark vent slot
+      ctx.fillStyle = shade(W[3], 1.10); ctx.fillRect(cx0 + 2, midY + 1, 4, 1);          // lit lintel over it
+      ctx.fillStyle = shade(W[2], 1.04); ctx.fillRect(cx0, botY - 1, (cx1 - cx0) + 1, 1); // sill ledge
+      ctx.fillStyle = 'rgba(0,0,0,0.30)'; ctx.fillRect(cx0 - 1, botY + 1, (cx1 - cx0) + 3, 1);  // its shadow on the roof
     }
-    ctx.fillStyle = shade(R[0], 0.85); ctx.fillRect(27, 20, 10, 1);  // cupola base shadow on the roof
+
     // HOIST — the loft opening moved out to the hay bay, so the facade keeps only the
     // pulley beam and its block, which reads as the barn's working gear.
     { const hy = bBot(dOfB(31)) + 2;
@@ -2544,7 +2549,8 @@ export function makeBarn(season = 'SUMMER') {
       ctx.fillStyle = W[1]; ctx.fillRect(30, hy + 5, 3, 2);                       // block
       ctx.fillStyle = TEX_DARK; ctx.fillRect(31, hy + 5, 1, 2); }
     // big white DOORS — recessed, framed planks, beveled X-braces, hinges, threshold AO
-    const dx0 = 25, dx1 = 39, dy0 = 37, dy1 = 55, dw = dx1 - dx0, dh = dy1 - dy0;
+    // 1px left of centre: lines the doors up with the ridge crease (x31|32)
+    const dx0 = 24, dx1 = 38, dy0 = 37, dy1 = 55, dw = dx1 - dx0, dh = dy1 - dy0;
     ctx.fillStyle = OL; ctx.fillRect(dx0 - 1, dy0 - 1, dw + 3, dh + 2);
     ctx.fillStyle = trim; ctx.fillRect(dx0, dy0, dw + 1, dh + 1);
     ctx.fillStyle = trimHi; ctx.fillRect(dx0, dy0, dw + 1, 1);                     // lit lintel
@@ -2571,8 +2577,8 @@ export function makeBarn(season = 'SUMMER') {
             eaveIcicles(ctx, x, bBot(d), SNOW);
         }
         ctx.fillStyle = SNOW.deep; ctx.fillRect(CXLb, bRidge, 2, 3);
-        ctx.fillStyle = SNOW.mid;  ctx.fillRect(27, 11, 10, 1);                    // snow lying on the cap's top plane
-        ctx.fillStyle = SNOW.deep; ctx.fillRect(30, 11, 5, 1);
+        ctx.fillStyle = SNOW.mid;  ctx.fillRect(27, 8, 10, 1);                    // snow lying on the cap's top plane
+        ctx.fillStyle = SNOW.deep; ctx.fillRect(30, 8, 5, 1);
     }
     if (fall) leafDrift(ctx, 1, 74, (x) => bTop(dOfB(x)), (x) => bBot(dOfB(x)), onRoofB);
 
