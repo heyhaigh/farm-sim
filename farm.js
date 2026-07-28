@@ -611,16 +611,42 @@ function tileNoise(i, j, scale, seed = 0) {
     return lerp(lerp(a, b, tx), lerp(c, d, tx), ty);
 }
 
+// #paddock A facility is a PADDOCK: a fenced enclosure annexed OUTSIDE the homestead fence, holding one
+// building plus its yard. Two sizes matter and they are not the same thing:
+//
+//   w/h      the paddock — the fenced ground the facility claims. This is what gets annexed.
+//   struct   the BUILDING's tile footprint inside it. Sized against the real sprite: a tile block of
+//            (w+h) tiles spans (w+h)*TILE_W/2 = (w+h)*10 screen px, so the barn (76px wide) wants 4x4
+//            (80px), and the coop/mill/hatch house (52/52/48px) want 3x3 (60px). The old code carried no
+//            footprint at all — every building was pinned to the region's NW tile and drawn one tile wide,
+//            which is why the reworked art hung off the north corner of its own pen.
+//
+// Every paddock is the SAME SIZE — one square cell of a lattice (see paddockSite). Uniform cells are what
+// let paddocks pack into rows and columns off the property line with their fences shared, instead of each
+// one being individually placed and the farm sprawling outward in every direction. Facilities differ by
+// what stands in the cell, not by how much ground they take.
+const PADDOCK_CELL = 7;
 const FACILITY_DEFS = {
-    pond: { label: 'water garden', w: 3, h: 3, produce: 'lily & fish' },
+    pond: { label: 'water garden', w: PADDOCK_CELL, h: PADDOCK_CELL, produce: 'lily & fish' },
     // #pens (player direction): livestock get REAL, roomier enclosures — a fenced run/pen/fold drawn around
     // the region, animals contained inside (see #tickProducers), crops excluded (see #rebuildFields).
-    coop: { label: 'chicken run', w: 4, h: 4, produce: 'eggs', penned: true },
-    pen:  { label: 'livestock pen', w: 5, h: 4, produce: 'milk', penned: true },
-    sheeppen: { label: 'sheep fold', w: 4, h: 4, produce: 'wool', penned: true },
-    mill: { label: 'mill', w: 3, h: 3, produce: null, workstation: true },   // #99b: grinds wheat -> grain (chicken/fish feed)
-    hatchery: { label: 'hatch house', w: 3, h: 3, produce: null, workstation: true },   // #100: hatches eggs -> chickens
+    coop: { label: 'chicken run', w: PADDOCK_CELL, h: PADDOCK_CELL, struct: { w: 3, h: 3 }, produce: 'eggs', penned: true },
+    pen:  { label: 'livestock pen', w: PADDOCK_CELL, h: PADDOCK_CELL, struct: { w: 4, h: 4 }, produce: 'milk', penned: true },
+    sheeppen: { label: 'sheep fold', w: PADDOCK_CELL, h: PADDOCK_CELL, struct: { w: 4, h: 4 }, produce: 'wool', penned: true },
+    mill: { label: 'mill', w: PADDOCK_CELL, h: PADDOCK_CELL, struct: { w: 3, h: 3 }, produce: null, workstation: true },   // #99b: grinds wheat -> grain (chicken/fish feed)
+    hatchery: { label: 'hatch house', w: PADDOCK_CELL, h: PADDOCK_CELL, struct: { w: 3, h: 3 }, produce: null, workstation: true },   // #100: hatches eggs -> chickens
 };
+// Where a building sits inside its paddock. The SOLID footprint has to be whole tiles, so it snaps to the
+// tile grid; but the building is DRAWN from cx/cy, the paddock's true centre. Keeping those separate means
+// an odd footprint in an even cell (or the reverse) still renders dead centre instead of half a tile off —
+// so cell size and footprint size are free to be chosen on their own merits.
+function structRect(def, region) {
+    const s = def.struct || { w: 1, h: 1 };
+    return {
+        i: region.x + ((region.w - s.w) >> 1), j: region.y + ((region.h - s.h) >> 1), w: s.w, h: s.h,
+        cx: region.x + region.w / 2, cy: region.y + region.h / 2,
+    };
+}
 
 // #100 Hatch House — a coop owner sets a clutch of EGGS incubating; ~HATCH_DAYS later they hatch into new
 // chickens (up to the coop's cap). Lets a farm GROW its flock deliberately — but only when it can feed them
@@ -2887,6 +2913,10 @@ export class World {
                 fencePosts: p.fencePosts, fenceTarget: p.fenceTarget,
                 building: p.building ? { ...p.building } : null, sited: p.sited,
                 fenceSkip: p.fenceSkip ? [...p.fenceSkip] : undefined,
+                // #paddock which of `cells` is annexed pen ground rather than cropland. Absent on saves
+                // from before paddocks existed, which is exactly right: those farms have none.
+                padCells: p.padCells && p.padCells.size ? [...p.padCells] : undefined,
+                padGrid: p.padGrid ? { ...p.padGrid } : undefined,   // the paddock lattice, anchored once and kept
                 facilities: p.facilities.map(f => ({
                     type: f.type, x: f.x, y: f.y, w: f.w, h: f.h,
                     struct: f.struct ? { ...f.struct } : null, trough: f.trough ? { ...f.trough } : null,
@@ -3038,6 +3068,8 @@ export class World {
                 building: pd.building ? { ...pd.building } : null, sited: pd.sited,
             };
             if (pd.fenceSkip) plot.fenceSkip = new Set(pd.fenceSkip);
+            if (pd.padCells) plot.padCells = new Set(pd.padCells);   // #paddock annexed pen ground
+            if (pd.padGrid) plot.padGrid = { ...pd.padGrid };        // #paddock the lattice this farm laid out on
             plot.facilities = pd.facilities.map(fd => {
                 const region = { x: fd.x, y: fd.y, w: fd.w, h: fd.h };
                 return {
@@ -4156,6 +4188,9 @@ export class World {
             // plot area is a SET of tiles (starts as the base square) so it can later grow
             // into L-shapes; `rev` bumps whenever `cells` changes so the renderer re-traces fences.
             cells: new Set(), rev: 0,
+            // #paddock the subset of `cells` annexed as facility ground (pens, ponds, workstations).
+            // Fenced and owned, but never cropland — see cropAcreage / expansionInfo / #rebuildFields.
+            padCells: new Set(),
             // settlers arrive to raw land: clear it, gather wood for a fence, then raise a
             // level-1 tipi and slowly upgrade it (L1 tipi -> L2 yurt -> L3 cottage) over a year+.
             // level 0 = homeless. Until level>=1 no house renders and they sleep in the open.
@@ -4298,7 +4333,9 @@ export class World {
         // ambition is capped by ACREAGE, not by a bounding box — annex fields make plots
         // disconnected, so bbox width/height stopped meaning anything. The cap scales with
         // the HOUSE tier: a grander home licenses a grander estate.
-        if (plot.cells.size >= World.tierCellCap(plot.built.level)) return { state: 'max' };
+        // #paddock the cap is on CROPLAND — paddock ground holds a barn and its yard, not fields, so it
+        // doesn't count against the acreage a farmer is saving up to plant.
+        if (this.cropAcreage(plot) >= World.tierCellCap(plot.built.level)) return { state: 'max' };
         const cx = plot.x + plot.w / 2, cy = plot.y + plot.h / 2;
         const dirs = [
             { di: 1, dj: 0, out: cx > CENTER },
@@ -4313,6 +4350,9 @@ export class World {
                 const clear = [], trees = [];
                 let frontier = 0;
                 for (const key of plot.cells) {
+                    // #paddock fields never spill out of a paddock — a pen's outer fence is a wall, not a
+                    // frontier. Growing off it would swallow the enclosure into the cropland.
+                    if (plot.padCells && plot.padCells.has(key)) continue;
                     const c = key.indexOf(','), i = +key.slice(0, c), j = +key.slice(c + 1);
                     const ni = i + d.di, nj = j + d.dj;
                     if (plot.cells.has(pkey(ni, nj))) continue;
@@ -4343,7 +4383,7 @@ export class World {
         const info = this.expansionInfo(p);
         if (info.state !== 'clear') return false;
         // never grab past what the HOUSE licenses — trim the frontier to fit the tier cap
-        const room = World.tierCellCap(p.built.level) - p.cells.size;
+        const room = World.tierCellCap(p.built.level) - this.cropAcreage(p);   // #paddock cap counts cropland, not pen ground
         if (room <= 0) return false;
         if (info.cells.length > room) info.cells = info.cells.slice(0, room);
         const { removed, added } = this.fenceDelta(p, info.cells);
@@ -4384,6 +4424,160 @@ export class World {
         this._tilesChanged = true;
         return true;
     }
+
+    // ---- #paddock: facilities annex their own fenced ground, outside the homestead ------------
+    //
+    // A coop, pen, fold, pond, mill or hatch house no longer squeezes in among the crops. Each one is
+    // raised in a PADDOCK: a block of land annexed OUTSIDE the existing fence line and butted straight
+    // up against it, so its new fencing links onto the old rather than floating free. The original
+    // enclosure keeps what it was staked for — the dwelling, its yard, and the fields.
+    //
+    // Paddocks are laid out as a GRID, not placed one at a time. The farm commits ONCE to a side of the
+    // property line, and from then on every paddock lands on a lattice of PADDOCK_CELL squares running
+    // PARALLEL to that line: fill down the first lane, and when it's full start the next lane one cell
+    // further out and fill down again. That's what turns the annexes into rows and columns hugging the
+    // farm instead of a scatter of bump-outs pushing off in every direction.
+    //
+    // The lattice is anchored the first time a farm annexes anything and then kept, so the farm's
+    // paddock district stays square with itself no matter how the fields grow afterwards.
+    #paddockGrid(plot, farmer) {
+        if (plot.padGrid) return plot.padGrid;
+        const C = PADDOCK_CELL;
+        // Anchor on the YARD's own edge, not on plot.x/w. The bounding box spans every cell the farm owns
+        // INCLUDING detached frontier fields staked out in open country, so anchoring to it could start the
+        // lattice a couple of tiles — or a couple of fields — clear of the fence the paddocks are supposed
+        // to butt against. Measuring the fenced homestead directly is what keeps lane 0 flush with it.
+        let minI = Infinity, maxI = -Infinity, minJ = Infinity, maxJ = -Infinity;
+        for (const key of plot.cells) {
+            if (plot.padCells && plot.padCells.has(key)) continue;
+            const c = key.indexOf(','), i = +key.slice(0, c), j = +key.slice(c + 1);
+            if (i < minI) minI = i; if (i > maxI) maxI = i;
+            if (j < minJ) minJ = j; if (j > maxJ) maxJ = j;
+        }
+        if (!isFinite(minI)) { minI = plot.x; maxI = plot.x + plot.w - 1; minJ = plot.y; maxJ = plot.y + plot.h - 1; }
+        const yw = maxI - minI + 1, yh = maxJ - minJ + 1;
+        // One deterministic pass over the four sides: pick the one with the most buildable lattice slots,
+        // so a farm boxed in by a neighbour or a lake commits to open ground rather than a dead end.
+        const salt = ((farmer ? farmer.sheet.seed : 0) >>> 0);
+        const sides = [
+            { k: 'E', ox: maxI + 1, oy: minJ, aI: 0, aJ: 1, lI: 1,  lJ: 0, span: yh },
+            { k: 'W', ox: minI - C, oy: minJ, aI: 0, aJ: 1, lI: -1, lJ: 0, span: yh },
+            { k: 'S', ox: minI, oy: maxJ + 1, aI: 1, aJ: 0, lI: 0,  lJ: 1, span: yw },
+            { k: 'N', ox: minI, oy: minJ - C, aI: 1, aJ: 0, lI: 0,  lJ: -1, span: yw },
+        ];
+        let best = null, bestScore = -Infinity;
+        for (const s of sides) {
+            const len = Math.max(2, Math.ceil(s.span / C));
+            let open = 0;
+            for (let lane = 0; lane < 2; lane++) for (let idx = 0; idx < len; idx++) {
+                if (this.#slotClass(plot, s, len, lane * len + idx) !== 'blocked') open++;
+            }
+            const score = open * 4 + ((salt + s.k.charCodeAt(0) * 31) % 7) * 0.5;   // tie-break so neighbours differ
+            if (score > bestScore) { bestScore = score; best = { ...s, len }; }
+        }
+        if (!best) return null;
+        plot.padGrid = { side: best.k, ox: best.ox, oy: best.oy, aI: best.aI, aJ: best.aJ, lI: best.lI, lJ: best.lJ, len: best.len };
+        return plot.padGrid;
+    }
+
+    // The rect for lattice slot n, filling one lane down before stepping out to the next.
+    #slotRect(g, n) {
+        const C = PADDOCK_CELL, lane = Math.floor(n / g.len), idx = n % g.len;
+        return {
+            x: g.ox + (g.aI * idx + g.lI * lane) * C,
+            y: g.oy + (g.aJ * idx + g.lJ * lane) * C,
+            w: C, h: C,
+        };
+    }
+    // 'blocked' | 'clear' | 'tree' for a whole slot, plus the trees standing on it.
+    #slotClass(plot, g, len, n) {
+        const r = this.#slotRect({ ...g, len }, n);
+        for (let j = r.y; j < r.y + r.h; j++) for (let i = r.x; i < r.x + r.w; i++) {
+            if (this.#annexClass(plot, i, j) === 'blocked') return 'blocked';
+        }
+        return 'clear';
+    }
+
+    // Facilities that WORK TOGETHER want to be neighbours — the hatch house takes eggs from the coop and
+    // grain from the mill, so putting them at opposite ends of the farm is just a long walk for no reason.
+    // Listed STRONGEST TIE FIRST: a hatch house would rather sit beside the coop it draws eggs from than
+    // beside the mill it only tops grain up from, and a slot touching both beats either alone.
+    static PADDOCK_KIN = {
+        coop: ['hatchery', 'mill'],
+        hatchery: ['coop', 'mill'],
+        mill: ['coop', 'hatchery', 'pen', 'sheeppen', 'pond'],
+        pond: ['mill'],
+        pen: ['mill', 'sheeppen'],
+        sheeppen: ['mill', 'pen'],
+    };
+
+    // Returns { rect, trees } for the slot this facility should take — `trees` is the woodland standing on
+    // it, which the farmer must fell before the ground can be fenced (see #pursueGrowth). Null when the
+    // farm has nowhere legal left to annex.
+    paddockSite(plot, type, farmer) {
+        const def = FACILITY_DEFS[type];
+        if (!def) return null;
+        const g = this.#paddockGrid(plot, farmer);
+        if (!g) return null;
+        const kinList = World.PADDOCK_KIN[type] || [];
+        // strongest tie first -> heaviest weight, so the ranking in PADDOCK_KIN actually decides placement
+        const kinWeight = new Map(kinList.map((t, idx) => [t, kinList.length - idx]));
+        const partners = plot.facilities.filter(f => kinWeight.has(f.type));
+        const MAX_LANES = 6;
+        let best = null, bestScore = -Infinity;
+        for (let n = 0; n < g.len * MAX_LANES; n++) {
+            const r = this.#slotRect(g, n);
+            let ok = true;
+            const trees = [];
+            for (let j = r.y; j < r.y + r.h && ok; j++) {
+                for (let i = r.x; i < r.x + r.w; i++) {
+                    const cls = this.#annexClass(plot, i, j);
+                    if (cls === 'blocked') { ok = false; break; }   // already-claimed slots block here too
+                    if (cls === 'tree') trees.push({ i, j });
+                }
+            }
+            if (!ok) continue;
+            // Sum the ties this slot would sit next to (lattice cells, so "shares a full edge" is exact).
+            // A slot touching two partners beats one touching only the stronger single tie.
+            let kinScore = 0;
+            for (const p of partners) {
+                const adj = (Math.abs(p.x - r.x) === PADDOCK_CELL && p.y === r.y) ||
+                            (Math.abs(p.y - r.y) === PADDOCK_CELL && p.x === r.x);
+                if (adj) kinScore += kinWeight.get(p.type);
+            }
+            // Kinship dominates; among equals the EARLIEST slot wins, which is what keeps the grid packing
+            // lane by lane instead of leaving holes. Standing timber is a mild deterrent, not a veto.
+            const score = kinScore * 100 - n - trees.length * 0.4;
+            if (score > bestScore) { bestScore = score; best = { rect: r, trees, slot: n }; }
+        }
+        return best;
+    }
+
+    // Take a sited paddock into the plot: pay for the fence line it adds, claim the tiles, and record
+    // them as paddock ground. Crops never grow here and the acreage they occupy doesn't count against
+    // the farmer's cropland cap — a farm shouldn't have to choose between a barn and a field.
+    #annexPaddock(farmer, plot, rect) {
+        const cells = [];
+        for (let j = rect.y; j < rect.y + rect.h; j++) for (let i = rect.x; i < rect.x + rect.w; i++) cells.push({ i, j });
+        const { removed, added } = this.fenceDelta(plot, cells);
+        if (farmer && farmer.wood + removed * FENCE_POST_WOOD < added * FENCE_POST_WOOD) return false;
+        if (farmer) farmer.wood = Math.max(0, farmer.wood + removed * FENCE_POST_WOOD - added * FENCE_POST_WOOD);
+        if (!plot.padCells) plot.padCells = new Set();
+        for (const { i, j } of cells) {
+            plot.cells.add(pkey(i, j));
+            plot.padCells.add(pkey(i, j));
+            const t = this.get(i, j);
+            if (t === T.WHEAT || t === T.FLOWER || t === T.STUMP) this.set(i, j, T.GRASS);
+        }
+        this.#recomputeBounds(plot);   // bumps rev -> the renderer re-traces the fence around the new bump-out
+        this._tilesChanged = true;
+        return true;
+    }
+
+    // Paddock ground is fenced land, but it isn't FARMLAND — it holds a building and its yard. The
+    // cropland cap (and the expansion frontier) therefore both ignore it, or annexing a barn would
+    // silently eat the acreage a farmer was saving for fields.
+    cropAcreage(plot) { return plot.cells.size - (plot.padCells ? plot.padCells.size : 0); }
 
     // The building sprites are far wider than the 2x2 tile footprint, so the clear zone spans
     // the whole visual area — nothing (tree/rock/brush/water) may overlap where a dwelling sits.
@@ -4540,38 +4734,21 @@ export class World {
         }
     }
 
-    // Place the farmer's next preferred facility if there's room (no auto-expand;
-    // room is the farmer's job via wood-gated expansion). Returns true if built.
-    buildNextFacility(farmer) {
+    // WHICH facility this farm wants next — need first, then taste and market gap. Pure choice, no
+    // placement: #pursueGrowth needs to know the type before it knows whether there's ground for it.
+    nextFacilityType(farmer) {
         const plot = farmer.plot;
         const built = new Set(plot.facilities.map(f => f.type));
         // #99b a farm with chickens/fish NEEDS a Mill to grind their grain feed — that need jumps the queue
-        // ahead of diversifying into another animal (no mill => the flock/pond slowly starves). Built when
-        // there's room; if not, the normal growth loop expands the plot and it lands on a later pass.
-        if (!built.has('mill') && plot.facilities.some(f => f.producers && f.producers.some(p => FEED_GOOD[p.kind] === 'grain'))) {
-            const region = this.#findFacilityRegion(plot, 'mill');
-            if (region) {
-                this.#buildFacility(plot, farmer.sheet, 'mill', region);
-                this.addLog(`${farmer.sheet.name} raised a MILL to grind feed!`, '#7dd069');
-                farmer.say('A MILL!', '#7dd069'); farmer.sparkle = 2;
-                return true;
-            }
-        }
+        // ahead of diversifying into another animal (no mill => the flock/pond slowly starves).
+        if (!built.has('mill') && plot.facilities.some(f => f.producers && f.producers.some(p => FEED_GOOD[p.kind] === 'grain'))) return 'mill';
         // #100 a coop owner with a healthy grain buffer + a mill raises a HATCH HOUSE to grow their flock
         if (!built.has('hatchery') && built.has('coop') && built.has('mill')
-            && (farmer.sheet.goods && farmer.sheet.goods.grain || 0) >= MILL_GRAIN_STOCK * 0.5) {
-            const region = this.#findFacilityRegion(plot, 'hatchery');
-            if (region) {
-                this.#buildFacility(plot, farmer.sheet, 'hatchery', region);
-                this.addLog(`${farmer.sheet.name} built a HATCH HOUSE to grow their flock!`, '#7dd069');
-                farmer.say('A HATCH HOUSE!', '#7dd069'); farmer.sparkle = 2;
-                return true;
-            }
-        }
+            && (farmer.sheet.goods && farmer.sheet.goods.grain || 0) >= MILL_GRAIN_STOCK * 0.5) return 'hatchery';
         // candidate facilities: the farmer's unbuilt preferences their house tier + level already unlock
         const prefs = farmer.sheet.facilityPrefs || ['pond', 'coop', 'pen'];
         const candidates = prefs.filter(t => !built.has(t) && facilityUnlocked(t, plot.built.level, farmer.sheet.level));
-        if (!candidates.length) return false;
+        if (!candidates.length) return null;
         // SPECIALISE INTO A GAP: bias toward a facility whose good FEW other farms make, so the town
         // spreads across niches (poultry / dairy / wool / fishery) instead of all making the same thing —
         // that spread is what gives the barter layer something to trade. The farmer's own taste (pref
@@ -4586,12 +4763,41 @@ export class World {
             const score = -glut * (1 + farmer.p.competitiveness * 0.8) - idx * 0.6;   // fewer producers + own taste
             if (score > bestScore) { bestScore = score; nextType = t; }
         });
-        const region = this.#findFacilityRegion(plot, nextType);
-        if (!region) return false;
-        this.#buildFacility(plot, farmer.sheet, nextType, region);
-        const def = FACILITY_DEFS[nextType];
-        this.addLog(`${farmer.sheet.name} added a ${def.label.toUpperCase()} to their farm!`, '#7dd069');
-        farmer.say('NEW GROUNDS!', '#7dd069'); farmer.sparkle = 2;
+        return nextType;
+    }
+
+    // What this farm would have to do to raise its next facility: the type, the ground it would take,
+    // and the trees standing on it. #pursueGrowth reads this to decide between felling and fencing.
+    facilityPlan(farmer) {
+        const type = this.nextFacilityType(farmer);
+        if (!type) return null;
+        const site = this.paddockSite(farmer.plot, type, farmer);
+        return site ? { type, ...site } : { type, rect: null, trees: [] };
+    }
+
+    // #paddock Raise the farm's next facility on its own annexed ground. Returns true if built; false
+    // when there's nowhere legal to put it or trees still stand on the site (the caller then sends the
+    // farmer to clear or to look elsewhere).
+    buildNextFacility(farmer) {
+        const plan = this.facilityPlan(farmer);
+        if (!plan || !plan.rect || plan.trees.length) return false;
+        const plot = farmer.plot;
+        if (!this.#annexPaddock(farmer, plot, plan.rect)) return false;   // couldn't pay for the new fence line
+        this.#buildFacility(plot, farmer.sheet, plan.type, { ...plan.rect });
+        this.#clearPlotWildBuffer(plot, 1);
+        this.#rebuildFields(plot);
+        const def = FACILITY_DEFS[plan.type];
+        if (plan.type === 'mill') {
+            this.addLog(`${farmer.sheet.name} raised a MILL to grind feed!`, '#7dd069');
+            farmer.say('A MILL!', '#7dd069');
+        } else if (plan.type === 'hatchery') {
+            this.addLog(`${farmer.sheet.name} built a HATCH HOUSE to grow their flock!`, '#7dd069');
+            farmer.say('A HATCH HOUSE!', '#7dd069');
+        } else {
+            this.addLog(`${farmer.sheet.name} fenced new ground and added a ${def.label.toUpperCase()}!`, '#7dd069');
+            farmer.say('NEW GROUNDS!', '#7dd069');
+        }
+        farmer.sparkle = 2;
         return true;
     }
 
@@ -4823,15 +5029,15 @@ export class World {
         // home, at its current (non-legacy) def size, AND not overlapping a sibling. A home-but-legacy or
         // home-but-overlapping facility (e.g. a 3x3 coop sitting on a mill near the house) still relocates,
         // else yardV:1 would freeze the overlap forever.
-        const defSize = t => FACILITY_DEFS[t] || null;
-        const isLegacy = f => { const d = defSize(f.type); return !!d && (f.w !== d.w || f.h !== d.h); };
         const overlaps = f => plot.facilities.some(o => o !== f && !(f.x + f.w <= o.x || o.x + o.w <= f.x || f.y + f.h <= o.y || o.y + o.h <= f.y));
         for (const fac of plot.facilities) {
-            if (home.has(fac) && !isLegacy(fac) && !overlaps(fac)) continue;   // already a clean, right-sized part of the yard
-            // try the roomier def size first (legacy pens upgrade as they come home); on a plot too
-            // tight for that (thin ribbon farms), retry at the facility's CURRENT footprint
-            const target = this.#findFacilityRegion(plot, fac.type, { ignore: fac })
-                || this.#findFacilityRegion(plot, fac.type, { ignore: fac, size: { w: fac.w, h: fac.h } });
+            if (home.has(fac) && !overlaps(fac)) continue;   // already a clean part of the yard
+            // #paddock This is a REPAIR pass for pre-yard saves, not a migration: it walks a stranded or
+            // overlapping pen back to the farmstead at THE SIZE IT ALREADY IS. It deliberately does not
+            // re-site anything to the current FACILITY_DEFS dimensions — those are now paddock sizes and
+            // describe ground annexed outside the fence, which an in-yard pen was never given. Old farms
+            // keep the layout they grew; only newly raised facilities get paddocks.
+            const target = this.#findFacilityRegion(plot, fac.type, { ignore: fac, size: { w: fac.w, h: fac.h } });
             if (!target) continue;   // no room by the house — it stays where it stood (graceful)
             this.#moveFacility(plot, fac, target);
         }
@@ -4877,6 +5083,15 @@ export class World {
         const fac = { type, ...region, producers: [], struct: null, trough: null };
         const cx = region.x + region.w / 2, cy = region.y + region.h / 2;
         const rand = this.rand;
+        // The building goes in the MIDDLE of its paddock on its real footprint, and every tile of that
+        // footprint turns solid. Previously one corner tile was stamped and the sprite hung off it.
+        const sr = structRect(FACILITY_DEFS[type], region);
+        const raise = (kind, tile) => {
+            fac.struct = { i: sr.i, j: sr.j, w: sr.w, h: sr.h, cx: sr.cx, cy: sr.cy, kind };
+            for (let j = sr.j; j < sr.j + sr.h; j++) for (let i = sr.i; i < sr.i + sr.w; i++) this.set(i, j, tile);
+        };
+        // The trough goes in a paddock CORNER, clear of the centred building — the SE inside corner.
+        const troughAt = () => ({ i: region.x + region.w - 1, j: region.y + region.h - 1 });
 
         if (type === 'pond') {
             for (let j = region.y; j < region.y + region.h; j++)
@@ -4889,24 +5104,20 @@ export class World {
             }
             for (let k = 0; k < 3; k++) fac.producers.push(this.#makeProducer('fish', cx + (rand() - 0.5), cy + (rand() - 0.5), region));
         } else if (type === 'coop') {
-            fac.struct = { i: region.x, j: region.y, kind: 'coop' };
-            this.set(region.x, region.y, T.COOP);
-            fac.trough = { i: region.x + region.w - 1, j: region.y + region.h - 1 };
+            raise('coop', T.COOP);
+            fac.trough = troughAt();
             const n = 4 + Math.floor(rand() * 3);
             for (let k = 0; k < n; k++) fac.producers.push(this.#makeProducer('chicken', cx + (rand() - 0.5) * region.w * 0.6, cy + (rand() - 0.5) * region.h * 0.6, region));
         } else if (type === 'pen' || type === 'sheeppen') {
-            fac.struct = { i: region.x, j: region.y, kind: 'barn' };
-            this.set(region.x, region.y, T.BARN);
-            fac.trough = { i: region.x + region.w - 1, j: region.y + region.h - 1 };
+            raise('barn', T.BARN);
+            fac.trough = troughAt();
             const kind = type === 'sheeppen' ? 'sheep' : (sheet.penAnimal || 'cow');
             const n = 3 + Math.floor(rand() * 2);
             for (let k = 0; k < n; k++) fac.producers.push(this.#makeProducer(kind, cx + (rand() - 0.5) * region.w * 0.6, cy + (rand() - 0.5) * region.h * 0.6, region));
         } else if (type === 'mill') {   // #99b a workstation, no producers — the miller stands at it to grind wheat
-            fac.struct = { i: region.x, j: region.y, kind: 'mill' };
-            this.set(region.x, region.y, T.MILL);
+            raise('mill', T.MILL);
         } else if (type === 'hatchery') {   // #100 a workstation that incubates a clutch of eggs into chickens
-            fac.struct = { i: region.x, j: region.y, kind: 'hatchery' };
-            this.set(region.x, region.y, T.HATCH);
+            raise('hatchery', T.HATCH);
             fac.clutch = null;   // { chicks, dueDay } while a clutch incubates
         }
         plot.facilities.push(fac);
@@ -5737,16 +5948,29 @@ export class World {
                                     const ang = this.rand() * Math.PI * 2;
                                     p.vx = Math.cos(ang) * 0.5; p.vy = Math.sin(ang) * 0.5;
                                     p.hop = 0.35;
-                                } else if (this.rand() < 0.72) {
-                                    // cattle/sheep/pigs GRAZE: mostly they just stand and chew,
-                                    // holding one spot for a long, contented while
-                                    p.wanderT = 6 + this.rand() * 14;
+                                } else if (this.rand() < 0.45) {
+                                    // cattle/sheep/pigs GRAZE: they stand and chew for a good while...
+                                    p.wanderT = 3.5 + this.rand() * 7;
                                     p.vx = 0; p.vy = 0;
                                 } else {
-                                    // ...then drift a slow step or two to fresher grass
-                                    p.wanderT = 1.6 + this.rand() * 2.4;
+                                    // ...then AMBLE to fresher grass. Long, slow walks rather than the
+                                    // hens' darting — but real walks: the old drift was a third of a tile
+                                    // every twenty seconds, so a herd stayed bunched wherever it spawned
+                                    // and the pen read as empty around them. This crosses a pen over a
+                                    // few ambles, which is what makes the ground look grazed and lived in.
+                                    p.wanderT = 3.5 + this.rand() * 4.5;
+                                    let ax = 0, ay = 0;
+                                    // SPREAD OUT: nose away from whoever is crowding you. A herd that
+                                    // repels at close range fans across its pen instead of clumping.
+                                    for (const o of fac.producers) {
+                                        if (o === p || o.kind === 'fish' || o.kind === 'pad') continue;
+                                        const ox = p.fx - o.fx, oy = p.fy - o.fy, od = Math.hypot(ox, oy);
+                                        if (od > 0.01 && od < 1.6) { ax += ox / od / od; ay += oy / od / od; }
+                                    }
                                     const ang = this.rand() * Math.PI * 2;
-                                    p.vx = Math.cos(ang) * 0.11; p.vy = Math.sin(ang) * 0.11;
+                                    let hx = Math.cos(ang) + ax * 0.5, hy = Math.sin(ang) + ay * 0.5;
+                                    const hd = Math.hypot(hx, hy) || 1;
+                                    p.vx = (hx / hd) * 0.22; p.vy = (hy / hd) * 0.22;
                                 }
                                 if (Math.abs(p.vx) > 0.02) p.flip = p.vx > 0 ? 1 : -1;
                             }
@@ -11423,15 +11647,24 @@ export class Farmer {
         }
         if (this.wantFacility) {
             if (w.farmerHasUnbuiltFacility(this)) {
+                // #paddock A facility is raised on its OWN annexed ground now, so the sequence is the same
+                // one the farm follows for any new land: find the side to build on, fell what's standing
+                // there, then pay for the fence. No site at all means the farm is hemmed in on every side —
+                // that's an expansion problem, not a building one, so it falls through below.
+                const plan = w.facilityPlan(this);
+                if (plan && plan.rect && plan.trees.length) {
+                    const src = w.nearestWood(this.pos, plan.trees);
+                    if (src) { this.think(this.#tr('CLEARING GROUND FOR THE PEN', 'CLEARING GROUND FOR A NEW PADDOCK')); this.#goToWood(src); return true; }
+                }
                 if (this.wood >= FACILITY_WOOD && w.buildNextFacility(this)) {
                     this.wood -= FACILITY_WOOD;
                     this.nextFacility = Math.round(this.sheet.harvested + 22 + this.rand() * 12);
                     this.wantFacility = false;
                     return true;
                 }
-                // no room -> need to expand; not enough wood -> go chop
+                // not enough timber for the building + its fence line -> go chop
                 if (this.wood < FACILITY_WOOD) { this.#goChop(); return true; }
-                // had wood but no room: fall through to expansion
+                // had wood but nowhere legal to annex: fall through to expansion
                 this.wantExpand = true;
             } else this.wantFacility = false;
         }
@@ -11445,7 +11678,7 @@ export class Farmer {
                 // land-capped by the HOUSE, not the terrain: the ambition turns homeward —
                 // a grander home is the license for a grander estate
                 if (info.state === 'max' && this.plot.built.level < 3 &&
-                    this.plot.cells.size >= World.tierCellCap(this.plot.built.level)) {
+                    w.cropAcreage(this.plot) >= World.tierCellCap(this.plot.built.level)) {
                     this.think(this.plot.built.level < 2 ? 'MY YARD IS FULL. A YURT WOULD CHANGE THAT.' : 'THE COTTAGE. THEN THE ESTATE.');
                     this.wantUpgrade = true;   // the blocked acreage becomes a savings plan
                 }
@@ -11783,7 +12016,7 @@ export class Farmer {
         // redrawing your plot lines across open country is a COTTAGE holder's right (L3) —
         // and even then, only within what the house licenses
         if (this.plot.built.level < 3) return false;
-        if (this.plot.cells.size + Farmer.ANNEX * Farmer.ANNEX > World.tierCellCap(this.plot.built.level)) return false;
+        if (this.world.cropAcreage(this.plot) + Farmer.ANNEX * Farmer.ANNEX > World.tierCellCap(this.plot.built.level)) return false;
         if (this.pendingAnnex) {   // already committed — keep walking / keep funding it
             const net = this.pendingAnnex.net;
             if (this.wood < net) { this.think(this.#tr(`${net} PALISADE POSTS FOR THE CLAIM`, `${net} POSTS FOR THE FRONTIER FIELD`)); this.#goChop(); return true; }

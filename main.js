@@ -602,7 +602,12 @@ function loadAnimalArt() {
 const HOME_BASE = './assets/craftpix-net-654184-main-characters-home-free-top-down-pixel-art-asset/PNG/';
 const homeSheet = new Image();
 let homeReady = false;
-const HOUSE_SRC = { x: 2, y: 5, w: 137, h: 125 };   // house within exterior.png (trimmed of the stone-wall row below)
+// House within exterior.png — the EXACT content box (alpha-scanned), not an eyeballed trim. The old
+// rect {2,5,137,125} started 5 rows BELOW the ridge and stopped 6 columns SHORT of the right eave, so
+// the cottage rendered with its peak and its right roof slope sliced off (visible in-game and in the
+// sprite library). It also carried 12px of dead padding on the left, which pushed the sprite off-centre
+// since the draw centres on the rect. Content is x 14..144, y 0..127; the stone-wall strip starts at 128.
+const HOUSE_SRC = { x: 14, y: 0, w: 131, h: 128 };
 // Tiered dwellings: L1 tipi (Yurt2), L2 round yurt (Yurt1), L3 = the cottage above.
 // Each is a 128x128 sheet; the trimmed content box keeps the base anchored to the tile.
 const ROCKY_BASE = './assets/craftpix-net-639143-free-rocky-area-objects-pixel-art/PNG/Objects_separately/';
@@ -2160,13 +2165,30 @@ function collectDrawables() {
             const dx = hc.x - (x + w / 2), dy = hc.y - (y + h / 2);
             const gateSide = Math.abs(dx) >= Math.abs(dy) ? (dx < 0 ? 'W' : 'E') : (dy < 0 ? 'N' : 'S');
             const gateAt = { N: x + (w >> 1), S: x + (w >> 1), W: y + (h >> 1), E: y + (h >> 1) }[gateSide];
-            const seg = (i0, j0, i1, j1, side, pos) => {
-                if (!(side === gateSide && pos === gateAt)) list.push(rail(i0, j0, i1, j1));
+            // #paddock A pen sitting in its own annexed paddock is ALREADY fenced on its outward sides by
+            // the plot outline — the paddock is part of plot.cells, so plotOutline traces right around it.
+            // Drawing the full pen rect on top of that gave a doubled, thickened fence line. So an inner
+            // rail is drawn only where the edge is INTERIOR to the homestead: the tile on the far side is
+            // land the plot also owns. For a paddock that's the single shared edge with the yard (which is
+            // exactly where the gate belongs); for a legacy pen sitting inside the yard, all four sides
+            // qualify and it fences exactly as it always did.
+            const owns = (i, j) => plot.cells.has(i + ',' + j);
+            const postSet = new Set();
+            const seg = (i0, j0, i1, j1, side, pos, oi, oj) => {
+                if (!owns(oi, oj)) return;                              // outer boundary — the plot outline has it
+                if (side === gateSide && pos === gateAt) return;        // the gate gap
+                list.push(rail(i0, j0, i1, j1));
+                postSet.add(i0 + ',' + j0); postSet.add(i1 + ',' + j1);
             };
-            for (let i = x; i < x + w; i++) { seg(i, y, i + 1, y, 'N', i); seg(i, y + h, i + 1, y + h, 'S', i); }
-            for (let j = y; j < y + h; j++) { seg(x, j, x, j + 1, 'W', j); seg(x + w, j, x + w, j + 1, 'E', j); }
-            for (let i = x; i <= x + w; i++) { list.push(post(i, y)); list.push(post(i, y + h)); }
-            for (let j = y + 1; j < y + h; j++) { list.push(post(x, j)); list.push(post(x + w, j)); }
+            for (let i = x; i < x + w; i++) {
+                seg(i, y, i + 1, y, 'N', i, i, y - 1);
+                seg(i, y + h, i + 1, y + h, 'S', i, i, y + h);
+            }
+            for (let j = y; j < y + h; j++) {
+                seg(x, j, x, j + 1, 'W', j, x - 1, j);
+                seg(x + w, j, x + w, j + 1, 'E', j, x + w, j);
+            }
+            for (const k of postSet) { const c = k.indexOf(','); list.push(post(+k.slice(0, c), +k.slice(c + 1))); }
         }
     }
     function post(i, j) {
@@ -2473,7 +2495,13 @@ function collectDrawables() {
             // building (coop / barn) + feed trough
             if (fac.struct) {
                 const b = fac.struct;
-                const bx = cam.x + isoX(b.i + 0.5, b.j + 0.5), by = cam.y + isoY(b.i + 0.5, b.j + 0.5);
+                // Anchor on b.cx/cy — the paddock's true centre, carried as a float so an odd footprint in
+                // an even cell still draws dead centre rather than half a tile off (the solid footprint
+                // b.i/j/w/h has to snap to whole tiles; where the sprite is DRAWN does not). Pre-footprint
+                // saves carry neither, and fall back to the old one-tile anchor unchanged.
+                const acx = b.cx != null ? b.cx : b.i + (b.w || 1) / 2;
+                const acy = b.cy != null ? b.cy : b.j + (b.h || 1) / 2;
+                const bx = cam.x + isoX(acx, acy), by = cam.y + isoY(acx, acy);
                 if (!offScreen(bx, by)) {   // Codex #44 P1 — cull off-screen facility buildings
                     const spr = b.kind === 'barn' ? barnSprite_(world.seasonDef.name) : b.kind === 'mill' ? millSprite_(world.seasonDef.name) : b.kind === 'hatchery' ? hatchSprite
                         : coopTDSprite(world.seasonDef.name, readyEggCount(fac));
@@ -2483,7 +2511,11 @@ function collectDrawables() {
                         // chimney smoke drifts up from the hatchery brooder + the mill's roof vent
                         if (b.kind === 'hatchery') drawChimneySmoke(dx + 35, dy + 5, b.i * 7 + b.j * 13);
                         else if (b.kind === 'mill') drawChimneySmoke(dx + 34, dy + 8, b.i * 7 + b.j * 13);
-                        else if (b.kind === 'barn') drawRoofPennant(dx + 32, dy - 5, b.i * 5 + b.j * 11);   // pennant on the cupola
+                        // Pennant planted ON the ridge, not hovering over the barn. The rebuilt cupola sits at
+                        // canvas y 14..21 (halved from the first cube), so the old -5 left the 9px pole ending
+                        // well clear of the roof — a flag floating in mid-air. +2 sets the pole's base into the
+                        // ridge with the cloth just clear of it (picked by A/B'ing offsets -5..+14 side by side).
+                        else if (b.kind === 'barn') drawRoofPennant(dx + 32, dy + 2, b.i * 5 + b.j * 11);
                     } });
                 }
             }

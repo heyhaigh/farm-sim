@@ -65,10 +65,21 @@ const BASELINE = {
     // legitimately shifting the trajectory. Codex #43 fixes compound it: off-field (onSortie) riders are now excluded
     // from civic selection/quorum/voting (#civicPresent), their wilderness encounters are DETACHED at departure (an
     // off-field target no longer draws world.rand), and departure revalidates riders. All same-twice held.
+    // re-pinned 2026-07-28 — #paddock. Facilities are no longer squeezed into the homestead: each coop, pen,
+    // fold, pond, mill and hatch house is raised in its own fenced enclosure ANNEXED OUTSIDE the existing fence
+    // line, sited by direction and cleared of trees first, with the building centred on a real tile footprint
+    // rather than pinned to one corner tile. That changes where ground gets claimed, what it costs in fence
+    // wood, when the frontier and the cropland cap read as full, and the serialized plot shape (new padCells).
+    // Every seed still held same-twice=true — the invariant is intact; only the fingerprint moved. Seed
+    // 20260706 is unchanged (no farm reaches a facility inside the 30-day window).
+    // Amended same day — paddocks now land on a LATTICE anchored to one side of the property line (fill a
+    // lane, then the next lane out) instead of being scored one at a time, with kin facilities preferring
+    // adjacent slots, and grazing livestock ambling across their pens rather than holding one spot. Only
+    // seed 7 moved again; same-twice held throughout.
     20260706: '39aa030b',
-    42: '620a2970',
-    7: '73e30a3c',
-    3: '60e16873',
+    42: '2b151660',
+    7: '57659601',
+    3: '6af5dfa7',
 };
 
 function boot(seed, culture) {
