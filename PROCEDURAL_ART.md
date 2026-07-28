@@ -818,6 +818,33 @@ Open polish: on a steep gable the bands can read as *clean parallel stripes* —
 trim. Breaking each band up per-course (some full, some patchy, occasional gaps) would make
 it look settled rather than striped. Near-solid wing snow does not have this problem.
 
+### DRAW ORDER — ROOF FURNITURE COMES AFTER THE WEATHER
+
+The snow and leaf passes sweep **every roof column**. Anything mounted on the roof — a
+cupola, a vent, a chimney, a hatch — must therefore be drawn **after** them, carrying its
+own snow cap on its own top plane. Drawn before, the weather lands *on top of it*: snow and
+leaves sitting on a vertical face, which reads as broken rather than seasonal.
+
+Same class as the grounding-pass bug (§S.2): **anything drawn before a sweeping pass gets
+painted over by it.** When a pass iterates a whole surface, ask what is already sitting on
+that surface.
+
+### SCALE ACCENTS PROPORTIONALLY, NOT ABSOLUTELY
+
+An accent tuned on one geometry gets louder when the geometry changes. The barn's ridge
+crease was right at an 18-row band and became a bright pole at 25; the snow `frac` tuned on
+pitched roofs saturated into a slab on a flat one. Anything expressed as a fixed value
+rather than a proportion of its container will drift the moment the container changes.
+
+### FLANK vs FACING ARE DIFFERENT QUESTIONS
+
+"Which side is it on" and "which way does it face" are not the same. The lit/shadow split
+answers the first. A near-flat plane answers the second: it faces the **sky**, so it reads
+BRIGHT on either flank. The barn's hay bay was based on the shadow ramp purely because it
+sits on the right-hand side, and came out as dark as the gable's shadow slope — which is
+exactly what a flat plane is not. Base tone follows FACING; the lateral falloff follows
+FLANK (a right-hand extension still darkens outward).
+
 ### FALL — LEAVES GATHER IN DRIFTS, AND MIND YOUR HASH
 
 A ~5% warm ramp is **invisible** at this scale: fall rendered as an indistinguishable

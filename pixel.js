@@ -2512,38 +2512,6 @@ export function makeBarn(season = 'SUMMER') {
         ctx.fillStyle = 'rgba(0,0,0,0.30)'; ctx.fillRect(x, ey, 1, 1);
         ctx.fillStyle = 'rgba(0,0,0,0.16)'; ctx.fillRect(x, ey + 1, 1, 1);
     }
-    // ---- RIDGE CUPOLA — a small CUBE (SLYNYRD top-down reference): a LIGHT TOP PLANE over
-    // a DARK FRONT FACE. The value gap between them is the whole volume cue. Two things the
-    // first attempt got wrong: it was far too large for the roof it sits on, and it was
-    // drawn in the SAME red as that roof, so it separated neither by hue nor by value.
-    // Timber against red tile separates on both counts.
-    { const cx0 = 28, cx1 = 35, topY = 14, midY = 18, botY = 23;
-      const OLc = outlineFor(W[1]);
-      ctx.fillStyle = OLc; ctx.fillRect(cx0 - 1, topY - 1, (cx1 - cx0) + 3, (botY - topY) + 3);
-      // TOP PLANE — tipped to the sky, the brightest surface on the cube
-      for (let x = cx0; x <= cx1; x++) {
-          const t = (x - cx0) / (cx1 - cx0);
-          for (let y = topY; y < midY; y++) {
-              ctx.fillStyle = shade(W[4], 1.16 - t * 0.12 - ((y - topY) / (midY - topY)) * 0.08);
-              ctx.fillRect(x, y, 1, 1);
-          }
-      }
-      ctx.fillStyle = shade(W[4], 1.22); ctx.fillRect(cx0, topY, (cx1 - cx0) + 1, 1);    // lit deck rim
-      // FRONT FACE — markedly darker; the drop is what reads as a cube
-      for (let x = cx0; x <= cx1; x++) {
-          const litC = (x <= ((cx0 + cx1) >> 1)) === (LIGHT.x < 0);
-          for (let y = midY; y <= botY; y++) {
-              ctx.fillStyle = litC ? W[1] : shade(W[0], 0.94);
-              ctx.fillRect(x, y, 1, 1);
-          }
-      }
-      ctx.fillStyle = 'rgba(0,0,0,0.34)'; ctx.fillRect(cx0, midY, (cx1 - cx0) + 1, 1);   // plane break, in shadow
-      ctx.fillStyle = '#241c18'; ctx.fillRect(cx0 + 2, midY + 1, 4, 2);                  // dark vent slot
-      ctx.fillStyle = shade(W[3], 1.10); ctx.fillRect(cx0 + 2, midY + 1, 4, 1);          // lit lintel over it
-      ctx.fillStyle = shade(W[2], 1.04); ctx.fillRect(cx0, botY - 1, (cx1 - cx0) + 1, 1); // sill ledge
-      ctx.fillStyle = 'rgba(0,0,0,0.30)'; ctx.fillRect(cx0 - 1, botY + 1, (cx1 - cx0) + 3, 1);  // its shadow on the roof
-    }
-
     // HOIST — the loft opening moved out to the hay bay, so the facade keeps only the
     // pulley beam and its block, which reads as the barn's working gear.
     { const hy = bBot(dOfB(31)) + 2;
@@ -2585,6 +2553,35 @@ export function makeBarn(season = 'SUMMER') {
         ctx.fillStyle = SNOW.deep; ctx.fillRect(30, 8, 5, 1);
     }
     if (fall) leafDrift(ctx, 1, 74, (x) => bTop(dOfB(x)), (x) => bBot(dOfB(x)), onRoofB);
+
+    // ---- RIDGE CUPOLA — drawn LAST, after the season passes ----
+    // A small CUBE per the SLYNYRD top-down reference: a LIGHT TOP PLANE over a DARK FRONT
+    // FACE, the value gap doing the volume. Halved from the first cube, which was still
+    // reading as a chest rather than a vent box.
+    // ORDER MATTERS: the snow/leaf passes sweep every roof column, so with the cupola drawn
+    // before them the weather landed ON TOP of it — snow and leaves floating over a vertical
+    // face. Drawing it after the seasons, with its own snow cap, is the correct layering.
+    { const cx0 = 29, cx1 = 34, topY = 15, midY = 17, botY = 21;
+      const OLc = outlineFor(W[1]);
+      ctx.fillStyle = OLc; ctx.fillRect(cx0 - 1, topY - 1, (cx1 - cx0) + 3, (botY - topY) + 3);
+      for (let x = cx0; x <= cx1; x++) {                                             // TOP PLANE, tipped to the sky
+          const t = (x - cx0) / (cx1 - cx0);
+          for (let y = topY; y < midY; y++) { ctx.fillStyle = shade(W[4], 1.16 - t * 0.12); ctx.fillRect(x, y, 1, 1); }
+      }
+      ctx.fillStyle = shade(W[4], 1.22); ctx.fillRect(cx0, topY, (cx1 - cx0) + 1, 1);  // lit deck rim
+      for (let x = cx0; x <= cx1; x++) {                                             // FRONT FACE, markedly darker
+          const litC = (x <= ((cx0 + cx1) >> 1)) === (LIGHT.x < 0);
+          for (let y = midY; y <= botY; y++) { ctx.fillStyle = litC ? W[1] : shade(W[0], 0.94); ctx.fillRect(x, y, 1, 1); }
+      }
+      ctx.fillStyle = 'rgba(0,0,0,0.34)'; ctx.fillRect(cx0, midY, (cx1 - cx0) + 1, 1);   // plane break in shadow
+      ctx.fillStyle = '#241c18'; ctx.fillRect(cx0 + 2, midY + 1, 2, 2);                  // vent slot
+      ctx.fillStyle = shade(W[3], 1.10); ctx.fillRect(cx0 + 2, midY + 1, 2, 1);          // lit lintel
+      ctx.fillStyle = 'rgba(0,0,0,0.30)'; ctx.fillRect(cx0 - 1, botY + 1, (cx1 - cx0) + 3, 1);  // shadow on the roof
+      if (winter) {                                                                  // its OWN cap, on the top plane only
+          ctx.fillStyle = SNOW.mid;  ctx.fillRect(cx0, topY, (cx1 - cx0) + 1, 1);
+          ctx.fillStyle = SNOW.deep; ctx.fillRect(cx0 + 1, topY, (cx1 - cx0) - 1, 1);
+      }
+    }
 
     _barn[season] = c;
     return c;
