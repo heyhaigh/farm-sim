@@ -2123,7 +2123,13 @@ function collectDrawables() {
     // #pens dedicated livestock enclosures — an inner fence around each animal facility's region,
     // with a gate gap on the house-facing side, plus a trampled-ground wash. Render-only (draw math
     // uses no world.rand); the sim-side containment lives in farm.js #tickProducers.
-    const PEN_WASH = { coop: 'rgba(196,168,90,0.16)', pen: 'rgba(122,88,56,0.18)', sheeppen: 'rgba(214,206,178,0.16)' };
+    // Trampled ground under a pen: ONE earth tone for all three, varying only in how hard the ground is
+    // worked. These used to be tinted by what lived on them — straw-yellow (196,168,90) for the coop and
+    // a wool cream (214,206,178) for the fold, against this brown for the cattle pen — which meant two of
+    // the three paddocks came out LIGHTER than the surrounding grass and one darker, so a row of pens read
+    // as a row of mismatched floor swatches rather than as worn earth. Livestock chew a yard down hardest;
+    // hens scratch it lightest.
+    const PEN_WASH = { coop: 'rgba(122,88,56,0.13)', pen: 'rgba(122,88,56,0.18)', sheeppen: 'rgba(122,88,56,0.16)' };
     for (const plot of world.plots) {
         if (!plot.built.fence) continue;
         for (const fac of plot.facilities) {
