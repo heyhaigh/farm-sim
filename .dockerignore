@@ -1,0 +1,36 @@
+# DENY EVERYTHING, then re-include only what the image needs.
+#
+# An allowlist, not a blocklist — deliberately. The one time this project used a blocklist for a deploy,
+# .supermemory/ (auth-secret + personal memory documents, 639MB) was not on it, and those files briefly
+# answered 200 on a public URL. With `*` first, a new sensitive file in the project root is excluded by
+# default instead of needing to be remembered.
+*
+
+# the game
+!index.html
+!memory-graph.html
+!propagate-title-anim2.png
+!server.mjs
+!*.js
+!api
+!api/**
+
+# ...but not the sprite-design scratch that lives at the root and is gitignored (so it is absent from a
+# git-based build anyway — this covers a local `docker build .`). Listed AFTER the re-includes: later
+# rules win.
+topdown_styles.js
+
+# Explicitly restating the things that must never enter the image, even though `*` already excludes them.
+# Redundant by design: if someone later loosens the allowlist, these still hold.
+.env
+.env.*
+.supermemory
+.supermemory/**
+.vercel
+.claude
+.agents
+.git
+assets
+component-library
+tests
+v1-3d
