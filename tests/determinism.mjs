@@ -114,10 +114,15 @@ const BASELINE = {
     // encounter that would spawn on blocked ground is relocated to the nearest open tile. Every run has
     // prey and encounters, so all four seeds move. Combat verified unweakened across four towns: 89 vs 90
     // encounters, 1309 vs 1130 damage dealt. same-twice held.
+    // re-pinned 2026-07-29 for the Codex #52 fixes. Only 42 and 3 move: the fence-aware foe/beast stepping
+    // (a perpendicular veer could carry a foe INTO an intact fenced plot without bashing it) and the swept
+    // step (endpoint-only collision let a 2.5-tile hunt burst tunnel clean through a blocked tile) both
+    // need the right geometry to bite, and only those two seeds hit it inside 30 days. The project-frontage
+    // guard, the merchant target and the underfoot-terrain escape move nothing here. same-twice held.
     20260706: '74e5e14f',
-    42: '2a47baa0',
+    42: 'e3d005be',
     7: 'bc6cf698',
-    3: '2b56f86b',
+    3: 'fe365353',
 };
 
 function boot(seed, culture) {

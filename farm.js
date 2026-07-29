@@ -4949,12 +4949,34 @@ export class World {
     // through it. Returns true if it moved. Takes any {i, j} — pass a farmer's `pos` to move a PERSON by
     // the same rule (the watched-raid choreography does).
     creatureStep(ent, ui, uj, sp) {
+        // ALREADY on blocked ground? Then no small step can help: at sub-tile speeds every candidate lands
+        // in the same blocked cell and is refused, so a creature with terrain raised underneath it — a pond
+        // carved across a deer, a barn finished over a foe — would be pinned there for the rest of its life.
+        // Facility completion sweeps livestock and farmers clear; nothing swept these. Step out to real
+        // ground instead. (Prey and encounters expire; a raid band stuck like this holds an untimed phase.)
+        if (this.pathBlocked(Math.floor(ent.i), Math.floor(ent.j))) {
+            const spot = this.nearestOpenTile({ i: ent.i, j: ent.j });
+            if (!spot) return false;
+            ent.i = spot.i + 0.5; ent.j = spot.j + 0.5; return true;
+        }
         for (const [vi, vj] of [[ui, uj], [uj, -ui], [-uj, ui]]) {
-            const ni = ent.i + vi * sp, nj = ent.j + vj * sp;
-            if (this.pathBlocked(Math.floor(ni), Math.floor(nj))) continue;
-            ent.i = ni; ent.j = nj; return true;
+            if (!this.stepClear(ent.i, ent.j, ent.i + vi * sp, ent.j + vj * sp)) continue;
+            ent.i += vi * sp; ent.j += vj * sp; return true;
         }
         return false;
+    }
+
+    // Is the whole SEGMENT walkable, not just where it lands? Testing the endpoint alone lets a long jump
+    // tunnel clean through a wall: the missed-hunt burst moves 2.5 tiles and a raid shove 1.5, either of
+    // which can start and finish on open ground with a pond in between. Samples at half-tile intervals,
+    // which is finer than any single move in the sim.
+    stepClear(fi, fj, ti, tj) {
+        const n = Math.max(1, Math.ceil(Math.max(Math.abs(ti - fi), Math.abs(tj - fj)) / 0.5));
+        for (let k = 1; k <= n; k++) {
+            const x = fi + (ti - fi) * (k / n), y = fj + (tj - fj) * (k / n);
+            if (this.pathBlocked(Math.floor(x), Math.floor(y))) return false;
+        }
+        return true;
     }
 
     pathBlocked(i, j) {
@@ -7957,14 +7979,22 @@ export class World {
         if (dist > 1.2 && !guarded) {
             let sp = e.def.speed * 2.6 * dt;               // ~as fast as a bustling farmer, so chases are real
             const ni = e.i + dx / dist * sp, nj = e.j + dy / dist * sp;
-            const onFence = this.tileInFencedPlot(Math.floor(ni), Math.floor(nj));
-            const terrain = this.pathBlocked(Math.floor(ni), Math.floor(nj));
-            if (beast) { if (!onFence) this.creatureStep(e, dx / dist, dy / dist, sp); }   // a fence turns a BEAST away entirely
-            else {
-                // a FOE breaches a fence — slowly, wrecking it — but no one wades a pond or walks a barn.
-                // Only bash when the fence is the thing in the way; if it's terrain, veer instead.
-                if (onFence && !terrain) { sp *= 0.4; this.#foeBashFence(e, Math.floor(ni), Math.floor(nj), dt); }
-                this.creatureStep(e, dx / dist, dy / dist, sp);
+            // Steps ITSELF rather than calling creatureStep, because the fence rules have to apply to the
+            // direction actually taken. creatureStep picks a perpendicular when the heading is blocked, and
+            // that perpendicular can lie inside an intact fenced plot — so a foe with a rock in front of it
+            // slipped through a neighbour's fence at full speed, bashing nothing and costing them no post.
+            // Terrain refuses everyone; a fence turns a BEAST aside; a FOE breaches it slowly, wrecking it.
+            const dirs = [[dx / dist, dy / dist], [dy / dist, -dx / dist], [-dy / dist, dx / dist]];
+            for (const [ui, uj] of dirs) {
+                const ci = e.i + ui * sp, cj = e.j + uj * sp;
+                if (!this.stepClear(e.i, e.j, ci, cj)) continue;              // terrain stops everything
+                const fenced = this.tileInFencedPlot(Math.floor(ci), Math.floor(cj));
+                if (beast) { if (fenced) continue; e.i = ci; e.j = cj; break; }
+                if (!fenced) { e.i = ci; e.j = cj; break; }
+                this.#foeBashFence(e, Math.floor(ci), Math.floor(cj), dt);     // breach THIS post, slowly
+                const si = e.i + ui * sp * 0.4, sj = e.j + uj * sp * 0.4;
+                if (this.stepClear(e.i, e.j, si, sj)) { e.i = si; e.j = sj; }
+                break;
             }
         } else {
             e.clashTimer -= dt;
@@ -8269,6 +8299,12 @@ export class World {
     #moveMerchant(dt) {
         const m = this.merchant;
         if (!m.path || m.pi >= m.path.length) {
+            // findPath permits its GOAL, so if the arrival tile itself has been built over during the visit
+            // the route comes back ending ON it and the walker steps straight in. Move the target first.
+            if (this.pathBlocked(m.target.i, m.target.j)) {
+                const spot = this.nearestOpenTile(m.target);
+                if (spot) m.target = { i: spot.i, j: spot.j };
+            }
             m.path = this.findPath(m.pos, m.target) || [];
             m.pi = 0;
             if (!m.path.length) { m.pos = { i: m.target.i + 0.5, j: m.target.j + 0.5 }; return true; }
@@ -10473,7 +10509,9 @@ export class Farmer {
         const site = pr.site;
         if (w.projectNeedsMaterials(pr)) {
             const canGive = (pr.wood < pr.needWood && this.wood > 0) || (pr.ore < pr.needOre && this.ore > 0);
-            if (canGive) { this.think(this.#tr(`DRAGGING STONE FOR THE ${pr.label}`, `HAULING STONE FOR THE ${pr.label}`)); if (this.#goTo(site.i + 0.5, site.j + 1.6, 'projdrop')) return true; }
+            if (canGive) { this.think(this.#tr(`DRAGGING STONE FOR THE ${pr.label}`, `HAULING STONE FOR THE ${pr.label}`));
+                const dp = this.#standAt(site.i + 0.5, site.j + 1.6);
+                if (this.#goTo(dp.i, dp.j, 'projdrop')) return true; }
             else if (pr.wood < pr.needWood) {
                 const src = w.nearestWood(this.pos);
                 if (src) { this.think(this.#tr(`HEWING TIMBER FOR THE ${pr.label}`, `TIMBER FOR THE ${pr.label}`)); if (this.#goToWood(src)) return true; }
@@ -10488,7 +10526,9 @@ export class Farmer {
         // already at the site? build in place — don't re-walk on every redecide (the jitter)
         if (Math.abs(this.pos.i - (site.i + 0.5)) + Math.abs(this.pos.j - (site.j + 1.6)) < 2.2 + (pr.size || 1)) { this.state = 'build'; return true; }
         const off = (this.sheet.seed % 3) - 1;
-        if (!this.#goTo(site.i + 0.5 + off, site.j + 1.6 + (pr.size || 1) - 1, 'build')) this.#goTo(site.i + 0.5, site.j + 1.6, 'build');
+        const bp = this.#standAt(site.i + 0.5 + off, site.j + 1.6 + (pr.size || 1) - 1);
+        const bp2 = this.#standAt(site.i + 0.5, site.j + 1.6);
+        if (!this.#goTo(bp.i, bp.j, 'build')) this.#goTo(bp2.i, bp2.j, 'build');
         return true;
     }
 
@@ -12444,7 +12484,8 @@ export class Farmer {
         // may be unreachable — that endless re-approach is what made builders twitch on the spot
         if (Math.abs(this.pos.i - (site.i + 0.5)) + Math.abs(this.pos.j - (site.j + 1.6)) < 2.2) { this.state = 'coopbuild'; return true; }
         const off = (this.sheet.seed % 3) - 1;
-        if (!this.#goTo(site.i + 0.5 + off, site.j + 1.6, 'coopbuild')) return this.#goTo(site.i + 0.5, site.j + 1.6, 'coopbuild');
+        const cp = this.#standAt(site.i + 0.5 + off, site.j + 1.6), cp2 = this.#standAt(site.i + 0.5, site.j + 1.6);
+        if (!this.#goTo(cp.i, cp.j, 'coopbuild')) return this.#goTo(cp2.i, cp2.j, 'coopbuild');
         return true;
     }
 
@@ -12511,6 +12552,11 @@ export class Farmer {
     // a wall when that's where the target happens to be. This was guarded inline for honest producer work,
     // then missed for poaching (found in review), then missed again for closing to FIGHT: a farmer would
     // wade into a pond to reach a foe standing in it. One helper, so a fifth caller can't quietly diverge.
+    // A frontage stand point beside a built thing. #findStructureSpot validates the FOOTPRINT it clears,
+    // not the tiles workers stand on to haul and build, so a raw `site + offset` can land on a rock the
+    // site scan never looked at (found at seed 298: board sited at 59,67, workers sent to rock at 59,68).
+    #standAt(i, j) { const p = this.#standNear(i, j); return p || { i, j }; }
+
     #standNear(i, j) {
         if (!this.world.pathBlocked(Math.floor(i), Math.floor(j))) return { i, j };
         const spot = this.world.nearestOpenTile({ i, j });
