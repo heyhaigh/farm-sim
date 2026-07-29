@@ -10519,10 +10519,15 @@ export class Farmer {
         const w = this.world, pr = w.project;
         if (!pr) return false;
         const site = pr.site;
+        // #standAt excludes the FUTURE FOOTPRINT, and a project's is size x size anchored at the site
+        // (#completeProject stamps exactly that) — but the size lives on the PROJECT, not on pr.site.
+        // Passing the bare site guarded the 2x2 FOX SENTINEL and 3x3 STONE MOTHER as though they were
+        // 1x1, so the j+1.6 drop point sat INSIDE the stone about to be laid and the guard was a no-op.
+        const foot = { i: site.i, j: site.j, size: pr.size || 1 };
         if (w.projectNeedsMaterials(pr)) {
             const canGive = (pr.wood < pr.needWood && this.wood > 0) || (pr.ore < pr.needOre && this.ore > 0);
             if (canGive) { this.think(this.#tr(`DRAGGING STONE FOR THE ${pr.label}`, `HAULING STONE FOR THE ${pr.label}`));
-                const dp = this.#standAt(site.i + 0.5, site.j + 1.6, site);
+                const dp = this.#standAt(site.i + 0.5, site.j + 1.6, foot);
                 if (dp && this.#goTo(dp.i, dp.j, 'projdrop')) return true; }
             else if (pr.wood < pr.needWood) {
                 const src = w.nearestWood(this.pos);
@@ -10538,8 +10543,8 @@ export class Farmer {
         // already at the site? build in place — don't re-walk on every redecide (the jitter)
         if (Math.abs(this.pos.i - (site.i + 0.5)) + Math.abs(this.pos.j - (site.j + 1.6)) < 2.2 + (pr.size || 1)) { this.state = 'build'; return true; }
         const off = (this.sheet.seed % 3) - 1;
-        const bp = this.#standAt(site.i + 0.5 + off, site.j + 1.6 + (pr.size || 1) - 1, site);
-        const bp2 = this.#standAt(site.i + 0.5, site.j + 1.6, site);
+        const bp = this.#standAt(site.i + 0.5 + off, site.j + 1.6 + (pr.size || 1) - 1, foot);
+        const bp2 = this.#standAt(site.i + 0.5, site.j + 1.6, foot);
         if (!bp || !this.#goTo(bp.i, bp.j, 'build')) { if (bp2) this.#goTo(bp2.i, bp2.j, 'build'); }
         return true;
     }

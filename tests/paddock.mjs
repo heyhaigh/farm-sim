@@ -366,5 +366,70 @@ console.log('\nFacility cost is charged as one bill');
     check(negative === 0, 'no farmer holds negative wood', `${negative}`);
 }
 
+// ---------------------------------------------------------------------------------------------------
+// A MULTI-TILE PROJECT NEVER SENDS A WORKER INSIDE ITS OWN FOOTPRINT
+//
+// #completeProject stamps size x size tiles solid at the site. #standAt is what keeps workers off those
+// tiles, but it reads the size off the avoid object — and pr.site is only {i,j}, so passing the bare site
+// guarded the 2x2 FOX SENTINEL and 3x3 STONE MOTHER as if they were 1x1. The j+1.6 drop point sits inside
+// the footprint for any size >= 2, so completion could stamp stone under a hauler.
+//
+// This is exactly the blind spot this file exists for: the four pinned determinism seeds never reach a
+// tier-2 statue (townLvl 4, 95 harvests), so they stayed green through the whole defect.
+//
+// Mutation-tested: reverting the three call sites to pass `site` turns size 2 and 3 to 100% inside while
+// size 1 stays at 0 — the size-1 row is the control that proves this check discriminates.
+console.log('\nMulti-tile projects keep workers off their own footprint');
+{
+    let observations = 0, insideTotal = 0, sized = 0;
+    let example = '';
+    for (const seed of [424242, 515151, 20260101]) {
+        for (const size of [1, 2, 3]) {
+            const w = boot(seed);
+            run(w, 14);
+            // a clear size x size spot with a margin, well away from any plot
+            let site = null;
+            for (let tries = 0; tries < 4000 && !site; tries++) {
+                const i = 20 + (tries * 7) % 30, j = 20 + (tries * 11) % 30;
+                let clear = true;
+                for (let dj = -2; dj < size + 2 && clear; dj++) for (let di = -2; di < size + 2; di++)
+                    if (w.get(i + di, j + dj) !== 0) { clear = false; break; }
+                for (const p of w.plots) if (i >= p.x - 3 && i <= p.x + p.w + 3 && j >= p.y - 3 && j <= p.y + p.h + 3) clear = false;
+                if (clear) site = { i, j };
+            }
+            if (!site) continue;
+            sized++;
+            w.project = {
+                type: size >= 3 ? 'statue3' : size === 2 ? 'statue2' : 'statue1',
+                label: 'PROBE MONUMENT', site, size, points: 0, builders: new Set(),
+                wood: 0, ore: 0, needWood: 20, needOre: 10, needed: 999,
+                lightning: 0.5, rain: 1.2, perk: 'PROBE',
+            };
+            for (const f of w.farmers) { f.wood = 200; f.ore = 60; f.p.collaboration = 1; }
+            const inFoot = (q) => {
+                const ti = Math.floor(q.i), tj = Math.floor(q.j);
+                return ti >= site.i && ti < site.i + size && tj >= site.j && tj < site.j + size;
+            };
+            const n = Math.round(4 * 190 / DT);
+            for (let k = 0; k < n; k++) {
+                w.tick(DT);
+                for (const f of w.farmers) {
+                    const p = f.path;
+                    if (!p || (p.then !== 'projdrop' && p.then !== 'build')) continue;
+                    observations++;
+                    if (inFoot({ i: p.i, j: p.j })) {
+                        insideTotal++;
+                        if (!example) example = `${p.then} -> (${p.i.toFixed(1)}, ${p.j.toFixed(1)}) site=(${site.i},${site.j}) size=${size}`;
+                    }
+                }
+                if (w.project) { w.project.wood = 0; w.project.ore = 0; }   // hold it in the hauling phase
+            }
+        }
+    }
+    check(sized === 9, 'placed a probe monument at every size on every seed', `${sized}/9`);
+    check(observations > 500, 'observed real project destinations', `${observations}`);
+    check(insideTotal === 0, 'no destination lands inside the future footprint', example || `${insideTotal}`);
+}
+
 console.log(`\n${fail.length ? `FAILED — ${fail.length} check(s): ${fail.join('; ')}` : 'All paddock + pond invariants hold.'}`);
 if (fail.length) process.exit(1);
