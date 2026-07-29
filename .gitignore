@@ -16,8 +16,12 @@ node_modules/
 # Vercel CLI project link (created by `vercel` deploys) — never commit
 .vercel/
 
-# licensed reference art (CraftPix) used as inspiration only + workflow scratch
-assets/
+# Licensed CraftPix art. The licence permits shipping it inside a deployed game and forbids a PUBLIC repo
+# of the raw files, so it is ignored HERE and committed to the private deploy repo instead (see Dockerfile).
+# `assets/*` rather than `assets/` so one placeholder can be re-included: it keeps the directory present in
+# this tree, which is what makes the Dockerfile's `COPY assets/` valid in both repos.
+assets/*
+!assets/.placeholder.png
 
 # local LLM key for the expressive channel (server.mjs) - NEVER commit
 .env

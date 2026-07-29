@@ -11,10 +11,16 @@
 # server.mjs only reads .env for values NOT already in process.env, so real env vars win and no .env
 # needs to ship.
 #
-# assets/ is deliberately NOT copied. The CraftPix sprites are gitignored, because a public repo of raw
-# art is the one thing that licence forbids — so a git-based build has no art. Mount them at /app/assets
-# with a Railway volume. Without them the game falls back to the procedural pixel.js sprites and still
-# runs; the wilderness rocks and the orc biome are the parts that go missing.
+# assets/ IS copied, and where it comes from is the whole trick. A public repo of raw CraftPix art is the
+# one thing the licence forbids; shipping that art inside a deployed game is expressly allowed. So the art
+# lives in a PRIVATE deploy repo (github.com/heyhaigh/farm-sim-deploy) that carries the same code plus
+# assets/*.png, and Railway builds THAT. This public repo tracks only assets/.placeholder.png, so the COPY
+# below is valid in both trees and the two Dockerfiles never diverge.
+# Only .png is ever loaded (50 references, all .png), so the deploy repo carries the 27MB of PNGs and none
+# of the 146MB of .psd/.aseprite source art.
+# Without the art the game still runs on pixel.js's procedural sprites — but wilderness ROCKS have no
+# fallback at all and render as nothing while staying impassable and still being the ore source, so an
+# art-less deploy is a broken-looking world, not a plainer one.
 
 FROM node:24-alpine
 
@@ -25,6 +31,7 @@ COPY index.html memory-graph.html propagate-title-anim2.png ./
 COPY *.js ./
 COPY server.mjs ./
 COPY api/ ./api/
+COPY assets/ ./assets/
 
 ENV NODE_ENV=production
 

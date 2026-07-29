@@ -15,6 +15,12 @@
 !api
 !api/**
 
+# the art. Only PNGs — the .psd/.aseprite source files are 146MB of the 185MB and the game never loads
+# them, so they stay out of the image even in the private deploy repo that has them on disk.
+!assets
+!assets/**/*.png
+!assets/*.png
+
 # ...but not the sprite-design scratch that lives at the root and is gitignored (so it is absent from a
 # git-based build anyway — this covers a local `docker build .`). Listed AFTER the re-includes: later
 # rules win.
@@ -30,7 +36,6 @@ topdown_styles.js
 .claude
 .agents
 .git
-assets
 component-library
 tests
 v1-3d
