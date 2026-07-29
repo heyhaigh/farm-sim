@@ -16,7 +16,9 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const ROOT = path.dirname(new URL(import.meta.url).pathname);
-const PORT = Number(process.argv[2]) || 8000;
+// An explicit CLI port still wins (the documented `node server.mjs 8123` local habit); otherwise take
+// PORT from the environment, which is how a host like Railway tells us where to listen.
+const PORT = Number(process.argv[2]) || Number(process.env.PORT) || 8000;
 
 // minimal .env loader (never overrides a var already set in the environment)
 try {
@@ -55,7 +57,9 @@ const MIME = {
     '.css': 'text/css', '.json': 'application/json', '.png': 'image/png',
     '.webp': 'image/webp', '.gif': 'image/gif', '.jpg': 'image/jpeg',
     '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.wav': 'audio/wav',
-    '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.md': 'text/plain',
+    '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg',
+    // NOTE: .md is deliberately absent. This map doubles as the serve allowlist, and markdown is never
+    // game media — leaving it in would hand over any internal doc that reached the deploy directory.
 };
 
 http.createServer(async (req, res) => {
@@ -71,15 +75,31 @@ http.createServer(async (req, res) => {
         return;
     }
 
-    // static: resolve inside ROOT only
+    // STATIC. This started as a localhost dev server and is now what faces the internet on a hosted
+    // deploy, so it serves an ALLOWLIST rather than "whatever is on disk". The project root holds .env
+    // (api keys) and .supermemory/ (auth-secret + personal documents); an over-broad CLI deploy once put
+    // that pair on a public URL, and `GET /.supermemory/api-key` answered 200. What gets uploaded must
+    // not be the only thing standing between those files and a request.
     let rel = decodeURIComponent(url.pathname);
     if (rel.endsWith('/')) rel += 'index.html';
+
+    // 1. no dotfile segments — kills /.env, /.supermemory/..., /.vercel/..., /.git/... outright
+    if (rel.split('/').some(seg => seg.startsWith('.'))) { res.writeHead(404); res.end('not found'); return; }
+
+    // 2. stay inside ROOT. startsWith(ROOT) alone is a bare string prefix, so a sibling directory
+    //    (ry-farms-backup) would pass it — compare against ROOT + separator.
     const file = path.normalize(path.join(ROOT, rel));
-    if (!file.startsWith(ROOT)) { res.writeHead(403); res.end(); return; }
+    if (file !== ROOT && !file.startsWith(ROOT + path.sep)) { res.writeHead(403); res.end(); return; }
+
+    // 3. known game media only. The old default of application/octet-stream meant an unrecognised
+    //    extension — an internal .md, a stray backup, a key file — was still handed over.
+    const type = MIME[path.extname(file).toLowerCase()];
+    if (!type) { res.writeHead(404); res.end('not found'); return; }
+
     fs.readFile(file, (err, data) => {
         if (err) { res.writeHead(404); res.end('not found'); return; }
         res.writeHead(200, {
-            'Content-Type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream',
+            'Content-Type': type,
             'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
         });
         res.end(data);
