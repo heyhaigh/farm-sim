@@ -13,7 +13,7 @@
 //
 // Run: `node tests/paddock.mjs`  (exits non-zero on any violation)
 
-import { World } from '../farm.js';
+import { World, T } from '../farm.js';
 import { generateCrew } from '../dna.js';
 
 const DT = 1 / 30;
@@ -377,58 +377,133 @@ console.log('\nFacility cost is charged as one bill');
 // This is exactly the blind spot this file exists for: the four pinned determinism seeds never reach a
 // tier-2 statue (townLvl 4, 95 harvests), so they stayed green through the whole defect.
 //
-// Mutation-tested: reverting the three call sites to pass `site` turns size 2 and 3 to 100% inside while
-// size 1 stays at 0 — the size-1 row is the control that proves this check discriminates.
+// WHAT THIS CAN AND CANNOT CATCH — read before trusting a green run. #pursueProject has three #standAt
+// call sites and they are NOT equally testable. Codex #55 caught v1 of this check claiming all three:
+//
+//   projdrop  (the hauler, farm.js ~10530)  target j+1.6            -> INSIDE for size>=2. Discriminating:
+//                                                                      reverting it to `site` fails Phase A.
+//   build bp  (~10546)                      target j+1.6+size-1     -> tile j+size, one past the footprint.
+//                                                                      NOT discriminating — see below.
+//   build bp2 (~10547)                      target j+1.6            -> inside for size>=2, but only the
+//                                                                      fallback for when bp fails, which
+//                                                                      never happened across 248,800 observed
+//                                                                      build decisions.
+//
+// DOCUMENTED COVERAGE GAP, measured rather than assumed. Mutating each call site SEPARATELY (all three at
+// once fails loudly and flatters the harness):
+//
+//     dp  -> CAUGHT      bp -> not caught      bp2 -> not caught
+//
+// bp's target is one tile past the footprint for every size and every off in {-1,0,1}, so on clear ground
+// `foot` vs `site` cannot change its answer. Phase C was written to break that by ringing the frontage in
+// rock — the scenario #standAt's own comment describes, where a still-walkable site tempts nearestOpenTile
+// into relocating a worker onto it. It did not discriminate either: nearestOpenTile prefers open ground
+// outward over the footprint, so the tempting relocation never happens. bp2 only fires when bp fails, and
+// bp does not fail on ground a farmer can reach at all.
+//
+// So the `foot` argument is LIVE at dp and defensive at the two build sites. It is kept there deliberately:
+// bp2's guard becomes meaningful if a site is ever unreachable via bp's target, and the offsets are the kind
+// of thing that gets retuned. Phase B and Phase C therefore earn their keep by observing REAL destinations
+// rather than trusting that arithmetic — retune an offset into the footprint, or change nearestOpenTile's
+// preference, and they fail even though `foot` is untouched.
+//
+// The haul and build phases are mutually exclusive by construction — holding materials unmet keeps the town
+// hauling (v1 did this and saw ZERO build decisions), satisfying them keeps it building. Hence separate runs.
 console.log('\nMulti-tile projects keep workers off their own footprint');
 {
-    let observations = 0, insideTotal = 0, sized = 0;
-    let example = '';
-    for (const seed of [424242, 515151, 20260101]) {
-        for (const size of [1, 2, 3]) {
-            const w = boot(seed);
-            run(w, 14);
-            // a clear size x size spot with a margin, well away from any plot
-            let site = null;
-            for (let tries = 0; tries < 4000 && !site; tries++) {
-                const i = 20 + (tries * 7) % 30, j = 20 + (tries * 11) % 30;
-                let clear = true;
-                for (let dj = -2; dj < size + 2 && clear; dj++) for (let di = -2; di < size + 2; di++)
-                    if (w.get(i + di, j + dj) !== 0) { clear = false; break; }
-                for (const p of w.plots) if (i >= p.x - 3 && i <= p.x + p.w + 3 && j >= p.y - 3 && j <= p.y + p.h + 3) clear = false;
-                if (clear) site = { i, j };
-            }
-            if (!site) continue;
-            sized++;
-            w.project = {
-                type: size >= 3 ? 'statue3' : size === 2 ? 'statue2' : 'statue1',
-                label: 'PROBE MONUMENT', site, size, points: 0, builders: new Set(),
-                wood: 0, ore: 0, needWood: 20, needOre: 10, needed: 999,
-                lightning: 0.5, rain: 1.2, perk: 'PROBE',
-            };
-            for (const f of w.farmers) { f.wood = 200; f.ore = 60; f.p.collaboration = 1; }
-            const inFoot = (q) => {
-                const ti = Math.floor(q.i), tj = Math.floor(q.j);
-                return ti >= site.i && ti < site.i + size && tj >= site.j && tj < site.j + size;
-            };
-            const n = Math.round(4 * 190 / DT);
-            for (let k = 0; k < n; k++) {
-                w.tick(DT);
-                for (const f of w.farmers) {
-                    const p = f.path;
-                    if (!p || (p.then !== 'projdrop' && p.then !== 'build')) continue;
-                    observations++;
-                    if (inFoot({ i: p.i, j: p.j })) {
-                        insideTotal++;
-                        if (!example) example = `${p.then} -> (${p.i.toFixed(1)}, ${p.j.toFixed(1)}) site=(${site.i},${site.j}) size=${size}`;
+    // phase: 'haul' leaves materials unmet; 'build' satisfies them and holds points down so it never
+    // completes; 'blocked' is 'build' with the frontage ringed in rock, so relocation is forced.
+    function observe(phase) {
+        const perSize = { 1: 0, 2: 0, 3: 0 };
+        const uniquePerSize = { 1: new Set(), 2: new Set(), 3: new Set() };
+        let sited = 0, inside = 0, example = '', wrongPhase = 0;
+        const want = phase === 'haul' ? 'projdrop' : 'build';
+        for (const seed of [424242, 515151, 20260101]) {
+            for (const size of [1, 2, 3]) {
+                const w = boot(seed);
+                run(w, 14);
+                // a clear size x size spot with a one-tile margin, well away from any plot
+                let site = null;
+                for (let tries = 0; tries < 4000 && !site; tries++) {
+                    const i = 20 + (tries * 7) % 30, j = 20 + (tries * 11) % 30;
+                    let clear = true;
+                    for (let dj = -2; dj < size + 2 && clear; dj++) for (let di = -2; di < size + 2; di++)
+                        if (w.get(i + di, j + dj) !== 0) { clear = false; break; }
+                    for (const p of w.plots) if (i >= p.x - 3 && i <= p.x + p.w + 3 && j >= p.y - 3 && j <= p.y + p.h + 3) clear = false;
+                    if (clear) site = { i, j };
+                }
+                if (!site) continue;
+                sited++;
+                // BLOCKED FRONTAGE: ring the footprint in rock but leave the footprint itself walkable —
+                // exactly the shape #standAt guards against. nearestOpenTile is now tempted to relocate a
+                // worker onto the site, and only avoid.size rejects that for a 2x2/3x3.
+                if (phase === 'blocked') {
+                    for (let dj = -1; dj <= size; dj++) for (let di = -1; di <= size; di++) {
+                        if (di === -1 || di === size || dj === -1 || dj === size) w.set(site.i + di, site.j + dj, T.ROCK);
                     }
                 }
-                if (w.project) { w.project.wood = 0; w.project.ore = 0; }   // hold it in the hauling phase
+                const met = phase !== 'haul';
+                w.project = {
+                    type: size >= 3 ? 'statue3' : size === 2 ? 'statue2' : 'statue1',
+                    label: 'PROBE MONUMENT', site, size, points: 0, builders: new Set(),
+                    wood: met ? 99 : 0, ore: met ? 99 : 0, needWood: 20, needOre: 10, needed: 99999,
+                    lightning: 0.5, rain: 1.2, perk: 'PROBE',
+                };
+                for (const f of w.farmers) { f.wood = 200; f.ore = 60; f.p.collaboration = 1; }
+                const inFoot = (q) => {
+                    const ti = Math.floor(q.i), tj = Math.floor(q.j);
+                    return ti >= site.i && ti < site.i + size && tj >= site.j && tj < site.j + size;
+                };
+                const n = Math.round(4 * 190 / DT);
+                for (let k = 0; k < n; k++) {
+                    w.tick(DT);
+                    // hold the project in the phase under test
+                    if (w.project) {
+                        w.project.points = 0;
+                        w.project.wood = met ? 99 : 0;
+                        w.project.ore = met ? 99 : 0;
+                    }
+                    for (const f of w.farmers) {
+                        const p = f.path;
+                        if (!p || (p.then !== 'projdrop' && p.then !== 'build')) continue;
+                        if (p.then !== want) { wrongPhase++; continue; }
+                        perSize[size]++;
+                        // count DECISIONS, not ticks of an already-active path: key on the destination
+                        uniquePerSize[size].add(`${f.sheet.seed}|${p.i.toFixed(2)},${p.j.toFixed(2)}`);
+                        if (inFoot({ i: p.i, j: p.j })) {
+                            inside++;
+                            if (!example) example = `${p.then} -> (${p.i.toFixed(1)}, ${p.j.toFixed(1)}) site=(${site.i},${site.j}) size=${size}`;
+                        }
+                    }
+                }
             }
         }
+        return { perSize, uniquePerSize, sited, inside, example, wrongPhase };
     }
-    check(sized === 9, 'placed a probe monument at every size on every seed', `${sized}/9`);
-    check(observations > 500, 'observed real project destinations', `${observations}`);
-    check(insideTotal === 0, 'no destination lands inside the future footprint', example || `${insideTotal}`);
+
+    const LABEL = { haul: 'hauling (projdrop)', build: 'building (build)', blocked: 'blocked frontage' };
+    for (const phase of ['haul', 'build', 'blocked']) {
+        const r = observe(phase);
+        const label = LABEL[phase];
+        check(r.sited === 9, `${label}: monument placed at every size on every seed`, `${r.sited}/9`);
+        // EVERY size must contribute — a global counter lets two sizes hide behind one.
+        // On a blocked frontage the CORRECT behaviour may be to skip the job entirely, so require only
+        // that the scenario was reached at all rather than a per-size floor.
+        if (phase === 'blocked') {
+            const total = r.perSize[1] + r.perSize[2] + r.perSize[3];
+            check(total > 0, `${label}: reached the build branch with the frontage blocked`,
+                `1:${r.perSize[1]} 2:${r.perSize[2]} 3:${r.perSize[3]}`);
+        } else {
+            const thin = [1, 2, 3].filter(s => r.perSize[s] < 50);
+            check(thin.length === 0, `${label}: every size observed`,
+                `1:${r.perSize[1]} 2:${r.perSize[2]} 3:${r.perSize[3]}${thin.length ? ` — thin: ${thin.join(',')}` : ''}`);
+            const flat = [1, 2, 3].filter(s => r.uniquePerSize[s].size < 2);
+            check(flat.length === 0, `${label}: distinct decisions per size`,
+                `1:${r.uniquePerSize[1].size} 2:${r.uniquePerSize[2].size} 3:${r.uniquePerSize[3].size}`);
+        }
+        check(r.inside === 0, `${label}: no destination lands inside the future footprint`,
+            r.example || `${r.inside}`);
+    }
 }
 
 console.log(`\n${fail.length ? `FAILED — ${fail.length} check(s): ${fail.join('; ')}` : 'All paddock + pond invariants hold.'}`);
