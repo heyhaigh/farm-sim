@@ -1,10 +1,12 @@
-// buildings.js — procedural TOP-DOWN buildings, drawn to the §S laws in PROCEDURAL_ART.md.
+// buildings.js — procedural TOP-DOWN buildings, drawn to the shared §S strategy laws
+// (one committed upper-left light, sphere-mask volume, cluster-unit organic primitive,
+// the darker-adjacent outline law, the fixed seat shadow) exported from pixel.js.
 //
 // This is the canonical home for code-drawn structures. It matters more than it looks:
 // assets/ is gitignored (CraftPix licensing), so on a git-based deploy the sheet art is
 // absent and these procedural builders are what players actually see.
 //
-// scratch_td/direct_1.js — ARCHETYPE 1 · GABLE (center-peak apex), top-down 3/4.
+// ARCHETYPE 1 · GABLE (center-peak apex), top-down 3/4.
 // The Slynyrd A-frame: the gable END faces the camera, so the ridge recedes and
 // projects as a VERTICAL center line — the apex that breaks the horizontal roof.
 // Two slope planes fan down-outward from it as a chevron band: HARD lit-left /

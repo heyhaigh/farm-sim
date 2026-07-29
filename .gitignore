@@ -41,6 +41,19 @@ KIMI_REVIEW_PACKET.md
 # generated Codex review patch (scratch, not a deliverable)
 review.diff
 
+# sprite/building design scratch — unlinked comparison pages and archetype experiments kept for my own
+# reference. scratch_td/pm_2.js calls itself "an EXERCISE, not a shipping asset". buildings.js is the
+# shipped outcome of this work; these are the workings behind it.
+scratch_td/
+sprites.html
+coop_scene_compare.html
+structures_before_after.html
+topdown_styles_compare.html
+topdown_v2_compare.html
+topdown_styles.js
+PROCEDURAL_ART.md
+PROCEDURAL_ART_AUDIT.md
+
 # Codex review directives + reports — local-only working docs, never on the public repo
 CODEX_REVIEW_*.md
 CODEX_TEST_DIRECTIVE.md

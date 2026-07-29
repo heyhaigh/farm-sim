@@ -138,7 +138,7 @@ function _hueToward(h, target, deg) {
     return h + Math.max(-deg, Math.min(deg, diff));
 }
 
-// Hue-shifting shade (PROCEDURAL_ART.md §1a). Value still tracks the old RGB-multiply
+// Hue-shifting shade. Value still tracks the old RGB-multiply
 // so existing builders keep their brightness; on top of that, darkening (f<1) rotates
 // hue toward a cool blue shadow anchor and DESATURATES, lightening (f>1) rotates toward
 // a warm anchor and SATURATES — the era's hue-shift, not a flat darken. Pure/deterministic.
@@ -154,7 +154,7 @@ export function shade(hex, f) {
     return _rgbToHex(r, g, b);
 }
 
-// Authored sub-palettes (PROCEDURAL_ART.md §1) — the era way: index into hand-tuned,
+// Authored sub-palettes — the era way: index into hand-tuned,
 // hue-shifted ramps rather than runtime-darkening. Each array is ordered SHADOW -> LIGHT.
 export const RAMPS = {
     OUTLINE:  { warm: '#211a1c', green: '#193926', brown: '#3a2818' },
@@ -172,7 +172,7 @@ export const RAMPS = {
 };
 
 // Baked translucent ground shadow: a 2:1 ellipse of stepped rows (no arc/AA), drawn
-// under a building so it doesn't float (PROCEDURAL_ART.md §4.4). Two layers — a soft
+// under a building so it doesn't float. Two layers — a soft
 // outer halo + a denser core — so the far edge feathers instead of hard-cutting. Pure.
 function groundShadow(ctx, cx, cy, rx, ry, alpha = 0.3) {
     const ell = (RX, RY, a) => {
@@ -198,7 +198,7 @@ export function recess(ctx, x, y, w, h, inner, rim) {
 }
 
 // ===========================================================================
-// STRATEGY HELPERS  (PROCEDURAL_ART.md §S — the SLYNYRD top-down strategy).
+// STRATEGY HELPERS — the SLYNYRD top-down strategy.
 // Shared, deterministic, fillRect-only primitives so EVERY builder can inherit the
 // north-star discipline: one committed light, sphere-mask volume, the cluster-unit
 // organic primitive, the darker-adjacent OUTLINE LAW, the fixed SEAT-SHADOW LAW, and
@@ -372,7 +372,7 @@ export function rampSwap(fromRamp, toRamp) {
 // Every code-drawn structure should route its roof through these so the lighting
 // pass, the proportional-texture rule and the seasonal treatments stay identical
 // across the set (and future buildings get them for free). Pure, deterministic,
-// fillRect-only. See PROCEDURAL_ART.md §S.2, §S.2b, §S.2d, §6b0.
+// fillRect-only.
 // ===========================================================================
 
 // deterministic 2-axis hash. HASH THE AXES SEPARATELY — a linear combination like
@@ -1141,7 +1141,7 @@ export function makeToolshed() {
 }
 
 // ---------------------------------------------------------------------------
-// ISOMETRIC BUILDING projection (PROCEDURAL_ART.md §6a) — POC helpers + coop.
+// ISOMETRIC BUILDING projection — POC helpers + coop.
 // A building sits in the 2:1 dimetric plane: a diamond footprint, two receding wall
 // faces (front-left LIT / front-right SHADOW) at a near vertical corner, and a hip roof
 // seen from ABOVE (two visible planes meeting at a peak, overhanging the eaves). Every
