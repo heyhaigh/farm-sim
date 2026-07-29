@@ -5176,16 +5176,20 @@ export class World {
     // the middle, which is what makes a clump read as a clump. A minimum separation keeps them crowding
     // without overlapping, and rejected candidates are simply dropped, so a pond ends up with roughly a
     // third of the pads it used to carry. Deterministic: seeded rand, fixed order.
-    #lilyRafts(region, rand) {
+    // Public (not #private) so a harness can sample it across many seeded rng streams — the raft-collapse
+    // defect was only visible at that scale, and reproducing that check matters more than the encapsulation
+    // of a pure geometry helper that reads no world state.
+    lilyRafts(region, rand) {
         const spots = [];
         const MARGIN = 0.9, MIN_SEP = 0.72;                       // off the bank; crowding but not overlapping
         const x0 = region.x + MARGIN, x1 = region.x + region.w - MARGIN;
         const y0 = region.y + MARGIN, y1 = region.y + region.h - MARGIN;
         if (x1 <= x0 || y1 <= y0) return spots;                   // a pond too small to float anything
         const place = (x, y) => {
-            if (x < x0 || x > x1 || y < y0 || y > y1) return;
-            for (const s of spots) if ((s.x - x) ** 2 + (s.y - y) ** 2 < MIN_SEP * MIN_SEP) return;
+            if (x < x0 || x > x1 || y < y0 || y > y1) return false;
+            for (const s of spots) if ((s.x - x) ** 2 + (s.y - y) ** 2 < MIN_SEP * MIN_SEP) return false;
             spots.push({ x, y });
+            return true;
         };
         const rafts = 2 + Math.floor(rand() * 3);                 // 2..4 clumps
         const roots = [];
@@ -5193,7 +5197,7 @@ export class World {
         // reject ate almost every pad of the second — a pond meant to carry three clumps could come out
         // holding two or three pads total. Each root gets a few tries to find open water before it gives
         // up; a bounded retry keeps this deterministic and can't spin.
-        const ROOT_SEP = 2.2;
+        const ROOT_SEP = 2.2, RING0 = MIN_SEP * 1.05;   // roots apart; satellites never on their own root
         for (let c = 0; c < rafts; c++) {
             let rx = 0, ry = 0, ok = false;
             for (let t = 0; t < 6 && !ok; t++) {
@@ -5202,15 +5206,24 @@ export class World {
             }
             if (!ok) continue;                                    // no open water left — this raft doesn't form
             roots.push({ x: rx, y: ry });
-            const spread = 0.9 + rand() * 1.2;
+            const spread = Math.max(RING0 + 0.4, 0.9 + rand() * 1.2);
             place(rx, ry);                                        // the rootstock the raft grew from
             const n = 3 + Math.floor(rand() * 3);                 // 3..5 more around it
             for (let k = 0; k < n; k++) {
-                const ang = rand() * Math.PI * 2, r = rand() * spread;
-                place(rx + Math.cos(ang) * r, ry + Math.sin(ang) * r);
+                // Draw the radius from an ANNULUS starting just outside MIN_SEP, not from zero. Sampling
+                // [0, spread] meant most satellites landed on top of their own rootstock and were rejected
+                // outright — with spread at its low end, four in five of them — so separating the roots
+                // fixed only half the collapse: rafts could still come out as bare rootstocks. Retries
+                // then cover the rarer case of colliding with a NEIGHBOUR's pad.
+                for (let t = 0; t < 4; t++) {
+                    const ang = rand() * Math.PI * 2, r = RING0 + rand() * (spread - RING0);
+                    if (place(rx + Math.cos(ang) * r, ry + Math.sin(ang) * r)) break;
+                }
             }
         }
-        for (let k = 0; k < 2; k++) place(x0 + rand() * (x1 - x0), y0 + rand() * (y1 - y0));   // strays
+        for (let k = 0; k < 2; k++) {                             // strays, off on their own
+            for (let t = 0; t < 3; t++) if (place(x0 + rand() * (x1 - x0), y0 + rand() * (y1 - y0))) break;
+        }
         return spots;
     }
 
@@ -5242,7 +5255,7 @@ export class World {
             for (let j = wr.y; j < wr.y + wr.h; j++)
                 for (let i = wr.x; i < wr.x + wr.w; i++) this.set(i, j, T.WATER);
             // pond life is confined to the WATER, not the paddock — no fish flopping on the bank
-            for (const s of this.#lilyRafts(wr, rand)) fac.producers.push(this.#makeProducer('pad', s.x, s.y, wr));
+            for (const s of this.lilyRafts(wr, rand)) fac.producers.push(this.#makeProducer('pad', s.x, s.y, wr));
             const wcx = wr.x + wr.w / 2, wcy = wr.y + wr.h / 2;
             for (let k = 0; k < 3; k++) fac.producers.push(this.#makeProducer('fish', wcx + (rand() - 0.5), wcy + (rand() - 0.5), wr));
         } else if (type === 'coop') {
