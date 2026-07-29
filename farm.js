@@ -5199,15 +5199,20 @@ export class World {
         // up; a bounded retry keeps this deterministic and can't spin.
         const ROOT_SEP = 2.2, RING0 = MIN_SEP * 1.05;   // roots apart; satellites never on their own root
         for (let c = 0; c < rafts; c++) {
-            let rx = 0, ry = 0, ok = false;
-            for (let t = 0; t < 6 && !ok; t++) {
+            // A candidate root has to clear the OTHER ROOTS *and* actually take the ground. Checking only
+            // ROOT_SEP let a root sit clear of its peers but on top of an earlier raft's satellite: place()
+            // then refused it, yet the root was already committed, so its satellites grew around a centre
+            // that holds no pad and the raft could contribute nothing at all. Over 100k streams that was
+            // 1,395 failed root placements and 26 rafts that added not one pad. Commit on success only.
+            let rx = 0, ry = 0, rooted = false;
+            for (let t = 0; t < 6 && !rooted; t++) {
                 rx = x0 + rand() * (x1 - x0); ry = y0 + rand() * (y1 - y0);
-                ok = roots.every(r => (r.x - rx) ** 2 + (r.y - ry) ** 2 >= ROOT_SEP * ROOT_SEP);
+                if (!roots.every(r => (r.x - rx) ** 2 + (r.y - ry) ** 2 >= ROOT_SEP * ROOT_SEP)) continue;
+                rooted = place(rx, ry);                           // the rootstock the raft grew from
             }
-            if (!ok) continue;                                    // no open water left — this raft doesn't form
+            if (!rooted) continue;                                // no open water left — this raft doesn't form
             roots.push({ x: rx, y: ry });
             const spread = Math.max(RING0 + 0.4, 0.9 + rand() * 1.2);
-            place(rx, ry);                                        // the rootstock the raft grew from
             const n = 3 + Math.floor(rand() * 3);                 // 3..5 more around it
             for (let k = 0; k < n; k++) {
                 // Draw the radius from an ANNULUS starting just outside MIN_SEP, not from zero. Sampling
@@ -5285,6 +5290,16 @@ export class World {
                 const spot = this.#nearestYardTile(plot, pr.fx, pr.fy, pr.region);
                 if (spot) { pr.fx = spot.i + 0.5; pr.fy = spot.j + 0.5; pr.vx = 0; pr.vy = 0; }
             }
+        }
+        // ...and the same for PEOPLE. The animal sweep above has always been here; farmers were left out,
+        // so raising a pond over the spot where someone happened to be standing left them in the water
+        // until their next walk carried them out — half a second of a farmhand standing in a brand-new
+        // pond. It's a neighbour's build that does this, not your own: any farm may finish a facility on
+        // any tick. Anyone caught inside the new footprint steps to the nearest open ground.
+        for (const f of this.farmers) {
+            if (!f.pos || !this.pathBlocked(Math.floor(f.pos.i), Math.floor(f.pos.j))) continue;
+            const spot = this.nearestOpenTile(f.pos);
+            if (spot) { f.pos.i = spot.i + 0.5; f.pos.j = spot.j + 0.5; f.path = null; f.state = 'decide'; }
         }
         this.#rebuildFields(plot);   // facility tiles removed from crop fields
     }

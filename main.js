@@ -7437,18 +7437,26 @@ function frame(now) {
     // any save from later never triggers this. A player already trailing someone, or mid-raid, keeps what
     // they chose. Fires once per town, at the very start — nothing later ever grabs the camera.
     {
-        const congregating = !!(world.congregating && world.congregating());
-        if (sawCongregating === null) sawCongregating = congregating;   // first observation: record, never fire
-        else if (sawCongregating && !congregating) {
-            const sentry = world.currentSentry && world.currentSentry();
-            if (sentry && !followMode && !world.raidEvent && !startScreen && !world._spectator) {
-                followMode = true; followTarget = sentry; selected = sentry;
-                sheetScroll = 0; sheetTab = 0; rosterOpen = false; chronOpen = false; boardOpen = false;
-                dramaSpotlight = null; raidFocus = null;
-                firstWatchHintT = 14;   // the coach line rides under the FOLLOWING banner
+        // SUSPEND across a frontier crossing, and suspend without CONSUMING. switchTown clears _switching
+        // as soon as the destination world is installed, but crossFx keeps running its 0.7s phase-in with
+        // the sim already live — so a day-one town you cross into could pass clock 38 underneath the
+        // transition, taking the camera and drawing the coach line over the crossing graphic, and the edge
+        // would be spent. Skipping the whole block (rather than updating sawCongregating) leaves the
+        // pending true→false intact, so it fires on the first frame after the crossing settles.
+        if (!crossFx) {
+            const congregating = !!(world.congregating && world.congregating());
+            if (sawCongregating === null) sawCongregating = congregating;   // first observation: record, never fire
+            else if (sawCongregating && !congregating) {
+                const sentry = world.currentSentry && world.currentSentry();
+                if (sentry && !followMode && !world.raidEvent && !startScreen && !world._spectator) {
+                    followMode = true; followTarget = sentry; selected = sentry;
+                    sheetScroll = 0; sheetTab = 0; rosterOpen = false; chronOpen = false; boardOpen = false;
+                    dramaSpotlight = null; raidFocus = null;
+                    firstWatchHintT = 14;   // the coach line rides under the FOLLOWING banner
+                }
             }
+            sawCongregating = congregating;
         }
-        sawCongregating = congregating;
     }
     // #incoming the SENTRY'S ALARM (detection edge) fires the fullscreen shader — headline "INCOMING RAID..." —
     // moved here from the strike. Once per telegraph; display-only, so no determinism reach.
