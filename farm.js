@@ -7984,6 +7984,14 @@ export class World {
             // that perpendicular can lie inside an intact fenced plot — so a foe with a rock in front of it
             // slipped through a neighbour's fence at full speed, bashing nothing and costing them no post.
             // Terrain refuses everyone; a fence turns a BEAST aside; a FOE breaches it slowly, wrecking it.
+            // Same escape creatureStep has: this loop replaced that call to get fence semantics right, and
+            // in doing so lost the blocked-source case — a facility finished under a foe left every
+            // sub-tile candidate inside the blocked cell, so it stood there for its whole 45s life.
+            if (this.pathBlocked(Math.floor(e.i), Math.floor(e.j))) {
+                const out = this.nearestOpenTile({ i: e.i, j: e.j });
+                if (out) { e.i = out.i + 0.5; e.j = out.j + 0.5; }
+                return;
+            }
             const dirs = [[dx / dist, dy / dist], [dy / dist, -dx / dist], [-dy / dist, dx / dist]];
             for (const [ui, uj] of dirs) {
                 const ci = e.i + ui * sp, cj = e.j + uj * sp;
@@ -8298,13 +8306,16 @@ export class World {
     // step the merchant along a path toward its target; returns true on arrival
     #moveMerchant(dt) {
         const m = this.merchant;
+        // findPath permits its GOAL, so a destination built over mid-visit comes back as the final waypoint
+        // and gets walked onto. Revalidate the TARGET on every re-path, not just the first: the arrival tile
+        // can be blocked after departure, and re-pathing to it returns the same admitted goal.
+        const retarget = () => {
+            if (!this.pathBlocked(m.target.i, m.target.j)) return;
+            const spot = this.nearestOpenTile(m.target);
+            if (spot) m.target = { i: spot.i, j: spot.j };
+        };
         if (!m.path || m.pi >= m.path.length) {
-            // findPath permits its GOAL, so if the arrival tile itself has been built over during the visit
-            // the route comes back ending ON it and the walker steps straight in. Move the target first.
-            if (this.pathBlocked(m.target.i, m.target.j)) {
-                const spot = this.nearestOpenTile(m.target);
-                if (spot) m.target = { i: spot.i, j: spot.j };
-            }
+            retarget();
             m.path = this.findPath(m.pos, m.target) || [];
             m.pi = 0;
             if (!m.path.length) { m.pos = { i: m.target.i + 0.5, j: m.target.j + 0.5 }; return true; }
@@ -8313,6 +8324,7 @@ export class World {
         // blind, but the ground changes underneath it — a farm can raise a pond or a barn across the road
         // mid-journey. Re-path from where the merchant stands rather than pressing on into it.
         if (this.pathBlocked(m.path[m.pi].i, m.path[m.pi].j)) {
+            retarget();
             m.path = this.findPath(m.pos, m.target) || [];
             m.pi = 0;
             if (!m.path.length) { m.pos = { i: m.target.i + 0.5, j: m.target.j + 0.5 }; return true; }
@@ -10510,7 +10522,7 @@ export class Farmer {
         if (w.projectNeedsMaterials(pr)) {
             const canGive = (pr.wood < pr.needWood && this.wood > 0) || (pr.ore < pr.needOre && this.ore > 0);
             if (canGive) { this.think(this.#tr(`DRAGGING STONE FOR THE ${pr.label}`, `HAULING STONE FOR THE ${pr.label}`));
-                const dp = this.#standAt(site.i + 0.5, site.j + 1.6);
+                const dp = this.#standAt(site.i + 0.5, site.j + 1.6, site);
                 if (dp && this.#goTo(dp.i, dp.j, 'projdrop')) return true; }
             else if (pr.wood < pr.needWood) {
                 const src = w.nearestWood(this.pos);
@@ -10526,8 +10538,8 @@ export class Farmer {
         // already at the site? build in place — don't re-walk on every redecide (the jitter)
         if (Math.abs(this.pos.i - (site.i + 0.5)) + Math.abs(this.pos.j - (site.j + 1.6)) < 2.2 + (pr.size || 1)) { this.state = 'build'; return true; }
         const off = (this.sheet.seed % 3) - 1;
-        const bp = this.#standAt(site.i + 0.5 + off, site.j + 1.6 + (pr.size || 1) - 1);
-        const bp2 = this.#standAt(site.i + 0.5, site.j + 1.6);
+        const bp = this.#standAt(site.i + 0.5 + off, site.j + 1.6 + (pr.size || 1) - 1, site);
+        const bp2 = this.#standAt(site.i + 0.5, site.j + 1.6, site);
         if (!bp || !this.#goTo(bp.i, bp.j, 'build')) { if (bp2) this.#goTo(bp2.i, bp2.j, 'build'); }
         return true;
     }
@@ -12467,7 +12479,8 @@ export class Farmer {
             const canGive = (coop.wood < coop.needWood && this.wood > 0) || (coop.ore < coop.needOre && this.ore > 0);
             if (canGive) {
                 this.think('HAULING MATERIALS TO OUR WELL SITE');
-                return this.#goTo(site.i + 0.5, site.j + 1.5, 'coopdrop');
+                const dp2 = this.#standAt(site.i + 0.5, site.j + 1.5, site);
+                return !!dp2 && this.#goTo(dp2.i, dp2.j, 'coopdrop');
             }
             if (coop.wood < coop.needWood) {
                 const src = w.nearestWood(this.pos);
@@ -12484,7 +12497,7 @@ export class Farmer {
         // may be unreachable — that endless re-approach is what made builders twitch on the spot
         if (Math.abs(this.pos.i - (site.i + 0.5)) + Math.abs(this.pos.j - (site.j + 1.6)) < 2.2) { this.state = 'coopbuild'; return true; }
         const off = (this.sheet.seed % 3) - 1;
-        const cp = this.#standAt(site.i + 0.5 + off, site.j + 1.6), cp2 = this.#standAt(site.i + 0.5, site.j + 1.6);
+        const cp = this.#standAt(site.i + 0.5 + off, site.j + 1.6, site), cp2 = this.#standAt(site.i + 0.5, site.j + 1.6, site);
         if (!cp || !this.#goTo(cp.i, cp.j, 'coopbuild')) return !!cp2 && this.#goTo(cp2.i, cp2.j, 'coopbuild');
         return true;
     }
@@ -12558,7 +12571,27 @@ export class Farmer {
     // Returns null when there is nowhere to stand — callers must SKIP the job rather than walk to the
     // blocked point. Falling back to the raw coordinate is the exact anti-pattern review #52 called out in
     // six other callers, and writing it here would have reintroduced it while fixing it elsewhere.
-    #standAt(i, j) { return this.#standNear(i, j); }
+    // `avoid` is the site about to be BUILT here. A project or well site stays walkable until completion,
+    // so when the frontage is blocked nearestOpenTile can happily return the site itself — and completion
+    // then stamps the structure underneath the builder. Reject anything inside the footprint (+1 margin,
+    // since these stamp a block, not a tile) and settle for a spot outside it.
+    #standAt(i, j, avoid = null) {
+        const p = this.#standNear(i, j);
+        if (!p || !avoid) return p;
+        // Exclude the FOOTPRINT ONLY — the tiles that will actually turn solid. My first attempt used a
+        // one-tile margin around it, which swallowed the legitimate frontage (the drop point sits half a
+        // tile past a 1x1 site) and quietly relocated every project and co-op delivery in every town. All
+        // four determinism digests moved, which is what exposed it: a guard against a contrived case had
+        // become a behaviour change for the common one.
+        const sz = avoid.size || 1;
+        const inSite = (q) => q.i >= avoid.i && q.i < avoid.i + sz && q.j >= avoid.j && q.j < avoid.j + sz;
+        if (!inSite(p)) return p;
+        for (const [di, dj] of [[0, sz + 0.5], [sz + 0.5, 0], [0, -1.5], [-1.5, 0]]) {
+            const q = this.#standNear(avoid.i + 0.5 + di, avoid.j + 0.5 + dj);
+            if (q && !inSite(q)) return q;
+        }
+        return null;
+    }
 
     #standNear(i, j) {
         if (!this.world.pathBlocked(Math.floor(i), Math.floor(j))) return { i, j };
