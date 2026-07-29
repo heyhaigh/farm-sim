@@ -11086,7 +11086,8 @@ export class Farmer {
         this.teachTarget = best;
         this.teachCooldown = 60 + this.rand() * 60;
         this.think(this.#tr(`I'LL SHOW ${shortName(best.student).toUpperCase()} HOW TO FORGE ${(RECIPE_BY_ID[best.id] ? RECIPE_BY_ID[best.id].name : best.id).toUpperCase()}`, `I'LL SHOW ${shortName(best.student).toUpperCase()} HOW TO MAKE ${(RECIPE_BY_ID[best.id] ? RECIPE_BY_ID[best.id].name : best.id).toUpperCase()}`));
-        if (this.#goTo(best.student.pos.i + 0.5, best.student.pos.j + 0.5, 'teach')) return true;
+        const tt = this.#standNear(best.student.pos.i + 0.5, best.student.pos.j + 0.5);
+        if (tt && this.#goTo(tt.i, tt.j, 'teach')) return true;
         this.teachTarget = null; return false;
     }
 
@@ -11459,7 +11460,8 @@ export class Farmer {
                 .sort((a, b) => a.hp / a.maxHp - b.hp / b.maxHp)[0];
             if (hurt && this.energy > 0.2) {
                 const rem = w.bestWoundRemedy(this, hurt.hp < hurt.maxHp * 0.25);
-                if (rem) { this.careTarget = hurt; this.careKind = 'wound'; this.think(`${shortName(hurt).toUpperCase()} IS HURT - I'LL BIND IT`); this.#goTo(hurt.pos.i + 0.5, hurt.pos.j + 0.5, 'care'); return; }
+                if (rem) { this.careTarget = hurt; this.careKind = 'wound'; this.think(`${shortName(hurt).toUpperCase()} IS HURT - I'LL BIND IT`);
+                    const ct = this.#standNear(hurt.pos.i + 0.5, hurt.pos.j + 0.5); if (ct) this.#goTo(ct.i, ct.j, 'care'); return; }
                 this.visitedSick.add(hurt.sheet.seed);   // no herbs to bind it now — weighed; restock below
             }
             if (this.grass < HEALER_HERB_LOW) {   // nobody to tend: restock herbs for the next outbreak
@@ -11475,7 +11477,8 @@ export class Farmer {
             const hf = w.healerFarmer();
             if (hf && hf !== this && !hf.onSortie && this.opinionOf(hf) > -0.3 && (this.effCollab() > 0.45 || this.opinionOf(hf) > 0.2)) {   // Codex #43 P1 don't march grass to an away Healer's stale position
                 this.herbTarget = hf; this.think("THE HEALER NEEDS HERBS - I'LL BRING GRASS");
-                if (this.#goTo(hf.pos.i + 0.5, hf.pos.j + 0.5, 'herbrun')) return;
+                const hbt = this.#standNear(hf.pos.i + 0.5, hf.pos.j + 0.5);
+                if (hbt && this.#goTo(hbt.i, hbt.j, 'herbrun')) return;
                 this.herbTarget = null;
             }
         }
@@ -11706,7 +11709,8 @@ export class Farmer {
             if (deal) {
                 this.think(this.#tr(`SWAP MY ${deal.give.toUpperCase()} FOR ${deal.partner.sheet.name.split(' ')[0].toUpperCase()}'S ${deal.get.toUpperCase()}`, `TRADE MY ${deal.give.toUpperCase()} FOR ${deal.partner.sheet.name.split(' ')[0].toUpperCase()}'S ${deal.get.toUpperCase()}`));
                 this.barterDeal = deal; this.barterCooldown = 45 + this.rand() * 45;
-                if (this.#goTo(deal.partner.pos.i + 0.5, deal.partner.pos.j + 0.5, 'barter')) { this.#heededWhisper('trade'); return; }
+                const bt = this.#standNear(deal.partner.pos.i + 0.5, deal.partner.pos.j + 0.5);
+                if (bt && this.#goTo(bt.i, bt.j, 'barter')) { this.#heededWhisper('trade'); return; }
                 this.barterDeal = null;
             } else this.barterCooldown = 12;   // nothing worth trading right now — don't re-scan every tick
         }
@@ -11732,7 +11736,8 @@ export class Farmer {
                 const t = w.farmers.find(o => o !== this && shortName(o).toLowerCase() === String(vu.target).toLowerCase());
                 if (t && this.opinionOf(t) > -0.35) {
                     this.think(this.#tr(`I'LL LOOK IN ON ${shortName(t).toUpperCase()}.`, `I SHOULD LOOK IN ON ${shortName(t).toUpperCase()}.`));
-                    if (this.#goTo(t.pos.i + 0.5, t.pos.j + 0.5, 'wander')) return;
+                    const vt = this.#standNear(t.pos.i + 0.5, t.pos.j + 0.5);
+                    if (vt && this.#goTo(vt.i, vt.j, 'wander')) return;
                 }
             }
         }
@@ -12068,7 +12073,8 @@ export class Farmer {
                 this.think(this.#tr(`HURT — I'LL SWAP ${deal.give.toUpperCase()} FOR ${shortName(deal.partner).toUpperCase()}'S MEAT`,
                     `WOUNDED — I'LL TRADE ${deal.give.toUpperCase()} FOR ${shortName(deal.partner)}'S MEAT`));
                 this.barterDeal = deal; this.barterCooldown = 40 + this.rand() * 40;
-                if (this.#goTo(deal.partner.pos.i + 0.5, deal.partner.pos.j + 0.5, 'barter')) return true;
+                const bt2 = this.#standNear(deal.partner.pos.i + 0.5, deal.partner.pos.j + 0.5);
+                if (bt2 && this.#goTo(bt2.i, bt2.j, 'barter')) return true;
                 this.barterDeal = null;
             }
         }
@@ -13137,11 +13143,18 @@ export class Farmer {
                 // pond, which is how someone ends up running across water. (The 'hunt' mover below has always
                 // had this right; flee was the odd one out.) Same shape as everywhere else — findPath is not
                 // involved in a panic run, so this check is the only thing keeping them on land.
-                let ni = this.pos.i + dx / d * sp, nj = this.pos.j + dy / d * sp;
-                if (this.world.pathBlocked(Math.floor(ni), Math.floor(nj))) {
-                    ni = this.pos.i + (dy / d) * sp; nj = this.pos.j + (-dx / d) * sp;   // veer around a blocker
+                // Straight at the refuge; if that's blocked, veer — and try BOTH perpendiculars before
+                // standing still. Testing only one meant a farmer cornered where the forward step and that
+                // one veer were both blocked simply stopped, with the open direction untried, while
+                // re-detection kept resetting fleeTimer: they'd stand at the corner until the encounter
+                // ended or they were cut down. (The unchecked veer this replaced always moved, but could
+                // move them into a pond — hence the check; the fix for that must not become a freeze.)
+                const cand = [[dx / d, dy / d], [dy / d, -dx / d], [-dy / d, dx / d]];
+                for (const [ui, uj] of cand) {
+                    const ni = this.pos.i + ui * sp, nj = this.pos.j + uj * sp;
+                    if (this.world.pathBlocked(Math.floor(ni), Math.floor(nj))) continue;
+                    this.pos.i = ni; this.pos.j = nj; break;
                 }
-                if (!this.world.pathBlocked(Math.floor(ni), Math.floor(nj))) { this.pos.i = ni; this.pos.j = nj; }
                 this.world.reveal(Math.round(this.pos.i), Math.round(this.pos.j), 3);
                 this.fleeTimer -= dt;
                 if (this.fleeTimer <= 0) this.state = 'decide';

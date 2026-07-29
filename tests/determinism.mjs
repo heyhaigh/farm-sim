@@ -96,10 +96,17 @@ const BASELINE = {
     // goal, so a foe standing in water was waded out to. Approaches now route through one #standNear
     // helper — the guard existed inline for producer work and had already been missed once for poaching
     // and twice more for fighting. same-twice held on all four seeds.
-    20260706: '579d9d47',
-    42: '39f3a9a3',
-    7: 'afa57ddc',
-    3: 'a8935e16',
+    // re-pinned again 2026-07-29 — the same movement class, found by review #50. SIX more approaches were
+    // still walking to a live entity's tile + 0.5 without checking it (teaching, wound care, the herb run,
+    // both barter paths, visiting), so a neighbour standing on a pond bank could produce a water goal that
+    // findPath admits. And the flee veer, having been given a check last commit, tested only ONE
+    // perpendicular: a farmer cornered where the forward step and that veer were both blocked stood
+    // motionless for the whole 0.5s fleeTimer with the open direction untried — measured at 16 consecutive
+    // frozen ticks before the fix, 1 after. Both are movement, so all four seeds move again. same-twice held.
+    20260706: '642423b2',
+    42: '0cdbe8bf',
+    7: 'c49ddcbf',
+    3: 'ff84421c',
 };
 
 function boot(seed, culture) {

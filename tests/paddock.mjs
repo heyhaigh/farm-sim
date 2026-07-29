@@ -182,7 +182,7 @@ console.log('\nPonds: a bank you can walk, water you cannot');
     check(lifeAshore === 0, 'no fish or lily sitting on dry land', `${lifeAshore} ashore`);
 }
 
-console.log('\nNobody wades: sampled every tick, not once at the end');
+console.log('\nNobody wades: every farmer, every tick, two towns');
 {
     // A SNAPSHOT after the run proves nothing — everyone has long since walked back ashore. With both shore
     // redirects removed the old single-sample check still reported "0 wading". Water occupancy has to be
@@ -196,7 +196,9 @@ console.log('\nNobody wades: sampled every tick, not once at the end');
         const wv = matureTown(seed);
         for (let k = 0; k < steps; k++) {
             wv.tick(DT); ticks++;
-            if (k % 3) continue;                   // every 3rd tick: 10Hz of sim time
+            // EVERY tick, not every third. The heading claimed continuous observation while the code
+            // sampled at 10Hz, so a brief corner clip could pass entirely between samples — the assertion
+            // was weaker than its own label. Costs a few seconds; an exact invariant is worth it.
             for (const f of wv.farmers) {
                 if (!f.pos) continue;
                 if (wv.get(Math.floor(f.pos.i), Math.floor(f.pos.j)) === T_WATER) {
