@@ -3070,12 +3070,18 @@ function drawFarmer(f, sx, sy) {
         const byProgress = (arr, p) => (arr && arr.length ? arr[Math.floor(Math.max(0, Math.min(0.999, p)) * arr.length)] : null);
         // stand-and-fight beats: a raid line under the blow, or a wilderness clash
         const struckLine = world.raidEvent && world.raidEvent.struck && (f._skirmish || f.state === 'muster');
-        const fighting = f.state === 'fight' || f.combatStance === 'fight' || struckLine;
+        // TRAVELLING BEATS POSING. A defender closing on a raider is state 'walk' with combatStance still
+        // 'fight' (#goTo(..., 'fight') keeps the stance across the approach), so the stand-and-fight pose used
+        // to win here and they SLID across the ground in an attack pose — the same FLOAT the foe gait-bob
+        // fixes, seen chasing the band toward the hall and again as it withdrew. Melee frames are for holding
+        // ground; the moment they're covering distance it's the walk/run cycle.
+        const fighting = f.state !== 'walk' && (f.state === 'fight' || f.combatStance === 'fight' || struckLine);
         const swinging = f._swingAt != null && world.time - f._swingAt < 0.42;
         // RUN when hurrying to support in battle: mustering to the defense line (walk→'muster'), riding to a
-        // counter-sortie / search-party rally (f.mustering / walk→'sortie'). Only while actually TRAVELLING —
-        // standing in formation reads as guard/fight, never a run-in-place.
-        const battleRush = f.state === 'walk' && (f.mustering || (f.path && (f.path.then === 'muster' || f.path.then === 'sortie')));
+        // counter-sortie / search-party rally (f.mustering / walk→'sortie'), or charging a threat
+        // (walk→'fight'). Only while actually TRAVELLING — standing in formation reads as guard/fight,
+        // never a run-in-place.
+        const battleRush = f.state === 'walk' && (f.mustering || (f.path && (f.path.then === 'muster' || f.path.then === 'sortie' || f.path.then === 'fight')));
 
         if (f.downed) {
             if (f._deathAnimAt == null) f._deathAnimAt = world.time;   // display-only timer (render field, like f._by)
