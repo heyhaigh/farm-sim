@@ -103,7 +103,11 @@ const BASELINE = {
     // perpendicular: a farmer cornered where the forward step and that veer were both blocked stood
     // motionless for the whole 0.5s fleeTimer with the open direction untried — measured at 16 consecutive
     // frozen ticks before the fix, 1 after. Both are movement, so all four seeds move again. same-twice held.
-    20260706: '642423b2',
+    // 20260706 alone moved 2026-07-29: the SABOTAGE approach now stands outside the victim's house rather
+    // than walking into it, and only that seed runs a sabotage inside 30 days. The workstation fix (millers
+    // were targeting a tile inside their own 3x3 footprint) doesn't show here — no farm reaches a mill in
+    // 30 days, which is exactly the blind spot tests/paddock.mjs exists to cover.
+    20260706: '9ab23a61',
     42: '0cdbe8bf',
     7: 'c49ddcbf',
     3: 'ff84421c',

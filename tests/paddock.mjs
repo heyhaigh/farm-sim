@@ -164,6 +164,25 @@ console.log('\nLivestock containment');
     check(loose === 0, 'every animal inside its containment bounds', `${loose} loose`);
 }
 
+console.log('\nWorkstations: the miller stands OUTSIDE the mill');
+{
+    // The approach offset was written when a building was a single tile; real 3x3 footprints put it inside
+    // the solid block, so every miller and hatcher walked into their own building and it went unnoticed
+    // through four reviews. Assert the stand-tile is outside the footprint AND walkable.
+    const stations = facilities(w).filter(f => f.struct && (f.type === 'mill' || f.type === 'hatchery'));
+    check(stations.length > 0, 'the town built workstations', `${stations.length}`);
+    let inside = 0, blocked = 0;
+    for (const fac of stations) {
+        const st = fac.struct, sw = st.w || 1, sh = st.h || 1;
+        const ti = st.i + sw / 2, tj = st.j + sh + 0.6;     // mirrors the target in #pursue
+        const fi = Math.floor(ti), fj = Math.floor(tj);
+        if (fi >= st.i && fi < st.i + sw && fj >= st.j && fj < st.j + sh) inside++;
+        if (w.pathBlocked(fi, fj)) blocked++;
+    }
+    check(inside === 0, 'the work spot is outside the building footprint', `${inside} inside`);
+    check(blocked === 0, 'the work spot is walkable ground', `${blocked} blocked`);
+}
+
 console.log('\nPonds: a bank you can walk, water you cannot');
 {
     const ponds = facilities(w, 'pond');

@@ -10020,7 +10020,8 @@ export class Farmer {
             const near = Math.hypot(this.pos.i - mgr.pos.i, this.pos.j - mgr.pos.j) < 2.6;
             if (!near) {
                 this.think(w.culture === 'orc' ? 'A WORD WITH THE CHIEF ON THE WATCH' : 'A WORD WITH THE MANAGER ON THE WATCH');
-                if (this.#goTo(mgr.pos.i, mgr.pos.j, 'confer')) return true;   // still walking to them
+                const mt = this.#standNear(mgr.pos.i, mgr.pos.j);   // the Manager may be stood in a workstation
+                if (mt && this.#goTo(mt.i, mt.j, 'confer')) return true;   // still walking to them
                 // #goTo returned false (arrived, or can't reach) — confer where we stand
             }
             u.conferred = true;
@@ -11115,8 +11116,11 @@ export class Farmer {
         if (this.rand() > 0.5 + Math.max(0, -worst - 0.45) * 0.8) return false;   // even the spiteful don't always act
         this.sabotageTarget = victim;
         this.think(this.#tr(`${shortName(victim).toUpperCase()} WILL PAY FOR CROSSING ME...`, `${shortName(victim).toUpperCase()} WILL REGRET CROSSING ME...`));
+        // The plot CENTRE is where the house stands (a 13x13 plot centres on x+6,y+6; the 5x5 dwelling
+        // covers x+4..x+8), so this walked the saboteur into the victim's living room.
         const cx = victim.plot.x + Math.floor(victim.plot.w / 2), cy = victim.plot.y + Math.floor(victim.plot.h / 2);
-        if (this.#goTo(cx + 0.5, cy + 0.5, 'sabotage')) return true;
+        const st = this.#standNear(cx + 0.5, cy + 0.5);
+        if (st && this.#goTo(st.i, st.j, 'sabotage')) return true;
         this.sabotageTarget = null; return false;
     }
     // Save toward the next dwelling tier; upgrade when affordable. Low priority (runs after
@@ -12489,13 +12493,26 @@ export class Farmer {
             return;
         }
         let ti, tj;
-        if (task.fac) { ti = task.fac.struct.i + 0.5; tj = task.fac.struct.j + 1.6; }   // #99b stand just below the mill
+        // #99b stand just below the workstation. This read `struct.j + 1.6` from a time when a building
+        // WAS one tile; once buildings got real footprints (3x3 for a mill or hatch house) that offset
+        // landed squarely INSIDE the solid block, and every miller has been walking into their own mill
+        // since. Measure from the footprint's far edge and centre on its width.
+        if (task.fac) {
+            const st = task.fac.struct, sw = st.w || 1, sh = st.h || 1;
+            ti = st.i + sw / 2; tj = st.j + sh + 0.6;
+        }
         else if (task.prod) { ti = task.prod.fx; tj = task.prod.fy; }
         else if (task.crop) { ti = task.crop.i + 0.5; tj = task.crop.j + 0.5; }
         else { ti = task.field.i + 0.5; tj = task.field.j + 0.5; }
-        // aquatic producers (fish, lily pads) sit ON pond water — a solid tile. Collect from the
-        // SHORE: stand on the nearest walkable tile beside them, never in the water itself.
-        if (task.prod) { const sp = this.#standNear(ti, tj); if (sp) { ti = sp.i; tj = sp.j; } }
+        // Aquatic producers sit ON pond water; workstations ARE solid. Either way, stand on the nearest
+        // walkable ground rather than in the thing. A null result means there is nowhere to stand at all —
+        // abort instead of falling through to the original blocked target, which is what the old
+        // `if (sp)` did: it left ti/tj pointing at the water and walked there anyway.
+        if (task.prod || task.fac) {
+            const sp = this.#standNear(ti, tj);
+            if (!sp) return;
+            ti = sp.i; tj = sp.j;
+        }
         // only claim the producer / queue the work once we know we can actually get there,
         // else an unreachable target leaves it flagged busy forever.
         if (!this.#goTo(ti, tj, 'work')) return;
