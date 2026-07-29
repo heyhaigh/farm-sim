@@ -10511,7 +10511,7 @@ export class Farmer {
             const canGive = (pr.wood < pr.needWood && this.wood > 0) || (pr.ore < pr.needOre && this.ore > 0);
             if (canGive) { this.think(this.#tr(`DRAGGING STONE FOR THE ${pr.label}`, `HAULING STONE FOR THE ${pr.label}`));
                 const dp = this.#standAt(site.i + 0.5, site.j + 1.6);
-                if (this.#goTo(dp.i, dp.j, 'projdrop')) return true; }
+                if (dp && this.#goTo(dp.i, dp.j, 'projdrop')) return true; }
             else if (pr.wood < pr.needWood) {
                 const src = w.nearestWood(this.pos);
                 if (src) { this.think(this.#tr(`HEWING TIMBER FOR THE ${pr.label}`, `TIMBER FOR THE ${pr.label}`)); if (this.#goToWood(src)) return true; }
@@ -10528,7 +10528,7 @@ export class Farmer {
         const off = (this.sheet.seed % 3) - 1;
         const bp = this.#standAt(site.i + 0.5 + off, site.j + 1.6 + (pr.size || 1) - 1);
         const bp2 = this.#standAt(site.i + 0.5, site.j + 1.6);
-        if (!this.#goTo(bp.i, bp.j, 'build')) this.#goTo(bp2.i, bp2.j, 'build');
+        if (!bp || !this.#goTo(bp.i, bp.j, 'build')) { if (bp2) this.#goTo(bp2.i, bp2.j, 'build'); }
         return true;
     }
 
@@ -12485,7 +12485,7 @@ export class Farmer {
         if (Math.abs(this.pos.i - (site.i + 0.5)) + Math.abs(this.pos.j - (site.j + 1.6)) < 2.2) { this.state = 'coopbuild'; return true; }
         const off = (this.sheet.seed % 3) - 1;
         const cp = this.#standAt(site.i + 0.5 + off, site.j + 1.6), cp2 = this.#standAt(site.i + 0.5, site.j + 1.6);
-        if (!this.#goTo(cp.i, cp.j, 'coopbuild')) return this.#goTo(cp2.i, cp2.j, 'coopbuild');
+        if (!cp || !this.#goTo(cp.i, cp.j, 'coopbuild')) return !!cp2 && this.#goTo(cp2.i, cp2.j, 'coopbuild');
         return true;
     }
 
@@ -12555,7 +12555,10 @@ export class Farmer {
     // A frontage stand point beside a built thing. #findStructureSpot validates the FOOTPRINT it clears,
     // not the tiles workers stand on to haul and build, so a raw `site + offset` can land on a rock the
     // site scan never looked at (found at seed 298: board sited at 59,67, workers sent to rock at 59,68).
-    #standAt(i, j) { const p = this.#standNear(i, j); return p || { i, j }; }
+    // Returns null when there is nowhere to stand — callers must SKIP the job rather than walk to the
+    // blocked point. Falling back to the raw coordinate is the exact anti-pattern review #52 called out in
+    // six other callers, and writing it here would have reintroduced it while fixing it elsewhere.
+    #standAt(i, j) { return this.#standNear(i, j); }
 
     #standNear(i, j) {
         if (!this.world.pathBlocked(Math.floor(i), Math.floor(j))) return { i, j };
