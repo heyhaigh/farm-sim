@@ -9943,7 +9943,8 @@ export class Farmer {
                 this.think(w.culture === 'orc' ? 'TO ARMS! OFF MY KIN!' : 'TO ARMS — GET OFF THEM!');
                 if (victim && !this._watcherCharged) { this._watcherCharged = true; this.say(w.culture === 'orc' ? `OFF ${shortName(threat.target)}!` : `OFF ${shortName(threat.target)}, RAIDER!`, '#e0c040'); }
                 if (Math.hypot(this.pos.i - threat.i, this.pos.j - threat.j) > 1.3) {
-                    if (!this.#goTo(threat.i, threat.j, 'fight')) { this.fightTimer = 0.6; this.state = 'fight'; }
+                    const ft = this.#standNear(threat.i, threat.j);   // close from dry land, not through the pond
+                    if (!ft || !this.#goTo(ft.i, ft.j, 'fight')) { this.fightTimer = 0.6; this.state = 'fight'; }
                 } else { this.fightTimer = 0.8; this.state = 'fight'; }
                 return;
             }
@@ -10653,7 +10654,11 @@ export class Farmer {
         if (helping) {
             this.think(this.#tr(`LENDING A FIST vs ${helping.def.name.toUpperCase()}`, `HELPING vs ${helping.def.name.toUpperCase()}`));
             const d = Math.hypot(this.pos.i - helping.i, this.pos.j - helping.j);
-            if (d > 1.3) { if (!this.#goTo(helping.i, helping.j, 'fight')) { this.fightTimer = 0.6; this.state = 'fight'; } return true; }
+            if (d > 1.3) {
+                const ht = this.#standNear(helping.i, helping.j);
+                if (!ht || !this.#goTo(ht.i, ht.j, 'fight')) { this.fightTimer = 0.6; this.state = 'fight'; }
+                return true;
+            }
             this.fightTimer = 0.8; this.state = 'fight'; return true;
         }
         if (this.combatStance) this.combatStance = null;   // stance left set but no fight involves me
@@ -10697,7 +10702,8 @@ export class Farmer {
         if (this.combatStance === 'fight') {
             this.think(this.#tr(`CUTTING DOWN ${def.name.toUpperCase()}`, `FIGHTING ${def.name.toUpperCase()}`));
             if (Math.hypot(this.pos.i - e.i, this.pos.j - e.j) > 1.3) {
-                if (!this.#goTo(e.i, e.j, 'fight')) { this.fightTimer = 0.6; this.state = 'fight'; }
+                const et = this.#standNear(e.i, e.j);   // a foe in the shallows is fought from the bank
+                if (!et || !this.#goTo(et.i, et.j, 'fight')) { this.fightTimer = 0.6; this.state = 'fight'; }
                 return;
             }
             this.fightTimer = 0.8; this.state = 'fight'; return;   // hold + trade blows (encounter tick resolves)
@@ -10720,7 +10726,8 @@ export class Farmer {
             if (brave < grit) continue;
             e.helpers.add(this); this.combatStance = 'fight';
             this.say(inVillage ? 'NOT IN MY TOWN!' : "HELP'S COMING!", '#e0c040');
-            if (!this.#goTo(e.i, e.j, 'fight')) { this.fightTimer = 0.6; this.state = 'fight'; }
+            const et2 = this.#standNear(e.i, e.j);
+            if (!et2 || !this.#goTo(et2.i, et2.j, 'fight')) { this.fightTimer = 0.6; this.state = 'fight'; }
             return true;
         }
         return false;
@@ -12431,6 +12438,17 @@ export class Farmer {
     // Returns true if a walk was started, false if the target is unreachable (caller should
     // pick something else — we do NOT straight-line at an unreachable goal, which would slide
     // against a wall forever).
+    // A spot you can actually STAND on to act on something at (i,j). findPath deliberately permits the GOAL
+    // tile so a bot can reach the thing it means to act on — a rock it means to mine, a fish it means to
+    // net — which means ANY approach aimed at a creature or a producer will happily walk onto water or into
+    // a wall when that's where the target happens to be. This was guarded inline for honest producer work,
+    // then missed for poaching (found in review), then missed again for closing to FIGHT: a farmer would
+    // wade into a pond to reach a foe standing in it. One helper, so a fifth caller can't quietly diverge.
+    #standNear(i, j) {
+        if (!this.world.pathBlocked(Math.floor(i), Math.floor(j))) return { i, j };
+        const spot = this.world.nearestOpenTile({ i, j });
+        return spot ? { i: spot.i + 0.5, j: spot.j + 0.5 } : null;
+    }
     #goTo(i, j, then) {
         const tiles = this.world.findPath(this.pos, { i, j });
         if (tiles === null) { this.path = null; this.state = 'decide'; return false; }
@@ -12471,10 +12489,7 @@ export class Farmer {
         else { ti = task.field.i + 0.5; tj = task.field.j + 0.5; }
         // aquatic producers (fish, lily pads) sit ON pond water — a solid tile. Collect from the
         // SHORE: stand on the nearest walkable tile beside them, never in the water itself.
-        if (task.prod && this.world.pathBlocked(Math.floor(ti), Math.floor(tj))) {
-            const spot = this.world.nearestOpenTile({ i: ti, j: tj });
-            if (spot) { ti = spot.i + 0.5; tj = spot.j + 0.5; }
-        }
+        if (task.prod) { const sp = this.#standNear(ti, tj); if (sp) { ti = sp.i; tj = sp.j; } }
         // only claim the producer / queue the work once we know we can actually get there,
         // else an unreachable target leaves it flagged busy forever.
         if (!this.#goTo(ti, tj, 'work')) return;
@@ -12489,11 +12504,7 @@ export class Farmer {
         // reach the thing it means to act on, which means targeting a fish or a lily pad walks the thief
         // out onto the water. A poacher gets no special dispensation to walk on water — take it from the
         // bank. (This guard existed only on the work path; the poach path went straight in.)
-        if (loot.prod && this.world.pathBlocked(Math.floor(ti), Math.floor(tj))) {
-            const spot = this.world.nearestOpenTile({ i: ti, j: tj });
-            if (!spot) return;
-            ti = spot.i + 0.5; tj = spot.j + 0.5;
-        }
+        if (loot.prod) { const sp = this.#standNear(ti, tj); if (!sp) return; ti = sp.i; tj = sp.j; }
         if (!this.#goTo(ti, tj, 'poach')) return;   // unreachable — don't claim the loot
         this.poachLoot = loot;
         if (loot.prod) { loot.prod.busy = true; this.targetProd = loot.prod; }
@@ -13121,9 +13132,16 @@ export class Farmer {
                 if (Math.abs(dx) + Math.abs(dy) > 0.02)
                     this.moveDir = Math.abs(dx + dy) > Math.abs(dx - dy) * 2 ? ((dx + dy) < 0 ? 'up' : 'down') : 'side';
                 const sp = this.speed * 1.2 * dt;
-                const ni = this.pos.i + dx / d * sp, nj = this.pos.j + dy / d * sp;
+                // The forward step is tested, and if it's blocked they VEER — but the veer itself has to be
+                // tested too. It wasn't: a farmer bolting past an obstacle could sidestep straight into a
+                // pond, which is how someone ends up running across water. (The 'hunt' mover below has always
+                // had this right; flee was the odd one out.) Same shape as everywhere else — findPath is not
+                // involved in a panic run, so this check is the only thing keeping them on land.
+                let ni = this.pos.i + dx / d * sp, nj = this.pos.j + dy / d * sp;
+                if (this.world.pathBlocked(Math.floor(ni), Math.floor(nj))) {
+                    ni = this.pos.i + (dy / d) * sp; nj = this.pos.j + (-dx / d) * sp;   // veer around a blocker
+                }
                 if (!this.world.pathBlocked(Math.floor(ni), Math.floor(nj))) { this.pos.i = ni; this.pos.j = nj; }
-                else { this.pos.i += (dy / d) * sp; this.pos.j += (-dx / d) * sp; }   // veer around a blocker
                 this.world.reveal(Math.round(this.pos.i), Math.round(this.pos.j), 3);
                 this.fleeTimer -= dt;
                 if (this.fleeTimer <= 0) this.state = 'decide';

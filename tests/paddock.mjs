@@ -187,21 +187,28 @@ console.log('\nNobody wades: sampled every tick, not once at the end');
     // A SNAPSHOT after the run proves nothing — everyone has long since walked back ashore. With both shore
     // redirects removed the old single-sample check still reported "0 wading". Water occupancy has to be
     // watched CONTINUOUSLY across a run long enough for pond work (and poaching) to actually happen.
-    const wv = matureTown(424242);
+    // TWO towns, deliberately. 424242 alone was seed-lucky: it never produced a foe standing in a pond, so
+    // it could not see farmers wading out to FIGHT one. 20260101 did, and is kept here as the regression
+    // that found it. A single-seed behavioural check is a coin toss dressed as an assertion.
     const days = 8, steps = Math.round(days * 190 / DT);
-    let waded = 0, worstTick = null, ticks = 0;
-    for (let k = 0; k < steps; k++) {
-        wv.tick(DT); ticks++;
-        if (k % 3) continue;                       // every 3rd tick: 10Hz of sim time, ~13k samples
-        for (const f of wv.farmers) {
-            if (!f.pos) continue;
-            if (wv.get(Math.floor(f.pos.i), Math.floor(f.pos.j)) === T_WATER) {
-                waded++; if (!worstTick) worstTick = `${f.sheet.name.split(' ')[0]} at tick ${k}, state ${f.state}`;
+    let waded = 0, worst = null, ticks = 0, states = {};
+    for (const seed of [424242, 20260101]) {
+        const wv = matureTown(seed);
+        for (let k = 0; k < steps; k++) {
+            wv.tick(DT); ticks++;
+            if (k % 3) continue;                   // every 3rd tick: 10Hz of sim time
+            for (const f of wv.farmers) {
+                if (!f.pos) continue;
+                if (wv.get(Math.floor(f.pos.i), Math.floor(f.pos.j)) === T_WATER) {
+                    waded++; states[f.state] = (states[f.state] || 0) + 1;
+                    if (!worst) worst = `${f.sheet.name.split(' ')[0]} on seed ${seed} at tick ${k}, state ${f.state}`;
+                }
             }
         }
     }
-    check(ticks > 0, 'ran the town long enough for pond work', `${ticks} ticks over ${days} days`);
-    check(waded === 0, 'no farmer ever stands on water', waded ? `${waded} samples, first: ${worstTick}` : 'across every sample');
+    check(ticks > 0, 'ran two towns long enough for pond work', `${ticks} ticks over ${days} days each`);
+    check(waded === 0, 'no farmer ever stands on water, in any state',
+        waded ? `${waded} samples ${JSON.stringify(states)}, first: ${worst}` : 'across every sample of both towns');
 }
 
 console.log('\nPonds: a pre-bank save keeps the shape it was built with');

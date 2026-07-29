@@ -88,10 +88,18 @@ const BASELINE = {
     // ground has changed hands rather than at plan time, the kin weight is derived so it actually dominates
     // position + timber, and the house-upgrade acreage gate measures cropland to match its own cap.
     // same-twice held on all four seeds; 20260706 unchanged (no farm reaches a facility inside 30 days).
-    20260706: '39aa030b',
-    42: '10fe0fd5',
-    7: 'f91faa32',
-    3: '6d3d58c5',
+    // re-pinned 2026-07-29 — MOVEMENT, so this one moves every seed including 20260706, which had held
+    // through the whole paddock series (that work only ever touched facilities, and no farm reaches one
+    // inside 30 days; fleeing and fighting happen in every run). Two fixes, both the same shape: a fleeing
+    // farmer's VEER around an obstacle was applied without checking where it landed, so a panic run could
+    // sidestep into a pond; and closing to FIGHT walked to the foe's tile, which findPath permits as the
+    // goal, so a foe standing in water was waded out to. Approaches now route through one #standNear
+    // helper — the guard existed inline for producer work and had already been missed once for poaching
+    // and twice more for fighting. same-twice held on all four seeds.
+    20260706: '579d9d47',
+    42: '39f3a9a3',
+    7: 'afa57ddc',
+    3: 'a8935e16',
 };
 
 function boot(seed, culture) {
