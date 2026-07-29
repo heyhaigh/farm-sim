@@ -646,9 +646,18 @@ const FACILITY_DEFS = {
 // facility that predates it — a legacy pond was water edge-to-edge, so its own rect IS its water.
 const POND_BANK = 1;
 function pondWater(fac) {
-    if (fac.water) return fac.water;
-    if (fac.w <= POND_BANK * 2 + 1 || fac.h <= POND_BANK * 2 + 1) return { x: fac.x, y: fac.y, w: fac.w, h: fac.h };
-    return { x: fac.x + POND_BANK, y: fac.y + POND_BANK, w: fac.w - POND_BANK * 2, h: fac.h - POND_BANK * 2 };
+    // NO `water` means the pond predates the bank, and every tile of its rect was carved to water on the
+    // map. Report the rect, not a derived inset: deriving one would confine the fish to an inner square
+    // while the outer ring stayed water on disk — a pond that looks full but behaves smaller, with no
+    // walkable bank to show for it. The tiles are the truth; only a pond built WITH a bank has `water`.
+    if (!fac.water) return { x: fac.x, y: fac.y, w: fac.w, h: fac.h };
+    return fac.water;
+}
+// The inset a NEW pond is carved at. Falls back to the full rect if the paddock is too small to spare a
+// bank (no legal paddock is, but a legacy reflow can hand us anything).
+function pondWaterFor(rect) {
+    if (rect.w <= POND_BANK * 2 + 1 || rect.h <= POND_BANK * 2 + 1) return { x: rect.x, y: rect.y, w: rect.w, h: rect.h };
+    return { x: rect.x + POND_BANK, y: rect.y + POND_BANK, w: rect.w - POND_BANK * 2, h: rect.h - POND_BANK * 2 };
 }
 // The ground a facility's producers are confined to: the water for a pond, the paddock for everything else.
 function producerRegion(fac) {
@@ -1502,7 +1511,7 @@ export class World {
         if (this.culture === 'orc') this.#scatterBones();   // #94 rare dragon skeletons (orc wastes only)
     }
 
-    // #94 — rare dragon-bone skeletons littering the orc wastes: spooky, IMPASSABLE (see blocked()), and in
+    // #94 — rare dragon-bone skeletons littering the orc wastes: spooky, IMPASSABLE (see pathBlocked()), and in
     // NO harvest/chop/mine target list, so they're pure decor a farmer walks around and can never remove.
     // Positional tileRand (never the sequential rng stream) + culture-gated, so human towns are byte-identical.
     #scatterBones() {
@@ -1857,11 +1866,6 @@ export class World {
         this.exploredTiles += newly;
         return newly;
     }
-    blocked(i, j) {
-        const t = this.get(i, j);
-        return t === T.HOUSE || t === T.WELL || t === T.SIGN || t === T.STRUCT || t === T.COOP || t === T.BARN || t === T.ROCK || t === T.MILL || t === T.HATCH || t === T.BONES;
-    }
-
     isNight() { return this.clock > DAY_LENGTH; }
     nightProgress() { return this.isNight() ? (this.clock - DAY_LENGTH) / NIGHT_LENGTH : 0; }
     get seasonDef() { return SEASONS[this.season]; }
@@ -5132,8 +5136,11 @@ export class World {
             const from = pondWater(fac);
             for (let j = from.y; j < from.y + from.h; j++)
                 for (let i = from.x; i < from.x + from.w; i++) if (this.get(i, j) === T.WATER) this.set(i, j, T.GRASS);
-            const to = pondWater({ ...fac, ...target, water: fac.water ? { x: fac.water.x + dx, y: fac.water.y + dy, w: fac.water.w, h: fac.water.h } : undefined });
-            fac.water = { ...to };
+            // a pond WITH a bank keeps it (translated); one carved before banks existed stays edge-to-edge
+            const to = fac.water
+                ? { x: fac.water.x + dx, y: fac.water.y + dy, w: fac.water.w, h: fac.water.h }
+                : { x: target.x, y: target.y, w: target.w, h: target.h };
+            if (fac.water) fac.water = { ...to };
             for (let j = to.y; j < to.y + to.h; j++)
                 for (let i = to.x; i < to.x + to.w; i++) this.set(i, j, T.WATER);
         }
@@ -5181,8 +5188,20 @@ export class World {
             spots.push({ x, y });
         };
         const rafts = 2 + Math.floor(rand() * 3);                 // 2..4 clumps
+        const roots = [];
+        // Rootstocks must land APART, or two rafts rolled onto the same water and the min-separation
+        // reject ate almost every pad of the second — a pond meant to carry three clumps could come out
+        // holding two or three pads total. Each root gets a few tries to find open water before it gives
+        // up; a bounded retry keeps this deterministic and can't spin.
+        const ROOT_SEP = 2.2;
         for (let c = 0; c < rafts; c++) {
-            const rx = x0 + rand() * (x1 - x0), ry = y0 + rand() * (y1 - y0);
+            let rx = 0, ry = 0, ok = false;
+            for (let t = 0; t < 6 && !ok; t++) {
+                rx = x0 + rand() * (x1 - x0); ry = y0 + rand() * (y1 - y0);
+                ok = roots.every(r => (r.x - rx) ** 2 + (r.y - ry) ** 2 >= ROOT_SEP * ROOT_SEP);
+            }
+            if (!ok) continue;                                    // no open water left — this raft doesn't form
+            roots.push({ x: rx, y: ry });
             const spread = 0.9 + rand() * 1.2;
             place(rx, ry);                                        // the rootstock the raft grew from
             const n = 3 + Math.floor(rand() * 3);                 // 3..5 more around it
@@ -5218,8 +5237,8 @@ export class World {
             // Filling the paddock edge-to-edge put water flush against the fence with no way past it, so
             // the only route to the far side was over the pond — and water is pathable when it's the goal
             // tile, so farmers waded across to collect. A bank gives them somewhere to stand instead.
-            const wr = pondWater(fac);
-            fac.water = { ...wr };   // stored, so a legacy pond (water edge-to-edge) keeps its own shape
+            const wr = pondWaterFor(region);
+            fac.water = { ...wr };   // stored, so this pond's bank survives a save/load exactly as carved
             for (let j = wr.y; j < wr.y + wr.h; j++)
                 for (let i = wr.x; i < wr.x + wr.w; i++) this.set(i, j, T.WATER);
             // pond life is confined to the WATER, not the paddock — no fish flopping on the bank
@@ -5278,9 +5297,18 @@ export class World {
         // degenerate. Fall back to the region's own middle rather than emitting a point outside the fence.
         const east = k % 2 === 0 && eastX1 > eastX0, south = southY1 > southY0;
         if (!east && !south) return { x: fac.x + fac.w / 2, y: fac.y + fac.h / 2 };
-        return east
+        const spot = east
             ? { x: span(eastX0, eastX1), y: span(s.j, Math.max(s.j + 0.2, fac.y + fac.h - 0.7)) }
             : { x: span(fac.x + 1.5, Math.max(fac.x + 1.7, fac.x + fac.w - 0.7)), y: span(southY0, southY1) };
+        // Keep off the feed trough. It sits in the paddock's SE inside corner — squarely inside the yard
+        // this picks from — and it's drawn as a prop rather than a solid tile, so nothing else would stop
+        // a beast being turned out standing in its own trough. Nudge clear along whichever axis has room.
+        const tr = fac.trough;
+        if (tr && spot.x > tr.i - 0.6 && spot.x < tr.i + 1.6 && spot.y > tr.j - 0.6 && spot.y < tr.j + 1.6) {
+            if (tr.i - 0.9 > fac.x + 0.6) spot.x = tr.i - 0.9;
+            else if (tr.j - 0.9 > fac.y + 0.6) spot.y = tr.j - 0.9;
+        }
+        return spot;
     }
 
     #makeProducer(kind, fx, fy, region) {
