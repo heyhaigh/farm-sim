@@ -4946,7 +4946,8 @@ export class World {
     // pond and a wolf could chase straight through a barn; and a foe standing in water is what made an
     // unguarded farmer approach reachable in the first place, so this is the upstream half of that class.
     // Fences are NOT terrain and are handled by the caller: a beast is turned away by one, a foe bashes
-    // through it. Returns true if it moved.
+    // through it. Returns true if it moved. Takes any {i, j} — pass a farmer's `pos` to move a PERSON by
+    // the same rule (the watched-raid choreography does).
     creatureStep(ent, ui, uj, sp) {
         for (const [vi, vj] of [[ui, uj], [uj, -ui], [-uj, ui]]) {
             const ni = ent.i + vi * sp, nj = ent.j + vj * sp;
@@ -7488,7 +7489,15 @@ export class World {
             const d = Math.max(WILD_RADIUS + 6, Math.min(edge, this.frontierDist(ang) + 5));   // at the fog's edge, out past the wilds
             const falls = k < out.felled;
             const target = falls && monSpots[k] ? { i: monSpots[k].i, j: monSpots[k].j } : { i: CENTER, j: CENTER };
-            raiders.push({ kind: 'orc', def, i: CENTER + co * d, j: CENTER + si * d, facing: 1,
+            // The bearing is a blind ray out of the fog, so it can land a raider in a lake or on a rooftop
+            // — where, movement now being terrain-aware, they'd STAY for the whole raid. Two such spawns
+            // showed up over twelve probe raids (one in water, one on a mill), each stuck ~1,700 ticks.
+            let ri = CENTER + co * d, rj = CENTER + si * d;
+            if (this.pathBlocked(Math.floor(ri), Math.floor(rj))) {
+                const spot = this.nearestOpenTile({ i: ri, j: rj });
+                if (spot) { ri = spot.i + 0.5; rj = spot.j + 0.5; }
+            }
+            raiders.push({ kind: 'orc', def, i: ri, j: rj, facing: 1,
                            hp: def.hp, foeName: out.felledNames[k] || null, falls, target,
                            art: k % 2 ? 3 : 2 });   // #orc-vs-orc raider sheet variant (render-only; used when the defenders are orcs too)
         }
@@ -7518,7 +7527,7 @@ export class World {
             const line = this.farmers.filter(f => this.#holdsLine(f));
             for (const r of re.raiders) {
                 const dx = CENTER - r.i, dy = CENTER - r.j, dist = Math.hypot(dx, dy) || 1;
-                r.i += dx / dist * RAID_APPROACH_SPEED * dt; r.j += dy / dist * RAID_APPROACH_SPEED * dt;
+                this.creatureStep(r, dx / dist, dy / dist, RAID_APPROACH_SPEED * dt);
                 r.facing = (dx - dy) >= 0 ? 1 : -1; r.mvI = dx; r.mvJ = dy;
                 nearest = Math.min(nearest, dist);
                 // #raid-feel the slam fires at CONTACT: the muster line stands OUTSIDE the old struck radius,
@@ -7612,7 +7621,7 @@ export class World {
                     if (!f || !this.#holdsLine(f)) { r.duel.done = true; continue; }   // opponent gone — disengage
                     const dx = f.pos.i - r.i, dy = f.pos.j - r.j, dist = Math.hypot(dx, dy);
                     if (dist > 1.7) {   // close to blade range (exchanges fire from the initiative beat below)
-                        r.i += dx / dist * 3.4 * dt; r.j += dy / dist * 3.4 * dt; r.facing = (dx - dy) >= 0 ? 1 : -1; r.mvI = dx; r.mvJ = dy;
+                        this.creatureStep(r, dx / dist, dy / dist, 3.4 * dt); r.facing = (dx - dy) >= 0 ? 1 : -1; r.mvI = dx; r.mvJ = dy;
                         continue;
                     }
                     r.facing = (dx - dy) >= 0 ? 1 : -1; r.mvI = dx; r.mvJ = dy;   // squared up — face the duel
@@ -7620,7 +7629,7 @@ export class World {
                 }
                 // no duel left: press on to the stores, take, and be ready to run
                 const dx = r.target.i - r.i, dy = r.target.j - r.j, dist = Math.hypot(dx, dy);
-                if (dist > 0.6) { r.i += dx / dist * 3.4 * dt; r.j += dy / dist * 3.4 * dt; r.facing = (dx - dy) >= 0 ? 1 : -1; r.mvI = dx; r.mvJ = dy; }
+                if (dist > 0.6) { this.creatureStep(r, dx / dist, dy / dist, 3.4 * dt); r.facing = (dx - dy) >= 0 ? 1 : -1; r.mvI = dx; r.mvJ = dy; }
                 else if (r.lootAt == null) r.lootAt = this.time;   // pausing at the stores — the grab
             }
             // #raid-initiative — the global turn: on each beat, exactly ONE live duel (round-robin) resolves
@@ -7675,7 +7684,7 @@ export class World {
             for (const r of re.raiders) {
                 const dx = r.i - CENTER, dy = r.j - CENTER, dist = Math.hypot(dx, dy) || 1;
                 // same screen-x rule fleeing outward: moving toward greater (i - j) reads as running RIGHT.
-                r.i += dx / dist * 5.5 * dt; r.j += dy / dist * 5.5 * dt; r.facing = (dx - dy) >= 0 ? 1 : -1; r.mvI = dx; r.mvJ = dy;
+                this.creatureStep(r, dx / dist, dy / dist, 5.5 * dt); r.facing = (dx - dy) >= 0 ? 1 : -1; r.mvI = dx; r.mvJ = dy;
             }
             re.timer -= dt;
             if (re.timer <= 0) {
@@ -7711,7 +7720,7 @@ export class World {
                     continue;
                 }
                 if (dch > 1.5) {   // give chase (a shade slower than the runner — harrying, not tackling)
-                    f.pos.i += (r.i - f.pos.i) / dch * 3.3 * dt; f.pos.j += (r.j - f.pos.j) / dch * 3.3 * dt;
+                    this.creatureStep(f.pos, (r.i - f.pos.i) / dch, (r.j - f.pos.j) / dch, 3.3 * dt);
                     f.facing = ((r.i - r.j) - (f.pos.i - f.pos.j)) >= 0 ? 1 : -1;
                     f._skirmish = true;
                 } else if (this.time >= (r._harryAt || 0)) {   // a swing at the runner's back
@@ -7748,7 +7757,7 @@ export class World {
                         const d2 = Math.hypot(r.i - f.pos.i, r.j - f.pos.j);
                         if (d2 < td) { td = d2; tgt = r; }
                     }
-                    if (tgt && td > 1.8) { f.pos.i += (tgt.i - f.pos.i) / td * 2.6 * dt; f.pos.j += (tgt.j - f.pos.j) / td * 2.6 * dt; }
+                    if (tgt && td > 1.8) this.creatureStep(f.pos, (tgt.i - f.pos.i) / td, (tgt.j - f.pos.j) / td, 2.6 * dt);
                     else if (tgt && this.time >= (f._flankAt || 0)) {   // a flanking swing from the second angle
                         f._flankAt = this.time + 2.1;
                         f._swingAt = this.time; f._swingI = tgt.i - f.pos.i; f._swingJ = tgt.j - f.pos.j;
@@ -7813,8 +7822,11 @@ export class World {
         const nx = f.pos.i - r.i, ny = f.pos.j - r.j, nn = Math.hypot(nx, ny) || 1;
         const ux = nx / nn, uy = ny / nn, px = -uy, py = ux;
         const side = (roll * 997 | 0) % 2 ? 1 : -1;
-        const moveRaider = (di, dj) => { r.i += di; r.j += dj; };
-        const moveFarmer = (di, dj) => { f.pos.i += di; f.pos.j += dj; };
+        // Duel footwork moves BOTH a display raider and a real, serialized farmer. Neither may step into
+        // a pond or a wall to do it — the choreography is allowed to look good, not to teleport a person
+        // onto water and leave them there once the raid ends.
+        const moveRaider = (di, dj) => { this.creatureStep(r, di, dj, 1); };
+        const moveFarmer = (di, dj) => { this.creatureStep(f.pos, di, dj, 1); };
         // #one-beat (council Phase 3): the marquee duel gets ONE authored moment at its midpoint — a stunt +
         // a bark, DM-written during the telegraph when the model answered (world._duelBeat), the seeded house
         // beat otherwise. It REPLACES this round's roll (display-only: motion + words; the scripted ending is
@@ -8251,6 +8263,14 @@ export class World {
     #moveMerchant(dt) {
         const m = this.merchant;
         if (!m.path || m.pi >= m.path.length) {
+            m.path = this.findPath(m.pos, m.target) || [];
+            m.pi = 0;
+            if (!m.path.length) { m.pos = { i: m.target.i + 0.5, j: m.target.j + 0.5 }; return true; }
+        }
+        // Re-check the waypoint before walking to it. The route is A*'d once on departure and then followed
+        // blind, but the ground changes underneath it — a farm can raise a pond or a barn across the road
+        // mid-journey. Re-path from where the merchant stands rather than pressing on into it.
+        if (this.pathBlocked(m.path[m.pi].i, m.path[m.pi].j)) {
             m.path = this.findPath(m.pos, m.target) || [];
             m.pi = 0;
             if (!m.path.length) { m.pos = { i: m.target.i + 0.5, j: m.target.j + 0.5 }; return true; }
