@@ -4940,6 +4940,22 @@ export class World {
     }
 
     // Solid obstacles farmers must walk AROUND (buildings, wells, rocks, the board).
+    // Move a free-moving creature (prey, beast, foe) along a heading, refusing ground it cannot stand on.
+    // Tries the heading, then each perpendicular, then stays put — the same shape the farmers' own movers
+    // use. These entities previously wrote their positions unconditionally, so a deer could graze across a
+    // pond and a wolf could chase straight through a barn; and a foe standing in water is what made an
+    // unguarded farmer approach reachable in the first place, so this is the upstream half of that class.
+    // Fences are NOT terrain and are handled by the caller: a beast is turned away by one, a foe bashes
+    // through it. Returns true if it moved.
+    creatureStep(ent, ui, uj, sp) {
+        for (const [vi, vj] of [[ui, uj], [uj, -ui], [-uj, ui]]) {
+            const ni = ent.i + vi * sp, nj = ent.j + vj * sp;
+            if (this.pathBlocked(Math.floor(ni), Math.floor(nj))) continue;
+            ent.i = ni; ent.j = nj; return true;
+        }
+        return false;
+    }
+
     pathBlocked(i, j) {
         const t = this.get(i, j);
         if (t === T.HOUSE || t === T.WELL || t === T.STRUCT || t === T.COOP || t === T.BARN || t === T.ROCK || t === T.WATER || t === T.MILL || t === T.HATCH || t === T.BONES) return true;
@@ -6527,7 +6543,7 @@ export class World {
             a.bolt = Math.max(a.bolt, 0.6);
             const ax = a.i - threat.pos.i, ay = a.j - threat.pos.j, m = Math.hypot(ax, ay) || 1;
             const spd = def.speed * (a.bolt > 0 ? 1 : 0.7);
-            a.i += (ax / m) * spd * dt; a.j += (ay / m) * spd * dt;
+            this.creatureStep(a, ax / m, ay / m, spd * dt);
             if (Math.abs(ax) > 0.05) a.facing = ax < 0 ? -1 : 1;
         } else {                            // GRAZE: amble in a slowly-turning heading, near home + shy of town
             a.turnT -= dt;
@@ -6535,7 +6551,7 @@ export class World {
             if (Math.hypot(a.i - a.home.i, a.j - a.home.j) > 14) a.dir = Math.atan2(a.home.j - a.j, a.home.i - a.i);
             else if (Math.hypot(a.i - CENTER, a.j - CENTER) < def.shy) a.dir = Math.atan2(a.j - CENTER, a.i - CENTER) + (this.rand() - 0.5) * 0.4;   // veer back from the settled heart
             const spd = def.speed * 0.28;
-            a.i += Math.cos(a.dir) * spd * dt; a.j += Math.sin(a.dir) * spd * dt;
+            if (!this.creatureStep(a, Math.cos(a.dir), Math.sin(a.dir), spd * dt)) { a.dir += 2.2; a.turnT = 0.8; }
             if (Math.abs(Math.cos(a.dir)) > 0.05) a.facing = Math.cos(a.dir) < 0 ? -1 : 1;
         }
         a.bolt = Math.max(0, a.bolt - dt);
@@ -6591,7 +6607,16 @@ export class World {
         const def = ENCOUNTER_DEFS[kind];
         const ang = Math.atan2(f.pos.j - CENTER, f.pos.i - CENTER) + (this.rand() - 0.5) * 1.2;   // out of the wild
         const d = 4 + this.rand() * 3;
-        const ei = f.pos.i + Math.cos(ang) * d, ej = f.pos.j + Math.sin(ang) * d;
+        let ei = f.pos.i + Math.cos(ang) * d, ej = f.pos.j + Math.sin(ang) * d;
+        // Come out of the wild onto GROUND. The bearing is a blind ray from the farmer, so it could land a
+        // beast in a pond or a foe on a rooftop, where it then sat out its whole 45s clock — measured at 2
+        // such spawns across 4 towns, one of them in water. Movement is terrain-aware now (creatureStep),
+        // so a bad spawn was the only remaining way onto blocked ground.
+        if (this.pathBlocked(Math.floor(ei), Math.floor(ej))) {
+            const spot = this.nearestOpenTile({ i: ei, j: ej });
+            if (!spot) return;                     // nowhere out there to stand — no encounter this time
+            ei = spot.i + 0.5; ej = spot.j + 0.5;
+        }
         const e = { kind, def, target: f, i: ei, j: ej, home: { i: ei, j: ej }, facing: 1,
                     hp: def.hp, clashTimer: 1, life: 45, done: false, helpWanted: false, helpers: new Set() };
         // #92a: the DM NAMES every raiding foe — a felled "Gruk the Fence-Breaker" makes a far
@@ -7915,8 +7940,14 @@ export class World {
             let sp = e.def.speed * 2.6 * dt;               // ~as fast as a bustling farmer, so chases are real
             const ni = e.i + dx / dist * sp, nj = e.j + dy / dist * sp;
             const onFence = this.tileInFencedPlot(Math.floor(ni), Math.floor(nj));
-            if (beast) { if (!onFence) { e.i = ni; e.j = nj; } }        // a fence turns a BEAST away entirely
-            else { if (onFence) { sp *= 0.4; this.#foeBashFence(e, Math.floor(ni), Math.floor(nj), dt); } e.i += dx / dist * sp; e.j += dy / dist * sp; }   // a FOE breaches — slowly, wrecking the fence
+            const terrain = this.pathBlocked(Math.floor(ni), Math.floor(nj));
+            if (beast) { if (!onFence) this.creatureStep(e, dx / dist, dy / dist, sp); }   // a fence turns a BEAST away entirely
+            else {
+                // a FOE breaches a fence — slowly, wrecking it — but no one wades a pond or walks a barn.
+                // Only bash when the fence is the thing in the way; if it's terrain, veer instead.
+                if (onFence && !terrain) { sp *= 0.4; this.#foeBashFence(e, Math.floor(ni), Math.floor(nj), dt); }
+                this.creatureStep(e, dx / dist, dy / dist, sp);
+            }
         } else {
             e.clashTimer -= dt;
             if (e.clashTimer <= 0) { e.clashTimer = 1.4; this.#resolveClash(e); }
@@ -12820,7 +12851,7 @@ export class Farmer {
             a.done = true; a.hunter = null; this.huntTarget = null; this.state = 'decide';
         } else {
             const ax = a.i - this.pos.i, ay = a.j - this.pos.j, m = Math.hypot(ax, ay) || 1;
-            a.i += (ax / m) * 2.5; a.j += (ay / m) * 2.5; a.bolt = 1.3;   // it darts clear
+            w.creatureStep(a, ax / m, ay / m, 2.5); a.bolt = 1.3;   // it darts clear
             this.say('missed!', '#c0b060');
             this.huntTimer = Math.min(this.huntTimer, 2 + this.p.competitiveness * 5);   // a coward gives up after a miss; the proud press on (#86)
         }

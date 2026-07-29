@@ -107,10 +107,17 @@ const BASELINE = {
     // than walking into it, and only that seed runs a sabotage inside 30 days. The workstation fix (millers
     // were targeting a tile inside their own 3x3 footprint) doesn't show here — no farm reaches a mill in
     // 30 days, which is exactly the blind spot tests/paddock.mjs exists to cover.
-    20260706: '9ab23a61',
-    42: '0cdbe8bf',
-    7: 'c49ddcbf',
-    3: 'ff84421c',
+    // re-pinned 2026-07-29 — CREATURE MOVEMENT, the upstream half of the walk-on-water class. Prey and
+    // foes wrote their positions unconditionally, so a deer grazed across ponds and a wolf chased through
+    // barns; and a foe standing in water is what made an unguarded farmer approach reachable at all. Both
+    // now move through World#creatureStep (heading, then either perpendicular, then stay put), and an
+    // encounter that would spawn on blocked ground is relocated to the nearest open tile. Every run has
+    // prey and encounters, so all four seeds move. Combat verified unweakened across four towns: 89 vs 90
+    // encounters, 1309 vs 1130 damage dealt. same-twice held.
+    20260706: '74e5e14f',
+    42: '2a47baa0',
+    7: 'bc6cf698',
+    3: '2b56f86b',
 };
 
 function boot(seed, culture) {
