@@ -5015,9 +5015,15 @@ export class World {
 
     // Nearest open (walkable) tile to a position, by ring search — an escape target for a
     // farmer stranded on a blocked tile (a pond/scarecrow/facility built underneath them).
+    // Radius 14, not 8. Six callers fall back to the RAW blocked candidate when this returns null — i.e.
+    // they walk something to a tile they already know is impassable — so how hard this looks directly sets
+    // how often that bad outcome happens. Widening costs nothing in the common case, because the spiral
+    // returns the moment it finds ground: a caller standing in the open still exits at r=1. It only does
+    // more work when it's genuinely hemmed in, which is precisely when giving up early is worst. A 15x15
+    // block of water was enough to defeat the old radius.
     nearestOpenTile(pos) {
         const ci = Math.floor(pos.i), cj = Math.floor(pos.j);
-        for (let r = 1; r < 8; r++) {
+        for (let r = 1; r < 14; r++) {
             for (let dj = -r; dj <= r; dj++) for (let di = -r; di <= r; di++) {
                 if (Math.max(Math.abs(di), Math.abs(dj)) !== r) continue;   // ring perimeter only
                 const i = ci + di, j = cj + dj;
