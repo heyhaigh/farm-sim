@@ -16,7 +16,7 @@ whose town is a non-persisting backdrop.
 `window.RYFARMS` is the debug surface: `world`, `speed(n)`, `saveNow()`, `peekSave()`, `restoreSave()`,
 `demoFaceoff()`, `demoRaid()`, `goTo(i,j)`, `wipeSave()`, `undoWipe()`.
 
-## The suite — twelve files, all `node tests/<name>.mjs`
+## The suite — thirteen files, all `node tests/<name>.mjs`
 
 Run them all before pushing. Several protect properties that no amount of care at the call site will.
 
@@ -33,6 +33,7 @@ Run them all before pushing. Several protect properties that no amount of care a
 | `counteroffensive.mjs` | the grievance ledger and the hero-called vote | fast |
 | `ablation.mjs` | memory is load-bearing: same seed, different memory sources ⇒ observably different societies | slow |
 | `raid-adversarial.mjs` | raid resolution under adversarial inputs | slow |
+| `gate-loop.mjs` | the mobile gate never forks a second render loop — a throw leaves a backoff pending, and a context loss+restore before it fires used to start a duplicate that ran forever (61 vs 122 renders/sec) | fast |
 | `gate-layout.mjs` | the **mobile gate's** geometry across real device sizes — the one screen most first-time visitors see, and otherwise unreachable by the suite (it needs a canvas and a matching media query) | fast |
 
 ## Reading a failure

@@ -14,11 +14,12 @@ import { CRT } from './crt.js';
 import { drawText, textWidth } from './pixel.js';
 import { drawTitleArt } from './title-anim.js';
 import { gateLayout, GATE_L1, GATE_L2 } from './gate-layout.js';
+import { createScheduler } from './gate-loop.js';
 
 const out = document.getElementById('tv');
 const game = document.createElement('canvas');
 const ctx = game.getContext('2d');
-const crt = new CRT(out, game);
+let crt = new CRT(out, game);   // `let`: a context loss invalidates it and it must be rebuilt (see below)
 
 let GW = 320, GH = 300;
 
@@ -69,6 +70,14 @@ out.addEventListener('webglcontextlost', (e) => {
     markFailed(new Error('webglcontextlost'));
 }, false);
 out.addEventListener('webglcontextrestored', () => {
+    // Codex #65-1: restoring the CONTEXT does not restore the CRT's shaders, programs, buffer or texture —
+    // those were created against the dead one. Restarting the old instance renders happily at 60fps onto a
+    // BLACK canvas, and because WebGL calls do not throw, markLive() would retire the fallback over it.
+    // Rebuild before recovering. (My earlier check missed this by asserting on class state, not on pixels.)
+    // Logged UNCONDITIONALLY, unlike markFailed's once-only: a rebuild failure is rare, terminal for the
+    // gate, and the only thing that explains a notice that never goes away.
+    try { crt = new CRT(out, game); }
+    catch (err) { console.error('mobile gate: CRT rebuild after context restore failed:', err); markFailed(err); return; }
     contextLost = false;
     schedule(false);   // the loop parked itself on loss; restart it
 }, false);
@@ -76,19 +85,22 @@ out.addEventListener('webglcontextrestored', () => {
 // Scheduling is INSIDE the frame now, not unconditionally at the top: a permanently-failing gate used to
 // retry at full frame rate, which on a phone is a hot battery for nothing.
 //
-// `scheduled` makes "exactly one loop in flight" explicit rather than emergent. Since every frame
-// reschedules itself, any second entry point would fork a permanent duplicate that never merges back.
-// HONESTY: I could not demonstrate that happening — removing this guard and driving two rapid
-// loss→restore cycles held at 60fps, because the loop parks on loss and Chrome fires one restore per
-// loss, so there is exactly one restart. This is cheap insurance on an invariant the recovery paths
-// depend on, NOT a fix for an observed bug.
-let scheduled = false;
-function schedule(failed) {
-    if (scheduled) return;
-    scheduled = true;
-    const go = () => requestAnimationFrame((t) => { scheduled = false; gateFrame(t); });
-    if (failed) setTimeout(go, 1000); else go();
-}
+// `scheduled` keeps exactly ONE loop in flight. Since every frame reschedules itself, a second entry
+// forks a duplicate that never merges back.
+//
+// The sequence that does it (Codex #65-3 — I had guessed at loss→restore→loss→restore, which does NOT
+// reproduce, because the loop parks on loss and the browser fires one restore per loss):
+//
+//     a frame THROWS  ->  schedule(true) leaves a 1s retry pending
+//     context is LOST ->  the loop parks
+//     context RESTORES BEFORE that timeout fires  ->  the restore path starts an immediate loop
+//     the old timeout then fires  ->  a SECOND permanent loop
+//
+// Measured in-browser: 61 renders/sec guarded, 122 unguarded. tests/gate-loop.mjs encodes it.
+// Note the guard makes the restore path a no-op while a retry is pending, so recovery waits out the
+// remaining backoff (<=1s) instead of restarting instantly. That is the intended trade.
+const loop = createScheduler({ raf: requestAnimationFrame.bind(window), delay: setTimeout.bind(window) });
+const schedule = (failed) => loop.schedule(failed);
 
 function gateFrame(t) {
     if (contextLost) return;   // parked — `webglcontextrestored` restarts the loop
@@ -119,4 +131,5 @@ function gateFrame(t) {
         schedule(true);
     }
 }
+loop.onFrame(gateFrame);
 schedule(false);

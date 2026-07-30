@@ -114,7 +114,11 @@ http.createServer(async (req, res) => {
     // its own revision and the release step asserts on it.
     // Railway injects RAILWAY_GIT_COMMIT_SHA; BUILD_REV is the manual override for anywhere that doesn't.
     if (url.pathname === '/api/build') {
-        const rev = process.env.BUILD_REV || process.env.RAILWAY_GIT_COMMIT_SHA || 'unknown';
+        // Codex #65-2: RAILWAY_GIT_COMMIT_SHA FIRST. It is the platform's own record of which commit triggered
+        // this container; BUILD_REV is a value a human typed. Letting the manual one win would allow the
+        // endpoint to echo the expected revision without proving anything about what is actually running —
+        // the exact failure the assertion exists to catch. BUILD_REV is the fallback for non-Railway hosts.
+        const rev = process.env.RAILWAY_GIT_COMMIT_SHA || process.env.BUILD_REV || 'unknown';
         res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
         res.end(JSON.stringify({ rev }));
         return;
