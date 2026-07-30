@@ -13,10 +13,15 @@ relationships, and the drive to build a farm; together they raise a town that gr
 remembers, and finds other towns. The whole thing renders through a CRT shader, with
 no build step — pure ES modules + Canvas 2D + a WebGL post-process.
 
-### ▶ Play the live demo — **[farm-sim-rosy.vercel.app](https://farm-sim-rosy.vercel.app/)**
+### ▶ Play the live demo — **[propagate.heyhaigh.ai](https://propagate.heyhaigh.ai/)**
 
 One click, nothing to install. (Drag to pan · click a farmer for their sheet ·
 **M** for the world map · **ROSTER** to whisper to a farmer.)
+
+> **Working on it?** Start with **[AGENTS.md](AGENTS.md)** — it points at
+> [COMPATIBILITY.md](COMPATIBILITY.md) (rules that keep live players' towns intact),
+> [TESTING.md](TESTING.md) (how to run the eleven test files) and
+> [HOSTING.md](HOSTING.md) (how a change reaches production).
 
 ## SuperMemory, end to end
 
