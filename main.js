@@ -8061,7 +8061,11 @@ function drawStartScreen() {
     // ?play=1 with no ?orc keeps the human default; the menu backdrop is always a calm human town.
     const bootCulture = (bootParams.get('orc') != null || bootParams.get('culture') === 'orc') ? 'orc' : 'human';   // #3.1 ?orc=1 raises a warband
 
-    let resumed = false, quarantined = null, quarantineFailed = false;
+    let resumed = false, quarantined = null;
+    // WHY this session may not persist — a specific reason, not a boolean. One flag drove four different
+    // causes and told the player the same (wrong) story for three of them: that their town "could not be
+    // opened OR moved aside", when in two cases it was never opened and in one we refused on purpose.
+    let noPersistReason = null;
     // Codex #56-3 — the seed the replacement town is founded on. A no-seed boot (?play=1) resolves `latest`,
     // so the unreadable snapshot's seed is NOT the random `worldSeed` this boot generated. Founding on the
     // random one left the preserved town under a seed the player was no longer in, which made
@@ -8092,7 +8096,7 @@ function drawStartScreen() {
         const st = await loadTownState(worldSeed);
         if (!st.ok) {
             console.error('ry-farms: could not inspect the slot before founding — running unsaved');
-            quarantineFailed = true;
+            noPersistReason = 'Storage could not be read, so this session will not be saved — it must not write over a town it cannot see.';
         } else if (st.snap) {
             // Codex #59 — REFUSE, do not wipe. A previous pass had ?fresh retire the occupant through the
             // undoable wipe, which was wrong twice over: a URL parameter is far too weak a thing to destroy a
@@ -8100,7 +8104,7 @@ function drawStartScreen() {
             // opening the same URL again overwrites the only copy of the town retired the first time. The
             // player-facing way to start over is the NEW TOWN hatch, which asks first.
             console.error(`ry-farms: ?fresh refused — seed ${worldSeed} already holds a town (day ${st.snap.day ?? '?'}). Use the NEW TOWN hatch to retire it, or drop ?fresh to resume. Running unsaved.`);
-            quarantineFailed = true;
+            noPersistReason = `This seed already holds a town (day ${st.snap.day ?? '?'}), so this fresh one will not be saved over it. Use the NEW TOWN hatch to retire it, or reload without ?fresh to resume it.`;
         } else foundGen = st.gen;   // observed EMPTY at this generation — a rev-0 claim is legitimate
     }
     if (!wantFresh && !startMode) {
@@ -8111,7 +8115,7 @@ function drawStartScreen() {
         // slot we never managed to look at is how a town gets buried. Fail closed, same as a failed quarantine.
         if (!st.ok) {
             console.error('ry-farms: could not inspect the town slot — running unsaved so nothing is overwritten');
-            quarantineFailed = true;
+            noPersistReason = 'Storage could not be read, so this session will not be saved — it must not write over a town it cannot see.';
         } else if (!saved) {
             foundGen = st.gen;   // observed EMPTY at this generation — that is the pair a rev-0 claim needs
         } else {
@@ -8134,7 +8138,9 @@ function drawStartScreen() {
                 // So on failure this session runs unsaved, deliberately, and says so.
                 // Codex #58 — `stale` lands here too: the slot moved under us, so we have not preserved
                 // anything and must not write. A reload re-observes and does the right thing.
-                quarantineFailed = !q.ok;
+                if (!q.ok) noPersistReason = q.stale
+                    ? 'This town changed while it was being set aside, so this session will not be saved. Reload to pick up whichever town is really there.'
+                    : 'A previous town on this seed could not be opened OR set aside, so this session will not be saved — it must not overwrite it.';
                 if (q.stale) console.error('ry-farms: the town slot changed while preserving it — running unsaved; reload to re-read it');
                 foundSeed = seed;
                 foundGen = q.stale ? null : q.gen;
@@ -8174,12 +8180,11 @@ function drawStartScreen() {
         world.addLog(`A previous town on this seed (day ${quarantined.day ?? '?'}) could not be opened by this version — it has been kept safe, not overwritten.`, '#e8b34a');
         console.warn(`ry-farms: preserved town seed ${quarantined.seed} (day ${quarantined.day}, schema v${quarantined.v}, rev ${quarantined.rev}) at 'unreadable:${quarantined.seed}' — RYFARMS.restoreSave() puts it back`);
     }
-    if (quarantineFailed) {
-        // The unreadable town is STILL in its slot and we could not move it. Refuse to persist rather than
-        // risk overwriting it: an unsaved session is recoverable, a buried town is not.
+    if (noPersistReason) {
+        // Refuse to persist rather than risk overwriting a town we could not read, could not set aside, or
+        // deliberately declined to replace. An unsaved session is recoverable; a buried town is not.
         world._spectator = true;
-        world.addLog(`A previous town on this seed could not be opened OR moved aside, so this session will not be saved — it must not overwrite it.`, '#e07a5a');
-        console.error('ry-farms: quarantine FAILED — running unsaved so the unreadable town is not overwritten. Free up storage and reload.');
+        world.addLog(noPersistReason, '#e07a5a');
     }
 
     // hook tile changes to terrain redraw
