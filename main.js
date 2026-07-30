@@ -274,6 +274,12 @@ let worldMapKeyOpen = false;                        // legend overlay toggle (th
 let worldMapFoundOpen = false;                      // "found a town" culture picker toggle (human / orc)
 let worldMapUiHits = null;                          // { key, found, human, orc } world-map button rects
 const WORLD_BTN = { x: 0, y: 3, w: 0, h: 12 };     // top-bar toggle, positioned in drawUI
+// #adminbooth The director's booth (staged rehearsals) is for recording videos and stress-tests — it was
+// never meant to face players, and it shipped to production visible to everyone (owner caught it on launch
+// day). Gated on ?admin=1 in the URL: no param, no booth — the rows are never drawn, so their hit rects are
+// never registered and the click handlers' `settingsHits.admX &&` guards go inert. The RYFARMS console API
+// keeps its rehearsal hooks; dev tools are already past any UI gate.
+const ADMIN_BOOTH = new URLSearchParams(location.search).has('admin');
 let settingsHits = null;                           // { music, sfx, musicSlider, sfxSlider, portalBtn, admRaid, admVote, close } rects (game px)
 let adminNote = null;                               // #Codex38 P2-5 transient booth feedback { text, until } (ms)
 let settingsDrag = null;                           // 'music' | 'sfx' while dragging a volume slider
@@ -4338,7 +4344,7 @@ function foundNewTown(culture) {
 // Settings menu — New Town + music/SFX volume. Opened by the top-bar gear cog.
 // ---------------------------------------------------------------------------
 function drawSettings() {
-    const PW = Math.min(GW - 24, 240), PH = 184;   // #counteroffensive taller for the STAGE A WAR PARTY row
+    const PW = Math.min(GW - 24, 240), PH = ADMIN_BOOTH ? 184 : 118;   // the booth rows only exist under ?admin=1
     const PX = Math.floor((GW - PW) / 2), PY = Math.floor((GH - PH) / 2) - 6;
     ctx.fillStyle = 'rgba(6,7,11,0.72)'; ctx.fillRect(0, 18, GW, GH - 18);
     uiPanel(PX, PY, PW, PH);
@@ -4385,23 +4391,28 @@ function drawSettings() {
 
     // #admin THE DIRECTOR'S BOOTH — stage a ghost rehearsal (raid / the vote) for videos and stress-tests.
     // Nothing a rehearsal does is recorded (no chronicle, no roles, no SuperMemory, stripped from saves).
-    const rh = world.rehearsal;
-    drawText(ctx, 'ADMIN - REHEARSALS (GHOST RUNS, NOTHING RECORDED)', IX, PY + 98, '#8a6fae');
-    const admRow = (y, key, live, liveLabel, idleLabel) => {
-        const b = { x: IX, y, w: PW - 16, h: 14 };
-        ctx.fillStyle = live ? '#2e2410' : '#141824'; ctx.fillRect(b.x, b.y, b.w, b.h);
-        ctx.strokeStyle = live ? '#e0b040' : '#5a6f9c'; ctx.strokeRect(b.x + 0.5, b.y + 0.5, b.w - 1, b.h - 1);
-        const label = live ? liveLabel : idleLabel;
-        drawText(ctx, label, b.x + Math.floor((b.w - textWidth(label)) / 2), b.y + 4, live ? '#f0c860' : '#9ab8e8');
-        settingsHits[key] = b;
-    };
-    admRow(PY + 108, 'admRaid', rh && rh.kind === 'raid', 'RAID REHEARSAL LIVE - CANCEL', 'STAGE A RAID');
-    admRow(PY + 126, 'admVote', rh && rh.kind === 'election', 'VOTE REHEARSAL LIVE - CANCEL', 'STAGE THE VOTE');
-    admRow(PY + 144, 'admSortie', rh && rh.kind === 'sortie', 'WAR PARTY LIVE - CANCEL', 'STAGE A WAR PARTY');   // #counteroffensive
+    // #adminbooth ?admin=1 only — see the flag's comment at module scope.
+    if (ADMIN_BOOTH) {
+        const rh = world.rehearsal;
+        drawText(ctx, 'ADMIN - REHEARSALS (GHOST RUNS, NOTHING RECORDED)', IX, PY + 98, '#8a6fae');
+        const admRow = (y, key, live, liveLabel, idleLabel) => {
+            const b = { x: IX, y, w: PW - 16, h: 14 };
+            ctx.fillStyle = live ? '#2e2410' : '#141824'; ctx.fillRect(b.x, b.y, b.w, b.h);
+            ctx.strokeStyle = live ? '#e0b040' : '#5a6f9c'; ctx.strokeRect(b.x + 0.5, b.y + 0.5, b.w - 1, b.h - 1);
+            const label = live ? liveLabel : idleLabel;
+            drawText(ctx, label, b.x + Math.floor((b.w - textWidth(label)) / 2), b.y + 4, live ? '#f0c860' : '#9ab8e8');
+            settingsHits[key] = b;
+        };
+        admRow(PY + 108, 'admRaid', rh && rh.kind === 'raid', 'RAID REHEARSAL LIVE - CANCEL', 'STAGE A RAID');
+        admRow(PY + 126, 'admVote', rh && rh.kind === 'election', 'VOTE REHEARSAL LIVE - CANCEL', 'STAGE THE VOTE');
+        admRow(PY + 144, 'admSortie', rh && rh.kind === 'sortie', 'WAR PARTY LIVE - CANCEL', 'STAGE A WAR PARTY');   // #counteroffensive
 
-    // #Codex38 P2-5: the booth REFUSES to stage over a real raid — say so, instead of silently closing
-    if (adminNote && performance.now() < adminNote.until) drawText(ctx, adminNote.text, IX, PY + 160, '#e0a850');
-    else drawText(ctx, 'ESC OR CLICK OUTSIDE TO CLOSE', IX, PY + 164, '#4a4f5c');
+        // #Codex38 P2-5: the booth REFUSES to stage over a real raid — say so, instead of silently closing
+        if (adminNote && performance.now() < adminNote.until) drawText(ctx, adminNote.text, IX, PY + 160, '#e0a850');
+        else drawText(ctx, 'ESC OR CLICK OUTSIDE TO CLOSE', IX, PY + 164, '#4a4f5c');
+    } else {
+        drawText(ctx, 'ESC OR CLICK OUTSIDE TO CLOSE', IX, PY + 98, '#4a4f5c');
+    }
     settingsHits.panel = { x: PX, y: PY, w: PW, h: PH };
 }
 
