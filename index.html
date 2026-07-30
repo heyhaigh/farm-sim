@@ -91,6 +91,10 @@
            keep the base 100vh, which is exactly the old behaviour. */
         html.entry-mobile #tv { pointer-events: none; touch-action: none; height: 100svh; }
 
+        /* TABLET: the browser must not hijack touches on the canvas (scroll/zoom gestures fire
+           pointercancel mid-pan without this) — the game owns every finger on it */
+        html.entry-tablet #tv { touch-action: none; }
+
         /* TABLET, PORTRAIT: a rotate prompt. Unlike the phone gate this is not a wall — landscape plays —
            so unlike `entry-mobile` the orientation half of the condition is deliberately LIVE: rotating the
            device shows/hides it with no JS. Sticky WHO you are, live HOW you're holding it. */

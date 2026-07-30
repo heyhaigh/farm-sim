@@ -294,6 +294,11 @@ const BOARD_RECT = { x: 0, y: 0, w: 0, h: 0 };
 
 const cam = { x: 0, y: 0 };
 const mouse = { x: -1, y: -1, downX: 0, downY: 0, dragging: false, panStart: null };
+// #touch Long-press = the hover that touch doesn't have: hold a finger still over a farmer or building and
+// the same tooltip the mouse gets on hover appears (the held point simply stays in mouse.x/y, which is all
+// hover ever reads). The release of a long-press is NOT a click — it was an inspect gesture.
+let touchHoldTimer = 0, touchHoldActive = false;
+const TOUCH_HOLD_MS = 450;
 
 const spriteCache = new Map();   // farmer -> frames
 const houseCache = new Map();    // roofColor -> canvas
@@ -6813,6 +6818,13 @@ out.addEventListener('pointerdown', (e) => {
     const onUI = !rosterOpen && !chronOpen && (inRect(p, MINIMAP) || (selected && inRect(p, SHEET_RECT)) || (boardOpen && inRect(p, BOARD_RECT)) || onChat);
     mouse.panStart = (rosterOpen || chronOpen || settingsOpen || worldMapOpen || onUI) ? null : { x: p.x, y: p.y, camX: cam.x, camY: cam.y };   // #Codex35-3: the world map is a full-screen modal too — a drag on its picker must not pan the hidden town camera
     mouse.dragging = false;
+    // #touch a finger has no prior hover position — seed it, so the frame's hover logic sees the held point;
+    // then arm the long-press (world gestures only: panStart is null when the press began on a panel)
+    if (e.pointerType === 'touch') {
+        mouse.x = p.x; mouse.y = p.y;
+        clearTimeout(touchHoldTimer); touchHoldActive = false;
+        if (mouse.panStart) touchHoldTimer = setTimeout(() => { touchHoldActive = true; }, TOUCH_HOLD_MS);
+    }
     try { out.setPointerCapture(e.pointerId); } catch { /* stale/synthetic pointer id — capture is best-effort */ }
 });
 
@@ -6826,7 +6838,7 @@ out.addEventListener('pointermove', (e) => {
     }
     if (mouse.panStart) {
         const dx = p.x - mouse.panStart.x, dy = p.y - mouse.panStart.y;
-        if (Math.abs(dx) + Math.abs(dy) > 4) { mouse.dragging = true; followMode = false; followTarget = null; raidFocus = null; }   // panning breaks follow (incl. the raid lock)
+        if (Math.abs(dx) + Math.abs(dy) > 4) { mouse.dragging = true; followMode = false; followTarget = null; raidFocus = null; clearTimeout(touchHoldTimer); touchHoldActive = false; }   // panning breaks follow (incl. the raid lock) and cancels a pending long-press
         if (mouse.dragging) {
             cam.x = mouse.panStart.camX + dx;
             cam.y = mouse.panStart.camY + dy;
@@ -6839,11 +6851,14 @@ function inRect(p, r) { return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p
 out.addEventListener('pointerup', (e) => {
     const wasDrag = mouse.dragging;
     const wasSlider = settingsDrag;
+    const wasHold = touchHoldActive;   // #touch captured before reset — the late cleanup listener parks the pointer
+    clearTimeout(touchHoldTimer); touchHoldActive = false;
     settingsDrag = null;
     mouse.panStart = null;
     mouse.dragging = false;
     if (wasSlider) return;   // finished dragging a volume slider — consume the release
     if (wasDrag || !booted) return;
+    if (wasHold) return;     // #touch a long-press was an INSPECT (name shown while held), not a click
     const p = gamePoint(e);
 
     // #START the launch menu owns every click while it's up: a button acts, anything else is swallowed
@@ -7072,6 +7087,20 @@ out.addEventListener('pointerup', (e) => {
 });
 
 // wheel scrolls whichever panel is open (roster or the detail card)
+// #touch runs AFTER the main pointerup (registration order): once a finger lifts there is no cursor, so
+// park the pointer offscreen — otherwise the last touch point keeps a phantom hover tooltip and the pixel
+// hand painted on screen. Mouse users are untouched (their position keeps flowing from pointermove).
+out.addEventListener('pointerup', (e) => {
+    if (e.pointerType === 'touch') { mouse.x = -1; mouse.y = -1; }
+});
+// #touch pointercancel was previously UNHANDLED: the browser stealing a gesture (system edge swipe,
+// notification pull) would strand panStart mid-drag and the next finger would teleport the camera.
+out.addEventListener('pointercancel', (e) => {
+    clearTimeout(touchHoldTimer); touchHoldActive = false;
+    settingsDrag = null; mouse.panStart = null; mouse.dragging = false;
+    if (e.pointerType === 'touch') { mouse.x = -1; mouse.y = -1; }
+});
+
 out.addEventListener('wheel', (e) => {
     if (rosterOpen) {
         e.preventDefault();
