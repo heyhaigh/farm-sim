@@ -8046,6 +8046,11 @@ function mobileGate() {
             ctx.imageSmoothingEnabled = false;
         }
     }
+    // The game registers its own resize handler at module scope, and it pins GH to 300 — on a phone that
+    // fights gateResize for the same two globals. Today gateResize happens to win because it is registered
+    // second; that is registration order, not a guarantee. Drop the game's handler outright so the gate is
+    // the single owner of GW/GH while it is up.
+    window.removeEventListener('resize', resize);
     window.addEventListener('resize', gateResize);
     window.addEventListener('orientationchange', gateResize);
     gateResize();
