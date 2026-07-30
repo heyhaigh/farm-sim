@@ -17,7 +17,7 @@ const FRAME_W = 256, FRAME_H = 113;   // one title-sheet frame (mirrors TITLE_SH
 const MARGIN = 16;                    // breathing room the composition must leave top and bottom
 
 export const GATE_L1 = 'DESKTOP ONLY';
-export const GATE_L2 = 'TRY ON A DIFFERENT DEVICE';
+export const GATE_L2 = 'LOAD ON A DIFFERENT DEVICE';
 
 const even = (v) => Math.round(v / 2) * 2;
 
@@ -33,7 +33,12 @@ export function gateLayout(outW, outH) {
     // Largest integer text scale that still fits the width. The 3x5 font at scale 1 is three source pixels
     // tall; the headline takes the biggest step it can, the support line is deliberately the quiet one.
     const fit = (str, want) => { let sc = want; while (sc > 1 && textWidth(str, sc) > GW - 24) sc--; return sc; };
-    const s1 = fit(GATE_L1, 3), s2 = fit(GATE_L2, 1);
+    const s1 = fit(GATE_L1, 3);
+    // The support line runs at 1.2 by owner request — the one deliberate exception to integer-only scaling.
+    // Its glyph pixels land on fractional coordinates and take canvas AA; under the CRT that reads as a
+    // slight phosphor glow rather than a blur, and the line is meant to be the quiet one. Width-guarded
+    // rather than fit()-stepped, since fit decrements in integers.
+    const s2 = textWidth(GATE_L2, 1.2) <= GW - 24 ? 1.2 : 1;
     const d1 = 28, d2 = d1 + s1 * 5 + 12;      // gaps measured from the art's bottom edge
     const below = d2 + s2 * 5;
 
@@ -44,8 +49,10 @@ export function gateLayout(outW, outH) {
     while (logoScale > 1 && FRAME_H * logoScale + below > GH - MARGIN) logoScale--;
 
     const maxW = FRAME_W * logoScale, titleH = FRAME_H * logoScale;
-    // Centre the WHOLE composition: the block's height varies with the logo scale, so a fixed fraction of
-    // the height lands correctly in one aspect and shoves the copy against the edge in the other.
-    const titleTop = Math.round((GH - (titleH + below)) / 2);
+    // Centre the WHOLE composition — then lift it to 45% of the remaining space rather than 50%. Optical
+    // centring: even with svh sizing the browser chrome mass sits at the bottom of a phone screen, and a
+    // block at true centre reads as low (seen on a real iPhone). The block's height varies with the logo
+    // scale, which is why this is a fraction of the REMAINDER, not of the height.
+    const titleTop = Math.round((GH - (titleH + below)) * 0.45);
     return { GW, GH, logoScale, maxW, titleH, titleTop, below, s1, s2, d1, d2 };
 }

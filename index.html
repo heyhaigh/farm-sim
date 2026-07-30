@@ -85,7 +85,11 @@
            the plain-text notice over a live town. Which experience a visitor gets is decided once, at load,
            in one place. This also retires the old rule that the query stay character-identical in three
            places — it now lives only in the entry chooser and main.js's defence-in-depth guard. */
-        html.entry-mobile #tv { pointer-events: none; touch-action: none; }
+        /* 100svh, not the inherited 100vh: on iOS, vh is the LARGE viewport (browser chrome retracted), so
+           the canvas extended behind the bottom bar and a mathematically-centred composition sat visibly low.
+           svh is the small viewport — always fully on screen. Browsers without svh ignore the declaration and
+           keep the base 100vh, which is exactly the old behaviour. */
+        html.entry-mobile #tv { pointer-events: none; touch-action: none; height: 100svh; }
         /* The plain-text block is only a fallback for "the gate never rendered". The inline script below
            arms it on a timer; the canvas gate normally sets `gate-live` long before that. */
         html.entry-mobile.gate-fallback:not(.gate-live) #mobile-gate { display: flex; }
