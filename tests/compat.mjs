@@ -42,12 +42,12 @@ function fnv(s) {
 // sites can undo. If this hash moves, either you appended (re-pin it) or you broke compatibility (don't).
 import { World } from '../farm.js';
 import { obstacleTier, forageIngredient, treeVariant, treeIsFruit, treeStageAt, FORAGE_INGREDIENTS,
-         CRAFTABLES, HOUSE_TIERS, FACILITY_DEFS, PROJECT_DEFS, T, GRID } from '../farm.js';
+         CRAFTABLES, HOUSE_TIERS, FACILITY_DEFS, PROJECT_DEFS, T, GRID, CENTER } from '../farm.js';
 
 // Pinned 2026-07-29 when this section was added. Re-pin DELIBERATELY: a terrain hash moving means existing
 // towns' frontier terrain or per-tile attributes changed, and a tables hash moving means a save-referenced
 // list was reordered. Both are compatibility events, not routine re-baselines.
-const TERRAIN_BASELINE = { 20260706: 'edfcf64a', 42: 'c62da43d', 7: '48d1421d', 3: 'ba0fa190' };
+const TERRAIN_BASELINE = { 20260706: '9c42ab2c', 42: 'e2d623d6', 7: '5ed23664', 3: '5ac66f6f' };
 const TABLES_BASELINE = '67414731';
 
 function fnvBytes(arr) {
@@ -66,11 +66,29 @@ const TREE_SAMPLE_DAYS = [1, 6, 14];
 function terrainDigest(seed) {
     const w = new World(seed);                       // construction only — generation, no simulation
     const parts = ['tiles:' + fnvBytes(w.tiles)];
-    // FRONTIER: reading a tile outside the valley materialises its chunk from #genTile. A wide lattice with a
-    // prime-ish stride so it lands in many different chunks rather than sampling one repeatedly.
-    const frontier = [];
-    for (let i = -180; i <= 280; i += 41) for (let j = -180; j <= 280; j += 41) frontier.push(w.get(i, j));
-    parts.push('frontier:' + fnvBytes(frontier));
+    // FRONTIER — EXHAUSTIVE, not sampled. Reading a tile outside the valley materialises its chunk from
+    // #genTile, the one generator whose output is NOT frozen into a save: change it and a player's next
+    // expedition crosses a seam between old-formula and new-formula ground.
+    //
+    // Two sparse versions of this failed a mutation test before this one, and the reason is worth keeping.
+    // A wide lattice caught salt and threshold changes but stepped clean over `r > 68` -> `r > 64`, which
+    // moves terrain only in a ~4-tile ring; adding a dense radial rim sample ALSO missed it. The affected
+    // set is the INTERSECTION of a thin ring and a rare feature — the lake branch fires above a 0.80 noise
+    // threshold — so the odds of any sampled point sitting in both are negligible. No sampling strategy
+    // fixes that; only covering every tile does. So: every tile in a band around the valley, excluding the
+    // valley itself (already hashed above as `tiles`).
+    //
+    // The band is +/-90 rather than a tighter ring because coverage here is a numbers game: a 0.001 nudge to
+    // the lake-SHORE threshold moves only the tiles whose noise sits in that 0.001 slice, and a ~17k-tile
+    // band expected roughly zero of them (it was missed; the same 0.001 change to the WATER threshold was
+    // caught, so at that granularity a narrower band is down to luck). ~72k tiles makes the thin slices
+    // land. Still 0.4s, memoised by chunk — cheap enough that there is no reason to be clever.
+    const band = [];
+    for (let i = -90; i < GRID + 90; i++) for (let j = -90; j < GRID + 90; j++) {
+        if (i >= 0 && i < GRID && j >= 0 && j < GRID) continue;   // the valley is persisted, not generated
+        band.push(w.get(i, j));
+    }
+    parts.push('frontier:' + fnvBytes(band));
     // PER-TILE ATTRIBUTES — re-derived live on every frame and every work tick, never stored, so a change
     // here rewrites existing towns: rock size and ore yield, forest age, which wild tile holds which herb.
     const attrs = [];
