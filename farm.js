@@ -226,7 +226,7 @@ const FENCE_POST_WOOD = 2; // wood per fence post (one per border tile) — must
 // (cottage) is the lifetime goal — a full YEAR of graft. Each tier gates on lifetime crops
 // (harvested, NOT spent), a personal LEVEL (minLevel), and a real pile of timber + stone, so a
 // farmer can't rush a farmhouse in a week. Livestock rides on the cottage (see FACILITY_MIN_LEVEL).
-const HOUSE_TIERS = [
+export const HOUSE_TIERS = [
     null,
     { wood: 10, ore: 2, harvested: 0, minLevel: 0, name: 'tipi', buildSteps: 30, footprint: 3 },        // L1 — 3x3, ~1/4 day
     { wood: 30, ore: 12, harvested: 300, minLevel: 9, name: 'yurt', buildSteps: 62, footprint: 5 },     // L2 — 5x5, ~1/2 day
@@ -631,7 +631,7 @@ function tileNoise(i, j, scale, seed = 0) {
 // smaller facilities the extra tiles read as yard. Paddock ground doesn't count against the cropland cap
 // (see cropAcreage), so the bigger cell costs a farm nothing it was saving for fields.
 const PADDOCK_CELL = 9;
-const FACILITY_DEFS = {
+export const FACILITY_DEFS = {
     pond: { label: 'water garden', w: PADDOCK_CELL, h: PADDOCK_CELL, produce: 'lily & fish' },
     // #pens (player direction): livestock get REAL, roomier enclosures — a fenced run/pen/fold drawn around
     // the region, animals contained inside (see #tickProducers), crops excluded (see #rebuildFields).
@@ -2821,7 +2821,25 @@ export class World {
     // derived at save time, and in-flight transient state (paths, walked deals, board
     // posts, active threats/prey, the merchant's visit, the treasure) intentionally
     // resets — farmers wake on 'decide' and the town re-poses its own errands.
+    // SAVE_VERSION is a FLOOR, not an equality gate, and that distinction is load-bearing now that the game
+    // is hosted and players have towns they are attached to. It used to be checked with `!==`, which cannot
+    // express "older but readable": bumping it rejected 100% of existing saves, and the boot path swallows a
+    // fromSave throw and founds a fresh town, so the bump read as "silently delete everyone's town".
+    //
+    // Raising it now means: add the upgrade step to MIGRATIONS keyed by the version it upgrades FROM, then
+    // bump. Every step mutates the raw snapshot in place and must be idempotent and total — it runs before
+    // #restoreFrom, on data written by a build that no longer exists, so it cannot assume any field it did
+    // not itself write. A missing step is a hard error rather than a silent reset, because quietly loading a
+    // half-migrated town is worse than refusing.
+    //
+    // Prefer NOT to bump at all. The `yardV` flag below is the cheaper pattern for most changes: an additive
+    // marker whose ABSENCE identifies old saves, plus an idempotent repair pass, grandfathering what exists
+    // ("old farms keep the layout they grew"). Bump SAVE_VERSION only when a field's MEANING changes such
+    // that absence cannot express it.
     static SAVE_VERSION = 1;
+    static MIGRATIONS = {
+        // 1: (d) => { ...upgrade a v1 snapshot to v2 in place... },
+    };
 
     serialize() {
         const plotIdx = new Map(this.plots.map((p, i) => [p, i]));
@@ -2986,8 +3004,26 @@ export class World {
         return structuredClone(snap);
     }
 
+    // Upgrade a raw snapshot to the current version IN PLACE, then hydrate. Split out from fromSave so a
+    // migration chain can be exercised by the harness without building a World.
+    static migrate(data) {
+        const from = data.v;
+        if (typeof from !== 'number' || !Number.isFinite(from)) throw new Error(`save has no usable schema version (v=${from})`);
+        // A snapshot from a NEWER build is the one case we genuinely cannot read: we have no idea what changed.
+        // Refuse rather than guess — the caller preserves it so a later build can still open it.
+        if (from > World.SAVE_VERSION) throw new Error(`save schema v${from} is newer than this build (v${World.SAVE_VERSION})`);
+        for (let v = from; v < World.SAVE_VERSION; v++) {
+            const step = World.MIGRATIONS[v];
+            if (typeof step !== 'function') throw new Error(`no migration from save schema v${v} to v${v + 1}`);
+            step(data);
+            data.v = v + 1;
+        }
+        return data;
+    }
+
     static fromSave(data) {
-        if (!data || data.v !== World.SAVE_VERSION) throw new Error(`save schema v${data && data.v} (expected v${World.SAVE_VERSION})`);
+        if (!data) throw new Error('no save data');
+        World.migrate(data);
         const w = new World(data.seed);
         w.#restoreFrom(data);
         return w;
@@ -8539,7 +8575,7 @@ const GOAL_CREEDS = {
 // hand-watering). Farmers haul the materials together, then carve together.
 // `townLvl` is the town-level rung each build unlocks at (see World.townLevel) — the town must
 // grow (silo donations) before its settlers can raise these, so a level-1 ghost town has only a well.
-const PROJECT_DEFS = [
+export const PROJECT_DEFS = [
     // Ordered build queue (strict projectIndex order). The guardian chain is interleaved so the head
     // arrives early (town L2) and its upgrades follow at L4 / L6, with harvest + carver-level gates
     // lowered to match those tiers so they're actually reachable there.
