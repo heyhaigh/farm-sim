@@ -6565,7 +6565,15 @@ function drawFaceoff() {
 
     // ===== BUSTS ON TOP (top of the z-order) — near full-height, BOTTOM-anchored so they overflow under the banner
     // (which clips them → NO gap at the bottom) while the top rises into the header (the raider's hair over the text).
-    const PHt = GH - 4, bustCy = cy + 4;
+    // Drawn 10% OVER the canvas height: the faces were sitting too far below the title plate, because two of the
+    // three portraits carry ~24% empty space above the head (human-farmer 317px of 1300, orc-raider 293px) — so a
+    // full-height draw still lands the face low. The extra 10% pushes the heads up to meet the header.
+    // bustCy is then derived from the BOTTOM rather than the centre, which is what the paragraph above always
+    // claimed: the bottom edge stays 2px under the canvas, so the banner keeps clipping it and no chin, tusk or
+    // beard is lost, and the whole overflow is spent upward into the header where that empty padding lives. Derived
+    // rather than a magic offset so any future change to the 10% keeps the bottom bleed correct for free.
+    const PHt = Math.round((GH - 4) * 1.10);
+    const bustCy = (GH + 2) - Math.round(PHt / 2);
     drawFaceoffBust(defImg, defReady, true, cx - gap, bustCy, PHt, -1, -slide);          // defender, LEFT, FLIPPED → faces right/inward
     drawFaceoffBust(raiderImg, raiderReady, false, cx + gap, bustCy, PHt, +1, +slide);   // raider, RIGHT, faces left/inward
 
