@@ -13,6 +13,23 @@ const DB_NAME = 'ryfarms';
 const DB_VER = 1;
 const STORE = 'towns';
 
+// Ask the browser to exempt this origin from storage eviction. IndexedDB already survives reloads, tab
+// closes and browser restarts — it is not session storage — but it is still EVICTABLE: under storage
+// pressure, and notably under Safari's policy of clearing script-writable storage for sites without enough
+// user engagement, a town can vanish through no action of the player's. A granted persist() makes the origin
+// exempt on Chromium and counts as an engagement signal elsewhere. Best-effort and fire-and-forget: the
+// answer changes nothing about how we save, so nothing waits on it and a refusal is not an error.
+// This is a mitigation, NOT a guarantee — the only real safety net for a town someone cares about is an
+// exported copy, because no browser flag survives the player clearing site data or switching device.
+let persistAsked = false;
+export function requestPersistentStorage() {
+    if (persistAsked || typeof navigator === 'undefined' || !navigator.storage?.persist) return;
+    persistAsked = true;
+    navigator.storage.persist()
+        .then(granted => console.log(`ry-farms: persistent storage ${granted ? 'GRANTED — towns are exempt from eviction' : 'not granted (towns may be evicted under storage pressure; export to be safe)'}`))
+        .catch(() => {});
+}
+
 let dbPromise = null;
 function openDb() {
     if (dbPromise) return dbPromise;
@@ -71,6 +88,71 @@ export async function saveTown(world) {
         return data.day;
     } catch (err) {
         console.warn('ry-farms: save failed (continuing unsaved)', err);
+        return null;
+    }
+}
+
+// A snapshot this build cannot hydrate is MOVED ASIDE, never overwritten. Two reasons, and the second one
+// is subtler than it looks:
+//
+//  1. It may still be readable. A save from a newer build, or one that trips a bug this build has and the
+//     next one fixes, is not garbage — it is the player's town. The old boot path logged a console warning
+//     and founded a fresh town on the same seed, so the first autosave buried a town someone had played for
+//     days. Keeping it costs a few hundred KB and is the difference between "we'll fix it" and "it's gone".
+//
+//  2. It unblocks saving. `saveTown` is a compare-and-set against the STORED snapshot's `_rev`, and it is
+//     right to refuse a write from behind it — that guard is what stops a stale tab clobbering a newer town.
+//     But a freshly founded world has no rev, so founding over a rev-47 snapshot meant every autosave for
+//     the rest of the session was refused with only a console warning: the player was dropped into day 1 AND
+//     could not save. Vacating the slot fixes that without weakening the CAS.
+//
+// One quarantine per seed, overwritten if it happens again (same one-deep discipline as the wipe backup).
+// Returns the quarantine record, or null if there was nothing to move.
+export async function quarantineTown(seed, reason) {
+    try {
+        const db = await openDb();
+        return await new Promise((resolve, reject) => {
+            const tx = db.transaction(STORE, 'readwrite');
+            const store = tx.objectStore(STORE);
+            let rec = null;
+            const g = store.get('town:' + seed);
+            g.onsuccess = () => {
+                const snap = g.result;
+                if (!snap) return;                      // nothing stored — nothing to preserve
+                rec = { seed, snap, reason: String(reason || 'unreadable'), at: Date.now(), v: snap.v ?? null, day: snap.day ?? null };
+                store.put(rec, 'unreadable:' + seed);
+                store.delete('town:' + seed);           // vacate the slot so the new session can save
+            };
+            g.onerror = () => reject(g.error);
+            tx.oncomplete = () => resolve(rec);
+            tx.onerror = () => reject(tx.error);
+            tx.onabort = () => reject(tx.error || new Error('quarantine txn aborted'));
+        });
+    } catch (err) {
+        console.warn('ry-farms: could not quarantine the unreadable save', err);
+        return null;
+    }
+}
+
+// Is there a quarantined town for this seed? (Metadata only — the caller decides whether to offer recovery.)
+export async function peekQuarantined(seed) {
+    try {
+        const rec = await idbReq('readonly', s => s.get('unreadable:' + seed));
+        return rec ? { seed: rec.seed, reason: rec.reason, at: rec.at, v: rec.v, day: rec.day } : null;
+    } catch { return null; }
+}
+
+// Put a quarantined snapshot back in the live slot, so a build that CAN read it opens the real town.
+// Deliberately manual: it overwrites whatever has been played since, so only ever call it on an explicit ask.
+export async function restoreQuarantined(seed) {
+    try {
+        const rec = await idbReq('readonly', s => s.get('unreadable:' + seed));
+        if (!rec || !rec.snap) return null;
+        await idbReq('readwrite', s => s.put(rec.snap, 'town:' + seed));
+        await idbReq('readwrite', s => s.delete('unreadable:' + seed));
+        return rec.snap.day ?? true;
+    } catch (err) {
+        console.warn('ry-farms: restore of the quarantined save failed', err);
         return null;
     }
 }

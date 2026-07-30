@@ -12,7 +12,7 @@ import {
     fillDiamond, strokeDiamond,
 } from './pixel.js';
 import { CRT } from './crt.js';
-import { saveTown, loadTown, wipeTown, undoWipe, loadWorldIndex, registerTownInWorld, saveWorldIndex, updateWorldIndex } from './save.js';
+import { saveTown, loadTown, wipeTown, undoWipe, loadWorldIndex, registerTownInWorld, saveWorldIndex, updateWorldIndex, quarantineTown, peekQuarantined, restoreQuarantined, requestPersistentStorage } from './save.js';
 import { computeLayout, detectEncounters, encounterLine, townPos, townReach, townTint } from './worldmap.js';
 import { enrichStories } from './dm.js';
 import { requestCongregation } from './congregation.js';
@@ -8072,12 +8072,20 @@ function drawStartScreen() {
     // lineage array itself, not memorySource. Empty when no store answered at all.
     lineagePool = Array.isArray(result.lineage) ? result.lineage : [];
 
-    let resumed = false;
+    let resumed = false, quarantined = null;
     if (!wantFresh) {
         const saved = await loadTown(urlSeed != null && urlSeed !== '' ? worldSeed : undefined);
         if (saved) {
             try { world = World.fromSave(saved); resumed = true; }
-            catch (err) { console.warn('ry-farms: save unreadable — founding fresh', err); world = null; }
+            catch (err) {
+                // A save this build cannot read is PRESERVED, not buried. Founding a fresh town over it used
+                // to destroy a played town on the next autosave — and, because saveTown is a compare-and-set
+                // against the stored `_rev`, the fresh session could not save either. Moving it aside keeps
+                // the town for a build that can open it AND vacates the slot so this session persists.
+                console.warn('ry-farms: save unreadable — preserving it and founding fresh', err);
+                quarantined = await quarantineTown(saved.seed ?? worldSeed, err?.message);
+                world = null;
+            }
         }
     }
     if (!world) world = new World(worldSeed, bootCulture);
@@ -8085,6 +8093,15 @@ function drawStartScreen() {
     // autosave, no SuperMemory writeback, no world-index entry, no cross-town raid ambush. Browsing
     // the start screen must leave zero trace (no save slots littered, no junk fed to the memory store).
     if (startMode) world._spectator = true;
+    // Only a town that actually persists is worth asking the browser to protect. Doing this on the start
+    // screen's throwaway backdrop would spend the one permission prompt on a town nobody keeps.
+    if (!world._spectator) requestPersistentStorage();
+    // Say it in the town's own log rather than only the console: a player whose town could not be opened
+    // should learn that it was KEPT, not that nothing happened.
+    if (quarantined) {
+        world.addLog(`A previous town on this seed (day ${quarantined.day ?? '?'}) could not be opened by this version — it has been kept safe, not overwritten.`, '#e8b34a');
+        console.warn(`ry-farms: preserved town seed ${quarantined.seed} (day ${quarantined.day}, schema v${quarantined.v}) at 'unreadable:${quarantined.seed}' — RYFARMS.restoreSave() puts it back`);
+    }
 
     // hook tile changes to terrain redraw
     const origSet = world.set.bind(world);
@@ -8298,6 +8315,15 @@ function drawStartScreen() {
         buildingUnder: (x, y) => buildingUnder(x ?? mouse.x, y ?? mouse.y),
         resumed,                                             // did this boot hydrate a save?
         saveNow: () => saveTown(world),                      // force an autosave (returns the saved day)
+        // A town this build could not open is preserved at 'unreadable:<seed>' rather than overwritten.
+        // peekSave() reports whether one is waiting; restoreSave() puts it back in the live slot — which
+        // OVERWRITES whatever has been played since, so it is deliberately manual and never automatic.
+        peekSave: (seed = world.seed) => peekQuarantined(seed),
+        restoreSave: async (seed = world.seed) => {
+            const day = await restoreQuarantined(seed);
+            console.log(day ? `restored the preserved town (day ${day}) — reload to open it` : 'no preserved town for this seed');
+            return day;
+        },
         wipeSave: () => { world._retired = true; return wipeTown(world.seed); },   // retire this town's slot to backup (no reload; late saves refused)
         undoWipe: () => undoWipe().then(seed => {            // resurrect the last wiped town + resume it
             if (seed == null) { console.log('no wiped town to restore'); return null; }
