@@ -422,8 +422,14 @@ const TREE_SETS = (() => {
 // farmer is chopping it (the "surprise reveal"). Winter keeps the static snow trees below. This sheet has
 // no ground shadow (accepted tradeoff for the animation). Grid = 9 cols x 13 frames of 64x80: 3 tree
 // types (green / apple / pine) x 3 sizes (large=mature / med=young / small=sapling).
+// #firstframe LOAD PRIORITY. Every image below is requested at module scope, so the browser starts all 176
+// together and the tail queues behind the head — which is why a 2KB sprite could take 2.1s on a cold visit.
+// `fetchPriority` does not change WHAT loads, it changes the order the connection serves them: the art the
+// first frame is blocked on goes first, and the heavy things nobody can see yet get out of its way. The three
+// portraits alone are 592KB — 29% of the cold payload — for art that only appears on a raid faceoff.
+const PRIO = (img, p) => { try { img.fetchPriority = p; } catch { /* older engines ignore it */ } return img; };
 const treeAnimSheet = new Image(); let treeAnimReady = false; treeAnimSheet.onload = () => { treeAnimReady = true; }; treeAnimSheet.onerror = () => {};
-treeAnimSheet.src = './assets/craftpix-net-654184-main-characters-home-free-top-down-pixel-art-asset/PNG/Trees_animation.png';
+PRIO(treeAnimSheet, 'low').src = './assets/craftpix-net-654184-main-characters-home-free-top-down-pixel-art-asset/PNG/Trees_animation.png';
 // scale MUST stay INTEGER: a fractional nearest-neighbour scale makes the foliage shimmer 1px<->2px
 // between frames (reads as horizontal striations). 1x = native 64x80, crisp + stable.
 const TREE_ANIM = { cols: 9, rows: 13, fw: 64, fh: 80, scale: 1 };
@@ -534,13 +540,13 @@ const WALK_STRIDE = 0.42;   // tiles travelled per walk-frame step (drives the g
 // orc town. Purely a display card (drawFaceoff), no sim/determinism impact.
 const humanPortraitImg = new Image(); let humanPortraitReady = false;
 humanPortraitImg.onload = () => { humanPortraitReady = true; }; humanPortraitImg.onerror = () => {};
-humanPortraitImg.src = './assets/human-farmer.png';
+PRIO(humanPortraitImg, 'low').src = './assets/human-farmer.png';
 const orcPortraitImg = new Image(); let orcPortraitReady = false;
 orcPortraitImg.onload = () => { orcPortraitReady = true; }; orcPortraitImg.onerror = () => {};
-orcPortraitImg.src = './assets/orc-raider.png';
+PRIO(orcPortraitImg, 'low').src = './assets/orc-raider.png';
 const orcRaider2Img = new Image(); let orcRaider2Ready = false;
 orcRaider2Img.onload = () => { orcRaider2Ready = true; }; orcRaider2Img.onerror = () => {};
-orcRaider2Img.src = './assets/orc-raider-2.png';
+PRIO(orcRaider2Img, 'low').src = './assets/orc-raider-2.png';
 
 // Roaming WILD PREY sprites (hunted for meat — see world.prey / #tickPrey). All 32x32, 4-frame idle
 // cycles; row 2 = side profile. Deer/hare side-frames face LEFT (srcFace -1), the turkey faces RIGHT.
@@ -567,6 +573,7 @@ function loadImageSet(base, sets, store, onReady) {
     for (const n of names) {
         const img = new Image();
         img.assetName = n;
+        img.fetchPriority = 'high';   // #firstframe flora/rock art gates the reveal — ahead of the rest
         img.onload = done;
         img.onerror = done;
         img.src = base + n + '.png';
@@ -881,7 +888,7 @@ function loadAssetArt() {
     loadAnimalArt();
     homeSheet.onload = () => { homeReady = true; };
     homeSheet.onerror = () => {};
-    homeSheet.src = HOME_BASE + 'exterior.png';
+    PRIO(homeSheet, 'high').src = HOME_BASE + 'exterior.png';
     if (SMOKE_ENABLED) {
         smokeSheet.onload = () => { smokeReady = true; };
         smokeSheet.onerror = () => {};
@@ -895,7 +902,7 @@ function loadAssetArt() {
     birdFlySheet.src = HOME_BASE + 'bird_fly_animation.png';
     grassDetailsImg.onload = () => { grassDetailsReady = true; terrainDirty = true; };
     grassDetailsImg.onerror = () => {};
-    grassDetailsImg.src = HOME_BASE + 'ground_grass_details.png';
+    PRIO(grassDetailsImg, 'high').src = HOME_BASE + 'ground_grass_details.png';
     plantsSheet.onload = () => { plantsReady = true; };
     plantsSheet.onerror = () => {};
     plantsSheet.src = PLANTS_BASE + 'Plants.png';
@@ -974,8 +981,8 @@ const charBody = new Image(), charHead = new Image();
 let charBodyReady = false, charHeadReady = false;
 charBody.onload = () => { charBodyReady = true; }; charBody.onerror = () => {};
 charHead.onload = () => { charHeadReady = true; }; charHead.onerror = () => {};
-charBody.src = CHAR_BASE + 'Swordsman_lvl1_Walk_body.png';
-charHead.src = CHAR_BASE + 'Swordsman_lvl1_Walk_head.png';
+PRIO(charBody, 'high').src = CHAR_BASE + 'Swordsman_lvl1_Walk_body.png';
+PRIO(charHead, 'high').src = CHAR_BASE + 'Swordsman_lvl1_Walk_head.png';
 // #anim-migrate the RUN (8f) + IDLE (12f) tintable Parts — full activity cycles for the in-game farmers.
 // Same 64px 4-row layout as the Walk parts. Loaded tolerant: until a sheet is ready its cycle is null and
 // the renderer falls back to the walk-based frames (never throws, never blacks the game).
@@ -7787,6 +7794,17 @@ function frame(now) {
 
 // boot / loading screen: the CRT tunes in (heavy static settling to near-black), then a 64-bit pixel
 // LOADER bar sweeps while the memories are pulled from SuperMemory, captioned "RETRIEVING MEMORIES".
+// #firstframe the art the FIRST FRAME needs — one list, read by both the reveal gate and the boot bar, so the
+// bar cannot drift from what is actually being waited on. Deliberately excludes the animated tree sheet,
+// portraits, UI and combat sets: those have graceful fallbacks or are not on screen yet.
+function firstFrameArtChecks() {
+    return [charReady(), treeArtReady, bushArtReady, rockArtReady, grassDetailsReady, homeReady];
+}
+function firstFrameArtProgress() {
+    const c = firstFrameArtChecks();
+    return c.filter(Boolean).length / c.length;
+}
+let _bootFill = 0;
 function drawBootScreen(t) {
     if (bootT0 == null) bootT0 = t;
     const bootTime = t - bootT0;   // #Codex-VS seconds since the first boot frame (RAF clock) — not a per-frame counter, so 30/60/120Hz all pace the same
@@ -7811,11 +7829,19 @@ function drawBootScreen(t) {
     const bx = cx - Math.round(barW / 2), by = cy - 8;
     ctx.fillStyle = '#2a3350'; ctx.fillRect(bx - 3, by - 3, barW + 6, barH + 6);   // bezel
     ctx.fillStyle = '#0c0f18'; ctx.fillRect(bx - 1, by - 1, barW + 2, barH + 2);   // inner well
-    const head = ((performance.now() / 1000 / 1.5) % 1) * (N + 5) - 3;             // leading cell, enters/exits the ends
+    // DETERMINATE now: the bar reports how much of the first-frame art has actually landed, so the wait is
+    // legible instead of arbitrary — the screen says "IMAGINING LIVES." and the bar shows it meaning it.
+    // The sweep is kept as a shimmer riding the filled edge, so a stalled connection still looks alive rather
+    // than frozen. `_bootFill` only ever climbs: art readiness is monotonic, and a bar that went backwards
+    // would read as an error.
+    const filled = Math.max(_bootFill, firstFrameArtProgress() * N);
+    _bootFill = filled;
+    const head = ((performance.now() / 1000 / 1.5) % 1) * (N + 5) - 3;             // shimmer on the leading edge
     for (let k = 0; k < N; k++) {
-        const d = head - k;                               // cells LIGHT behind the sweeping head, fading with distance
+        const d = head - k;
         let col = '#141c18';                              // unlit cell
-        if (d >= 0 && d < 4) col = d < 1 ? '#c8f0a0' : d < 2 ? '#7dd069' : '#4a8a3c';
+        if (k < filled) col = '#4a8a3c';                  // landed
+        if (k < filled && d >= 0 && d < 4) col = d < 1 ? '#c8f0a0' : d < 2 ? '#7dd069' : '#4a8a3c';
         ctx.fillStyle = col;
         ctx.fillRect(bx + k * (CELL + GAPC), by, CELL, barH);
     }
@@ -7911,10 +7937,14 @@ function startPlateButton(key, bx, y, bw, bh, label, base, fill, fillHot, textCo
 // a last-ditch fallback while a sheet loads. Fake farmer objects satisfy the fallback sprite builders.
 const MENU_HUMAN = { sheet: { culture: 'human', seed: 77 }, moveDir: 'side', facing: 1, state: 'walk', animTime: 0 };
 const MENU_ORC_FB = { sheet: { culture: 'orc', seed: 33 }, moveDir: 'side', facing: 1, state: 'walk', animTime: 0 };
-// crop the 6 side-row cells of a 64px walk sheet down to body + foot shadow → an array of frame canvases
-function menuWalkFrames(img, sx0, sy0, sw, sh) {
+// Crop cells from a 64px sheet → array of frame canvases
+// maxCols limits how many columns to extract (default = all columns in the sheet)
+function menuWalkFrames(img, sx0, sy0, sw, sh, row, maxCols) {
     if (!img || !img.complete || !img.naturalWidth) return null;
-    const FW = 64, cols = Math.max(1, Math.round(img.naturalWidth / FW)), row = 2;   // side row
+    row = row != null ? row : 2;
+    const FW = 64;
+    const totalCols = Math.max(1, Math.round(img.naturalWidth / FW));
+    const cols = maxCols != null ? Math.min(maxCols, totalCols) : totalCols;
     const frames = [];
     for (let c = 0; c < cols; c++) {
         const [o, ox] = makeCanvas(sw, sh); ox.imageSmoothingEnabled = false;
@@ -7925,27 +7955,36 @@ function menuWalkFrames(img, sx0, sy0, sw, sh) {
 }
 let menuOrcWalk = null;
 function menuOrcFrames() {
-    // orc1 walk, side row faces LEFT; crop covers the body AND the baked foot shadow (y6..50 of the cell)
-    return menuOrcWalk || (menuOrcWalk = menuWalkFrames(orcWalkImg && orcWalkImg[1], 12, 6, 40, 44));
+    if (menuOrcWalk) return menuOrcWalk;
+    const walkSrc = orcWalkImg && orcWalkImg[1];
+    return (menuOrcWalk = menuWalkFrames(walkSrc, 12, 6, 40, 44, 2));
 }
 let menuHumanWalk = null;
 function menuHumanFrames() {
-    // Swordsman lvl1 walk, side row faces RIGHT; body sits x24..42 / y17..47 in its cell (shadow included)
-    return menuHumanWalk || (menuHumanWalk = menuWalkFrames(menuHumanWalkImg, 18, 14, 30, 36));
+    if (menuHumanWalk) return menuHumanWalk;
+    const walkSrc = menuHumanWalkImg;
+    return (menuHumanWalk = menuWalkFrames(walkSrc, 18, 14, 30, 36, 2));
 }
-// draw a walking `culture` sprite with its FEET centred at (footX, footY), scaled to targetH, facing right.
+// draw a walking `culture` sprite with its FEET centred at (footX, footY), scaled to targetH.
+// Loops the walk frames continuously.
 function drawMenuWalker(culture, footX, footY, targetH, t) {
-    let frame = null, flip = false;
     const frames = culture === 'orc' ? menuOrcFrames() : menuHumanFrames();
-    if (frames && frames.length) {
-        frame = frames[Math.floor(t * 8) % frames.length];
-        flip = culture === 'orc';                   // orc side row faces left → mirror; swordsman already faces right
-    }
-    if (!frame) {                                   // sheet not ready → in-game farmer sprite (2-frame walk)
+    if (!frames || !frames.length) {
+        // sheet not ready → in-game farmer sprite (2-frame walk) fallback
         const fr = farmerSprites(culture === 'orc' ? MENU_ORC_FB : MENU_HUMAN);
-        frame = Math.floor(t * 7) % 2 ? fr.walk1 : fr.walk2;
-        flip = culture === 'orc';                   // orcCharSets side faces left; human char side already faces right
+        const frame = Math.floor(t * 7) % 2 ? fr.walk1 : fr.walk2;
+        const flip = culture === 'orc';
+        const scale = targetH / frame.height, w = Math.round(frame.width * scale), h = Math.round(frame.height * scale);
+        const dx = Math.round(footX - w / 2), dy = Math.round(footY - h);
+        const sm = ctx.imageSmoothingEnabled; ctx.imageSmoothingEnabled = false;
+        if (flip) { ctx.save(); ctx.translate(dx + w, dy); ctx.scale(-1, 1); ctx.drawImage(frame, 0, 0, w, h); ctx.restore(); }
+        else ctx.drawImage(frame, dx, dy, w, h);
+        ctx.imageSmoothingEnabled = sm;
+        return w;
     }
+    const frame = frames[Math.floor(t * 6) % frames.length];
+    // human walk frames face right, orc walk frames face left
+    const flip = culture === 'orc';
     if (!frame || !frame.width) return 0;
     const scale = targetH / frame.height, w = Math.round(frame.width * scale), h = Math.round(frame.height * scale);
     const dx = Math.round(footX - w / 2), dy = Math.round(footY - h);
@@ -7998,13 +8037,11 @@ function drawStartScreen() {
         return;
     }
 
-    // 'choose' — no title art; a heading, two culture CTAs (each a right-facing WALKING sprite + label in a
-    // stroke-outlined container that fills on hover), and a view button — the block CENTRED over the living town.
     const heading = 'CHOOSE YOUR PATH', t = performance.now() / 1000;
-    const slot = 40, boxH = 42, boxGap = 14, headGap = 24, viewGap = 30, padX = 14;
+    const slot = 36, boxH = 38, boxGap = 5, headGap = 18, viewGap = 20, padL = 4, padR = 8;
     const labelHuman = 'CREATE A HUMAN TOWN', labelOrc = 'CREATE AN ORC TOWN';
     const maxLabelW = Math.max(textWidth(labelHuman), textWidth(labelOrc));
-    const boxW = padX + slot + 10 + maxLabelW + padX, boxX = Math.round(cx - boxW / 2);
+    const boxW = padL + slot + 8 + maxLabelW + padR, boxX = Math.round(cx - boxW / 2);
     const blockH = 5 + headGap + boxH + boxGap + boxH + viewGap + 5;
     let y = Math.round(GH / 2 - blockH / 2);
 
@@ -8017,8 +8054,8 @@ function drawStartScreen() {
         const r = { x: boxX, y, w: boxW, h: boxH }, hot = inRect(mouse, r);
         ctx.fillStyle = hot ? fillHot : 'rgba(255,255,255,0.05)'; ctx.fillRect(r.x, r.y, r.w, r.h);
         ctx.strokeStyle = stroke; ctx.lineWidth = 1; ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
-        drawMenuWalker(culture, r.x + padX + slot / 2, r.y + boxH - 4, spriteH, t);   // feet near the container floor
-        drawText(ctx, label, r.x + padX + slot + 10, Math.round(r.y + boxH / 2 - 2), hot ? '#ffffff' : textCol, 1);
+        drawMenuWalker(culture, r.x + padL + slot / 2, r.y + boxH / 2 + spriteH / 2, spriteH, t);
+        drawText(ctx, label, r.x + padL + slot + 4, Math.round(r.y + boxH / 2 - 2), hot ? '#ffffff' : textCol, 1);
         startHits[key] = r;
         y += boxH + boxGap;
     };
@@ -8026,10 +8063,10 @@ function drawStartScreen() {
     ctaBox('orc',   'orc',   labelOrc,   36, '#e0806a', 'rgba(224,128,106,0.30)', '#f0b0a0');    // ember — an orc town
 
     y += viewGap - boxGap;
-    startTextButton('view', cx, y, 'View existing town'.toUpperCase(), 1, '#c9a45a');
+    startTextButton('view', cx, y, 'OR VIEW EXISTING TOWN'.toUpperCase(), 1, '#ffffff', 'rgba(255,255,255,0.3)');
 
-    // BACK — top-left, quiet
-    startTextButton('back', 34, 26, 'BACK', 1, '#8a8f9c');
+    // BACK — top-left, aligned with volume button center (y=17)
+    startTextButton('back', 34, 17, 'BACK', 1, '#8a8f9c');
 }
 
 // ---------------------------------------------------------------------------
@@ -8037,20 +8074,11 @@ function drawStartScreen() {
 // ---------------------------------------------------------------------------
 
 (async function boot() {
-    // MOBILE GATE: the sim is a fullscreen mouse+keyboard experience. On touch/small-screen
-    // devices, show a full-screen notice instead of booting the game at all.
-    const isMobile = window.matchMedia('(pointer: coarse)').matches ||
-                     Math.min(window.innerWidth, window.innerHeight) < 600;
+    // MOBILE GATE: the sim is a fullscreen mouse+keyboard experience. CSS shows the
+    // desktop-required notice immediately; this guard prevents the game from booting beneath it.
+    // Deliberately use input capability rather than viewport size so a narrow desktop still works.
+    const isMobile = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
     if (isMobile) {
-        const tv = document.getElementById('tv');
-        if (tv) tv.style.display = 'none';
-        const gate = document.createElement('div');
-        gate.setAttribute('role', 'status');
-        gate.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;' +
-            'background:#000;color:#e6e5de;font-family:monospace;font-size:16px;letter-spacing:0.08em;' +
-            'text-transform:uppercase;text-align:center;padding:24px;z-index:9999;';
-        gate.textContent = 'Switch to a desktop experience to play';
-        document.body.appendChild(gate);
         return;
     }
 
@@ -8300,9 +8328,37 @@ function drawStartScreen() {
     world.addLog(`${memories.length} memories loaded from ${memorySource}`, '#8a9ade');
     world.addLog('Click a farmer to read their sheet. Drag to pan.', '#9aa0b4');
 
-    // let the tuning screen breathe for a moment — then, on a plain visit, drop the launch overlay
-    // OVER the now-living town (so the backdrop is a breathing town, not the tuning static).
-    setTimeout(() => { booted = true; if (startMode) { startScreen = true; audio.setMenuMode(true); audio.setMuted(true); } }, 1400);
+    // #firstframe — REVEAL WHEN THE ART IS THERE, not on a blind timer.
+    //
+    // This used to flip `booted` after a flat 1400ms. Measured on a cold visit, the last asset lands at
+    // ~3500ms, so the town was revealed with roughly two seconds of art still in flight — and because the
+    // world is not drawn at all until `booted` (see the boot-screen branch in frame()), those two seconds were
+    // spent watching the game assemble itself: `drawFarmer` falls back to pixel.js's procedural sprites while
+    // `charReady()` is false and swaps to the CraftPix ones the moment the sheets land, which reads as farmers
+    // FLASHING in and out and walking on a slower, simpler cycle. First impressions are mostly first visits,
+    // so the tuning screen — which exists precisely to cover this — now holds until the art is in.
+    //
+    // FLOOR so the screen still breathes rather than blinking past. CEILING so a slow connection or a dead
+    // asset can never hang the boot: at that point we reveal anyway and the old fallback behaviour applies,
+    // which is no worse than before. Only the art that defines the FIRST frame is waited on — the animated
+    // tree sheet, portraits, UI and combat sets are deliberately excluded, since they either have a graceful
+    // static fallback or are not on screen yet.
+    const REVEAL_FLOOR_MS = 1400, REVEAL_CEILING_MS = 5000;
+    const firstFrameArtReady = () => firstFrameArtChecks().every(Boolean);
+    const revealStart = performance.now();
+    const reveal = () => {
+        booted = true;
+        if (startMode) { startScreen = true; audio.setMenuMode(true); audio.setMuted(true); }
+    };
+    (function waitForFirstFrameArt() {
+        const waited = performance.now() - revealStart;
+        if (waited >= REVEAL_CEILING_MS) {
+            console.warn(`ry-farms: revealing at the ${REVEAL_CEILING_MS}ms ceiling with art still loading — sprites may pop in`);
+            return reveal();
+        }
+        if (waited >= REVEAL_FLOOR_MS && firstFrameArtReady()) return reveal();
+        setTimeout(waitForFirstFrameArt, 80);
+    })();
 
     // the LLM chronicler (#92 stage 2): once the town is up, offer the cast's draft tales
     // for a finer telling. One try shortly after boot; the slow recheck catches farmers
