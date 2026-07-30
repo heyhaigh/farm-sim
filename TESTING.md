@@ -42,7 +42,10 @@ Run them all before pushing. Several protect properties that no amount of care a
 - `frontier` — the generated wilderness changed (this is the one that seams against a player's already-explored chunks)
 - `attrs` — a sim-side per-tile hash changed (`obstacleTier`, `forageIngredient`, `treeStageAt`)
 - `look` — a render-side one changed (`grassPatch`, `pickIndex`, jitter and its spreads)
-- `content tables` — a save-referenced list was **reordered**, not appended to
+- `content tables` — a save-referenced list changed. The digest hashes whole arrays, so this moves on a safe
+  **append** as well as a destructive **reorder** — check which you did before re-pinning. It covers the `T`
+  enum, `PROJECT_DEFS` order, `HOUSE_TIERS` names, `FACILITY_DEFS` keys, `CRAFTABLES` ids and
+  `FORAGE_INGREDIENTS`; it does NOT cover `struct.kind`, `producer.kind`, crop ids or `sheet.seed`
 
 `attrs` and `look` take no seed: they are a property of the code, not of any world, so they are pinned once.
 

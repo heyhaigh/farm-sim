@@ -41,7 +41,16 @@
             font-size: 20px;
             margin-bottom: 12px;
         }
-        @media (hover: none) and (pointer: coarse) {
+        /* Codex #62-1 — `hover`/`pointer` describe only the PRIMARY pointing device, so a touch-first
+           laptop matches (hover: none) and (pointer: coarse) even though it also has a trackpad or mouse.
+           That blocked a perfectly capable machine from the game entirely. `any-hover`/`any-pointer` ask
+           whether ANY attached device qualifies, so the gate now means "there is no usable pointer here"
+           rather than "the main pointer is a finger". Kept as a not() around the capable case so a device
+           reporting nothing useful still gets the notice.
+           Written as four PLAIN feature queries rather than `not(... or ...)`: if a browser cannot parse the
+           condition it drops the whole rule, which on a phone would mean a blank canvas with the notice
+           hidden — worse than either outcome the gate is choosing between. */
+        @media (hover: none) and (pointer: coarse) and (any-hover: none) and (any-pointer: coarse) {
             #tv { display: none; }
             #mobile-gate { display: flex; }
         }

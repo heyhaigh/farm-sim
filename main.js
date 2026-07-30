@@ -469,6 +469,10 @@ const ORC_ROCK_NAMES = ['Rock7_1', 'Rock7_2', 'Rock7_3', 'Rock7_4', 'Rock7_5']; 
 const ORC_CACTUS_BASE = './assets/craftpix-net-141354-free-top-down-bushes-pixel-art/PNG/Assets/';
 const ORC_CACTUS_NAMES = ['Cactus1_1', 'Cactus1_2', 'Cactus1_3', 'Cactus2_1', 'Cactus2_2', 'Cactus2_3'];
 const orcTreeImg = {}, orcRockyImg = {}, orcRockImg = {}, orcCactusImg = {}, orcBurnedImg = {};
+// Codex #62-2 — these sets were loaded with EMPTY ready callbacks, so the first-frame gate had nothing
+// orc-side to wait on and a cold `?orc=1` boot revealed on human/procedural stand-ins and bare tiles.
+let orcTreeArtReady = false, orcRockyArtReady = false, orcRockArtReady = false,
+    orcCactusArtReady = false, orcBurnedArtReady = false;
 
 // The Dungeon Master's wilderness threats. Each sheet is a directional frame GRID; we slice one
 // side-profile frame per sprite (`row`), which in these packs faces LEFT — so it's mirrored to face
@@ -880,11 +884,11 @@ function loadAssetArt() {
     loadImageSet(ROCK_ART_BASE, { ROCKS: ROCK_NAMES }, rockImg, () => { rockArtReady = true; });
     loadImageSet(STUMP_ART_BASE, { STUMPS: STUMP_NAMES }, stumpImg, () => { stumpArtReady = true; });
     // #94 orc biome sets (dead/fungal trees, ground mushrooms + bones, magma rocks)
-    loadImageSet(ORC_FOREST_BASE, { ORCTREES: ORC_TREE_NAMES }, orcTreeImg, () => {});
-    loadImageSet(ORC_ROCKY_BASE, { ORCROCKY: ORC_FLOWER_NAMES.concat(ORC_WHEAT_NAMES, ORC_BONE_NAMES) }, orcRockyImg, () => {});
-    loadImageSet(ROCK_ART_BASE, { ORCROCKS: ORC_ROCK_NAMES }, orcRockImg, () => {});
-    loadImageSet(ORC_CACTUS_BASE, { ORCCACTI: ORC_CACTUS_NAMES }, orcCactusImg, () => {});
-    loadImageSet(ORC_BURNED_BASE, { ORCBURNED: ORC_BURNED_NAMES }, orcBurnedImg, () => {});
+    loadImageSet(ORC_FOREST_BASE, { ORCTREES: ORC_TREE_NAMES }, orcTreeImg, () => { orcTreeArtReady = true; });
+    loadImageSet(ORC_ROCKY_BASE, { ORCROCKY: ORC_FLOWER_NAMES.concat(ORC_WHEAT_NAMES, ORC_BONE_NAMES) }, orcRockyImg, () => { orcRockyArtReady = true; });
+    loadImageSet(ROCK_ART_BASE, { ORCROCKS: ORC_ROCK_NAMES }, orcRockImg, () => { orcRockArtReady = true; });
+    loadImageSet(ORC_CACTUS_BASE, { ORCCACTI: ORC_CACTUS_NAMES }, orcCactusImg, () => { orcCactusArtReady = true; });
+    loadImageSet(ORC_BURNED_BASE, { ORCBURNED: ORC_BURNED_NAMES }, orcBurnedImg, () => { orcBurnedArtReady = true; });
     loadAnimalArt();
     homeSheet.onload = () => { homeReady = true; };
     homeSheet.onerror = () => {};
@@ -1526,8 +1530,22 @@ function wildJitter(i, j, t) {
 // Keyed by source + target size. The wild set is ~50 images at one size each, so this stays small; it is
 // cleared with the terrain cache when art lands, so a late-arriving sheet cannot leave a stale scale behind.
 const _scaledSprites = new Map();
+// Codex #62-3 — procedural fallback sources are CANVASES, which have neither `assetName` nor `src`, so they
+// all keyed as `undefined|WxH`. Every procedural tree species and season is 16x22, so in an art-less or
+// failed-load session they collapsed onto whichever tree was cached first — one tree, repeated everywhere.
+// Canvases get an identity token from a WeakMap instead (no leak: the entry dies with the canvas); Images
+// keep their URL/name key so two Images of the same art still share one scaled copy.
+let _spriteIdSeq = 0;
+const _spriteIds = new WeakMap();
+function spriteKey(src) {
+    if (src.assetName) return 'n:' + src.assetName;
+    if (src.src) return 'u:' + src.src;
+    let id = _spriteIds.get(src);
+    if (id === undefined) { id = ++_spriteIdSeq; _spriteIds.set(src, id); }
+    return 'c:' + id;
+}
 function scaledSprite(img, w, h) {
-    const key = (img.assetName || img.src) + '|' + w + 'x' + h;
+    const key = spriteKey(img) + '|' + w + 'x' + h;
     let c = _scaledSprites.get(key);
     if (!c) {
         const [cv, cx] = makeCanvas(w, h);
@@ -7844,10 +7862,17 @@ function firstFrameArtChecks() {
     // drawSiloBarrels falls back to a flat brown box "until the sheet loads" — which is what a first-time
     // visitor was seeing and reasonably read as "the crates are procedural".
     // uiIconsReady: without it the top bar draws its inline-SVG fallbacks and then swaps to the real icons.
-    // guildExtReady: the town hall falls back to a flat tan box "sheet not loaded — a small stand-in", so a
-    // resumed town at level 1+ showed a box where its guild hall should be.
-    const checks = [charReady(), treeArtReady, bushArtReady, rockArtReady, grassDetailsReady, homeReady,
-                    crateReady, guildExtReady, uiIconsReady()];
+    // Codex #62-2 — CULTURE-AWARE. These were all human flags, so a cold orc boot could satisfy every one of
+    // them while the orc character sheet, the five orc wilderness sets and the orc silo were still in flight —
+    // revealing exactly the bare tiles and stand-ins this gate exists to hide.
+    // Shared: the ground detail, the crate stack (both cultures start on one) and the UI icons.
+    const checks = [grassDetailsReady, crateReady, uiIconsReady()];
+    if (_bootIsOrc) {
+        checks.push(orcSpriteReady(), orcTreeArtReady, orcRockyArtReady, orcRockArtReady,
+                    orcCactusArtReady, orcBurnedArtReady, orcSiloReady);
+    } else {
+        checks.push(charReady(), treeArtReady, bushArtReady, rockArtReady, homeReady, guildExtReady);
+    }
     // On a plain visit the START SCREEN is the first frame, and its animated title falls back to a font
     // wordmark. Only waited on for that path — an explicit ?seed= boot never shows it.
     if (_startModeBoot) checks.push(startTitleSettled);
@@ -7862,6 +7887,9 @@ let _bootFill = 0;
 // and cannot see a const declared inside boot(). Referencing it there is a ReferenceError that would take the
 // boot screen down on every load — parsing does not catch it.
 let _startModeBoot = false;
+// Which culture's art the first frame needs. Set from the boot flag immediately, then corrected from the
+// hydrated world — a resumed orc town has no ?orc= in its URL, so the flag alone would be wrong.
+let _bootIsOrc = false;
 function drawBootScreen(t) {
     if (bootT0 == null) bootT0 = t;
     const bootTime = t - bootT0;   // #Codex-VS seconds since the first boot frame (RAF clock) — not a per-frame counter, so 30/60/120Hz all pace the same
@@ -8146,7 +8174,10 @@ function drawStartScreen() {
     // MOBILE GATE: the sim is a fullscreen mouse+keyboard experience. CSS shows the
     // desktop-required notice immediately; this guard prevents the game from booting beneath it.
     // Deliberately use input capability rather than viewport size so a narrow desktop still works.
-    const isMobile = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+    // Codex #62-1 — MUST mirror the CSS gate in index.html exactly, or the two disagree and one hides the
+    // canvas while the other boots (or vice versa). `any-hover`/`any-pointer` exempt hybrids that have a real
+    // pointer attached; only a device with no usable pointer at all is turned away.
+    const isMobile = window.matchMedia('(hover: none) and (pointer: coarse) and (any-hover: none) and (any-pointer: coarse)').matches;
     if (isMobile) {
         return;
     }
@@ -8172,6 +8203,10 @@ function drawStartScreen() {
     const worldSeed = urlSeed != null && urlSeed !== '' ? (parseInt(urlSeed, 10) >>> 0) : Math.floor(Math.random() * 0x7fffffff);
     // ?play=1 with no ?orc keeps the human default; the menu backdrop is always a calm human town.
     const bootCulture = (bootParams.get('orc') != null || bootParams.get('culture') === 'orc') ? 'orc' : 'human';   // #3.1 ?orc=1 raises a warband
+    // Must come AFTER the const above: a `const` is in its temporal dead zone until initialised, so assigning
+    // from it earlier throws "Cannot access 'bootCulture' before initialization" and kills boot entirely.
+    // Corrected again once the world is hydrated — a resumed orc town carries no ?orc= in its URL.
+    _bootIsOrc = bootCulture === 'orc';
 
     let resumed = false, quarantined = null;
     // WHY this session may not persist — a specific reason, not a boolean. One flag drove four different
@@ -8270,6 +8305,10 @@ function drawStartScreen() {
     if (!world) world = new World(foundSeed, bootCulture);
     // The slot's generation this world belongs to. saveTown refuses a writer from a superseded epoch, which
     // is what stops a tab holding the quarantined town from overwriting this replacement.
+    // A RESUMED town carries its own culture and may be orc with no ?orc= in the URL, so correct the mirror
+    // before the gate can act on the flag alone (Codex #62-2).
+    _bootIsOrc = world.culture === 'orc';
+
     // The pair established above. `?? 0` covers only the paths that deliberately never persist: the spectator
     // backdrop, and any session already marked non-persisting because its observation failed. There is no
     // longer a non-atomic readGen() fallback — Codex #58: every persisting world's generation comes from a

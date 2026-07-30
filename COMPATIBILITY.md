@@ -79,7 +79,15 @@ safe. Reordering, renaming or inserting silently reinterprets every existing tow
 Evidence this is real: `structSprites.tower` still exists in `main.js` while `'tower'` appears nowhere in
 `farm.js` — a legacy type surviving only inside old saves. `T.SIGN: 5` is vestigial and unreclaimable.
 
-`tests/compat.mjs` pins the order of all of these.
+**What the harness actually pins, and what it does not.** `tests/compat.mjs` fingerprints the `T` enum, the
+`PROJECT_DEFS` order, the `HOUSE_TIERS` names, the `FACILITY_DEFS` keys, the `CRAFTABLES` ids and the
+`FORAGE_INGREDIENTS` order. It does **not** pin `struct.kind`, `producer.kind`, crop ids, or the `sheet.seed`
+derivation — those rows are a rule you must follow by hand, with no test to catch you. Do not read a green
+run as "the contract held".
+
+Note also that the digest hashes the FULL arrays, so it moves on a safe **append** as well as on a
+destructive **reorder**. A moved hash is therefore a prompt to check which of the two you did — not proof of
+either. Re-pin deliberately, and say in the commit which it was.
 
 ---
 
