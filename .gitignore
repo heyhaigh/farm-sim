@@ -20,6 +20,15 @@ node_modules/
 # of the raw files, so it is ignored HERE and committed to the private deploy repo instead (see Dockerfile).
 # `assets/*` rather than `assets/` so one placeholder can be re-included: it keeps the directory present in
 # this tree, which is what makes the Dockerfile's `COPY assets/` valid in both repos.
+#
+# ⚠️ ADDING A NEW SPRITE? IT WILL NOT REACH THE DEPLOY UNTIL YOU COPY IT ACROSS.
+# Your new PNG is ignored here (that is the point), and the private deploy repo carries a CURATED
+# subset — only the 324 files the game was measured to load — so a code-only sync leaves it behind.
+# The deploy will then 404 that file SILENTLY, because every image loader has an onerror fallback.
+#     cp <new>.png ~/ry-farms-deploy/assets/<same path>
+#     cd ~/ry-farms-deploy && git fetch public && git merge public/main && git add -f assets && git commit
+# Full recipe, including how the 324 was measured: DEPLOY.md in ~/ry-farms-deploy.
+#
 assets/*
 !assets/.placeholder.png
 

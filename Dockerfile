@@ -16,8 +16,13 @@
 # lives in a PRIVATE deploy repo (github.com/heyhaigh/farm-sim-deploy) that carries the same code plus
 # assets/*.png, and Railway builds THAT. This public repo tracks only assets/.placeholder.png, so the COPY
 # below is valid in both trees and the two Dockerfiles never diverge.
-# Only .png is ever loaded (50 references, all .png), so the deploy repo carries the 27MB of PNGs and none
-# of the 146MB of .psd/.aseprite source art.
+# Only .png is ever loaded (50 references, all .png), and the deploy repo carries only the 324 files a
+# recorded boot proved the game requests (6.9MB) — not all 2034 PNGs (27MB), and none of the 146MB of
+# .psd/.aseprite source art.
+#
+# ⚠️ SO: A NEW SPRITE ADDED HERE DOES NOT REACH THE DEPLOY. It must be copied into
+# ~/ry-farms-deploy/assets and `git add -f`'d, or it 404s in production SILENTLY (every loader has an
+# onerror fallback, so the art just quietly goes missing). See DEPLOY.md in the deploy repo.
 # Without the art the game still runs on pixel.js's procedural sprites — but wilderness ROCKS have no
 # fallback at all and render as nothing while staying impassable and still being the ore source, so an
 # art-less deploy is a broken-looking world, not a plainer one.
