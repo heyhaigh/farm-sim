@@ -1513,6 +1513,33 @@ function wildSpec(i, j, t, season) {
 function wildJitter(i, j, t) {
     return tileJitter(i, j, t === T.TREE ? 'tree' : t === T.ROCK ? 'rock' : t === T.STUMP ? 'stump' : 'other');
 }
+// #banding PRE-SCALED SPRITE CACHE. drawWild used to nearest-neighbour downscale every wild sprite to
+// ASSET_SCALE (0.76) on EVERY FRAME. At a fractional ratio NN drops source rows unevenly, which is literally
+// "lines running through" a sprite — and because the CRT shader lays its scanlines in SCREEN space while that
+// artefact lives in SPRITE space, the two beat against each other the moment the camera moves. That is why it
+// reads as banding while following a farmer and is easy to miss while dragging.
+//
+// Scaling ONCE into a cache fixes both halves: the resample happens with smoothing (rows are averaged, not
+// dropped) and the per-frame blit becomes a 1:1 integer copy, so there is nothing left to beat. It is also
+// less work per frame — the downscale stops being redone 60 times a second for every bush on screen.
+//
+// Keyed by source + target size. The wild set is ~50 images at one size each, so this stays small; it is
+// cleared with the terrain cache when art lands, so a late-arriving sheet cannot leave a stale scale behind.
+const _scaledSprites = new Map();
+function scaledSprite(img, w, h) {
+    const key = (img.assetName || img.src) + '|' + w + 'x' + h;
+    let c = _scaledSprites.get(key);
+    if (!c) {
+        const [cv, cx] = makeCanvas(w, h);
+        cx.imageSmoothingEnabled = true;
+        cx.imageSmoothingQuality = 'high';
+        cx.drawImage(img, 0, 0, w, h);
+        _scaledSprites.set(key, cv);
+        c = cv;
+    }
+    return c;
+}
+
 function drawWild(spec, x, baseY) {
     ctx.imageSmoothingEnabled = false;
     // ANIMATED tree sheet: frozen on frame 0 (dead still), cycling its frames only while this tile is
@@ -1525,12 +1552,11 @@ function drawWild(spec, x, baseY) {
         drawLeafDrift(spec, x, baseY);   // ambient autumn drift still applies in fall
         return;
     }
+    // 1:1 integer blit of a sprite scaled once — see scaledSprite above.
     ctx.drawImage(
-        spec.img,
+        scaledSprite(spec.img, spec.w, spec.h),
         Math.floor(x - spec.w / 2),
-        Math.floor(baseY - spec.h * spec.anchor + (spec.nudgeY || 0)),
-        spec.w,
-        spec.h
+        Math.floor(baseY - spec.h * spec.anchor + (spec.nudgeY || 0))
     );
     drawLeafDrift(spec, x, baseY);
 }
@@ -1791,7 +1817,7 @@ function bakeChunk(cx, cy) {
 
 // The set of chunk canvases intersecting the viewport, baked on demand.
 function drawTerrainChunks() {
-    if (terrainDirty) { chunkCanvases.clear(); terrainDirty = false; }
+    if (terrainDirty) { chunkCanvases.clear(); _scaledSprites.clear(); terrainDirty = false; }
     for (const k of world.dirtyChunks) chunkCanvases.delete(k);
     world.dirtyChunks.clear();
     if (chunkCanvases.size > 420) chunkCanvases.clear();   // roam far enough and old bakes just fall away
@@ -3774,7 +3800,23 @@ function makeMaskIcon(img) {
     };
 }
 function makeSvgIcon(svg) { const img = new Image(); img.src = 'data:image/svg+xml,' + encodeURIComponent(svg); return makeMaskIcon(img); }
-function makePngIcon(src) { const img = new Image(); img.src = src; return makeMaskIcon(img); }
+// #firstframe the mask PNGs are ~100 bytes each but they are still a NETWORK FETCH, and `makeMaskIcon`
+// returns null until one lands — which is why the top bar renders its inline-SVG fallbacks first and then
+// SWAPS to the real icons. The fallback is right to exist (the bar must never be empty, and inline SVG needs
+// no network); what was wrong was showing that swap to the player. Counted here so the boot gate can wait.
+let _uiIconsPending = 0, _uiIconsLoaded = 0;
+function uiIconsReady() { return _uiIconsPending > 0 && _uiIconsLoaded >= _uiIconsPending; }
+function makePngIcon(src) {
+    const img = new Image();
+    _uiIconsPending++;
+    const settle = () => { _uiIconsLoaded++; };
+    img.addEventListener('load', settle, { once: true });
+    img.addEventListener('error', settle, { once: true });   // a dead icon must not hold the boot forever
+    img.fetchPriority = 'high';                              // tiny, and the first frame shows them
+    img.src = src;
+    if (img.complete) { /* cached: the listeners above still fire, or already have */ }
+    return makeMaskIcon(img);
+}
 const COG_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m21,10v-1h-1v-2h1v-2h-1v-1h-1v-1h-2v1h-2v-1h-1V1h-4v2h-1v1h-2v-1h-2v1h-1v1h-1v2h1v2h-1v1H1v4h2v1h1v2h-1v2h1v1h1v1h2v-1h2v1h1v2h4v-2h1v-1h2v1h2v-1h1v-1h1v-2h-1v-2h1v-1h2v-4h-2Zm-11,0v-1h4v1h1v4h-1v1h-4v-1h-1v-4h1Z"/></svg>';
 const GLOBE_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="9" y="1" width="1" height="1"/><polygon points="9 2 9 3 8 3 8 5 7 5 7 8 2 8 2 7 3 7 3 5 4 5 4 4 5 4 5 3 7 3 7 2 9 2"/><polygon points="13 2 14 2 14 4 15 4 15 6 16 6 16 8 8 8 8 6 9 6 9 4 10 4 10 2 11 2 11 1 13 1 13 2"/><rect x="14" y="1" width="1" height="1"/><polygon points="22 7 22 8 17 8 17 5 16 5 16 3 15 3 15 2 17 2 17 3 19 3 19 4 20 4 20 5 21 5 21 7 22 7"/><polygon points="17 10 17 14 16 14 16 15 8 15 8 14 7 14 7 10 8 10 8 9 16 9 16 10 17 10"/><polygon points="1 9 7 9 7 10 6 10 6 14 7 14 7 15 1 15 1 9"/><polygon points="23 9 23 15 17 15 17 14 18 14 18 10 17 10 17 9 23 9"/><polygon points="22 16 22 17 21 17 21 19 20 19 20 20 19 20 19 21 17 21 17 22 15 22 15 21 16 21 16 19 17 19 17 16 22 16"/><rect x="9" y="22" width="1" height="1"/><polygon points="9 21 9 22 7 22 7 21 5 21 5 20 4 20 4 19 3 19 3 17 2 17 2 16 7 16 7 19 8 19 8 21 9 21"/><rect x="14" y="22" width="1" height="1"/><polygon points="14 22 13 22 13 23 11 23 11 22 10 22 10 20 9 20 9 18 8 18 8 16 16 16 16 18 15 18 15 20 14 20 14 22"/></svg>';
 const BANK_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><polygon points="23 20 23 22 22 22 22 23 2 23 2 22 1 22 1 20 3 20 3 19 4 19 4 10 6 10 6 19 8 19 8 10 10 10 10 19 14 19 14 10 16 10 16 19 18 19 18 10 20 10 20 19 21 19 21 20 23 20"/><path d="m20,5v-1h-2v-1h-2v-1h-2v-1h-4v1h-2v1h-2v1h-2v1H1v2h1v1h1v1h18v-1h1v-1h1v-2h-3Zm-9,2v-1h-1v-2h1v-1h2v1h1v2h-1v1h-2Z"/></svg>';
@@ -7798,13 +7840,28 @@ function frame(now) {
 // bar cannot drift from what is actually being waited on. Deliberately excludes the animated tree sheet,
 // portraits, UI and combat sets: those have graceful fallbacks or are not on screen yet.
 function firstFrameArtChecks() {
-    return [charReady(), treeArtReady, bushArtReady, rockArtReady, grassDetailsReady, homeReady];
+    // crateReady: the LV-0 town silo is a stack of crates in the plaza, visible from the first frame, and
+    // drawSiloBarrels falls back to a flat brown box "until the sheet loads" — which is what a first-time
+    // visitor was seeing and reasonably read as "the crates are procedural".
+    // uiIconsReady: without it the top bar draws its inline-SVG fallbacks and then swaps to the real icons.
+    // guildExtReady: the town hall falls back to a flat tan box "sheet not loaded — a small stand-in", so a
+    // resumed town at level 1+ showed a box where its guild hall should be.
+    const checks = [charReady(), treeArtReady, bushArtReady, rockArtReady, grassDetailsReady, homeReady,
+                    crateReady, guildExtReady, uiIconsReady()];
+    // On a plain visit the START SCREEN is the first frame, and its animated title falls back to a font
+    // wordmark. Only waited on for that path — an explicit ?seed= boot never shows it.
+    if (_startModeBoot) checks.push(startTitleSettled);
+    return checks;
 }
 function firstFrameArtProgress() {
     const c = firstFrameArtChecks();
     return c.filter(Boolean).length / c.length;
 }
 let _bootFill = 0;
+// Mirrors boot()'s `startMode` at module scope: firstFrameArtChecks() runs from drawBootScreen (module level)
+// and cannot see a const declared inside boot(). Referencing it there is a ReferenceError that would take the
+// boot screen down on every load — parsing does not catch it.
+let _startModeBoot = false;
 function drawBootScreen(t) {
     if (bootT0 == null) bootT0 = t;
     const bootTime = t - bootT0;   // #Codex-VS seconds since the first boot frame (RAF clock) — not a per-frame counter, so 30/60/120Hz all pace the same
@@ -7868,7 +7925,20 @@ function drawBootScreen(t) {
 // The title is an animated pixel spritesheet (propagate_grow, white removed → transparent); it falls
 // back to the 3x5 font wordmark until the sheet loads. Buttons navigate to the real, persisting game.
 const TITLE_SHEET = { cols: 8, rows: 5, frames: 40, fw: 256, fh: 113, ms: 90 };   // propagate-title-anim.png (frame 39 = bare finale, unused by the loop)
-let startTitleImg = null, startTitleTried = false;
+// #firstframe START THE TITLE EARLY. This used to be fetched on the first DRAW of the start screen, which is
+// the worst possible moment: the boot screen hands over, the start screen appears, and only THEN does a 393KB
+// sheet begin downloading — so the very first thing a new visitor sees is the 3x5 font wordmark, which then
+// swaps to the animated title. Kicked off at module scope so it downloads alongside everything else, and the
+// gate waits for it on a plain visit (see firstFrameArtChecks), where the start screen IS the first frame.
+let startTitleImg = null, startTitleTried = false, startTitleSettled = false;
+(function preloadTitle() {
+    startTitleTried = true;
+    const im = new Image();
+    im.fetchPriority = 'high';
+    im.addEventListener('load', () => { startTitleImg = im; startTitleSettled = true; }, { once: true });
+    im.addEventListener('error', () => { startTitleSettled = true; }, { once: true });   // never hold the boot
+    im.src = './propagate-title-anim2.png';
+})();
 function startHovering() { return !!(startScreen && startHits && Object.values(startHits).some(r => inRect(mouse, r))); }
 
 // right-pointing PLAY triangle of EXACT height h, top-aligned at yTop (so it matches text-cap height).
@@ -7884,7 +7954,6 @@ function drawPlayIcon(x, yTop, h, color) {
 
 // the animated title, centred at (cx, topY); returns the y just below it. Falls back to the font wordmark.
 function drawTitleArt(cx, topY, maxW) {
-    if (!startTitleTried) { startTitleTried = true; const im = new Image(); im.onload = () => { startTitleImg = im; }; im.src = './propagate-title-anim2.png'; }
     if (startTitleImg && startTitleImg.width) {
         // Ping-pong the growth so the loop never snaps: vines grow in 0→38, rest on the
         // full-lush apex (~1.1s), recede 38→0 slightly faster, breathe on the sprouted frame,
@@ -8098,6 +8167,7 @@ function drawStartScreen() {
     // players (plain-visit auto-resume is now gated behind the menu, so the town no longer resumes
     // silently — a menu greets you instead).
     const startMode = !bootParams.has('seed') && !bootParams.has('fresh') && !bootParams.has('play');
+    _startModeBoot = startMode;   // the gate reads this from module scope
     const wantFresh = bootParams.get('fresh') != null || startMode;   // the menu's backdrop is always a fresh random town
     const worldSeed = urlSeed != null && urlSeed !== '' ? (parseInt(urlSeed, 10) >>> 0) : Math.floor(Math.random() * 0x7fffffff);
     // ?play=1 with no ?orc keeps the human default; the menu backdrop is always a calm human town.
