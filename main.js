@@ -8302,9 +8302,38 @@ function drawStartScreen() {
     world.addLog(`${memories.length} memories loaded from ${memorySource}`, '#8a9ade');
     world.addLog('Click a farmer to read their sheet. Drag to pan.', '#9aa0b4');
 
-    // let the tuning screen breathe for a moment — then, on a plain visit, drop the launch overlay
-    // OVER the now-living town (so the backdrop is a breathing town, not the tuning static).
-    setTimeout(() => { booted = true; if (startMode) { startScreen = true; audio.setMenuMode(true); audio.setMuted(true); } }, 1400);
+    // #firstframe — REVEAL WHEN THE ART IS THERE, not on a blind timer.
+    //
+    // This used to flip `booted` after a flat 1400ms. Measured on a cold visit, the last asset lands at
+    // ~3500ms, so the town was revealed with roughly two seconds of art still in flight — and because the
+    // world is not drawn at all until `booted` (see the boot-screen branch in frame()), those two seconds were
+    // spent watching the game assemble itself: `drawFarmer` falls back to pixel.js's procedural sprites while
+    // `charReady()` is false and swaps to the CraftPix ones the moment the sheets land, which reads as farmers
+    // FLASHING in and out and walking on a slower, simpler cycle. First impressions are mostly first visits,
+    // so the tuning screen — which exists precisely to cover this — now holds until the art is in.
+    //
+    // FLOOR so the screen still breathes rather than blinking past. CEILING so a slow connection or a dead
+    // asset can never hang the boot: at that point we reveal anyway and the old fallback behaviour applies,
+    // which is no worse than before. Only the art that defines the FIRST frame is waited on — the animated
+    // tree sheet, portraits, UI and combat sets are deliberately excluded, since they either have a graceful
+    // static fallback or are not on screen yet.
+    const REVEAL_FLOOR_MS = 1400, REVEAL_CEILING_MS = 5000;
+    const firstFrameArtReady = () => charReady() && treeArtReady && bushArtReady && rockArtReady
+                                  && grassDetailsReady && homeReady;
+    const revealStart = performance.now();
+    const reveal = () => {
+        booted = true;
+        if (startMode) { startScreen = true; audio.setMenuMode(true); audio.setMuted(true); }
+    };
+    (function waitForFirstFrameArt() {
+        const waited = performance.now() - revealStart;
+        if (waited >= REVEAL_CEILING_MS) {
+            console.warn(`ry-farms: revealing at the ${REVEAL_CEILING_MS}ms ceiling with art still loading — sprites may pop in`);
+            return reveal();
+        }
+        if (waited >= REVEAL_FLOOR_MS && firstFrameArtReady()) return reveal();
+        setTimeout(waitForFirstFrameArt, 80);
+    })();
 
     // the LLM chronicler (#92 stage 2): once the town is up, offer the cast's draft tales
     // for a finer telling. One try shortly after boot; the slow recheck catches farmers
