@@ -8009,6 +8009,85 @@ function drawTitleArt(cx, topY, maxW) {
     return ty + 5 * s;
 }
 
+// #MOBILEGATE — what a phone gets instead of the game.
+// The sim is a fullscreen mouse-and-keyboard thing and does not boot here (see the guard in boot(), which
+// returns before loadAssetArt(), so a phone never downloads the 6.9MB of art). But a link shared publicly is
+// mostly opened on phones, and those visitors should still meet PROPAGATE rather than a web page — so the
+// notice is the REAL animated title drawn through the REAL CRT shader onto the same #tv canvas. Nothing is
+// reimplemented: same `crt` instance, same drawTitleArt, same 3x5 font, so the overlay cannot drift from the
+// desktop one. The title sheet is the only image needed and is already in flight (see preloadTitle above).
+function mobileGate() {
+    document.documentElement.classList.add('gate-live');   // retires the no-JS HTML fallback in index.html
+    out.style.cursor = 'auto';                             // nothing to aim; the in-world pixel hand is a pointer device idea
+
+    // resize() pins GH to 300 and floors GW at 320, which on a portrait phone would map a 320x300 source onto
+    // a ~430x860 output — a vertically smeared logo. The gate owns its sizing and matches the output aspect.
+    function gateResize() {
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        out.width = Math.max(1, Math.round(out.clientWidth * dpr));
+        out.height = Math.max(1, Math.round(out.clientHeight * dpr));
+        // Match the OUTPUT aspect in both orientations, or the shader stretches the logo. Portrait pins the
+        // short side (width) and grows height; landscape pins height the way the game itself does.
+        //
+        // GATE_ZOOM magnifies the whole screen relative to the game's own 320x300 internal resolution. The
+        // logo scales in INTEGER steps only (256 -> 512; anything fractional half-pixels the pixel art and
+        // blurs it), so the way to make it fill more of a phone's width is to shrink the source canvas
+        // underneath it, not to scale the sprite. At 1.15 the 256px logo goes from 80% of a portrait width
+        // to 92%, and every glyph grows with it.
+        const GATE_ZOOM = 1.15, BASE_W = 320, BASE_H = 300;
+        const even = (v) => Math.round(v / 2) * 2;
+        const ar = out.clientWidth / Math.max(out.clientHeight, 1);
+        // The clamps are escape hatches for absurd aspect ratios only — inside them the source aspect must
+        // track the output exactly, so they are set wide enough never to bite on a real device.
+        if (ar >= 1) { GH = even(BASE_H / GATE_ZOOM); GW = Math.max(240, Math.min(1200, even(GH * ar))); }
+        else { GW = even(BASE_W / GATE_ZOOM); GH = Math.max(240, Math.min(1200, even(GW / ar))); }
+        if (game.width !== GW || game.height !== GH) {
+            game.width = GW; game.height = GH;
+            ctx.imageSmoothingEnabled = false;
+        }
+    }
+    window.addEventListener('resize', gateResize);
+    window.addEventListener('orientationchange', gateResize);
+    gateResize();
+
+    (function gateFrame(t) {
+        requestAnimationFrame(gateFrame);
+        // the start screen's own backdrop: near-black with a soft green lift behind the letters
+        ctx.fillStyle = '#05070a'; ctx.fillRect(0, 0, GW, GH);
+        const vg = ctx.createRadialGradient(GW / 2, GH / 2, 0, GW / 2, GH / 2, GH * 0.7);
+        vg.addColorStop(0, 'rgba(18,32,22,0.65)'); vg.addColorStop(1, 'rgba(5,7,10,0)');
+        ctx.fillStyle = vg; ctx.fillRect(0, 0, GW, GH);
+
+        const cx = GW / 2;
+        // Largest integer scale whose glyphs still fit the width. The 3x5 font at scale 1 is three source
+        // pixels tall — on a phone that is ~4 CSS px and genuinely unreadable, which is the whole failure this
+        // screen exists to avoid. Integer only: a fractional scale half-pixels the glyphs and blurs them.
+        const fit = (str, want) => { let sc = want; while (sc > 1 && textWidth(str, sc) > GW - 24) sc--; return sc; };
+        const centred = (str, y, color, sc) => drawText(ctx, str, Math.round(cx - textWidth(str, sc) / 2), y, color, sc);
+
+        // The logo also takes an INTEGER scale. drawTitleArt derives its own from maxW, so handing it an exact
+        // multiple of the frame width is how you ask for a crisp one (256/320 fills most of a phone's width).
+        const logoScale = Math.max(1, Math.floor(Math.min(GW - 32, 512) / TITLE_SHEET.fw));
+        const maxW = TITLE_SHEET.fw * logoScale;
+        const titleH = TITLE_SHEET.fh * logoScale;
+
+        const l1 = 'DESKTOP ONLY', l2 = 'TRY ON A DIFFERENT DEVICE';
+        const s1 = fit(l1, 3), s2 = fit(l2, 1);
+        // gaps measured from the art's bottom edge, which carries transparent frame padding
+        const d1 = 28, d2 = d1 + s1 * 5 + 12;
+        const BELOW = d2 + s2 * 5;
+
+        // Centre the WHOLE composition rather than pinning the title to a fraction of the height: the block's
+        // height varies with the logo scale, so a fixed fraction lands right in one aspect and shoves the copy
+        // against the bottom edge in the other.
+        const titleBottom = drawTitleArt(cx, Math.round((GH - (titleH + BELOW)) / 2), maxW);
+        centred(l1, titleBottom + d1, '#f0d060', s1);
+        centred(l2, titleBottom + d2, '#8a8f9c', s2);
+
+        crt.render(t || performance.now());
+    })(performance.now());
+}
+
 // a centred TEXT button (no plate). hotCol is the hover colour (defaults to the gold used elsewhere).
 function startTextButton(key, cx, y, label, scale, baseCol, hotCol = '#ffd24a') {
     const tw = textWidth(label, scale), r = { x: Math.round(cx - tw / 2) - 6, y: y - 3, w: tw + 12, h: 5 * scale + 6 };
@@ -8179,6 +8258,7 @@ function drawStartScreen() {
     // pointer attached; only a device with no usable pointer at all is turned away.
     const isMobile = window.matchMedia('(hover: none) and (pointer: coarse) and (any-hover: none) and (any-pointer: coarse)').matches;
     if (isMobile) {
+        mobileGate();   // the branded notice — draws the title through the CRT; never touches the sim or the art
         return;
     }
 

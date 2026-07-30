@@ -18,28 +18,65 @@
             cursor: crosshair;
             touch-action: none;
         }
+        /* The gate is the ONLY thing a phone ever sees, so it has to be in the game's language rather than a
+           plain web page — same near-black, same phosphor green (#7dd069), same gold (#f0d060), scanlines and
+           a slow flicker standing in for the CRT shader the canvas would have applied. Pure CSS on purpose:
+           main.js returns before it renders anything on mobile, so nothing here can rely on the game. */
         #mobile-gate {
             display: none;
             position: fixed;
             inset: 0;
             align-items: center;
             justify-content: center;
-            background: #000;
-            color: #e6e5de;
-            font-family: monospace;
-            font-size: 16px;
-            letter-spacing: 0.08em;
-            line-height: 1.6;
+            background: radial-gradient(ellipse at center, #0b1410 0%, #05070a 70%);
+            color: #c8ccd8;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: 15px;
+            letter-spacing: 0.14em;
+            line-height: 1.9;
             text-align: center;
             text-transform: uppercase;
-            padding: 24px;
+            padding: 28px;
             z-index: 9999;
+            overflow: hidden;
+        }
+        /* scanlines + a corner vignette: the two cheapest cues that read as "this is that CRT" */
+        #mobile-gate::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            background:
+                repeating-linear-gradient(180deg, rgba(0,0,0,0.55) 0 2px, rgba(0,0,0,0) 2px 4px),
+                radial-gradient(ellipse at center, rgba(0,0,0,0) 55%, rgba(0,0,0,0.75) 100%);
+            animation: gate-flicker 5.5s steps(2, end) infinite;
+        }
+        @keyframes gate-flicker { 0%, 96% { opacity: 1; } 97% { opacity: 0.86; } 100% { opacity: 1; } }
+        @media (prefers-reduced-motion: reduce) { #mobile-gate::before { animation: none; } }
+
+        #mobile-gate .gate-inner { position: relative; max-width: 24ch; }
+        /* the wordmark, with the CRT's chromatic fringing faked in text-shadow */
+        #mobile-gate .gate-title {
+            display: block;
+            color: #7dd069;
+            font-size: 26px;
+            letter-spacing: 0.3em;
+            margin-bottom: 22px;
+            text-shadow: -1px 0 rgba(255,64,64,0.55), 1px 0 rgba(64,160,255,0.55), 0 0 14px rgba(125,208,105,0.45);
         }
         #mobile-gate strong {
             display: block;
-            color: #ffd24a;
-            font-size: 20px;
-            margin-bottom: 12px;
+            color: #f0d060;
+            font-size: 17px;
+            letter-spacing: 0.18em;
+            margin-bottom: 14px;
+        }
+        #mobile-gate .gate-note {
+            display: block;
+            margin-top: 22px;
+            color: #6a6f7c;
+            font-size: 12px;
+            letter-spacing: 0.1em;
         }
         /* Codex #62-1 — `hover`/`pointer` describe only the PRIMARY pointing device, so a touch-first
            laptop matches (hover: none) and (pointer: coarse) even though it also has a trackpad or mouse.
@@ -51,20 +88,31 @@
            condition it drops the whole rule, which on a phone would mean a blank canvas with the notice
            hidden — worse than either outcome the gate is choosing between. */
         @media (hover: none) and (pointer: coarse) and (any-hover: none) and (any-pointer: coarse) {
-            #tv { display: none; }
-            #mobile-gate { display: flex; }
+            /* The canvas STAYS — on a phone it carries the branded notice (mobileGate() in main.js draws the
+               animated title through the same CRT shader). It is inert: the sim never boots, and
+               pointer-events are off so no touch can reach a handler. */
+            #tv { pointer-events: none; touch-action: none; }
+            /* The plain-text block is now only a fallback for "main.js never arrived". The inline script
+               below reveals it on a timer; the canvas gate normally sets `gate-live` long before that. */
+            html.gate-fallback:not(.gate-live) #mobile-gate { display: flex; }
         }
     </style>
 </head>
 <body>
     <canvas id="tv"></canvas>
     <div id="mobile-gate" role="status">
-        <div>
-            <strong>Desktop required</strong>
-            Propagate is built for a mouse and keyboard.<br>
-            Open this page on a desktop to play.
-        </div>
+        <div class="gate-inner">
+            <span class="gate-title">Propagate</span>
+            <strong>Desktop only</strong>
+            Try on a different device.
+                    </div>
     </div>
+    <script>
+        // If main.js never arrives (offline, blocked, a bad deploy) a phone would sit on black forever.
+        // Reveal the plain-text notice only in that case. mobileGate() sets `gate-live` as its first act,
+        // so on any healthy load this class is added to a rule that no longer matches.
+        setTimeout(function () { document.documentElement.classList.add('gate-fallback'); }, 6000);
+    </script>
     <script type="module" src="./main.js"></script>
 </body>
 </html>
