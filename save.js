@@ -202,6 +202,12 @@ export async function quarantineTown(seed, reason, expect = null) {
             // leave `gen` at 0 and the bump below would always write 1 instead of storedGen + 1.
             const gg = store.get(genKey(seed));
             gg.onsuccess = () => { gen = (gg.result || 0); };
+            // Codex #58(a) — the index slice moves WITH the town. Quarantine used to leave it entirely alone, so
+            // the replacement inherited the dead town's summary (a ghost on the world map that its own rev guard
+            // then refused to overwrite), and also its inbox, pairs, encounters and news. Read the index here so
+            // the capture happens in the same transaction as the move.
+            let widx = null;
+            const rw = store.get(WORLD_KEY); rw.onsuccess = () => { widx = rw.result || { towns: {}, encounters: [] }; };
             const g = store.get('town:' + seed);
             g.onsuccess = () => {
                 const snap = g.result;
@@ -211,8 +217,10 @@ export async function quarantineTown(seed, reason, expect = null) {
                     stale = true;
                     return;                             // a different occupant arrived — leave it alone
                 }
-                rec = { seed, snap, reason: String(reason || 'unreadable'), at: Date.now(), v: snap.v ?? null, day: snap.day ?? null, rev: snap._rev ?? 0 };
+                const slice = sliceKeyed(widx, seed);   // capture BEFORE pruning
+                rec = { seed, snap, slice, reason: String(reason || 'unreadable'), at: Date.now(), v: snap.v ?? null, day: snap.day ?? null, rev: snap._rev ?? 0 };
                 store.put(rec, 'unreadable:' + seed);
+                store.put(pruneKeyed(widx, seed), WORLD_KEY);   // the replacement starts with a clean sheet
                 store.delete('town:' + seed);           // vacate the slot so the new session can save
                 gen = gen + 1;                          // the slot changed hands — supersede every older writer
                 store.put(gen, genKey(seed));
@@ -302,11 +310,17 @@ export async function restoreQuarantined(seed) {
             const gg = store.get(genKey(seed));      // generation first — callbacks fire in request order
             let gen = 0;
             gg.onsuccess = () => { gen = gg.result || 0; };
+            let widx = null;
+            const rw = store.get(WORLD_KEY); rw.onsuccess = () => { widx = rw.result || { towns: {}, encounters: [] }; };
             const r = store.get('unreadable:' + seed);
             r.onsuccess = () => {
                 const rec = r.result;
                 if (!rec || !rec.snap) return;       // nothing to restore — leave everything untouched
                 store.put(rec.snap, 'town:' + seed);
+                // Codex #58(a) — bring the town's index slice back with it, so a recovered town rejoins the world
+                // with its own history rather than as a stranger. `rec.slice` is absent on quarantines taken by
+                // the build that did not capture one; applyKeyed treats that as nothing to restore.
+                if (rec.slice) store.put(applyKeyed(widx, rec.slice, seed), WORLD_KEY);
                 store.delete('unreadable:' + seed);  // consume the SAME record we just read, never a newer one
                 store.put(gen + 1, genKey(seed));
                 day = rec.snap.day ?? true;
@@ -350,22 +364,103 @@ export async function loadWorldIndex() {
 // + put inside ONE txn makes concurrent updates safe (each sees the prior's committed value). `mutator(cur)`
 // mutates + returns the index; it must be SYNCHRONOUS (no awaits — the txn would auto-close). Returns the
 // stored index, or null on failure (best-effort, never throws into the sim).
-export function updateWorldIndex(mutator) {
+//
+// Codex #58 — `fence` extends the SLOT INVARIANT to derived state. Any mutation carrying data derived from a
+// slot's occupant (a town summary, encounters resolved from it, its inbox) must only land while that occupant
+// is still the authoritative one. Pass `{ seed, gen }`; the generation is read in THIS transaction and the
+// mutator is skipped entirely on a mismatch (returns null, which every caller already treats as "did not
+// happen").
+//
+// Why the index needed this at all: it has its own rev-monotonic guard, so it inherited the whole #56-1 bug.
+// After a quarantine the entry kept the SUPERSEDED town's revision and silently rejected the replacement's
+// summaries — reproduced on seed 313131, live world at rev 2 while the index still read rev 8, leaving a ghost
+// of a dead town on the world map. And per the review, generation-in-the-summary alone is not enough: a
+// DELAYED generation-0 write can still land after the quarantine if the old entry was pruned, which is why the
+// fence is checked against the authoritative `gen:<seed>` here rather than against whatever the index holds.
+export function updateWorldIndex(mutator, fence = null) {
     return openDb().then(db => new Promise((resolve, reject) => {
         const tx = db.transaction(STORE, 'readwrite');
         const store = tx.objectStore(STORE);
+        // Fence FIRST — callbacks fire in request order, so the generation must be read before the index or
+        // `fenceGen` is still 0 when the mutator runs.
+        let fenceGen = 0;
+        if (fence) { const fg = store.get(genKey(fence.seed)); fg.onsuccess = () => { fenceGen = fg.result || 0; }; }
         const getReq = store.get(WORLD_KEY);
-        let out = null;
+        let out = null, fenced = false;
         getReq.onsuccess = () => {
+            if (fence && (fence.gen || 0) !== fenceGen) {
+                fenced = true;
+                console.warn(`ry-farms: world-index write skipped — town ${fence.seed} is generation ${fenceGen}, this writer holds ${fence.gen || 0}`);
+                return;                        // a superseded occupant must not publish derived state
+            }
             const cur = getReq.result || { towns: {}, encounters: [] };
             try { out = mutator(cur) || cur; } catch (e) { try { tx.abort(); } catch {} reject(e); return; }
             store.put(out, WORLD_KEY);
         };
         getReq.onerror = () => reject(getReq.error);
-        tx.oncomplete = () => resolve(out);
+        tx.oncomplete = () => resolve(fenced ? null : out);
         tx.onerror = () => reject(tx.error);
         tx.onabort = () => reject(tx.error || new Error('world-index txn aborted'));
     })).catch(err => { console.warn('ry-farms: atomic world-index update failed', err); return null; });
+}
+
+
+// Codex #58 — the world-index SLICE, extracted so every path that vacates a slot handles derived state the
+// same way. `wipeTown`/`undoWipe` already did this correctly and `quarantineTown` did not touch the index at
+// all, which is how a replacement town inherited the dead one's summary, inbox, pairs, encounters and news.
+// Writing a second copy for quarantine is exactly the duplication that produced the sim/render hash divergence,
+// so both now call these.
+//
+// A slice is everything in the index keyed to one seed: its summary, its inbox (including a traveler still
+// mid-journey), the pair records and #Codex25-3 the DURABLE metPairs dedup keys (without those, GC drops the
+// absent town's met-pairs and a restore lets every old pair re-detect), plus news and encounters naming it.
+function sliceKeyed(index, seed) {
+    const s = String(seed);
+    const inPair = k => { const [a, b] = k.split(':'); return a === s || b === s; };
+    return {
+        town: index.towns ? index.towns[s] : undefined,
+        inbox: (index.inbox && index.inbox[s] !== undefined) ? index.inbox[s] : undefined,
+        pairs: index.pairs ? Object.fromEntries(Object.entries(index.pairs).filter(([k]) => inPair(k))) : {},
+        metPairs: index.metPairs ? Object.keys(index.metPairs).filter(inPair) : [],
+        news: Array.isArray(index.news) ? index.news.filter(n => String(n.origin) === s || String(n.destination) === s) : [],
+        encounters: Array.isArray(index.encounters) ? index.encounters.filter(e => String(e.a) === s || String(e.b) === s) : [],
+    };
+}
+
+// Remove that slice from the index, in place. Always safe to call: an unsaved town has nothing to remove and
+// leaves no zombie entry either way.
+function pruneKeyed(index, seed) {
+    const s = String(seed);
+    const inPair = k => { const [a, b] = k.split(':'); return a === s || b === s; };
+    if (index.towns) delete index.towns[s];
+    if (index.inbox) delete index.inbox[s];
+    if (index.pairs) for (const k of Object.keys(index.pairs)) if (inPair(k)) delete index.pairs[k];
+    if (index.metPairs) for (const k of Object.keys(index.metPairs)) if (inPair(k)) delete index.metPairs[k];
+    if (Array.isArray(index.news)) index.news = index.news.filter(n => String(n.origin) !== s && String(n.destination) !== s);
+    if (Array.isArray(index.encounters)) index.encounters = index.encounters.filter(e => String(e.a) !== s && String(e.b) !== s);
+    return index;
+}
+
+// Put a captured slice back, in place. Encounters and news are merged by key rather than appended, so an undo
+// cannot duplicate an event a concurrent tab already re-detected.
+function applyKeyed(index, slice, seed) {
+    if (!slice) return index;
+    const sk = String(seed);
+    index.towns = index.towns || {}; index.inbox = index.inbox || {}; index.pairs = index.pairs || {};
+    index.metPairs = index.metPairs || {};
+    index.news = Array.isArray(index.news) ? index.news : [];
+    index.encounters = Array.isArray(index.encounters) ? index.encounters : [];
+    if (slice.town !== undefined) index.towns[sk] = slice.town;
+    if (slice.inbox !== undefined) index.inbox[sk] = slice.inbox;
+    for (const [k, v] of Object.entries(slice.pairs || {})) index.pairs[k] = v;
+    for (const k of (slice.metPairs || [])) index.metPairs[k] = 1;
+    const encKey = e => `${e.a}:${e.b}:${e.kind || ''}:${e.day ?? ''}:${e.ordinal ?? ''}`;
+    const haveEnc = new Set(index.encounters.map(encKey));
+    for (const e of (slice.encounters || [])) if (!haveEnc.has(encKey(e))) index.encounters.push(e);
+    const newsKey = nn => `${nn.origin}:${nn.destination}:${nn.ordinal ?? ''}`;
+    const haveNews = new Set(index.news.map(newsKey));
+    for (const nn of (slice.news || [])) if (!haveNews.has(newsKey(nn))) index.news.push(nn);
+    return index;
 }
 
 // The NEW TOWN hatch: retire a seed's snapshot (and the latest-pointer if it points there).
@@ -395,23 +490,8 @@ export async function wipeTown(seed) {
             const rWorld = store.get(WORLD_KEY);
             rWorld.onsuccess = () => {
                 const index = rWorld.result || { towns: {}, encounters: [] };
-                // CAPTURE the town's whole world-index slice — summary, inbox (incl. a future traveler mid-journey),
-                // pairs, news, encounters, AND #Codex25-3 the DURABLE metPairs dedup keys. Without metPairs, GC
-                // drops the wiped town's met-pairs while it's absent and undo lets every old pair re-detect.
-                const slice = {
-                    town: index.towns ? index.towns[s] : undefined,
-                    inbox: (index.inbox && index.inbox[s] !== undefined) ? index.inbox[s] : undefined,
-                    pairs: index.pairs ? Object.fromEntries(Object.entries(index.pairs).filter(([k]) => inPair(k))) : {},
-                    metPairs: index.metPairs ? Object.keys(index.metPairs).filter(inPair) : [],
-                    news: Array.isArray(index.news) ? index.news.filter(n => String(n.origin) === s || String(n.destination) === s) : [],
-                    encounters: Array.isArray(index.encounters) ? index.encounters.filter(e => String(e.a) === s || String(e.b) === s) : [],
-                };
-                if (index.towns) delete index.towns[s];
-                if (index.inbox) delete index.inbox[s];
-                if (index.pairs) for (const k of Object.keys(index.pairs)) if (inPair(k)) delete index.pairs[k];
-                if (index.metPairs) for (const k of Object.keys(index.metPairs)) if (inPair(k)) delete index.metPairs[k];
-                if (Array.isArray(index.news)) index.news = index.news.filter(n => String(n.origin) !== s && String(n.destination) !== s);
-                if (Array.isArray(index.encounters)) index.encounters = index.encounters.filter(e => String(e.a) !== s && String(e.b) !== s);
+                const slice = sliceKeyed(index, seed);   // capture BEFORE pruning
+                pruneKeyed(index, seed);
                 store.put(index, WORLD_KEY);          // the town is ALWAYS removed from the index (an unsaved town too — no zombie)
                 store.delete('town:' + seed);
                 store.put(wGen + 1, genKey(seed));    // supersede any tab still holding this town
@@ -457,7 +537,6 @@ export async function undoWipe() {
                 if (!backup || !backup.snap) return;   // nothing to restore — leave everything, resolve null
                 const { snap, latest, slice } = backup;   // #Codex26-2 one coherent generation: same seed's snap+latest+slice
                 restoredSeed = snap.seed;
-                const sk = String(snap.seed);
                 store.put(snap, 'town:' + snap.seed);
                 // Codex #57 judgment — undo puts a town BACK, which supersedes any tab holding whatever
                 // occupied the slot meanwhile, so it bumps the generation too. Unlike the other call sites the
@@ -468,23 +547,7 @@ export async function undoWipe() {
                 rGen.onsuccess = () => { store.put((rGen.result || 0) + 1, genKey(snap.seed)); };
                 store.put(latest && latest.seed === snap.seed ? latest
                     : { seed: snap.seed, day: snap.day, season: snap.season, year: snap.year, savedAt: Date.now() }, 'latest');
-                if (slice) {
-                    const index = rWorld.result || { towns: {}, encounters: [] };
-                    index.towns = index.towns || {}; index.inbox = index.inbox || {}; index.pairs = index.pairs || {};
-                    index.metPairs = index.metPairs || {};
-                    index.news = Array.isArray(index.news) ? index.news : []; index.encounters = Array.isArray(index.encounters) ? index.encounters : [];
-                    if (slice.town !== undefined) index.towns[sk] = slice.town;
-                    if (slice.inbox !== undefined) index.inbox[sk] = slice.inbox;
-                    for (const [k, v] of Object.entries(slice.pairs || {})) index.pairs[k] = v;
-                    for (const k of (slice.metPairs || [])) index.metPairs[k] = 1;   // #Codex25-3 restore the durable dedup keys
-                    const encKey = e => `${e.a}:${e.b}:${e.kind || ''}:${e.day ?? ''}:${e.ordinal ?? ''}`;
-                    const haveEnc = new Set(index.encounters.map(encKey));
-                    for (const e of (slice.encounters || [])) if (!haveEnc.has(encKey(e))) index.encounters.push(e);
-                    const newsKey = nn => `${nn.origin}:${nn.destination}:${nn.ordinal ?? ''}`;
-                    const haveNews = new Set(index.news.map(newsKey));
-                    for (const nn of (slice.news || [])) if (!haveNews.has(newsKey(nn))) index.news.push(nn);
-                    store.put(index, WORLD_KEY);
-                }
+                if (slice) store.put(applyKeyed(rWorld.result || { towns: {}, encounters: [] }, slice, snap.seed), WORLD_KEY);
                 // #Codex27-2 consume the coherent backup AND any legacy keys (whichever we restored from)
                 store.delete('backup:wipe'); store.delete('backup:town'); store.delete('backup:latest'); store.delete('backup:worldslice');
             };

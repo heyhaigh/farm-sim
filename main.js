@@ -6637,6 +6637,10 @@ async function registerWorld(w, summary) {
         // actually persisted. Fall back to a live read only for direct callers that don't pass one.
         const s = summary || townSummary(w);
         let fresh = [], mine = [];
+        // Codex #58 — FENCED on the slot's generation. Everything this mutator writes is derived from `w`:
+        // its summary, the encounters resolved from that summary, its inbox. A superseded occupant publishing
+        // any of it is how a dead town kept a ghost entry on the world map.
+        const fence = { seed: w.seed, gen: w._gen || 0 };
         const idx = await updateWorldIndex(index => {
             index.towns = index.towns || {}; index.encounters = index.encounters || []; index.ledgers = index.ledgers || {};
             const prev = index.towns[s.seed] || {};
@@ -6648,8 +6652,8 @@ async function registerWorld(w, summary) {
             fresh = detectEncounters(index);                 // resolves raids/parleys, queues inbox
             mine = (index.inbox && index.inbox[String(w.seed)]) || [];
             return index;
-        });
-        if (!idx) return;
+        }, fence);
+        if (!idx) return;                                // fenced or failed — nothing was published
         for (const ev of fresh) if (w === world) world.addLog(encounterLine(ev), '#c8b0e0');   // surface on the town log
         if (mine.length && w === world) await consumeInbox(w, mine);
     } finally { _worldBusy = false; }
@@ -6675,6 +6679,8 @@ async function consumeInbox(w, events) {
     // clear everything we processed — EXCEPT a traveler still en route (arrivalDay in the future): it must
     // linger in the inbox until the sim reaches its day, when Slice C consumes it. (applyInbox leaves it too.)
     const done = new Set(events.filter(e => !(e.kind === 'traveler' && (e.day || 0) > w.day)).map(inboxEventId));
+    // Codex #58 — fenced for the same reason: the ids being cleared and the summary being republished are both
+    // derived from this occupant. A superseded one must not acknowledge events on the live town's behalf.
     await updateWorldIndex(index => {              // remove ONLY the ids we processed, keeping concurrent appends
         const box = index.inbox && index.inbox[String(w.seed)];
         if (box) index.inbox[String(w.seed)] = box.filter(e => !done.has(inboxEventId(e)));
@@ -6683,7 +6689,7 @@ async function consumeInbox(w, events) {
         const prev = index.towns[summary.seed] || {};
         if (!(prev.rev != null && (summary.rev || 0) < prev.rev)) index.towns[summary.seed] = { ...prev, ...summary, firstSeen: prev.firstSeen || summary.lastSeen || Date.now() };
         return index;
-    });
+    }, { seed: w.seed, gen: w._gen || 0 });
 }
 
 // ---------------------------------------------------------------------------
