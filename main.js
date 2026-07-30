@@ -6580,7 +6580,7 @@ function drawFaceoff() {
 // Autosave (#88): the town writes itself to IndexedDB at every day rollover, plus whenever the
 // tab hides/closes. Fire-and-forget — a failed write never touches the sim (save.js swallows).
 function maybeAutosave() {
-    if (!booted || !world || world._spectator || world.day === lastSavedDay) return;   // #START the menu backdrop never persists
+    if (!booted || !world || world._persistenceDisabled || world.day === lastSavedDay) return;   // never persists
     lastSavedDay = world.day;                       // claim synchronously so a slow write can't double-fire
     // #Codex24-1/#Codex25-1: register the world summary ONLY after a SUCCESSFUL save, and register an IMMUTABLE
     // summary captured SYNCHRONOUSLY with the save (same world state — the sim can't interleave between these two
@@ -6635,7 +6635,13 @@ async function registerWorld(w, summary) {
         // #Codex25-1: `summary` is captured by the caller SYNCHRONOUSLY with the save (same world state) and
         // stamped with the COMMITTED rev — so we never publish a summary built from state newer than what was
         // actually persisted. Fall back to a live read only for direct callers that don't pass one.
-        const s = summary || townSummary(w);
+        // Codex #60-2 — the captured summary is REQUIRED. The fallback was unsafe in a way the fence cannot
+        // catch: the world advances in memory after its last save WITHOUT `_rev` changing, so townSummary(w)
+        // could describe newer, unpersisted doctrine/day/envoy state while carrying the still-current stored
+        // revision — and an exact-pair fence accepts it, because the pair is genuinely current. Every caller
+        // already captures synchronously with saveTown and stamps the committed rev.
+        if (!summary) { console.error('ry-farms: registerWorld requires the summary captured with the save — refusing'); return; }
+        const s = summary;
         let fresh = [], mine = [];
         // Codex #58/#59 — FENCED on the full slot pair. Everything this mutator writes is derived from `w`:
         // its summary, the encounters resolved from that summary, its inbox. A superseded occupant publishing
@@ -7533,7 +7539,9 @@ function frame(now) {
                 // LANDS, the town says so on screen: the memory-loop's payoff made visible (council, unanimous:
                 // "your point is followed by silence"). The card queues BEHIND the aftermath cards.
                 const w = world;
-                persistBattle(w, battle).then(ok => {
+                // #60 belt-and-braces with the module's own guard: a non-persisting session must not inscribe
+                // a battle into the shared store, and this path had no guard at all.
+                if (!w._persistenceDisabled) persistBattle(w, battle).then(ok => {
                     if (!ok || w !== world) return;
                     const rid = String(battle.rid).replace(/[^\w:.-]/g, '_').slice(0, 80);
                     pendingInscription = {
@@ -8085,10 +8093,9 @@ function drawStartScreen() {
     // Codex #58 — EVERY persisting world must get its generation from a PAIRED slot observation, so there are
     // exactly three ways in and each establishes the pair:
     //   startMode  — the menu backdrop. Never persists, never touches storage, so it needs no pair at all.
-    //   ?fresh=1   — an EXPLICIT claim. If the slot is occupied this goes through the same undoable wipe the
-    //                player's NEW TOWN hatch uses, which backs the town up, bumps the generation and prunes the
-    //                index. Without that the fresh world arrives at rev 0 against a stored rev N and can never
-    //                save — a pre-existing bug that equality CAS makes visible instead of silent.
+    //   ?fresh=1   — an EXPLICIT claim, and ONLY over an empty slot. If the slot is occupied we navigate to
+    //                the resume URL instead: a URL parameter must not retire someone's town, and the fresh
+    //                world would arrive at rev 0 against a stored rev N and never save anyway.
     //   otherwise  — resume, or found on an observed-empty slot.
     if (startMode) {
         /* spectator backdrop: no observation, no persistence (see world._spectator below) */
@@ -8103,8 +8110,14 @@ function drawStartScreen() {
             // town with, and the "undoable" guarantee is FALSE the second time — the backup is one-deep, so
             // opening the same URL again overwrites the only copy of the town retired the first time. The
             // player-facing way to start over is the NEW TOWN hatch, which asks first.
-            console.error(`ry-farms: ?fresh refused — seed ${worldSeed} already holds a town (day ${st.snap.day ?? '?'}). Use the NEW TOWN hatch to retire it, or drop ?fresh to resume. Running unsaved.`);
-            noPersistReason = `This seed already holds a town (day ${st.snap.day ?? '?'}), so this fresh one will not be saved over it. Use the NEW TOWN hatch to retire it, or reload without ?fresh to resume it.`;
+            // Codex #60-1 — do NOT launch a playable town here. The occupant is safe, but founding an
+            // ephemeral replacement means the player plays on while every save is silently discarded, and a
+            // log line is far too weak a boundary for that. We READ the occupant successfully, so a safe
+            // destination is known: go there. (The unsaved fallback below stays for genuinely unreadable
+            // storage, where no safe destination exists.)
+            console.error(`ry-farms: ?fresh refused — seed ${worldSeed} already holds a town (day ${st.snap.day ?? '?'}); resuming it instead. Use the NEW TOWN hatch to retire it.`);
+            location.search = '?seed=' + worldSeed;   // reboots into the resume path
+            return;
         } else foundGen = st.gen;   // observed EMPTY at this generation — a rev-0 claim is legitimate
     }
     if (!wantFresh && !startMode) {
@@ -8170,10 +8183,20 @@ function drawStartScreen() {
     // #START the menu backdrop is a SPECTATOR town: it lives and animates but never persists — no
     // autosave, no SuperMemory writeback, no world-index entry, no cross-town raid ambush. Browsing
     // the start screen must leave zero trace (no save slots littered, no junk fed to the memory store).
-    if (startMode) world._spectator = true;
+    // Codex #60 — TWO flags, because they gate different things and conflating them changed gameplay.
+    //   _spectator          — this town is scenery: the menu backdrop. Gates ambient/presentation behaviour
+    //                         (the sentry camera, the start-screen branch) and `_live`.
+    //   _persistenceDisabled — this town must not WRITE: no saves, no world-index publication, no inbox
+    //                         acknowledgement, no SuperMemory writeback, no persistent-storage request.
+    // A backdrop is both. A session we refused to persist (unreadable storage, a stale quarantine) is
+    // persistence-disabled but NOT scenery — it still gets its founding scene and its camera, because those
+    // are display, and suppressing them was an accident of reusing one flag.
+    // Established HERE, before any storage/inbox/index/writeback setup reads them.
+    if (startMode) { world._spectator = true; world._persistenceDisabled = true; }
+    if (noPersistReason) world._persistenceDisabled = true;
     // Only a town that actually persists is worth asking the browser to protect. Doing this on the start
     // screen's throwaway backdrop would spend the one permission prompt on a town nobody keeps.
-    if (!world._spectator) requestPersistentStorage();
+    if (!world._persistenceDisabled) requestPersistentStorage();
     // Say it in the town's own log rather than only the console: a player whose town could not be opened
     // should learn that it was KEPT, not that nothing happened.
     if (quarantined) {
@@ -8181,9 +8204,7 @@ function drawStartScreen() {
         console.warn(`ry-farms: preserved town seed ${quarantined.seed} (day ${quarantined.day}, schema v${quarantined.v}, rev ${quarantined.rev}) at 'unreadable:${quarantined.seed}' — RYFARMS.restoreSave() puts it back`);
     }
     if (noPersistReason) {
-        // Refuse to persist rather than risk overwriting a town we could not read, could not set aside, or
-        // deliberately declined to replace. An unsaved session is recoverable; a buried town is not.
-        world._spectator = true;
+        // The flag is set above, before anything reads it; this only tells the player why.
         world.addLog(noPersistReason, '#e07a5a');
     }
 
@@ -8196,7 +8217,7 @@ function drawStartScreen() {
     // frontier that docked its stores, a parley honored/broken) before the resume card is built, so they land
     // in the chronicle + the "PREVIOUSLY ON" recap. Deterministic consume; cleared once applied.
     // #START a spectator backdrop consumes no inbox and joins no world index — it is not a real town.
-    if (!world._spectator) try {
+    if (!world._persistenceDisabled) try {
         const widx = await loadWorldIndex();
         const pending = (widx.inbox && widx.inbox[String(world.seed)]) || [];
         if (pending.length) await consumeInbox(world, pending);   // exactly-once (Codex r20/r21)
@@ -8249,7 +8270,7 @@ function drawStartScreen() {
     selected = null;
 
     // the town also saves itself whenever the tab hides or closes (the rollover autosave's backstop)
-    const saveOnHide = () => { if (booted && world && !world._retired && !world._spectator) saveTown(world); };
+    const saveOnHide = () => { if (booted && world && !world._retired && !world._persistenceDisabled) saveTown(world); };
     const syncTabHidden = () => { if (world) world._tabHidden = document.hidden; };   // #101 sim reads this to pause the LLM chat
     document.addEventListener('visibilitychange', () => {
         syncTabHidden();
@@ -8274,7 +8295,7 @@ function drawStartScreen() {
     // whose stories only reach composer-generation at the next dawn (older saves migrating)
     // and any later arrivals. Display-only, save-carried, fails silent to procedural text.
     const tryEnrich = async () => {
-        if (document.hidden || (world && world._spectator)) return;   // #101 / #START no LLM+memory for a hidden tab or the menu backdrop
+        if (document.hidden || (world && world._persistenceDisabled)) return;   // #101 enrichment rides the save
         const w = world;
         if (await enrichStories(w, () => world === w)) saveTown(w);
     };
@@ -8290,7 +8311,7 @@ function drawStartScreen() {
     // self-hosted SuperMemory. Off the sim loop, best-effort, save-carried stamp. Slower cadence than
     // enrichment so a life is captured with a little history (beliefs form over days); no-ops offline.
     const tryPersist = async () => {
-        if (document.hidden || (world && world._spectator)) return;   // #101 STALE-TAB GUARD + #START menu-backdrop guard: no memory
+        if (document.hidden || (world && world._persistenceDisabled)) return;   // #101 STALE-TAB GUARD: no writeback
         const w = world;               // writeback while the tab is hidden OR while a spectator backdrop is up (feeds SuperMemory's paid extraction otherwise)
         // #101 the tab can be hidden (or the town replaced) DURING any await below, so every later paid op rechecks —
         // guarding only at the top let three writeback/enrich calls still fire after the tab went to the background.

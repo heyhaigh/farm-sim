@@ -41,7 +41,17 @@ function historySignature(world) {
     return `${(r.history || []).length}:${r.manager}:${r.watch}:${r.managerTerms}:${world.year}:${world.raidsSuffered || 0}:${world.learned || ''}` +
            `:${nem ? `${nem.pairKey}.${nem.raidCount}.${nem.sworeAgainst ?? ''}.${nem.ended ? 1 : 0}` : ''}:${(world.nemesisLog || []).length}`;
 }
+
+// Codex #60 — a session that must not WRITE must not write HERE either. The three entry points below all
+// push into the shared SuperMemory store, which outlives the tab, so a menu backdrop or a session we refused
+// to persist (unreadable storage, a stale quarantine) must be silent. Centralized in the module rather than
+// left to each caller, for the reason saveTown's own guard exists: the caller that forgets is the one that
+// matters, and this was already missed once — persistBattle was called from the raid path with no guard at
+// all, so a non-persisting session could still inscribe a battle into the shared store.
+function mayWrite(world) { return !!world && !world._persistenceDisabled; }
+
 export async function persistTownHistory(world, isCurrent = () => true) {
+    if (!mayWrite(world)) return false;   // #60 non-persisting session: never touch the shared store
     if (typeof fetch !== 'function' || historyInflight) return false;
     if (Date.now() - lastHistoryFailAt < RETRY_COOLDOWN_MS) return false;
     const r = world.roles;
@@ -117,6 +127,7 @@ function lifeSig(f) {
 // Persist each farmer whose life has CHANGED since it was last written. `isCurrent` guards a response
 // landing after a NEW-town reset. Returns the count refreshed this pass (0 = nothing changed / store down).
 export async function persistLives(world, isCurrent = () => true) {
+    if (!mayWrite(world)) return false;   // #60 non-persisting session: never touch the shared store
     if (typeof fetch !== 'function' || inflight) return 0;
     if (Date.now() - lastFailAt < RETRY_COOLDOWN_MS) return 0;
     const pending = [];
@@ -175,6 +186,7 @@ export async function persistLives(world, isCurrent = () => true) {
 const battlesSent = new Set();
 let battleInflight = false;
 export async function persistBattle(world, battle) {
+    if (!mayWrite(world)) return false;   // #60 non-persisting session: never touch the shared store
     if (typeof fetch !== 'function' || !battle || !battle.rid || battlesSent.has(battle.rid) || battleInflight) return false;
     battlesSent.add(battle.rid);   // one shot per raid — a failed write is a lost tale, not a retry storm
     battleInflight = true;

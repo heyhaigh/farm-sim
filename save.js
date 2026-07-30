@@ -72,12 +72,14 @@ export async function saveTown(world) {
     // a late whisper/debrief callback). The guard is centralized here so every caller is covered, and
     // re-checked inside the transaction so a wipe landing mid-write can't slip a put past it.
     if (world._retired) return null;
-    // Same argument for a NON-PERSISTING world, and it is not hypothetical: `_spectator` was honoured at the
+    // Same argument for a NON-PERSISTING world, and it is not hypothetical: the flag was honoured at the
     // autosave, the on-hide save and the writeback, but `RYFARMS.saveNow()` calls this function directly and
     // bypassed all three. That matters most in the case it was added for — when a quarantine FAILS, the boot
     // marks the session non-persisting precisely so it cannot overwrite the unreadable town still sitting in
     // the slot, and a single manual save would have defeated that. Centralized here so every caller is covered.
-    if (world._spectator) return null;
+    // Codex #60: `_persistenceDisabled`, NOT `_spectator` — the menu backdrop sets both, but a refused session
+    // is only the former, and gating saves on "is this scenery" is what suppressed its founding scene.
+    if (world._persistenceDisabled) return null;
     try {
         const data = world.serialize();               // data._rev = world._rev
         const key = 'town:' + world.seed, myRev = data._rev || 0, myGen = world._gen || 0;
@@ -397,7 +399,13 @@ export function updateWorldIndex(mutator, fence) {
     // A genuinely global, non-occupant-derived maintenance pass should get its own named API (repairWorldIndex)
     // rather than a sentinel here.
     if (!fence || fence.seed == null || typeof fence.gen !== 'number' || typeof fence.rev !== 'number') {
-        return Promise.reject(new Error('updateWorldIndex requires a { seed, gen, rev } fence'));
+        // Codex #60-3 — fail closed and LOUD, but resolve rather than reject. This check runs before the
+        // function's own catch, and `registerWorld` is called fire-and-forget by the autosave, so rejecting
+        // produced an unhandled rejection: a bug in index publication escaping into the game loop, which is
+        // exactly what this file's best-effort contract exists to prevent. A missing fence is a programming
+        // error — it must never write unfenced, and it must never take the game down either.
+        console.error('ry-farms: updateWorldIndex requires a { seed, gen, rev } fence — write refused', fence);
+        return Promise.resolve(null);
     }
     return openDb().then(db => new Promise((resolve, reject) => {
         const tx = db.transaction(STORE, 'readwrite');
