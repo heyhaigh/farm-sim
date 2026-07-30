@@ -47,12 +47,26 @@ import { obstacleTier, forageIngredient, treeVariant, treeIsFruit, treeStageAt, 
 // which needs a DOM and so could never be imported here: changing any of them repainted every existing town
 // with both harnesses green. They decide which grass patch a tile is, which variant of a sprite set it gets,
 // and how far that sprite is nudged — all recomputed live, none of it stored.
-import { grassPatch, pickIndex, tileJitter, tileNoise, tileRand } from '../tilehash.js';
+import { grassPatch, pickIndex, tileJitter, tileNoise, tileRand, WILD_SPREAD } from '../tilehash.js';
 
 // Pinned 2026-07-29 when this section was added. Re-pin DELIBERATELY: a terrain hash moving means existing
 // towns' frontier terrain or per-tile attributes changed, and a tables hash moving means a save-referenced
 // list was reordered. Both are compatibility events, not routine re-baselines.
-const TERRAIN_BASELINE = { 20260706: '2c0d7424', 42: 'a3b6cfee', 7: '65125bac', 3: 'a421f74f' };
+// Pinned per PART, not as one opaque hash (Codex #57). A drift then names itself: `tiles` is the founding
+// valley, `frontier` the lazily generated wilderness — both per-seed — while `attrs` (sim-side per-tile
+// hashes) and `look` (render-side) take no seed at all and are a property of the CODE, so they are pinned
+// once. Re-pin DELIBERATELY: a moved part means existing towns differ, and the part tells you which way.
+//
+// CANONICAL RUNTIME for these values: node v24.4.1 darwin/arm64. The generation path uses Math.hypot and
+// friends, which ECMAScript leaves implementation-approximated, so a different engine or version may legally
+// produce different low bits. If every part moves at once AND the runtime differs, suspect the runtime first.
+const TERRAIN_BASELINE = {
+    20260706: { tiles: '2195aa20', frontier: 'be024324' },
+    42:       { tiles: 'ac75eeed', frontier: 'ec721114' },
+    7:        { tiles: '00455fdc', frontier: 'd2ca09eb' },
+    3:        { tiles: '9622d43c', frontier: '0e1ced3f' },
+};
+const HASH_BASELINE = { attrs: 'f5bd4e3b', look: 'd3b1a6fd' };
 const TABLES_BASELINE = '67414731';
 
 function fnvBytes(arr) {
@@ -70,7 +84,7 @@ const TREE_SAMPLE_DAYS = [1, 6, 14];
 
 function terrainDigest(seed) {
     const w = new World(seed);                       // construction only — generation, no simulation
-    const parts = ['tiles:' + fnvBytes(w.tiles)];
+    const parts = { tiles: fnvBytes(w.tiles) };
     // FRONTIER — EXHAUSTIVE, not sampled. Reading a tile outside the valley materialises its chunk from
     // #genTile, the one generator whose output is NOT frozen into a save: change it and a player's next
     // expedition crosses a seam between old-formula and new-formula ground.
@@ -93,27 +107,38 @@ function terrainDigest(seed) {
         if (i >= 0 && i < GRID && j >= 0 && j < GRID) continue;   // the valley is persisted, not generated
         band.push(w.get(i, j));
     }
-    parts.push('frontier:' + fnvBytes(band));
+    parts.frontier = fnvBytes(band);
     // EVERY tile, not a lattice. These are pure arithmetic with no chunk generation behind them, so density
     // is nearly free — and a stride-7 lattice (144 points) missed a 0.01 nudge to grassPatch's SUNLIT
     // threshold, because that band is the tail of the distribution and 144 samples contained none of it. The
     // same mistake as the frontier: thin slices need coverage, not cleverness.
+    return parts;
+}
+
+// The per-tile hash families take NO seed — obstacleTier, forageIngredient, treeStageAt, grassPatch,
+// pickIndex and tileJitter are functions of position alone. So they are a property of the CODE, not of any
+// one world, and pinning them per-seed would have been the same four numbers repeated. Hashed once.
+function hashDigest() {
+    const parts = {};
     // PER-TILE ATTRIBUTES — re-derived live on every frame and every work tick, never stored, so a change
     // here rewrites existing towns: rock size and ore yield, forest age, which wild tile holds which herb.
     const attrs = [];
     for (let i = 0; i < GRID; i++) for (let j = 0; j < GRID; j++) {
         attrs.push(`${obstacleTier(i, j)}${forageIngredient(i, j) || '-'}${treeVariant(i, j, 6)}${treeIsFruit(i, j) ? 1 : 0}${TREE_SAMPLE_DAYS.map(d => treeStageAt(i, j, d)).join('')}`);
     }
-    parts.push('attrs:' + fnv(attrs.join('|')));
+    parts.attrs = fnv(attrs.join('|'));
     // RENDER-SIDE per-tile look. Sampled over the same lattice, plus the jitter at the spreads main.js
     // actually passes (tree 32x18 is the widest, so it is the one that would visibly shift).
     const look = [];
     for (let i = 0; i < GRID; i++) for (let j = 0; j < GRID; j++) {
-        const jt = tileJitter(i, j, 32, 18), jr = tileJitter(i, j, 5, 3);
-        look.push(`${grassPatch(i, j)}${pickIndex(i, j, 64, 6)}${pickIndex(i, j, 68, 5)}${jt.x},${jt.y};${jr.x},${jr.y}`);
+        // every jitter KIND, so a change to any spread in WILD_SPREAD moves the digest
+        const jt = tileJitter(i, j, 'tree'), jr = tileJitter(i, j, 'rock');
+        const js = tileJitter(i, j, 'stump'), jo = tileJitter(i, j, 'other');
+        look.push(`${grassPatch(i, j)}${pickIndex(i, j, 64, 6)}${pickIndex(i, j, 68, 5)}${jt.x},${jt.y};${jr.x},${jr.y};${js.x},${js.y};${jo.x},${jo.y}`);
     }
-    parts.push('look:' + fnv(look.join('|')));
-    return fnv(parts.join('/'));
+    parts.attrs = fnv(attrs.join('|'));
+    parts.look = fnv(look.join('|'));
+    return parts;
 }
 
 function tablesDigest() {
@@ -133,16 +158,50 @@ if (TABLES_BASELINE == null) console.log(`content tables  ${tHash}  (unpinned �
 else if (tHash !== TABLES_BASELINE) { console.error(`FAIL content tables ${tHash} != baseline ${TABLES_BASELINE} — a save-referenced table was REORDERED, not appended to`); compatFail++; }
 else console.log(`content tables  ${tHash}  ok`);
 
+// Codex #57 judgment — the four parts are pinned SEPARATELY. One opaque hash told you something moved but
+// never what, so every legitimate terrain change meant re-pinning four numbers blind. Now a drift names its
+// own part: `tiles` is the founding valley, `frontier` the generated wilderness, `attrs` the sim-side
+// per-tile hashes, `look` the render-side ones. That keeps the coverage exhaustive while making a re-pin
+// auditable — you can see whether you changed what you meant to.
+const WORLD_PARTS = ['tiles', 'frontier'];
+const CODE_PARTS = ['attrs', 'look'];
+
+function report(label, got, base, parts) {
+    const drift = [], unstable = [];
+    for (const k of parts) {
+        if (got[k] !== got['__2nd_' + k]) unstable.push(k);
+        else if (base[k] == null) drift.push(`${k}=${got[k]}  (unpinned)`);
+        else if (got[k] !== base[k]) drift.push(`${k}: ${base[k]} -> ${got[k]}`);
+    }
+    const line = parts.map(k => `${k}=${got[k]}`).join('  ');
+    if (!unstable.length && !drift.length) { console.log(`${label.padEnd(24)} ok    ${line}`); return 0; }
+    console.error(`${label.padEnd(24)} FAIL  ${line}`);
+    for (const u of unstable) console.error(`   ${u}: NOT reproducible in-process — a determinism bug, not a content change`);
+    for (const d of drift) console.error(`   ${d}`);
+    return unstable.length + drift.length;
+}
+
+// seed-independent: the per-tile hash families
+{
+    const a = hashDigest(), b = hashDigest();
+    for (const k of CODE_PARTS) a['__2nd_' + k] = b[k];
+    compatFail += report('per-tile hashes', a, HASH_BASELINE, CODE_PARTS);
+}
+// per-seed: the founding valley and the generated frontier
 for (const seed of SEEDS) {
     const a = terrainDigest(seed), b = terrainDigest(seed);
-    const same = a === b;
-    const base = TERRAIN_BASELINE[seed];
-    const ok = base == null ? '(unpinned)' : (a === base ? 'ok' : `FAIL != ${base}`);
-    console.log(`terrain seed ${String(seed).padEnd(9)} ${a}  same-twice=${same}  ${ok}`);
-    if (!same) { console.error(`  seed ${seed}: generation is NOT reproducible in-process`); compatFail++; }
-    if (base != null && a !== base) compatFail++;
+    for (const k of WORLD_PARTS) a['__2nd_' + k] = b[k];
+    compatFail += report(`terrain seed ${seed}`, a, TERRAIN_BASELINE[seed] || {}, WORLD_PARTS);
 }
-if (compatFail) { console.error(`\n${compatFail} compatibility fingerprint failure(s) — generation or a save-referenced table moved.`); process.exit(1); }
+if (compatFail) {
+    // Codex #57 judgment on floating point — the generation path uses Math.hypot/exp/sin/cos, which
+    // ECMAScript leaves implementation-approximated, so the digests are not guaranteed bit-identical across
+    // engines or versions. Report the runtime on failure: if the parts moved and the runtime ALSO changed,
+    // suspect the runtime before suspecting the code.
+    console.error(`\nruntime: ${typeof process !== 'undefined' ? process.version + ' ' + process.platform + '/' + process.arch : 'unknown'}  (canonical: v24.4.1 darwin/arm64)`);
+    console.error(`${compatFail} compatibility fingerprint failure(s) — generation or a save-referenced table moved.`);
+    process.exit(1);
+}
 console.log('Terrain generation + save-referenced content tables unchanged.');
 
 // ---------------------------------------------------------------------------------------------------------

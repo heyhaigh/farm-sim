@@ -60,6 +60,12 @@ export async function saveTown(world) {
     // a late whisper/debrief callback). The guard is centralized here so every caller is covered, and
     // re-checked inside the transaction so a wipe landing mid-write can't slip a put past it.
     if (world._retired) return null;
+    // Same argument for a NON-PERSISTING world, and it is not hypothetical: `_spectator` was honoured at the
+    // autosave, the on-hide save and the writeback, but `RYFARMS.saveNow()` calls this function directly and
+    // bypassed all three. That matters most in the case it was added for — when a quarantine FAILS, the boot
+    // marks the session non-persisting precisely so it cannot overwrite the unreadable town still sitting in
+    // the slot, and a single manual save would have defeated that. Centralized here so every caller is covered.
+    if (world._spectator) return null;
     try {
         const data = world.serialize();               // data._rev = world._rev
         const key = 'town:' + world.seed, myRev = data._rev || 0;
@@ -175,6 +181,46 @@ export async function quarantineTown(seed, reason) {
     }
 }
 
+// Codex #57-1 — LOAD THE SNAPSHOT AND ITS EPOCH TOGETHER, in ONE readonly transaction.
+//
+// Reading them separately is not merely untidy, it reopens the exact hole the epoch closes. If another tab
+// quarantines or restores between the two reads, this tab hydrates the OLD rev-47 snapshot while adopting the
+// NEW generation — so its next save passes the epoch check and overwrites the replacement town. The pairing is
+// the invariant: a snapshot is only safe to write back under the generation it was READ WITH. IndexedDB holds
+// a readonly transaction's view constant, so one transaction makes the pair coherent by construction.
+//
+// Returns { snap, gen, seed } — `snap` null when there is nothing stored. `seed` is RESOLVED (the caller may
+// have passed undefined to mean "whatever `latest` points at"), because callers need to know which slot they
+// actually got.
+export async function loadTownState(seed) {
+    try {
+        const db = await openDb();
+        return await new Promise((resolve, reject) => {
+            const tx = db.transaction(STORE, 'readonly');
+            const store = tx.objectStore(STORE);
+            let out = { snap: null, gen: 0, seed: seed ?? null };
+            const finish = (s) => {
+                const gg = store.get(genKey(s));           // generation first, then the snapshot
+                gg.onsuccess = () => { out.gen = gg.result || 0; };
+                const g = store.get('town:' + s);
+                g.onsuccess = () => { out.snap = g.result || null; out.seed = s; };
+                g.onerror = () => reject(g.error);
+            };
+            if (seed == null) {
+                const l = store.get('latest');             // same transaction, so `latest` cannot move under us
+                l.onsuccess = () => { if (l.result) finish(l.result.seed); };
+                l.onerror = () => reject(l.error);
+            } else finish(seed);
+            tx.oncomplete = () => resolve(out);
+            tx.onerror = () => reject(tx.error);
+            tx.onabort = () => reject(tx.error || new Error('load txn aborted'));
+        });
+    } catch (err) {
+        console.warn('ry-farms: load failed (starting fresh)', err);
+        return { snap: null, gen: 0, seed: seed ?? null };
+    }
+}
+
 // Is there a quarantined town for this seed? (Metadata only — the caller decides whether to offer recovery.)
 export async function peekQuarantined(seed) {
     try {
@@ -220,21 +266,11 @@ export async function restoreQuarantined(seed) {
     }
 }
 
-// Load a snapshot: by explicit seed, or the last-played town when seed is omitted.
-// Returns the raw snapshot (or null) — the caller decides whether it can be hydrated.
-export async function loadTown(seed) {
-    try {
-        if (seed == null) {
-            const latest = await idbReq('readonly', s => s.get('latest'));
-            if (!latest) return null;
-            seed = latest.seed;
-        }
-        return (await idbReq('readonly', s => s.get('town:' + seed))) || null;
-    } catch (err) {
-        console.warn('ry-farms: load failed (starting fresh)', err);
-        return null;
-    }
-}
+// NOTE: there is deliberately no non-atomic `loadTown()` any more. It read the snapshot in one transaction
+// and its generation in another, and that split is exactly Codex #57-1: a quarantine or restore landing
+// between the two reads pairs a stale snapshot with a fresh generation, which then passes saveTown's epoch
+// check and overwrites the replacement town. Leaving it exported would be an invitation to reintroduce the
+// bug, so the atomic loadTownState() above is the only way to read a town.
 
 // --- #2.1 the WORLD INDEX ---------------------------------------------------------------------------------
 // A lightweight registry of every town this browser has grown — one small summary per town (name, day, pop,
@@ -317,6 +353,12 @@ export async function wipeTown(seed) {
             const tx = db.transaction(STORE, 'readwrite');
             const store = tx.objectStore(STORE);
             let snap, latest;
+            // Codex #57 judgment — a WIPE changes the slot's identity just as a quarantine does, so it bumps
+            // the generation too. Without it, another tab still holding the wiped town (its `_retired` flag is
+            // per-world, so only the tab that wiped is covered) could save and resurrect it. Read early:
+            // callbacks fire in request order, so this must precede the write phase below.
+            let wGen = 0;
+            const rGen = store.get(genKey(seed)); rGen.onsuccess = () => { wGen = rGen.result || 0; };
             const rSnap = store.get('town:' + seed); rSnap.onsuccess = () => { snap = rSnap.result; };
             const rLatest = store.get('latest'); rLatest.onsuccess = () => { latest = rLatest.result; };
             const rWorld = store.get(WORLD_KEY);
@@ -341,6 +383,7 @@ export async function wipeTown(seed) {
                 if (Array.isArray(index.encounters)) index.encounters = index.encounters.filter(e => String(e.a) !== s && String(e.b) !== s);
                 store.put(index, WORLD_KEY);          // the town is ALWAYS removed from the index (an unsaved town too — no zombie)
                 store.delete('town:' + seed);
+                store.put(wGen + 1, genKey(seed));    // supersede any tab still holding this town
                 if (latest && latest.seed === seed) store.delete('latest');
                 // #Codex26-2: ONE coherent one-deep backup object, written ONLY when there is committed state to
                 // restore. An UNSAVED town (no snapshot) has nothing to undo — leave the PREVIOUS backup intact
@@ -385,6 +428,13 @@ export async function undoWipe() {
                 restoredSeed = snap.seed;
                 const sk = String(snap.seed);
                 store.put(snap, 'town:' + snap.seed);
+                // Codex #57 judgment — undo puts a town BACK, which supersedes any tab holding whatever
+                // occupied the slot meanwhile, so it bumps the generation too. Unlike the other call sites the
+                // seed is not known until the backup has been read (undoWipe takes no argument — it restores
+                // whatever was last wiped), so the generation is read NESTED here rather than up front. That is
+                // legal and still atomic: the transaction stays active while its requests are outstanding.
+                const rGen = store.get(genKey(snap.seed));
+                rGen.onsuccess = () => { store.put((rGen.result || 0) + 1, genKey(snap.seed)); };
                 store.put(latest && latest.seed === snap.seed ? latest
                     : { seed: snap.seed, day: snap.day, season: snap.season, year: snap.year, savedAt: Date.now() }, 'latest');
                 if (slice) {

@@ -78,10 +78,22 @@ export function grassPatch(i, j) {
     return 0;
 }
 
-// A stable per-tile offset so wild sprites do not sit dead-centre in a grid. The SPREADS are the caller's
-// (they depend on what kind of thing is being drawn); the randomness and its salts live here so they are
-// covered by the fingerprint.
-export function tileJitter(i, j, xSpread, ySpread) {
+// A stable per-tile offset so wild sprites do not sit dead-centre in a grid.
+//
+// Codex #57 judgment — the SPREADS live here too, not at the call site. They looked like a rendering detail,
+// but they decide PERSISTENT VISUAL PLACEMENT: widen the tree spread and every tree in every existing town
+// shifts. That is the same class as the salts, so it belongs behind the same fingerprint. Keyed by a semantic
+// name rather than by farm.js's `T` enum on purpose — this module imports NOTHING, which is what lets the
+// compatibility harness load it, and importing `T` would make farm.js -> tilehash.js -> farm.js a cycle.
+export const WILD_SPREAD = {
+    tree:  [32, 18],
+    rock:  [5, 3],
+    stump: [4, 4],
+    other: [7, 4],
+};
+
+export function tileJitter(i, j, kind) {
+    const [xSpread, ySpread] = WILD_SPREAD[kind] || WILD_SPREAD.other;
     return {
         x: Math.round((tileRand(i, j, 71) - 0.5) * xSpread),
         y: Math.round((tileRand(i, j, 72) - 0.5) * ySpread),

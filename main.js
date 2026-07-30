@@ -16,7 +16,7 @@ import {
 import { tileHash as hash2, tileRand as rand2, smooth,
          pickIndex, grassPatch, tileJitter } from './tilehash.js';
 import { CRT } from './crt.js';
-import { saveTown, loadTown, wipeTown, undoWipe, loadWorldIndex, registerTownInWorld, saveWorldIndex, updateWorldIndex, quarantineTown, peekQuarantined, restoreQuarantined, requestPersistentStorage, readGen } from './save.js';
+import { saveTown, loadTownState, wipeTown, undoWipe, loadWorldIndex, registerTownInWorld, saveWorldIndex, updateWorldIndex, quarantineTown, peekQuarantined, restoreQuarantined, requestPersistentStorage, readGen } from './save.js';
 import { computeLayout, detectEncounters, encounterLine, townPos, townReach, townTint } from './worldmap.js';
 import { enrichStories } from './dm.js';
 import { requestCongregation } from './congregation.js';
@@ -1501,12 +1501,10 @@ function wildSpec(i, j, t, season) {
     }
     return null;
 }
-// The SPREADS stay here — they depend on what is being drawn — while the offset randomness and its salts
-// live in tilehash.js so the fingerprint covers them.
+// Only the T-enum -> semantic-name mapping stays here; the spread VALUES moved into tilehash.js, because
+// they decide persistent sprite placement and so belong behind the compatibility fingerprint (Codex #57).
 function wildJitter(i, j, t) {
-    const xSpread = t === T.TREE ? 32 : t === T.ROCK ? 5 : t === T.STUMP ? 4 : 7;
-    const ySpread = t === T.TREE ? 18 : t === T.ROCK ? 3 : 4;
-    return tileJitter(i, j, xSpread, ySpread);
+    return tileJitter(i, j, t === T.TREE ? 'tree' : t === T.ROCK ? 'rock' : t === T.STUMP ? 'stump' : 'other');
 }
 function drawWild(spec, x, baseY) {
     ctx.imageSmoothingEnabled = false;
@@ -6168,7 +6166,10 @@ async function switchTown(seed, ang) {
     _switching = true;
     try {
         const s32 = seed >>> 0;
-        const saved = await loadTown(s32);
+        // Codex #57-1/#57-2 — snapshot AND generation from one readonly transaction, so the crossed-into world
+        // writes back under the generation it was read with.
+        const crossState = await loadTownState(s32);
+        const saved = crossState.snap, crossGen = crossState.gen;
         if (!saved) { location.search = '?seed=' + s32; return true; }
         if (world) {
             try { world.cancelRehearsal(); } catch { /* pre-admin saves */ }
@@ -6179,6 +6180,12 @@ async function switchTown(seed, ang) {
         let next;
         try { next = World.fromSave(saved); }
         catch (err) { console.warn('ry-farms: neighbour save unreadable - navigating', err); location.search = '?seed=' + s32; return true; }
+        // Codex #57-2 — adopt the DESTINATION slot's generation. Without this the crossed-into world ran as
+        // generation 0, so if that slot had ever been quarantined, restored, wiped or undone, every save after
+        // the crossing was refused and the session's progress was lost on the next reload — silently, since a
+        // refusal only warns to the console. `crossGen` was read in the SAME transaction as this snapshot
+        // (loadTownState), so the pair is coherent.
+        next._gen = crossGen;
         const origSet = next.set.bind(next);
         next.set = (i, j, t) => { origSet(i, j, t); next._tilesChanged = true; };
         next._tilesChanged = true;
@@ -8041,34 +8048,35 @@ function drawStartScreen() {
     // ?play=1 with no ?orc keeps the human default; the menu backdrop is always a calm human town.
     const bootCulture = (bootParams.get('orc') != null || bootParams.get('culture') === 'orc') ? 'orc' : 'human';   // #3.1 ?orc=1 raises a warband
 
-    // Grow the cast from a REAL self-hosted SuperMemory corpus if one is reachable; otherwise from
-    // INVENTED past lives, seeded by this world so the default town is unique + untethered (no real docs).
-    const result = await fetchMemories();
-    memories = (result.memories && result.memories.length) ? result.memories : generateCrew(worldSeed);
-    memorySource = (result.memories && result.memories.length) ? result.source : 'invented';
-    // #1.1 (Codex r20 P1) lineage is INDEPENDENT of the source corpus: even a town whose fresh cast is invented
-    // (no /v3 corpus, e.g. v0.0.3) still founds heirs of PRIOR towns read back via /v4/search. Key off the
-    // lineage array itself, not memorySource. Empty when no store answered at all.
-    lineagePool = Array.isArray(result.lineage) ? result.lineage : [];
-
     let resumed = false, quarantined = null, quarantineFailed = false;
     // Codex #56-3 — the seed the replacement town is founded on. A no-seed boot (?play=1) resolves `latest`,
     // so the unreadable snapshot's seed is NOT the random `worldSeed` this boot generated. Founding on the
     // random one left the preserved town under a seed the player was no longer in, which made
     // RYFARMS.peekSave()/restoreSave() — both defaulting to world.seed — unable to find it at all. Found on
     // the SAME seed, matching what an explicit ?seed=N boot already does.
-    let foundSeed = worldSeed, foundGen = 0;
+    //
+    // Codex #57-1 — the snapshot and its GENERATION are read in ONE transaction (loadTownState). Read
+    // separately, a quarantine or restore landing between them pairs a stale high-rev snapshot with the newly
+    // bumped generation, which then passes the epoch check and overwrites the replacement — the very thing the
+    // epoch exists to stop. A snapshot is only safe to write back under the generation it was READ WITH.
+    //
+    // Codex #57-3 — this whole resolve now runs BEFORE the cast is generated, because `foundSeed` is what the
+    // founders, the lineage and the displayed seed must all key off. Previously generateCrew()/planHeirs() ran
+    // on the pre-resolution random `worldSeed`, so a no-seed recovery produced a town whose terrain came from
+    // one seed and whose founding cast came from another.
+    let foundSeed = worldSeed, foundGen = null;
     if (!wantFresh) {
-        const saved = await loadTown(urlSeed != null && urlSeed !== '' ? worldSeed : undefined);
+        const st = await loadTownState(urlSeed != null && urlSeed !== '' ? worldSeed : undefined);
+        const saved = st.snap;
         if (saved) {
-            try { world = World.fromSave(saved); resumed = true; foundGen = await readGen(world.seed); }
+            try { world = World.fromSave(saved); resumed = true; foundGen = st.gen; }
             catch (err) {
                 // A save this build cannot read is PRESERVED, not buried. Founding a fresh town over it used
                 // to destroy a played town on the next autosave — and, because saveTown is a compare-and-set
                 // against the stored `_rev`, the fresh session could not save either. Moving it aside keeps
                 // the town for a build that can open it AND vacates the slot so this session persists.
                 console.warn('ry-farms: save unreadable — preserving it and founding fresh', err);
-                const seed = saved.seed ?? worldSeed;
+                const seed = st.seed ?? saved.seed ?? worldSeed;
                 const q = await quarantineTown(seed, err?.message);
                 quarantined = q.rec;
                 // Codex #56-2 — only persist if the move actually COMMITTED. A storage failure leaves the
@@ -8085,7 +8093,19 @@ function drawStartScreen() {
     if (!world) world = new World(foundSeed, bootCulture);
     // The slot's generation this world belongs to. saveTown refuses a writer from a superseded epoch, which
     // is what stops a tab holding the quarantined town from overwriting this replacement.
-    world._gen = foundGen || await readGen(world.seed);
+    // `??`, not `||`: a legitimately-0 generation must not fall through to a redundant re-read (Codex #57).
+    world._gen = foundGen ?? await readGen(world.seed);
+
+    // The cast is grown from a REAL self-hosted SuperMemory corpus if one is reachable, else from INVENTED
+    // past lives seeded by THIS world — which is why it has to come after the slot is resolved: on a
+    // no-seed recovery the live seed is the quarantined town's, not the random one this boot generated.
+    const result = await fetchMemories();
+    memories = (result.memories && result.memories.length) ? result.memories : generateCrew(world.seed);
+    memorySource = (result.memories && result.memories.length) ? result.source : 'invented';
+    // #1.1 (Codex r20 P1) lineage is INDEPENDENT of the source corpus: even a town whose fresh cast is invented
+    // (no /v3 corpus, e.g. v0.0.3) still founds heirs of PRIOR towns read back via /v4/search. Key off the
+    // lineage array itself, not memorySource. Empty when no store answered at all.
+    lineagePool = Array.isArray(result.lineage) ? result.lineage : [];
     // #START the menu backdrop is a SPECTATOR town: it lives and animates but never persists — no
     // autosave, no SuperMemory writeback, no world-index entry, no cross-town raid ambush. Browsing
     // the start screen must leave zero trace (no save slots littered, no junk fed to the memory store).
@@ -8138,7 +8158,7 @@ function drawStartScreen() {
         };
     } else {
         lastSavedDay = world.day;
-        world.addLog(`Propagate — seed ${worldSeed}`, '#5a6672');
+        world.addLog(`Propagate — seed ${world.seed}`, '#5a6672');   // the LIVE seed (Codex #57-3)
         // #lineage the roster of towns this world remembers — every OTHER town the index has seen. Set
         // BEFORE the founders spawn so each can be grown "out of" one (their past life sited at a town that
         // truly stood here). Deterministic (the index is persisted); empty on a first world, so nothing changes.
@@ -8146,7 +8166,7 @@ function drawStartScreen() {
             .filter(t => t && t.name && String(t.seed) !== String(world.seed))
             .map(t => ({ seed: t.seed, name: t.name }))
             .sort((a, b) => String(a.seed).localeCompare(String(b.seed)));   // stable order, index-independent
-        const heirPlan = planHeirs(worldSeed, 8, lineagePool);   // #1.1 which founders descend from a past town's lives
+        const heirPlan = planHeirs(world.seed, 8, lineagePool);   // #1.1 which founders descend from a past town's lives (Codex #57-3: the LIVE seed, not the pre-resolution one)
         for (let i = 0; i < 8; i++) spawnFarmer(heirPlan.get(i) || null);   // start with the full founding eight
         if (world.rememberedTowns.length) world.addLog(`This valley remembers ${world.rememberedTowns.length} town${world.rememberedTowns.length > 1 ? 's' : ''} that came before.`, '#c8b0e0');
         if (heirPlan.size) world.addLog(`${heirPlan.size} of the founders are heirs of a remembered town.`, '#c8b0e0');
