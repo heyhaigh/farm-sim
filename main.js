@@ -7911,10 +7911,14 @@ function startPlateButton(key, bx, y, bw, bh, label, base, fill, fillHot, textCo
 // a last-ditch fallback while a sheet loads. Fake farmer objects satisfy the fallback sprite builders.
 const MENU_HUMAN = { sheet: { culture: 'human', seed: 77 }, moveDir: 'side', facing: 1, state: 'walk', animTime: 0 };
 const MENU_ORC_FB = { sheet: { culture: 'orc', seed: 33 }, moveDir: 'side', facing: 1, state: 'walk', animTime: 0 };
-// crop the 6 side-row cells of a 64px walk sheet down to body + foot shadow → an array of frame canvases
-function menuWalkFrames(img, sx0, sy0, sw, sh) {
+// Crop cells from a 64px sheet → array of frame canvases
+// maxCols limits how many columns to extract (default = all columns in the sheet)
+function menuWalkFrames(img, sx0, sy0, sw, sh, row, maxCols) {
     if (!img || !img.complete || !img.naturalWidth) return null;
-    const FW = 64, cols = Math.max(1, Math.round(img.naturalWidth / FW)), row = 2;   // side row
+    row = row != null ? row : 2;
+    const FW = 64;
+    const totalCols = Math.max(1, Math.round(img.naturalWidth / FW));
+    const cols = maxCols != null ? Math.min(maxCols, totalCols) : totalCols;
     const frames = [];
     for (let c = 0; c < cols; c++) {
         const [o, ox] = makeCanvas(sw, sh); ox.imageSmoothingEnabled = false;
@@ -7925,27 +7929,36 @@ function menuWalkFrames(img, sx0, sy0, sw, sh) {
 }
 let menuOrcWalk = null;
 function menuOrcFrames() {
-    // orc1 walk, side row faces LEFT; crop covers the body AND the baked foot shadow (y6..50 of the cell)
-    return menuOrcWalk || (menuOrcWalk = menuWalkFrames(orcWalkImg && orcWalkImg[1], 12, 6, 40, 44));
+    if (menuOrcWalk) return menuOrcWalk;
+    const walkSrc = orcWalkImg && orcWalkImg[1];
+    return (menuOrcWalk = menuWalkFrames(walkSrc, 12, 6, 40, 44, 2));
 }
 let menuHumanWalk = null;
 function menuHumanFrames() {
-    // Swordsman lvl1 walk, side row faces RIGHT; body sits x24..42 / y17..47 in its cell (shadow included)
-    return menuHumanWalk || (menuHumanWalk = menuWalkFrames(menuHumanWalkImg, 18, 14, 30, 36));
+    if (menuHumanWalk) return menuHumanWalk;
+    const walkSrc = menuHumanWalkImg;
+    return (menuHumanWalk = menuWalkFrames(walkSrc, 18, 14, 30, 36, 2));
 }
-// draw a walking `culture` sprite with its FEET centred at (footX, footY), scaled to targetH, facing right.
+// draw a walking `culture` sprite with its FEET centred at (footX, footY), scaled to targetH.
+// Loops the walk frames continuously.
 function drawMenuWalker(culture, footX, footY, targetH, t) {
-    let frame = null, flip = false;
     const frames = culture === 'orc' ? menuOrcFrames() : menuHumanFrames();
-    if (frames && frames.length) {
-        frame = frames[Math.floor(t * 8) % frames.length];
-        flip = culture === 'orc';                   // orc side row faces left → mirror; swordsman already faces right
-    }
-    if (!frame) {                                   // sheet not ready → in-game farmer sprite (2-frame walk)
+    if (!frames || !frames.length) {
+        // sheet not ready → in-game farmer sprite (2-frame walk) fallback
         const fr = farmerSprites(culture === 'orc' ? MENU_ORC_FB : MENU_HUMAN);
-        frame = Math.floor(t * 7) % 2 ? fr.walk1 : fr.walk2;
-        flip = culture === 'orc';                   // orcCharSets side faces left; human char side already faces right
+        const frame = Math.floor(t * 7) % 2 ? fr.walk1 : fr.walk2;
+        const flip = culture === 'orc';
+        const scale = targetH / frame.height, w = Math.round(frame.width * scale), h = Math.round(frame.height * scale);
+        const dx = Math.round(footX - w / 2), dy = Math.round(footY - h);
+        const sm = ctx.imageSmoothingEnabled; ctx.imageSmoothingEnabled = false;
+        if (flip) { ctx.save(); ctx.translate(dx + w, dy); ctx.scale(-1, 1); ctx.drawImage(frame, 0, 0, w, h); ctx.restore(); }
+        else ctx.drawImage(frame, dx, dy, w, h);
+        ctx.imageSmoothingEnabled = sm;
+        return w;
     }
+    const frame = frames[Math.floor(t * 6) % frames.length];
+    // human walk frames face right, orc walk frames face left
+    const flip = culture === 'orc';
     if (!frame || !frame.width) return 0;
     const scale = targetH / frame.height, w = Math.round(frame.width * scale), h = Math.round(frame.height * scale);
     const dx = Math.round(footX - w / 2), dy = Math.round(footY - h);
@@ -7998,13 +8011,11 @@ function drawStartScreen() {
         return;
     }
 
-    // 'choose' — no title art; a heading, two culture CTAs (each a right-facing WALKING sprite + label in a
-    // stroke-outlined container that fills on hover), and a view button — the block CENTRED over the living town.
     const heading = 'CHOOSE YOUR PATH', t = performance.now() / 1000;
-    const slot = 40, boxH = 42, boxGap = 14, headGap = 24, viewGap = 30, padX = 14;
+    const slot = 36, boxH = 38, boxGap = 5, headGap = 18, viewGap = 20, padL = 4, padR = 8;
     const labelHuman = 'CREATE A HUMAN TOWN', labelOrc = 'CREATE AN ORC TOWN';
     const maxLabelW = Math.max(textWidth(labelHuman), textWidth(labelOrc));
-    const boxW = padX + slot + 10 + maxLabelW + padX, boxX = Math.round(cx - boxW / 2);
+    const boxW = padL + slot + 8 + maxLabelW + padR, boxX = Math.round(cx - boxW / 2);
     const blockH = 5 + headGap + boxH + boxGap + boxH + viewGap + 5;
     let y = Math.round(GH / 2 - blockH / 2);
 
@@ -8017,8 +8028,8 @@ function drawStartScreen() {
         const r = { x: boxX, y, w: boxW, h: boxH }, hot = inRect(mouse, r);
         ctx.fillStyle = hot ? fillHot : 'rgba(255,255,255,0.05)'; ctx.fillRect(r.x, r.y, r.w, r.h);
         ctx.strokeStyle = stroke; ctx.lineWidth = 1; ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
-        drawMenuWalker(culture, r.x + padX + slot / 2, r.y + boxH - 4, spriteH, t);   // feet near the container floor
-        drawText(ctx, label, r.x + padX + slot + 10, Math.round(r.y + boxH / 2 - 2), hot ? '#ffffff' : textCol, 1);
+        drawMenuWalker(culture, r.x + padL + slot / 2, r.y + boxH / 2 + spriteH / 2, spriteH, t);
+        drawText(ctx, label, r.x + padL + slot + 4, Math.round(r.y + boxH / 2 - 2), hot ? '#ffffff' : textCol, 1);
         startHits[key] = r;
         y += boxH + boxGap;
     };
@@ -8026,10 +8037,10 @@ function drawStartScreen() {
     ctaBox('orc',   'orc',   labelOrc,   36, '#e0806a', 'rgba(224,128,106,0.30)', '#f0b0a0');    // ember — an orc town
 
     y += viewGap - boxGap;
-    startTextButton('view', cx, y, 'View existing town'.toUpperCase(), 1, '#c9a45a');
+    startTextButton('view', cx, y, 'OR VIEW EXISTING TOWN'.toUpperCase(), 1, '#ffffff', 'rgba(255,255,255,0.3)');
 
-    // BACK — top-left, quiet
-    startTextButton('back', 34, 26, 'BACK', 1, '#8a8f9c');
+    // BACK — top-left, aligned with volume button center (y=17)
+    startTextButton('back', 34, 17, 'BACK', 1, '#8a8f9c');
 }
 
 // ---------------------------------------------------------------------------
@@ -8037,20 +8048,11 @@ function drawStartScreen() {
 // ---------------------------------------------------------------------------
 
 (async function boot() {
-    // MOBILE GATE: the sim is a fullscreen mouse+keyboard experience. On touch/small-screen
-    // devices, show a full-screen notice instead of booting the game at all.
-    const isMobile = window.matchMedia('(pointer: coarse)').matches ||
-                     Math.min(window.innerWidth, window.innerHeight) < 600;
+    // MOBILE GATE: the sim is a fullscreen mouse+keyboard experience. CSS shows the
+    // desktop-required notice immediately; this guard prevents the game from booting beneath it.
+    // Deliberately use input capability rather than viewport size so a narrow desktop still works.
+    const isMobile = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
     if (isMobile) {
-        const tv = document.getElementById('tv');
-        if (tv) tv.style.display = 'none';
-        const gate = document.createElement('div');
-        gate.setAttribute('role', 'status');
-        gate.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;' +
-            'background:#000;color:#e6e5de;font-family:monospace;font-size:16px;letter-spacing:0.08em;' +
-            'text-transform:uppercase;text-align:center;padding:24px;z-index:9999;';
-        gate.textContent = 'Switch to a desktop experience to play';
-        document.body.appendChild(gate);
         return;
     }
 
