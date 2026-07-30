@@ -71,10 +71,13 @@ function harness({ backoffMs = 1000 } = {}) {
 
     h.advance(1000);                   // the ORIGINAL backoff timeout now fires
     const queued = h.inFlight();
-    check('restore + stale backoff does NOT fork a second loop', queued <= 1, `${queued} loops in flight`);
+    // EXACTLY one, both bounds. Codex #66: `<= 1` also passes when recovery killed the loop outright —
+    // it proves "did not duplicate" while saying nothing about "still alive". A mutation that discarded
+    // every failed-frame retry passed all eight assertions.
+    check('restore + stale backoff leaves exactly one live loop', queued === 1, `${queued} loops in flight`);
 
     h.tickFrames();
-    check('and it stays single after another round', h.inFlight() <= 1, `${h.inFlight()} loops in flight`);
+    check('and it is still exactly one after another round', h.inFlight() === 1, `${h.inFlight()} loops in flight`);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -92,7 +95,7 @@ function harness({ backoffMs = 1000 } = {}) {
         h.loop.schedule(false);        // restore
         h.tickFrames();
     }
-    check('loss/restore cycles stay single-looped', h.inFlight() <= 1, `${h.inFlight()} loops in flight`);
+    check('loss/restore cycles leave exactly one live loop', h.inFlight() === 1, `${h.inFlight()} loops in flight`);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -127,6 +130,9 @@ function harness({ backoffMs = 1000 } = {}) {
         frames += h.tickFrames();
         h.advance(1000);
     }
+    // Two-sided again: `<= 6` alone is satisfied by a loop that gave up entirely. The retry must actually
+    // happen (one per backoff period) AND must not spin.
+    check('continuous failure keeps retrying', frames >= 5, `${frames} frames over 5s — did it give up?`);
     check('continuous failure retries ~1/s, not 60/s', frames <= 6, `${frames} frames over 5s`);
 }
 
