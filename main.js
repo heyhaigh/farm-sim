@@ -6637,10 +6637,13 @@ async function registerWorld(w, summary) {
         // actually persisted. Fall back to a live read only for direct callers that don't pass one.
         const s = summary || townSummary(w);
         let fresh = [], mine = [];
-        // Codex #58 — FENCED on the slot's generation. Everything this mutator writes is derived from `w`:
+        // Codex #58/#59 — FENCED on the full slot pair. Everything this mutator writes is derived from `w`:
         // its summary, the encounters resolved from that summary, its inbox. A superseded occupant publishing
-        // any of it is how a dead town kept a ghost entry on the world map.
-        const fence = { seed: w.seed, gen: w._gen || 0 };
+        // any of it is how a dead town kept a ghost entry on the world map — and generation alone was not
+        // enough, because a DELAYED publication of rev N could still land after the snapshot reached N+1 and
+        // let detectEncounters resolve raids from stale doctrine. `s.rev` is the COMMITTED rev the caller
+        // stamped synchronously with the save, which is exactly the snapshot this summary describes.
+        const fence = { seed: w.seed, gen: w._gen || 0, rev: s.rev || 0 };
         const idx = await updateWorldIndex(index => {
             index.towns = index.towns || {}; index.encounters = index.encounters || []; index.ledgers = index.ledgers || {};
             const prev = index.towns[s.seed] || {};
@@ -6689,7 +6692,7 @@ async function consumeInbox(w, events) {
         const prev = index.towns[summary.seed] || {};
         if (!(prev.rev != null && (summary.rev || 0) < prev.rev)) index.towns[summary.seed] = { ...prev, ...summary, firstSeen: prev.firstSeen || summary.lastSeen || Date.now() };
         return index;
-    }, { seed: w.seed, gen: w._gen || 0 });
+    }, { seed: w.seed, gen: w._gen || 0, rev: summary.rev || 0 });   // #59 full pair; summary.rev is the committed rev
 }
 
 // ---------------------------------------------------------------------------
@@ -8091,12 +8094,14 @@ function drawStartScreen() {
             console.error('ry-farms: could not inspect the slot before founding — running unsaved');
             quarantineFailed = true;
         } else if (st.snap) {
-            console.warn(`ry-farms: ?fresh over an occupied slot — retiring the existing town to backup first (undoable)`);
-            await wipeTown(worldSeed);
-            const after = await loadTownState(worldSeed);
-            if (!after.ok) { console.error('ry-farms: slot unreadable after retiring — running unsaved'); quarantineFailed = true; }
-            else foundGen = after.gen;
-        } else foundGen = st.gen;
+            // Codex #59 — REFUSE, do not wipe. A previous pass had ?fresh retire the occupant through the
+            // undoable wipe, which was wrong twice over: a URL parameter is far too weak a thing to destroy a
+            // town with, and the "undoable" guarantee is FALSE the second time — the backup is one-deep, so
+            // opening the same URL again overwrites the only copy of the town retired the first time. The
+            // player-facing way to start over is the NEW TOWN hatch, which asks first.
+            console.error(`ry-farms: ?fresh refused — seed ${worldSeed} already holds a town (day ${st.snap.day ?? '?'}). Use the NEW TOWN hatch to retire it, or drop ?fresh to resume. Running unsaved.`);
+            quarantineFailed = true;
+        } else foundGen = st.gen;   // observed EMPTY at this generation — a rev-0 claim is legitimate
     }
     if (!wantFresh && !startMode) {
         const st = await loadTownState(urlSeed != null && urlSeed !== '' ? worldSeed : undefined);

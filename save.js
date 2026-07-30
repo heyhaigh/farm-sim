@@ -191,7 +191,13 @@ const genKey = seed => 'gen:' + String(seed);
 //          must be able to distinguish, and must not persist over a save it failed to preserve.
 //   rec  — the preserved record, or null when the slot was already empty (which is a success, not a failure).
 //   gen  — the slot's generation AFTER the bump, for the replacement world to adopt.
-export async function quarantineTown(seed, reason, expect = null) {
+export async function quarantineTown(seed, reason, expect) {
+    // Codex #59 — `expect` is REQUIRED. It was optional, which silently restored the unfenced behaviour the
+    // comment above forbids; the sole caller always has the observed pair.
+    if (!expect || typeof expect.gen !== 'number' || typeof expect.rev !== 'number') {
+        console.error('ry-farms: quarantineTown requires the observed { gen, rev } pair — refusing');
+        return { ok: false, rec: null, gen: 0, stale: false };
+    }
     try {
         const db = await openDb();
         return await new Promise((resolve, reject) => {
@@ -213,7 +219,7 @@ export async function quarantineTown(seed, reason, expect = null) {
                 const snap = g.result;
                 if (!snap) return;                      // nothing stored — nothing to preserve
                 // CAS the target: only quarantine the exact slot version whose hydration failed.
-                if (expect && ((expect.gen ?? 0) !== gen || (expect.rev ?? 0) !== (snap._rev ?? 0))) {
+                if (expect.gen !== gen || expect.rev !== (snap._rev ?? 0)) {
                     stale = true;
                     return;                             // a different occupant arrived — leave it alone
                 }
@@ -377,21 +383,37 @@ export async function loadWorldIndex() {
 // of a dead town on the world map. And per the review, generation-in-the-summary alone is not enough: a
 // DELAYED generation-0 write can still land after the quarantine if the old entry was pruned, which is why the
 // fence is checked against the authoritative `gen:<seed>` here rather than against whatever the index holds.
-export function updateWorldIndex(mutator, fence = null) {
+export function updateWorldIndex(mutator, fence) {
+    // Codex #59 — the fence is MANDATORY and carries the FULL PAIR. It was optional and generation-only, and
+    // both halves of that were wrong:
+    //   optional — the same unsafe-shape hazard that got `loadTown`/`readGen`/`saveWorldIndex` deleted. A
+    //     future occupant-derived caller that forgets the argument silently gets unfenced behaviour.
+    //   generation-only — it could not see that the authoritative SNAPSHOT had moved on. Schedule: rev N
+    //     commits and its publication is delayed; another tab loads N, commits N+1 and closes before
+    //     publishing; the delayed N publication then sees the same generation and an index revision below N,
+    //     so it lands — and detectEncounters makes DURABLE decisions (inbox, metPairs, encounters, news,
+    //     ledgers) from that stale summary's doctrine/envoy/day.
+    // So both `gen:<seed>` and `town:<seed>` are read in THIS transaction and both must match exactly.
+    // A genuinely global, non-occupant-derived maintenance pass should get its own named API (repairWorldIndex)
+    // rather than a sentinel here.
+    if (!fence || fence.seed == null || typeof fence.gen !== 'number' || typeof fence.rev !== 'number') {
+        return Promise.reject(new Error('updateWorldIndex requires a { seed, gen, rev } fence'));
+    }
     return openDb().then(db => new Promise((resolve, reject) => {
         const tx = db.transaction(STORE, 'readwrite');
         const store = tx.objectStore(STORE);
-        // Fence FIRST — callbacks fire in request order, so the generation must be read before the index or
-        // `fenceGen` is still 0 when the mutator runs.
-        let fenceGen = 0;
-        if (fence) { const fg = store.get(genKey(fence.seed)); fg.onsuccess = () => { fenceGen = fg.result || 0; }; }
+        // Fence reads FIRST — callbacks fire in request order, so these must precede the index read or the
+        // comparison below runs against zeroes.
+        let fenceGen = 0, storedRev = null;
+        const fg = store.get(genKey(fence.seed)); fg.onsuccess = () => { fenceGen = fg.result || 0; };
+        const ft = store.get('town:' + fence.seed); ft.onsuccess = () => { storedRev = ft.result ? (ft.result._rev || 0) : null; };
         const getReq = store.get(WORLD_KEY);
         let out = null, fenced = false;
         getReq.onsuccess = () => {
-            if (fence && (fence.gen || 0) !== fenceGen) {
+            if (fence.gen !== fenceGen || fence.rev !== storedRev) {
                 fenced = true;
-                console.warn(`ry-farms: world-index write skipped — town ${fence.seed} is generation ${fenceGen}, this writer holds ${fence.gen || 0}`);
-                return;                        // a superseded occupant must not publish derived state
+                console.warn(`ry-farms: world-index write skipped — town ${fence.seed} is at (gen ${fenceGen}, rev ${storedRev}), this writer holds (gen ${fence.gen}, rev ${fence.rev})`);
+                return;                        // a superseded or stale occupant must not publish derived state
             }
             const cur = getReq.result || { towns: {}, encounters: [] };
             try { out = mutator(cur) || cur; } catch (e) { try { tx.abort(); } catch {} reject(e); return; }
