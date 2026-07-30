@@ -16,7 +16,7 @@ import {
 import { tileHash as hash2, tileRand as rand2, smooth,
          pickIndex, grassPatch, tileJitter } from './tilehash.js';
 import { CRT } from './crt.js';
-import { saveTown, loadTownState, wipeTown, undoWipe, loadWorldIndex, registerTownInWorld, saveWorldIndex, updateWorldIndex, quarantineTown, peekQuarantined, restoreQuarantined, requestPersistentStorage, readGen } from './save.js';
+import { saveTown, loadTownState, wipeTown, undoWipe, loadWorldIndex, updateWorldIndex, quarantineTown, peekQuarantined, restoreQuarantined, requestPersistentStorage } from './save.js';
 import { computeLayout, detectEncounters, encounterLine, townPos, townReach, townTint } from './worldmap.js';
 import { enrichStories } from './dm.js';
 import { requestCongregation } from './congregation.js';
@@ -6169,6 +6169,10 @@ async function switchTown(seed, ang) {
         // Codex #57-1/#57-2 — snapshot AND generation from one readonly transaction, so the crossed-into world
         // writes back under the generation it was read with.
         const crossState = await loadTownState(s32);
+        // Codex #58 — a failed observation must not be read as "no town there". Navigating on a real URL change
+        // re-boots, which re-observes the slot and fails closed there if storage is still unreadable; silently
+        // treating it as empty here would found a savable town over a neighbour we never managed to look at.
+        if (!crossState.ok) { console.error('ry-farms: could not read the neighbour slot — navigating instead of crossing'); location.search = '?seed=' + s32; return true; }
         const saved = crossState.snap, crossGen = crossState.gen;
         if (!saved) { location.search = '?seed=' + s32; return true; }
         if (world) {
@@ -8065,10 +8069,41 @@ function drawStartScreen() {
     // on the pre-resolution random `worldSeed`, so a no-seed recovery produced a town whose terrain came from
     // one seed and whose founding cast came from another.
     let foundSeed = worldSeed, foundGen = null;
-    if (!wantFresh) {
+    // Codex #58 — EVERY persisting world must get its generation from a PAIRED slot observation, so there are
+    // exactly three ways in and each establishes the pair:
+    //   startMode  — the menu backdrop. Never persists, never touches storage, so it needs no pair at all.
+    //   ?fresh=1   — an EXPLICIT claim. If the slot is occupied this goes through the same undoable wipe the
+    //                player's NEW TOWN hatch uses, which backs the town up, bumps the generation and prunes the
+    //                index. Without that the fresh world arrives at rev 0 against a stored rev N and can never
+    //                save — a pre-existing bug that equality CAS makes visible instead of silent.
+    //   otherwise  — resume, or found on an observed-empty slot.
+    if (startMode) {
+        /* spectator backdrop: no observation, no persistence (see world._spectator below) */
+    } else if (wantFresh) {
+        const st = await loadTownState(worldSeed);
+        if (!st.ok) {
+            console.error('ry-farms: could not inspect the slot before founding — running unsaved');
+            quarantineFailed = true;
+        } else if (st.snap) {
+            console.warn(`ry-farms: ?fresh over an occupied slot — retiring the existing town to backup first (undoable)`);
+            await wipeTown(worldSeed);
+            const after = await loadTownState(worldSeed);
+            if (!after.ok) { console.error('ry-farms: slot unreadable after retiring — running unsaved'); quarantineFailed = true; }
+            else foundGen = after.gen;
+        } else foundGen = st.gen;
+    }
+    if (!wantFresh && !startMode) {
         const st = await loadTownState(urlSeed != null && urlSeed !== '' ? worldSeed : undefined);
         const saved = st.snap;
-        if (saved) {
+        // Codex #58 — a FAILED OBSERVATION is not an empty slot. If storage could not be read we do not know
+        // whether a town is sitting there, so this session must not persist: founding a savable world over a
+        // slot we never managed to look at is how a town gets buried. Fail closed, same as a failed quarantine.
+        if (!st.ok) {
+            console.error('ry-farms: could not inspect the town slot — running unsaved so nothing is overwritten');
+            quarantineFailed = true;
+        } else if (!saved) {
+            foundGen = st.gen;   // observed EMPTY at this generation — that is the pair a rev-0 claim needs
+        } else {
             try { world = World.fromSave(saved); resumed = true; foundGen = st.gen; }
             catch (err) {
                 // A save this build cannot read is PRESERVED, not buried. Founding a fresh town over it used
@@ -8077,15 +8112,21 @@ function drawStartScreen() {
                 // the town for a build that can open it AND vacates the slot so this session persists.
                 console.warn('ry-farms: save unreadable — preserving it and founding fresh', err);
                 const seed = st.seed ?? saved.seed ?? worldSeed;
-                const q = await quarantineTown(seed, err?.message);
+                // Codex #58 — pass the pair we OBSERVED so the quarantine moves the snapshot that actually
+                // failed to hydrate. Another tab can save between the observation and this transaction, and
+                // filing away a perfectly good newer town under this failure's reason would be its own bug.
+                const q = await quarantineTown(seed, err?.message, { gen: st.gen, rev: saved._rev ?? 0 });
                 quarantined = q.rec;
                 // Codex #56-2 — only persist if the move actually COMMITTED. A storage failure leaves the
                 // unreadable snapshot in place, and founding over it means the rev guard refuses every save
                 // for the session anyway; worse, persisting here is how the town would eventually be lost.
                 // So on failure this session runs unsaved, deliberately, and says so.
+                // Codex #58 — `stale` lands here too: the slot moved under us, so we have not preserved
+                // anything and must not write. A reload re-observes and does the right thing.
                 quarantineFailed = !q.ok;
+                if (q.stale) console.error('ry-farms: the town slot changed while preserving it — running unsaved; reload to re-read it');
                 foundSeed = seed;
-                foundGen = q.gen;
+                foundGen = q.stale ? null : q.gen;
                 world = null;
             }
         }
@@ -8093,8 +8134,11 @@ function drawStartScreen() {
     if (!world) world = new World(foundSeed, bootCulture);
     // The slot's generation this world belongs to. saveTown refuses a writer from a superseded epoch, which
     // is what stops a tab holding the quarantined town from overwriting this replacement.
-    // `??`, not `||`: a legitimately-0 generation must not fall through to a redundant re-read (Codex #57).
-    world._gen = foundGen ?? await readGen(world.seed);
+    // The pair established above. `?? 0` covers only the paths that deliberately never persist: the spectator
+    // backdrop, and any session already marked non-persisting because its observation failed. There is no
+    // longer a non-atomic readGen() fallback — Codex #58: every persisting world's generation comes from a
+    // paired observation, because a generation read on its own is the shape of the #57-1 bug.
+    world._gen = foundGen ?? 0;
 
     // The cast is grown from a REAL self-hosted SuperMemory corpus if one is reachable, else from INVENTED
     // past lives seeded by THIS world — which is why it has to come after the slot is resolved: on a
