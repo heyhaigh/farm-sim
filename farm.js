@@ -9,6 +9,11 @@
 // livestock pen (milk) — each with its own "producers" the farmer tends and
 // collects from. Which facility comes first reflects the farmer's archetype.
 
+// The positional hash family lives in ONE place now (tilehash.js) — it was duplicated verbatim in
+// main.js, and a divergence between the sim's idea of a tile and the renderer's is invisible until a
+// farmer is charged for clearing a boulder that is drawn as a pebble. See that file's header.
+import { tileHash, tileRand, tileNoise, lerp, smooth } from './tilehash.js';
+
 import { mulberry32, mod, growFarmer, growHeir, personalityLabel, compileCreeds, docLexicon, hashString, ALL_CROPS } from './dna.js';
 import { cultureWord } from './culture.js';   // #3.1 orc-vs-human display copy (roles etc.)
 export { ALL_CROPS };   // re-exported so tools/tests can pull the crop list from the sim entrypoint
@@ -552,14 +557,6 @@ const FEED_GOOD = { cow: 'grass', sheep: 'grass', chicken: 'grain', fish: 'grain
 // plot cell-set key (plots are tile-sets so they can grow into non-rectangular shapes)
 export function pkey(i, j) { return i + ',' + j; }
 
-function tileHash(i, j, seed = 0) {
-    let h = Math.imul(i | 0, 374761393) ^ Math.imul(j | 0, 668265263) ^ Math.imul(seed | 0, 2246822519);
-    h = Math.imul(h ^ (h >>> 13), 1274126177);
-    return (h ^ (h >>> 16)) >>> 0;
-}
-function tileRand(i, j, seed = 0) {
-    return tileHash(i, j, seed) / 4294967296;
-}
 // The bulk of an obstacle (rock/tree/bush) at a tile, deterministic from its position: 0 = small,
 // 1 = medium, 2 = big. Most are small; a few are big boulders/old trees that are a real slog to
 // clear. Used by BOTH the sim (clearing labour + reward scale) and the render (sprite scale), and by
@@ -597,18 +594,6 @@ export function treeStageAt(i, j, day, planted) {
         : -(tileHash(i, j, 0x7ea1) % 32);   // founding forest: ages 0..31 -> a mix of saplings/young/mature
     const age = day - birth;
     return age < TREE_STAGE_DAYS[0] ? 0 : age < TREE_STAGE_DAYS[0] + TREE_STAGE_DAYS[1] ? 1 : 2;
-}
-function lerp(a, b, t) { return a + (b - a) * t; }
-function smooth(t) { return t * t * (3 - 2 * t); }
-function tileNoise(i, j, scale, seed = 0) {
-    const x = i / scale, y = j / scale;
-    const x0 = Math.floor(x), y0 = Math.floor(y);
-    const tx = smooth(x - x0), ty = smooth(y - y0);
-    const a = tileRand(x0, y0, seed);
-    const b = tileRand(x0 + 1, y0, seed);
-    const c = tileRand(x0, y0 + 1, seed);
-    const d = tileRand(x0 + 1, y0 + 1, seed);
-    return lerp(lerp(a, b, tx), lerp(c, d, tx), ty);
 }
 
 // #paddock A facility is a PADDOCK: a fenced enclosure annexed OUTSIDE the homestead fence, holding one

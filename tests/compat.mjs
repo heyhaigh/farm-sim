@@ -43,11 +43,16 @@ function fnv(s) {
 import { World } from '../farm.js';
 import { obstacleTier, forageIngredient, treeVariant, treeIsFruit, treeStageAt, FORAGE_INGREDIENTS,
          CRAFTABLES, HOUSE_TIERS, FACILITY_DEFS, PROJECT_DEFS, T, GRID, CENTER } from '../farm.js';
+// Codex #56-5 — the RENDER side of the positional family. Until tilehash.js existed these lived in main.js,
+// which needs a DOM and so could never be imported here: changing any of them repainted every existing town
+// with both harnesses green. They decide which grass patch a tile is, which variant of a sprite set it gets,
+// and how far that sprite is nudged — all recomputed live, none of it stored.
+import { grassPatch, pickIndex, tileJitter, tileNoise, tileRand } from '../tilehash.js';
 
 // Pinned 2026-07-29 when this section was added. Re-pin DELIBERATELY: a terrain hash moving means existing
 // towns' frontier terrain or per-tile attributes changed, and a tables hash moving means a save-referenced
 // list was reordered. Both are compatibility events, not routine re-baselines.
-const TERRAIN_BASELINE = { 20260706: '9c42ab2c', 42: 'e2d623d6', 7: '5ed23664', 3: '5ac66f6f' };
+const TERRAIN_BASELINE = { 20260706: '2c0d7424', 42: 'a3b6cfee', 7: '65125bac', 3: 'a421f74f' };
 const TABLES_BASELINE = '67414731';
 
 function fnvBytes(arr) {
@@ -89,13 +94,25 @@ function terrainDigest(seed) {
         band.push(w.get(i, j));
     }
     parts.push('frontier:' + fnvBytes(band));
+    // EVERY tile, not a lattice. These are pure arithmetic with no chunk generation behind them, so density
+    // is nearly free — and a stride-7 lattice (144 points) missed a 0.01 nudge to grassPatch's SUNLIT
+    // threshold, because that band is the tail of the distribution and 144 samples contained none of it. The
+    // same mistake as the frontier: thin slices need coverage, not cleverness.
     // PER-TILE ATTRIBUTES — re-derived live on every frame and every work tick, never stored, so a change
     // here rewrites existing towns: rock size and ore yield, forest age, which wild tile holds which herb.
     const attrs = [];
-    for (let i = 12; i <= GRID - 12; i += 7) for (let j = 12; j <= GRID - 12; j += 7) {
+    for (let i = 0; i < GRID; i++) for (let j = 0; j < GRID; j++) {
         attrs.push(`${obstacleTier(i, j)}${forageIngredient(i, j) || '-'}${treeVariant(i, j, 6)}${treeIsFruit(i, j) ? 1 : 0}${TREE_SAMPLE_DAYS.map(d => treeStageAt(i, j, d)).join('')}`);
     }
     parts.push('attrs:' + fnv(attrs.join('|')));
+    // RENDER-SIDE per-tile look. Sampled over the same lattice, plus the jitter at the spreads main.js
+    // actually passes (tree 32x18 is the widest, so it is the one that would visibly shift).
+    const look = [];
+    for (let i = 0; i < GRID; i++) for (let j = 0; j < GRID; j++) {
+        const jt = tileJitter(i, j, 32, 18), jr = tileJitter(i, j, 5, 3);
+        look.push(`${grassPatch(i, j)}${pickIndex(i, j, 64, 6)}${pickIndex(i, j, 68, 5)}${jt.x},${jt.y};${jr.x},${jr.y}`);
+    }
+    parts.push('look:' + fnv(look.join('|')));
     return fnv(parts.join('/'));
 }
 

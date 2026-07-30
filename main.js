@@ -11,6 +11,10 @@ import {
     makeTree, makeStump, makeWildWheat, makeWildFlowers,
     fillDiamond, strokeDiamond,
 } from './pixel.js';
+// `smooth` is used by the watch-fan falloff; `lerp` and `noise2` have no callers left in main.js now that
+// noise2's only user (grassPatch) moved into the shared module, so they are deliberately not imported.
+import { tileHash as hash2, tileRand as rand2, smooth,
+         pickIndex, grassPatch, tileJitter } from './tilehash.js';
 import { CRT } from './crt.js';
 import { saveTown, loadTown, wipeTown, undoWipe, loadWorldIndex, registerTownInWorld, saveWorldIndex, updateWorldIndex, quarantineTown, peekQuarantined, restoreQuarantined, requestPersistentStorage, readGen } from './save.js';
 import { computeLayout, detectEncounters, encounterLine, townPos, townReach, townTint } from './worldmap.js';
@@ -1497,13 +1501,12 @@ function wildSpec(i, j, t, season) {
     }
     return null;
 }
+// The SPREADS stay here — they depend on what is being drawn — while the offset randomness and its salts
+// live in tilehash.js so the fingerprint covers them.
 function wildJitter(i, j, t) {
     const xSpread = t === T.TREE ? 32 : t === T.ROCK ? 5 : t === T.STUMP ? 4 : 7;
     const ySpread = t === T.TREE ? 18 : t === T.ROCK ? 3 : 4;
-    return {
-        x: Math.round((rand2(i, j, 71) - 0.5) * xSpread),
-        y: Math.round((rand2(i, j, 72) - 0.5) * ySpread),
-    };
+    return tileJitter(i, j, xSpread, ySpread);
 }
 function drawWild(spec, x, baseY) {
     ctx.imageSmoothingEnabled = false;
@@ -1659,28 +1662,12 @@ function chunkOrigin(cx, cy) {
 
 const PATH_C = '#8a7a58';
 
-function hash2(i, j, seed = 0) {
-    let h = Math.imul(i | 0, 374761393) ^ Math.imul(j | 0, 668265263) ^ Math.imul(seed | 0, 2246822519);
-    h = Math.imul(h ^ (h >>> 13), 1274126177);
-    return (h ^ (h >>> 16)) >>> 0;
-}
-function rand2(i, j, seed = 0) {
-    return hash2(i, j, seed) / 4294967296;
-}
-function lerp(a, b, t) { return a + (b - a) * t; }
-function smooth(t) { return t * t * (3 - 2 * t); }
-function noise2(i, j, scale, seed = 0) {
-    const x = i / scale, y = j / scale;
-    const x0 = Math.floor(x), y0 = Math.floor(y);
-    const tx = smooth(x - x0), ty = smooth(y - y0);
-    const a = rand2(x0, y0, seed);
-    const b = rand2(x0 + 1, y0, seed);
-    const c = rand2(x0, y0 + 1, seed);
-    const d = rand2(x0 + 1, y0 + 1, seed);
-    return lerp(lerp(a, b, tx), lerp(c, d, tx), ty);
-}
+// hash2/rand2/noise2 were a verbatim duplicate of farm.js's tileHash/tileRand/tileNoise (numerically
+// identical over 40k samples). They now come from the shared tilehash.js — same functions, same salts, so
+// nothing renders differently — and the aliases keep every call site below unchanged. The point of sharing
+// them is that tests/compat.mjs can fingerprint a DOM-free module, which it could never do for main.js.
 function pickTile(list, i, j, seed = 0) {
-    return list[hash2(i * 31 + j * 17, j * 29 - i * 13, seed) % list.length];
+    return list[pickIndex(i, j, seed, list.length)];
 }
 
 function shade(hex, f) {
@@ -1691,14 +1678,6 @@ function shade(hex, f) {
     return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`;
 }
 
-// low-frequency noise -> which grass "patch" a tile belongs to (0..3)
-function grassPatch(i, j) {
-    const n = noise2(i, j, 8, 12) * 0.55 + noise2(i + 31, j - 17, 19, 13) * 0.35 + rand2(i, j, 14) * 0.1;
-    if (n < 0.24) return 1;   // shaded meadow
-    if (n > 0.78) return 2;   // sunlit patch
-    if (n > 0.55) return 3;   // wildflower / tufted patch
-    return 0;                 // plain
-}
 
 // Bake ONE chunk's ground into a cached canvas. Unrevealed tiles bake as fog (a near-black
 // diamond with a faint hash weave — no tile data is read for them, so rendering never
