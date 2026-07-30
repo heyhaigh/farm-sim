@@ -8133,7 +8133,10 @@ function drawStartScreen() {
     // Codex #62-1 — MUST mirror the entry chooser in index.html exactly, or the two disagree and one hides the
     // canvas while the other boots (or vice versa). `any-hover`/`any-pointer` exempt hybrids that have a real
     // pointer attached; only a device with no usable pointer at all is turned away.
-    const isMobile = window.matchMedia('(hover: none) and (pointer: coarse) and (any-hover: none) and (any-pointer: coarse)').matches;
+    const touchOnly = window.matchMedia('(hover: none) and (pointer: coarse) and (any-hover: none) and (any-pointer: coarse)').matches;
+    // tablets (>=600px short side) DO boot — landscape play with the CSS rotate prompt in portrait —
+    // so only a touch-only device that is also phone-sized is refused here
+    const isMobile = touchOnly && Math.min(window.screen.width, window.screen.height) < 600;
     if (isMobile) {
         // index.html routes phones to mobile-gate.js, so this normally never runs. Kept as defence in depth:
         // if main.js is ever loaded on a phone directly, it must still refuse to boot the sim.

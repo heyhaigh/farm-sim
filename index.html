@@ -90,6 +90,52 @@
            svh is the small viewport — always fully on screen. Browsers without svh ignore the declaration and
            keep the base 100vh, which is exactly the old behaviour. */
         html.entry-mobile #tv { pointer-events: none; touch-action: none; height: 100svh; }
+
+        /* TABLET, PORTRAIT: a rotate prompt. Unlike the phone gate this is not a wall — landscape plays —
+           so unlike `entry-mobile` the orientation half of the condition is deliberately LIVE: rotating the
+           device shows/hides it with no JS. Sticky WHO you are, live HOW you're holding it. */
+        #rotate-gate {
+            display: none;
+            position: fixed;
+            inset: 0;
+            align-items: center;
+            justify-content: center;
+            background: radial-gradient(ellipse at center, #0b1410 0%, #05070a 70%);
+            color: #c8ccd8;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            text-align: center;
+            text-transform: uppercase;
+            padding: 28px;
+            z-index: 9999;
+            overflow: hidden;
+        }
+        #rotate-gate::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            background:
+                repeating-linear-gradient(180deg, rgba(0,0,0,0.55) 0 2px, rgba(0,0,0,0) 2px 4px),
+                radial-gradient(ellipse at center, rgba(0,0,0,0) 55%, rgba(0,0,0,0.75) 100%);
+        }
+        #rotate-gate .rg-inner { position: relative; }
+        #rotate-gate strong {
+            display: block;
+            color: #f0d060;
+            font-size: 34px;
+            letter-spacing: 0.18em;
+            margin-bottom: 18px;
+        }
+        #rotate-gate .rg-note {
+            color: #8a8f9c;
+            font-size: 15px;
+            letter-spacing: 0.12em;
+        }
+        @media (orientation: portrait) {
+            html.entry-tablet #rotate-gate { display: flex; }
+            /* no touches reach a game that should not be played this way up */
+            html.entry-tablet #tv { pointer-events: none; }
+        }
         /* The plain-text block is only a fallback for "the gate never rendered". The inline script below
            arms it on a timer; the canvas gate normally sets `gate-live` long before that. */
         html.entry-mobile.gate-fallback:not(.gate-live) #mobile-gate { display: flex; }
@@ -97,6 +143,12 @@
 </head>
 <body>
     <canvas id="tv"></canvas>
+    <div id="rotate-gate" role="status">
+        <div class="rg-inner">
+            <strong>Flip horizontally</strong>
+            <div class="rg-note">Game supported in landscape orientation.</div>
+        </div>
+    </div>
     <div id="mobile-gate" role="status">
         <div class="gate-inner">
             <span class="gate-title">Propagate</span>
@@ -114,10 +166,17 @@
         // usable pointer attached. Four PLAIN feature queries, no not(): an unparseable query returns
         // matches:false here, which fails toward the FULL game — heavy on a phone, but functional.
         (function () {
-            var MOBILE = window.matchMedia('(hover: none) and (pointer: coarse) and (any-hover: none) and (any-pointer: coarse)').matches;
+            var TOUCH_ONLY = window.matchMedia('(hover: none) and (pointer: coarse) and (any-hover: none) and (any-pointer: coarse)').matches;
+            // Touch-only devices split by size: a tablet (>=600px on its SHORT side) gets the real game in
+            // landscape with a rotate prompt in portrait; a phone gets the title-screen gate. screen.* is
+            // orientation-independent, so the class cannot flip when the device rotates.
+            var TABLET = TOUCH_ONLY && Math.min(window.screen.width, window.screen.height) >= 600;
+            var MOBILE = TOUCH_ONLY && !TABLET;
             // stamp the decision for CSS; nothing re-evaluates it, so a mid-session capability change
-            // (detached keyboard, unplugged mouse) cannot disturb a running game
+            // (detached keyboard, unplugged mouse) cannot disturb a running game. Orientation is the one
+            // thing that stays live, via the CSS orientation query on #rotate-gate.
             if (MOBILE) document.documentElement.classList.add('entry-mobile');
+            if (TABLET) document.documentElement.classList.add('entry-tablet');
             // Desktop loses the preload scanner's head start once the entry is chosen in script rather than
             // written in markup, so hand it back explicitly. Skipped on the gate path, which does not want it.
             if (!MOBILE) {
