@@ -49,6 +49,8 @@ function markLive() {
     firstFrameDone = true;
     document.documentElement.classList.add('gate-live');
 }
+// The HTML fallback is `position: fixed; inset: 0` with its own background at z-index 9999, so it COVERS
+// the canvas — there is no need to hide #tv as well, and hiding it would break recovery on restore.
 function markFailed(err) {
     firstFrameDone = false;
     document.documentElement.classList.remove('gate-live');
@@ -56,8 +58,30 @@ function markFailed(err) {
     if (!markFailed.logged) { markFailed.logged = true; console.error('mobile gate render failed:', err); }
 }
 
+// Codex #64-3: a WebGL context loss does NOT throw — it fires `webglcontextlost` and quietly makes draw
+// calls ineffective. So the try/catch below could never see it, and after one good frame `gate-live` would
+// stay set over a frozen black canvas with the notice suppressed. Handle it explicitly.
+// preventDefault() is required, or the browser will never fire `webglcontextrestored`.
+let contextLost = false;
+out.addEventListener('webglcontextlost', (e) => {
+    e.preventDefault();
+    contextLost = true;
+    markFailed(new Error('webglcontextlost'));
+}, false);
+out.addEventListener('webglcontextrestored', () => {
+    contextLost = false;
+    requestAnimationFrame(gateFrame);   // the loop parked itself on loss; restart it
+}, false);
+
+// Scheduling is INSIDE the frame now, not unconditionally at the top: a permanently-failing gate used to
+// retry at full frame rate, which on a phone is a hot battery for nothing.
+function schedule(failed) {
+    if (failed) setTimeout(() => requestAnimationFrame(gateFrame), 1000);
+    else requestAnimationFrame(gateFrame);
+}
+
 function gateFrame(t) {
-    requestAnimationFrame(gateFrame);
+    if (contextLost) return;   // parked — `webglcontextrestored` restarts the loop
     try {
         const L = gateLayout(out.clientWidth, out.clientHeight);
         GW = L.GW; GH = L.GH;
@@ -79,8 +103,10 @@ function gateFrame(t) {
         // by 1000 before calling render. Passing raw milliseconds ran the dot-crawl 1000x too fast.
         crt.render((t || performance.now()) / 1000);
         markLive();
+        schedule(false);
     } catch (err) {
         markFailed(err);
+        schedule(true);
     }
 }
 requestAnimationFrame(gateFrame);

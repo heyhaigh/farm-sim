@@ -42,15 +42,42 @@ git push origin main
 # 2. assert before going further — a mismatch here means step 3 would ship the wrong tree
 [ "$(git rev-parse origin/main)" = "$REV" ] || { echo "origin/main is NOT $REV — stop"; exit 1; }
 
-# 3. carry it into the deploy repo — this is the only thing that ships
+# 3. carry it into the deploy repo — this is the only thing that ships.
+#    Check main out EXPLICITLY: `git merge` merges into whatever is checked out, but the push below sends
+#    the `main` ref. If the clone is ever left on another branch those are different commits, and the
+#    procedure silently repeats the exact stale-ref failure it exists to prevent.
 cd ~/ry-farms-deploy
-git fetch public && git merge public/main
+git fetch public
+git checkout main
+git merge public/main
 [ "$(git rev-parse public/main)" = "$REV" ] || { echo "public/main is NOT $REV — stop"; exit 1; }
+git merge-base --is-ancestor "$REV" HEAD || { echo "$REV is NOT in the deploy tree — stop"; exit 1; }
+DEPLOY_REV=$(git rev-parse HEAD)
 git push origin main               # Railway builds on push
 
-# 4. assert it is actually LIVE — the deploy can succeed while serving an older image
-curl -s https://propagate.heyhaigh.ai/main.js | wc -c        # compare against the local byte count
+# 4. assert it is actually LIVE. The image STATES its own revision at /api/build, because a deploy can
+#    succeed while Railway still serves an older one — we have hit that. Poll until it matches, or fail.
+for i in $(seq 1 40); do
+  LIVE=$(curl -s https://propagate.heyhaigh.ai/api/build | sed 's/.*"rev":"\([^"]*\)".*/\1/')
+  [ "$LIVE" = "$DEPLOY_REV" ] && { echo "live on $LIVE"; break; }
+  echo "  live=$LIVE want=$DEPLOY_REV — waiting"; sleep 15
+done
+[ "$LIVE" = "$DEPLOY_REV" ] || { echo "NEVER went live — check Railway"; exit 1; }
 ```
+
+### Why `/api/build` rather than a byte count
+
+The old check was `curl main.js | wc -c`. It printed a number and exited 0 whatever it found: it could not
+fail, two revisions of equal size were indistinguishable, and it said nothing about `index.html` or the
+mobile entry. `server.mjs` now answers `/api/build` with
+`{"rev": RAILWAY_GIT_COMMIT_SHA || BUILD_REV || "unknown"}` — Railway injects the former on every build.
+
+**If it answers `"unknown"`, the assertion is not working** and the deploy is unverified: set `BUILD_REV`
+in the Railway service, or confirm `RAILWAY_GIT_COMMIT_SHA` is being injected. Do not treat a missing
+revision as a pass.
+
+Note `DEPLOY_REV` is the *deploy* repo's HEAD — a merge commit, so it is deliberately NOT equal to `REV`.
+The `merge-base --is-ancestor` check on the line above is what ties the two together.
 
 `--ff-only` is deliberate: if it refuses, `main` has commits your branch does not, and a silent merge commit
 there is how the two repos drift apart in the first place.

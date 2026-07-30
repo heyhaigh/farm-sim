@@ -107,6 +107,19 @@ function gzipFor(file, key, data) {
 http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://localhost:${PORT}`);
 
+    // #buildrev WHICH BUILD IS THIS? Codex #64-2: the release check used to be `curl main.js | wc -c`, which
+    // prints a number and exits 0 whatever it finds — it cannot fail, two different revisions of equal size
+    // are indistinguishable, and it says nothing about index.html or the mobile entry. A deploy that
+    // succeeds while serving an older image is a failure mode we have actually hit, so the image now states
+    // its own revision and the release step asserts on it.
+    // Railway injects RAILWAY_GIT_COMMIT_SHA; BUILD_REV is the manual override for anywhere that doesn't.
+    if (url.pathname === '/api/build') {
+        const rev = process.env.BUILD_REV || process.env.RAILWAY_GIT_COMMIT_SHA || 'unknown';
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ rev }));
+        return;
+    }
+
     const apiRel = API_ROUTES[url.pathname];
     if (apiRel) {
         try { const api = loadHandler(apiRel); await api(req, res); }
