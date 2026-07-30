@@ -6675,6 +6675,12 @@ async function registerWorld(w, summary) {
 // inbox that never got acknowledged because the clear was gated on applyInbox's return count.
 const inboxEventId = e => e.id || `${e.pairKey}:${e.ordinal}:${e.kind}`;
 async function consumeInbox(w, events) {
+    // Codex #61-3 — the policy lives HERE, at the mutation boundary, not at each call site. Consuming means
+    // ACKNOWLEDGING events, and a session that cannot persist must not claim them. Placed before applyInbox
+    // so a future caller cannot apply the effects locally and only discover the refusal when saveTown declines.
+    // Note this is about the DESTINATION world, not the caller: switchTown passes a freshly observed,
+    // persistence-enabled town and should consume normally.
+    if (w._persistenceDisabled) return;
     w.applyInbox(events);                          // idempotent: re-delivered events are skipped by applied-id
     // #Codex30/#Codex31 P1 — applyInbox may have changed this town's DOCTRINE/ENVOY (a raid it LEARNED from: #134
     // defence -> palisade, or truce -> envoy.suePeace); republish its summary so another tab can't resolve an
@@ -8116,7 +8122,9 @@ function drawStartScreen() {
             // destination is known: go there. (The unsaved fallback below stays for genuinely unreadable
             // storage, where no safe destination exists.)
             console.error(`ry-farms: ?fresh refused — seed ${worldSeed} already holds a town (day ${st.snap.day ?? '?'}); resuming it instead. Use the NEW TOWN hatch to retire it.`);
-            location.search = '?seed=' + worldSeed;   // reboots into the resume path
+            // REPLACE, not assign: assigning leaves the refused ?fresh URL in history, so Back returns to it
+            // and it immediately redirects again — a trap between two entries (Codex #61-1).
+            location.replace('?seed=' + worldSeed);   // reboots into the resume path
             return;
         } else foundGen = st.gen;   // observed EMPTY at this generation — a rev-0 claim is legitimate
     }

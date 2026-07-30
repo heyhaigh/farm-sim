@@ -37,6 +37,13 @@ export async function enrichInventions(world, isCurrent = () => true) {
 let invInflight = false, invSig = null, invFailAt = -Infinity;
 function inventSignature(world) { return `${Object.keys(world.recipes || {}).length}:${Object.keys(world.recipeFlavor || {}).length}`; }
 export async function persistTownInventions(world, isCurrent = () => true) {
+    // Codex #61-2 — same policy guard as memory-writeback.js's three entry points, at this function's own
+    // boundary rather than its caller's. This writes to the shared SuperMemory store, which outlives the tab,
+    // so a menu backdrop or a session we refused to persist must be silent. The current caller is gated, but
+    // caller-dependent protection is exactly the shape the centralized guards were added to eliminate — and
+    // that shape has already been missed twice in this work (persistBattle, then the world-index read).
+    // Returns silently: intentional background suppression should not spam the console.
+    if (!world || world._persistenceDisabled) return false;
     if (typeof fetch !== 'function' || invInflight || !world.recipes) return false;
     if (Date.now() - invFailAt < COOLDOWN_MS) return false;
     const recipes = Object.values(world.recipes);
