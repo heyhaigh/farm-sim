@@ -422,8 +422,14 @@ const TREE_SETS = (() => {
 // farmer is chopping it (the "surprise reveal"). Winter keeps the static snow trees below. This sheet has
 // no ground shadow (accepted tradeoff for the animation). Grid = 9 cols x 13 frames of 64x80: 3 tree
 // types (green / apple / pine) x 3 sizes (large=mature / med=young / small=sapling).
+// #firstframe LOAD PRIORITY. Every image below is requested at module scope, so the browser starts all 176
+// together and the tail queues behind the head — which is why a 2KB sprite could take 2.1s on a cold visit.
+// `fetchPriority` does not change WHAT loads, it changes the order the connection serves them: the art the
+// first frame is blocked on goes first, and the heavy things nobody can see yet get out of its way. The three
+// portraits alone are 592KB — 29% of the cold payload — for art that only appears on a raid faceoff.
+const PRIO = (img, p) => { try { img.fetchPriority = p; } catch { /* older engines ignore it */ } return img; };
 const treeAnimSheet = new Image(); let treeAnimReady = false; treeAnimSheet.onload = () => { treeAnimReady = true; }; treeAnimSheet.onerror = () => {};
-treeAnimSheet.src = './assets/craftpix-net-654184-main-characters-home-free-top-down-pixel-art-asset/PNG/Trees_animation.png';
+PRIO(treeAnimSheet, 'low').src = './assets/craftpix-net-654184-main-characters-home-free-top-down-pixel-art-asset/PNG/Trees_animation.png';
 // scale MUST stay INTEGER: a fractional nearest-neighbour scale makes the foliage shimmer 1px<->2px
 // between frames (reads as horizontal striations). 1x = native 64x80, crisp + stable.
 const TREE_ANIM = { cols: 9, rows: 13, fw: 64, fh: 80, scale: 1 };
@@ -534,13 +540,13 @@ const WALK_STRIDE = 0.42;   // tiles travelled per walk-frame step (drives the g
 // orc town. Purely a display card (drawFaceoff), no sim/determinism impact.
 const humanPortraitImg = new Image(); let humanPortraitReady = false;
 humanPortraitImg.onload = () => { humanPortraitReady = true; }; humanPortraitImg.onerror = () => {};
-humanPortraitImg.src = './assets/human-farmer.png';
+PRIO(humanPortraitImg, 'low').src = './assets/human-farmer.png';
 const orcPortraitImg = new Image(); let orcPortraitReady = false;
 orcPortraitImg.onload = () => { orcPortraitReady = true; }; orcPortraitImg.onerror = () => {};
-orcPortraitImg.src = './assets/orc-raider.png';
+PRIO(orcPortraitImg, 'low').src = './assets/orc-raider.png';
 const orcRaider2Img = new Image(); let orcRaider2Ready = false;
 orcRaider2Img.onload = () => { orcRaider2Ready = true; }; orcRaider2Img.onerror = () => {};
-orcRaider2Img.src = './assets/orc-raider-2.png';
+PRIO(orcRaider2Img, 'low').src = './assets/orc-raider-2.png';
 
 // Roaming WILD PREY sprites (hunted for meat — see world.prey / #tickPrey). All 32x32, 4-frame idle
 // cycles; row 2 = side profile. Deer/hare side-frames face LEFT (srcFace -1), the turkey faces RIGHT.
@@ -567,6 +573,7 @@ function loadImageSet(base, sets, store, onReady) {
     for (const n of names) {
         const img = new Image();
         img.assetName = n;
+        img.fetchPriority = 'high';   // #firstframe flora/rock art gates the reveal — ahead of the rest
         img.onload = done;
         img.onerror = done;
         img.src = base + n + '.png';
@@ -881,7 +888,7 @@ function loadAssetArt() {
     loadAnimalArt();
     homeSheet.onload = () => { homeReady = true; };
     homeSheet.onerror = () => {};
-    homeSheet.src = HOME_BASE + 'exterior.png';
+    PRIO(homeSheet, 'high').src = HOME_BASE + 'exterior.png';
     if (SMOKE_ENABLED) {
         smokeSheet.onload = () => { smokeReady = true; };
         smokeSheet.onerror = () => {};
@@ -895,7 +902,7 @@ function loadAssetArt() {
     birdFlySheet.src = HOME_BASE + 'bird_fly_animation.png';
     grassDetailsImg.onload = () => { grassDetailsReady = true; terrainDirty = true; };
     grassDetailsImg.onerror = () => {};
-    grassDetailsImg.src = HOME_BASE + 'ground_grass_details.png';
+    PRIO(grassDetailsImg, 'high').src = HOME_BASE + 'ground_grass_details.png';
     plantsSheet.onload = () => { plantsReady = true; };
     plantsSheet.onerror = () => {};
     plantsSheet.src = PLANTS_BASE + 'Plants.png';
@@ -974,8 +981,8 @@ const charBody = new Image(), charHead = new Image();
 let charBodyReady = false, charHeadReady = false;
 charBody.onload = () => { charBodyReady = true; }; charBody.onerror = () => {};
 charHead.onload = () => { charHeadReady = true; }; charHead.onerror = () => {};
-charBody.src = CHAR_BASE + 'Swordsman_lvl1_Walk_body.png';
-charHead.src = CHAR_BASE + 'Swordsman_lvl1_Walk_head.png';
+PRIO(charBody, 'high').src = CHAR_BASE + 'Swordsman_lvl1_Walk_body.png';
+PRIO(charHead, 'high').src = CHAR_BASE + 'Swordsman_lvl1_Walk_head.png';
 // #anim-migrate the RUN (8f) + IDLE (12f) tintable Parts — full activity cycles for the in-game farmers.
 // Same 64px 4-row layout as the Walk parts. Loaded tolerant: until a sheet is ready its cycle is null and
 // the renderer falls back to the walk-based frames (never throws, never blacks the game).
@@ -7787,6 +7794,17 @@ function frame(now) {
 
 // boot / loading screen: the CRT tunes in (heavy static settling to near-black), then a 64-bit pixel
 // LOADER bar sweeps while the memories are pulled from SuperMemory, captioned "RETRIEVING MEMORIES".
+// #firstframe the art the FIRST FRAME needs — one list, read by both the reveal gate and the boot bar, so the
+// bar cannot drift from what is actually being waited on. Deliberately excludes the animated tree sheet,
+// portraits, UI and combat sets: those have graceful fallbacks or are not on screen yet.
+function firstFrameArtChecks() {
+    return [charReady(), treeArtReady, bushArtReady, rockArtReady, grassDetailsReady, homeReady];
+}
+function firstFrameArtProgress() {
+    const c = firstFrameArtChecks();
+    return c.filter(Boolean).length / c.length;
+}
+let _bootFill = 0;
 function drawBootScreen(t) {
     if (bootT0 == null) bootT0 = t;
     const bootTime = t - bootT0;   // #Codex-VS seconds since the first boot frame (RAF clock) — not a per-frame counter, so 30/60/120Hz all pace the same
@@ -7811,11 +7829,19 @@ function drawBootScreen(t) {
     const bx = cx - Math.round(barW / 2), by = cy - 8;
     ctx.fillStyle = '#2a3350'; ctx.fillRect(bx - 3, by - 3, barW + 6, barH + 6);   // bezel
     ctx.fillStyle = '#0c0f18'; ctx.fillRect(bx - 1, by - 1, barW + 2, barH + 2);   // inner well
-    const head = ((performance.now() / 1000 / 1.5) % 1) * (N + 5) - 3;             // leading cell, enters/exits the ends
+    // DETERMINATE now: the bar reports how much of the first-frame art has actually landed, so the wait is
+    // legible instead of arbitrary — the screen says "IMAGINING LIVES." and the bar shows it meaning it.
+    // The sweep is kept as a shimmer riding the filled edge, so a stalled connection still looks alive rather
+    // than frozen. `_bootFill` only ever climbs: art readiness is monotonic, and a bar that went backwards
+    // would read as an error.
+    const filled = Math.max(_bootFill, firstFrameArtProgress() * N);
+    _bootFill = filled;
+    const head = ((performance.now() / 1000 / 1.5) % 1) * (N + 5) - 3;             // shimmer on the leading edge
     for (let k = 0; k < N; k++) {
-        const d = head - k;                               // cells LIGHT behind the sweeping head, fading with distance
+        const d = head - k;
         let col = '#141c18';                              // unlit cell
-        if (d >= 0 && d < 4) col = d < 1 ? '#c8f0a0' : d < 2 ? '#7dd069' : '#4a8a3c';
+        if (k < filled) col = '#4a8a3c';                  // landed
+        if (k < filled && d >= 0 && d < 4) col = d < 1 ? '#c8f0a0' : d < 2 ? '#7dd069' : '#4a8a3c';
         ctx.fillStyle = col;
         ctx.fillRect(bx + k * (CELL + GAPC), by, CELL, barH);
     }
@@ -8318,8 +8344,7 @@ function drawStartScreen() {
     // tree sheet, portraits, UI and combat sets are deliberately excluded, since they either have a graceful
     // static fallback or are not on screen yet.
     const REVEAL_FLOOR_MS = 1400, REVEAL_CEILING_MS = 5000;
-    const firstFrameArtReady = () => charReady() && treeArtReady && bushArtReady && rockArtReady
-                                  && grassDetailsReady && homeReady;
+    const firstFrameArtReady = () => firstFrameArtChecks().every(Boolean);
     const revealStart = performance.now();
     const reveal = () => {
         booted = true;
