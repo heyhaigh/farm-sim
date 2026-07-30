@@ -7954,6 +7954,89 @@ function drawPlayIcon(x, yTop, h, color) {
     return w;   // pixel width consumed
 }
 
+// a centred TEXT button (no plate). hotCol is the hover colour (defaults to the gold used elsewhere).
+function startTextButton(key, cx, y, label, scale, baseCol, hotCol = '#ffd24a') {
+    const tw = textWidth(label, scale), r = { x: Math.round(cx - tw / 2) - 6, y: y - 3, w: tw + 12, h: 5 * scale + 6 };
+    const hot = inRect(mouse, r);
+    drawText(ctx, label, Math.round(cx - tw / 2), y, hot ? hotCol : baseCol, scale);
+    startHits[key] = r;
+    return r;
+}
+
+// a full tinted-plate button in the game's FOUND-A-TOWN style. Registers its hit rect under `key`.
+function startPlateButton(key, bx, y, bw, bh, label, base, fill, fillHot, textCol) {
+    const cx = bx + bw / 2, r = { x: bx, y, w: bw, h: bh }, hot = inRect(mouse, r);
+    ctx.fillStyle = hot ? fillHot : fill; ctx.fillRect(r.x, r.y, r.w, r.h);
+    ctx.strokeStyle = base; ctx.lineWidth = 1; ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
+    drawText(ctx, label, Math.round(cx - textWidth(label) / 2), r.y + (bh - 5) / 2, hot ? '#ffffff' : textCol);
+    startHits[key] = r;
+}
+
+// #START choose-screen WALKERS — a looping, right-facing walk sprite per culture, cropped straight from the
+// CraftPix WALK sheets (both 384x256 = 6 cols x 4 rows of 64px cells, side = row 2) so each gets a smooth
+// 6-frame gait WITH its baked-in foot shadow. Human: Swordsman lvl1 walk (side faces RIGHT — no mirror).
+// Orc: orc1 walk (side faces LEFT → mirrored). The old in-game farmer sprite (2-frame walk) remains only as
+// a last-ditch fallback while a sheet loads. Fake farmer objects satisfy the fallback sprite builders.
+const MENU_HUMAN = { sheet: { culture: 'human', seed: 77 }, moveDir: 'side', facing: 1, state: 'walk', animTime: 0 };
+const MENU_ORC_FB = { sheet: { culture: 'orc', seed: 33 }, moveDir: 'side', facing: 1, state: 'walk', animTime: 0 };
+// Crop cells from a 64px sheet → array of frame canvases
+// maxCols limits how many columns to extract (default = all columns in the sheet)
+function menuWalkFrames(img, sx0, sy0, sw, sh, row, maxCols) {
+    if (!img || !img.complete || !img.naturalWidth) return null;
+    row = row != null ? row : 2;
+    const FW = 64;
+    const totalCols = Math.max(1, Math.round(img.naturalWidth / FW));
+    const cols = maxCols != null ? Math.min(maxCols, totalCols) : totalCols;
+    const frames = [];
+    for (let c = 0; c < cols; c++) {
+        const [o, ox] = makeCanvas(sw, sh); ox.imageSmoothingEnabled = false;
+        ox.drawImage(img, c * FW + sx0, row * FW + sy0, sw, sh, 0, 0, sw, sh);
+        frames.push(o);
+    }
+    return frames;
+}
+let menuOrcWalk = null;
+function menuOrcFrames() {
+    if (menuOrcWalk) return menuOrcWalk;
+    const walkSrc = orcWalkImg && orcWalkImg[1];
+    return (menuOrcWalk = menuWalkFrames(walkSrc, 12, 6, 40, 44, 2));
+}
+let menuHumanWalk = null;
+function menuHumanFrames() {
+    if (menuHumanWalk) return menuHumanWalk;
+    const walkSrc = menuHumanWalkImg;
+    return (menuHumanWalk = menuWalkFrames(walkSrc, 18, 14, 30, 36, 2));
+}
+// draw a walking `culture` sprite with its FEET centred at (footX, footY), scaled to targetH.
+// Loops the walk frames continuously.
+function drawMenuWalker(culture, footX, footY, targetH, t) {
+    const frames = culture === 'orc' ? menuOrcFrames() : menuHumanFrames();
+    if (!frames || !frames.length) {
+        // sheet not ready → in-game farmer sprite (2-frame walk) fallback
+        const fr = farmerSprites(culture === 'orc' ? MENU_ORC_FB : MENU_HUMAN);
+        const frame = Math.floor(t * 7) % 2 ? fr.walk1 : fr.walk2;
+        const flip = culture === 'orc';
+        const scale = targetH / frame.height, w = Math.round(frame.width * scale), h = Math.round(frame.height * scale);
+        const dx = Math.round(footX - w / 2), dy = Math.round(footY - h);
+        const sm = ctx.imageSmoothingEnabled; ctx.imageSmoothingEnabled = false;
+        if (flip) { ctx.save(); ctx.translate(dx + w, dy); ctx.scale(-1, 1); ctx.drawImage(frame, 0, 0, w, h); ctx.restore(); }
+        else ctx.drawImage(frame, dx, dy, w, h);
+        ctx.imageSmoothingEnabled = sm;
+        return w;
+    }
+    const frame = frames[Math.floor(t * 6) % frames.length];
+    // human walk frames face right, orc walk frames face left
+    const flip = culture === 'orc';
+    if (!frame || !frame.width) return 0;
+    const scale = targetH / frame.height, w = Math.round(frame.width * scale), h = Math.round(frame.height * scale);
+    const dx = Math.round(footX - w / 2), dy = Math.round(footY - h);
+    const sm = ctx.imageSmoothingEnabled; ctx.imageSmoothingEnabled = false;
+    if (flip) { ctx.save(); ctx.translate(dx + w, dy); ctx.scale(-1, 1); ctx.drawImage(frame, 0, 0, w, h); ctx.restore(); }
+    else ctx.drawImage(frame, dx, dy, w, h);
+    ctx.imageSmoothingEnabled = sm;
+    return w;
+}
+
 function drawStartScreen() {
     ctx.fillStyle = 'rgba(8,9,14,0.8)'; ctx.fillRect(0, 0, GW, GH);   // the ~80% black veil over the living town
     // deepen the CENTRE into a clean stage for the menu (the living town still breathes at the edges) so the
