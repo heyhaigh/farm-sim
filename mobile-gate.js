@@ -16,6 +16,11 @@ import { drawTitleArt } from './title-anim.js';
 import { gateLayout, GATE_L1, GATE_L2 } from './gate-layout.js';
 import { createScheduler } from './gate-loop.js';
 
+// The CSS contract this module depends on (`pointer-events: none` on the canvas, the fallback rule) keys
+// off `entry-mobile`. The entry chooser stamps it before loading us; re-stamping here is idempotent and
+// keeps the module correct even if it is ever loaded directly.
+document.documentElement.classList.add('entry-mobile');
+
 const out = document.getElementById('tv');
 const game = document.createElement('canvas');
 const ctx = game.getContext('2d');

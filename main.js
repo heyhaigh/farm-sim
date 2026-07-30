@@ -8119,7 +8119,7 @@ function drawStartScreen() {
     // MOBILE GATE: the sim is a fullscreen mouse+keyboard experience. CSS shows the
     // desktop-required notice immediately; this guard prevents the game from booting beneath it.
     // Deliberately use input capability rather than viewport size so a narrow desktop still works.
-    // Codex #62-1 — MUST mirror the CSS gate in index.html exactly, or the two disagree and one hides the
+    // Codex #62-1 — MUST mirror the entry chooser in index.html exactly, or the two disagree and one hides the
     // canvas while the other boots (or vice versa). `any-hover`/`any-pointer` exempt hybrids that have a real
     // pointer attached; only a device with no usable pointer at all is turned away.
     const isMobile = window.matchMedia('(hover: none) and (pointer: coarse) and (any-hover: none) and (any-pointer: coarse)').matches;
