@@ -70,14 +70,24 @@ out.addEventListener('webglcontextlost', (e) => {
 }, false);
 out.addEventListener('webglcontextrestored', () => {
     contextLost = false;
-    requestAnimationFrame(gateFrame);   // the loop parked itself on loss; restart it
+    schedule(false);   // the loop parked itself on loss; restart it
 }, false);
 
 // Scheduling is INSIDE the frame now, not unconditionally at the top: a permanently-failing gate used to
 // retry at full frame rate, which on a phone is a hot battery for nothing.
+//
+// `scheduled` makes "exactly one loop in flight" explicit rather than emergent. Since every frame
+// reschedules itself, any second entry point would fork a permanent duplicate that never merges back.
+// HONESTY: I could not demonstrate that happening — removing this guard and driving two rapid
+// loss→restore cycles held at 60fps, because the loop parks on loss and Chrome fires one restore per
+// loss, so there is exactly one restart. This is cheap insurance on an invariant the recovery paths
+// depend on, NOT a fix for an observed bug.
+let scheduled = false;
 function schedule(failed) {
-    if (failed) setTimeout(() => requestAnimationFrame(gateFrame), 1000);
-    else requestAnimationFrame(gateFrame);
+    if (scheduled) return;
+    scheduled = true;
+    const go = () => requestAnimationFrame((t) => { scheduled = false; gateFrame(t); });
+    if (failed) setTimeout(go, 1000); else go();
 }
 
 function gateFrame(t) {
@@ -109,4 +119,4 @@ function gateFrame(t) {
         schedule(true);
     }
 }
-requestAnimationFrame(gateFrame);
+schedule(false);
