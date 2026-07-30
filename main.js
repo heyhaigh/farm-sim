@@ -120,14 +120,13 @@ let followTarget = null;          // the farmer being trailed — independent of
 // #firstwatch Following is the game's most useful camera verb and nothing teaches it. The DAY-1 founding
 // congregation is the place to: the founders gather at the centre, confer about how they'll live, and agree
 // to share a rotating watch — so the moment they scatter there is already one named person with a job to do
-// tonight. The camera takes hold of whoever holds that first watch, and the FOLLOWING banner appears with
-// its own instructions. It is an INTRODUCTION, so it happens once, at the start, and never again — the
+// tonight. The camera takes hold of whoever holds that first watch, and the FOLLOWING banner carries the
+// instructions on its own. It is an INTRODUCTION, so it happens once, at the start, and never again — the
 // day-10 election and every winter election after it leave the camera alone.
 // EDGE-TRIGGERED on the congregation dispersing, deliberately: it fires only for a player who is there to
 // see it. Load a save from any later point and the congregation is long over, so there is no edge and no
 // hijack of a camera the player has since put somewhere on purpose. Display-only — no sim state, no rng.
 let sawCongregating = null;       // last observed world.congregating() (null until the first frame with a world)
-let firstWatchHintT = 0;          // seconds left on the one-time "this is following" coach line
 let recapSeq = -1;                // last day-recap seq we've seen (to detect a new one)
 let dramaSpotlight = null;        // { seed, kind, label, t } — a recent off-camera story beat worth watching (B4)
 let lastChronLen = -1;            // chronicle length last frame, to detect NEW beats to spotlight
@@ -6278,7 +6277,7 @@ async function switchTown(seed, ang) {
         chatFarmer = null; chatWidgetOpen = false; chatDropdownOpen = false; blurChatInput();
         momentQueue.length = 0; calloutQueue.length = 0; activeMoment = null; activeCallout = null; momentsPrimed = false;
         chronReadTotal = world._chronTotal || 0; lastChronLen = -1; recapSeq = -1;
-        sawCongregating = null; firstWatchHintT = 0;   // #firstwatch re-observe the new town before edge-detecting
+        sawCongregating = null;   // #firstwatch re-observe the new town before edge-detecting
         miniKey = null; chunkCanvases.clear();
         worldMapSel = world.seed;
         // arrive on the frontier you entered by — the side facing the town you left — looking inward
@@ -7544,7 +7543,6 @@ function frame(now) {
                     followMode = true; followTarget = sentry; selected = sentry;
                     sheetScroll = 0; sheetTab = 0; rosterOpen = false; chronOpen = false; boardOpen = false;
                     dramaSpotlight = null; raidFocus = null;
-                    firstWatchHintT = 14;   // the coach line rides under the FOLLOWING banner
                 }
             }
             sawCongregating = congregating;
@@ -7784,22 +7782,8 @@ function frame(now) {
     }
     // a quiet indicator while the camera is trailing someone (F, or the sheet's crosshair, toggles it)
     FOLLOW_PREV.w = FOLLOW_NEXT.w = 0;   // no banner, no clickable arrows (cleared each frame)
-    if (firstWatchHintT > 0) firstWatchHintT = followMode ? firstWatchHintT - dt : 0;   // cancels the moment they take the camera back
     if (!startScreen && followMode && followTarget && world.farmers.includes(followTarget) && !rosterOpen && !chronOpen && !boardOpen) {
         const lbl = `FOLLOWING ${followTarget.sheet.name.split(' ')[0].toUpperCase()} - F TO STOP`;
-        // #firstwatch one-time coach line, only for the camera the founding vote took hold of. It says what
-        // just happened and what the banner beneath it is, because the banner alone reads as a status label
-        // rather than as "you are in a mode you can leave".
-        if (firstWatchHintT > 0) {
-            const hint = 'THEY TAKE THE FIRST WATCH TONIGHT - THE CAMERA IS TRAILING THEM';
-            const hw = textWidth(hint), hx = Math.floor((GW - hw) / 2);
-            const fade = Math.min(1, firstWatchHintT / 2);   // eases out over the last couple of seconds
-            ctx.globalAlpha = fade;
-            ctx.fillStyle = 'rgba(12,14,22,0.82)';
-            ctx.fillRect(hx - 12, GH - 29, hw + 24, 11);
-            drawText(ctx, hint, hx, GH - 26, '#e8c860');
-            ctx.globalAlpha = 1;
-        }
         // sit the plate near the bottom edge (the log bar is gone) as a floating element
         const tw = textWidth(lbl), bx = Math.floor((GW - tw) / 2), boxTop = GH - 16, cy = GH - 11;
         const pad = 12, bxL = bx - pad, bxW = tw + pad * 2;
