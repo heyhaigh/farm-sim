@@ -8217,11 +8217,17 @@ function drawStartScreen() {
     // frontier that docked its stores, a parley honored/broken) before the resume card is built, so they land
     // in the chronicle + the "PREVIOUSLY ON" recap. Deterministic consume; cleared once applied.
     // #START a spectator backdrop consumes no inbox and joins no world index — it is not a real town.
-    if (!world._persistenceDisabled) try {
+    // The READ and the ACKNOWLEDGEMENT are gated differently, and conflating them was a regression the flag
+    // split introduced: reading the index is not a write, so a session that must not persist should still SEE
+    // the world — it just must not consume its inbox, because consuming means acknowledging events it can
+    // never durably record. Gating the whole block left a refused town with no world map and no frontier cue.
+    try {
         const widx = await loadWorldIndex();
-        const pending = (widx.inbox && widx.inbox[String(world.seed)]) || [];
-        if (pending.length) await consumeInbox(world, pending);   // exactly-once (Codex r20/r21)
         worldMapIdx = widx;   // #P2 the frontier cue needs the neighbour map from the first frame, not first map-open
+        if (!world._persistenceDisabled) {
+            const pending = (widx.inbox && widx.inbox[String(world.seed)]) || [];
+            if (pending.length) await consumeInbox(world, pending);   // exactly-once (Codex r20/r21)
+        }
     } catch (err) { console.warn('ry-farms: inbox consume failed', err); }
 
     // #108 from here on this town is the WATCHED one: a cross-town raid that ARRIVES during live play stages a
