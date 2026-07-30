@@ -20,15 +20,40 @@ Dockerfiles never diverge. The private repo carries the art and is what Railway 
 
 ## Deploying a change
 
-```sh
-# 1. work, commit and push in the public repo
-cd ~/ry-farms && git push origin main
+> ### ⚠️ `git push origin main` does NOT push what you are working on
+>
+> It pushes the local **`main` ref**, whatever branch happens to be checked out. This has already cost a
+> release: five reviewed commits sat on `topdown-buildings` while `main` and `public/main` stayed at
+> `232d55f`, so the deploy repo faithfully shipped the old code and the live site was judged against fixes
+> that were never running. Nothing failed loudly — the push "succeeded" and pushed nothing.
+>
+> **Always name the revision you intend to ship, and assert it landed.**
 
-# 2. carry it into the deploy repo — this is the only thing that ships
+```sh
+# 0. name what you are shipping
+cd ~/ry-farms
+REV=$(git rev-parse HEAD)          # the reviewed revision, on whatever branch you work on
+
+# 1. fast-forward main to it, and push THAT ref explicitly
+git fetch origin
+git checkout main && git merge --ff-only "$REV"
+git push origin main
+
+# 2. assert before going further — a mismatch here means step 3 would ship the wrong tree
+[ "$(git rev-parse origin/main)" = "$REV" ] || { echo "origin/main is NOT $REV — stop"; exit 1; }
+
+# 3. carry it into the deploy repo — this is the only thing that ships
 cd ~/ry-farms-deploy
 git fetch public && git merge public/main
-git push origin main            # Railway builds on push
+[ "$(git rev-parse public/main)" = "$REV" ] || { echo "public/main is NOT $REV — stop"; exit 1; }
+git push origin main               # Railway builds on push
+
+# 4. assert it is actually LIVE — the deploy can succeed while serving an older image
+curl -s https://propagate.heyhaigh.ai/main.js | wc -c        # compare against the local byte count
 ```
+
+`--ff-only` is deliberate: if it refuses, `main` has commits your branch does not, and a silent merge commit
+there is how the two repos drift apart in the first place.
 
 Nothing to reconcile on that merge: the art is force-added past the deploy repo's own `.gitignore` rather
 than by editing it, so **no tracked file differs** between the repos. The only difference is *which* files are

@@ -16,6 +16,7 @@ import {
 import { tileHash as hash2, tileRand as rand2, smooth,
          pickIndex, grassPatch, tileJitter } from './tilehash.js';
 import { CRT } from './crt.js';
+import { TITLE_SHEET, drawTitleArt as drawTitleSheet, isTitleSettled } from './title-anim.js';
 import { saveTown, loadTownState, wipeTown, undoWipe, loadWorldIndex, updateWorldIndex, quarantineTown, peekQuarantined, restoreQuarantined, requestPersistentStorage } from './save.js';
 import { computeLayout, detectEncounters, encounterLine, townPos, townReach, townTint } from './worldmap.js';
 import { enrichStories } from './dm.js';
@@ -7859,7 +7860,7 @@ function firstFrameArtChecks() {
     }
     // On a plain visit the START SCREEN is the first frame, and its animated title falls back to a font
     // wordmark. Only waited on for that path — an explicit ?seed= boot never shows it.
-    if (_startModeBoot) checks.push(startTitleSettled);
+    if (_startModeBoot) checks.push(isTitleSettled());
     return checks;
 }
 function firstFrameArtProgress() {
@@ -7936,21 +7937,10 @@ function drawBootScreen(t) {
 //   'choose' — CREATE A HUMAN TOWN / RAISE AN ORC WARBAND, a VIEW A LIVING TOWN text-button, and ‹ BACK
 // The title is an animated pixel spritesheet (propagate_grow, white removed → transparent); it falls
 // back to the 3x5 font wordmark until the sheet loads. Buttons navigate to the real, persisting game.
-const TITLE_SHEET = { cols: 8, rows: 5, frames: 40, fw: 256, fh: 113, ms: 90 };   // propagate-title-anim.png (frame 39 = bare finale, unused by the loop)
-// #firstframe START THE TITLE EARLY. This used to be fetched on the first DRAW of the start screen, which is
-// the worst possible moment: the boot screen hands over, the start screen appears, and only THEN does a 393KB
-// sheet begin downloading — so the very first thing a new visitor sees is the 3x5 font wordmark, which then
-// swaps to the animated title. Kicked off at module scope so it downloads alongside everything else, and the
-// gate waits for it on a plain visit (see firstFrameArtChecks), where the start screen IS the first frame.
-let startTitleImg = null, startTitleTried = false, startTitleSettled = false;
-(function preloadTitle() {
-    startTitleTried = true;
-    const im = new Image();
-    im.fetchPriority = 'high';
-    im.addEventListener('load', () => { startTitleImg = im; startTitleSettled = true; }, { once: true });
-    im.addEventListener('error', () => { startTitleSettled = true; }, { once: true });   // never hold the boot
-    im.src = './propagate-title-anim2.png';
-})();
+// the animated title lives in title-anim.js so the mobile gate can draw it without importing this module
+// (see mobile-gate.js). This shim keeps the existing callsites' signature.
+function drawTitleArt(cx, topY, maxW) { return drawTitleSheet(ctx, cx, topY, maxW, GW); }
+
 function startHovering() { return !!(startScreen && startHits && Object.values(startHits).some(r => inRect(mouse, r))); }
 
 // right-pointing PLAY triangle of EXACT height h, top-aligned at yTop (so it matches text-cap height).
@@ -7962,202 +7952,6 @@ function drawPlayIcon(x, yTop, h, color) {
         ctx.fillRect(x + c, Math.round(yTop) + Math.floor((h - colH) / 2), 1, colH);
     }
     return w;   // pixel width consumed
-}
-
-// the animated title, centred at (cx, topY); returns the y just below it. Falls back to the font wordmark.
-function drawTitleArt(cx, topY, maxW) {
-    if (startTitleImg && startTitleImg.width) {
-        // Ping-pong the growth so the loop never snaps: vines grow in 0→38, rest on the
-        // full-lush apex (~1.1s), recede 38→0 slightly faster, breathe on the sprouted frame,
-        // regrow. Frame 39 (the bare-gold finale) is skipped — flashing it between lush 38 and
-        // the frame-0 rest was the visible loop hitch.
-        // Straight FORWARD loop (no boomerang): play 0→LAST once — vines bloom in (0→~20), then the SHINE
-        // sweeps L→R across the letters (~20→LAST) — PAUSE 2s on the lush, shine-complete frame, then REPLAY
-        // from the start. The bare tail (37-39) is never shown; the shine only ever travels left→right.
-        const T = TITLE_SHEET, LAST = 32, PLAY = LAST * T.ms, PAUSE = 2000, REST = 150;   // pause the instant the shine finishes, before the foliage recedes (frames 33+ minimize)
-        const cycle = PLAY + PAUSE + REST, e = performance.now() % cycle;
-        let i;
-        if (e < PLAY) i = Math.floor(e / T.ms);        // play forward 0→LAST (grow, then the shine sweeps across)
-        else if (e < PLAY + PAUSE) i = LAST;           // PAUSE on the lush, shine-complete frame
-        else i = 0;                                    // brief beat, then the loop replays from the start
-        const sx = (i % T.cols) * T.fw, sy = Math.floor(i / T.cols) * T.fh;
-        const sc = Math.min(maxW / T.fw, 2.4), w = Math.round(T.fw * sc), h = Math.round(T.fh * sc);
-        const dx = Math.round(cx - w / 2), dy = Math.round(topY);
-        const sm = ctx.imageSmoothingEnabled; ctx.imageSmoothingEnabled = false;
-        ctx.drawImage(startTitleImg, sx, sy, T.fw, T.fh, dx, dy, w, h); ctx.imageSmoothingEnabled = sm;
-        return dy + h;
-    }
-    const s = GW < 400 ? 3 : 4, tw = textWidth('PROPAGATE', s), tx = Math.round(cx - tw / 2), ty = Math.round(topY + 20);
-    drawText(ctx, 'PROPAGATE', tx + 1, ty + 1, 'rgba(0,0,0,0.6)', s);
-    drawText(ctx, 'PROPAGATE', tx, ty, '#7dd069', s);
-    return ty + 5 * s;
-}
-
-// #MOBILEGATE — what a phone gets instead of the game.
-// The sim is a fullscreen mouse-and-keyboard thing and does not boot here (see the guard in boot(), which
-// returns before loadAssetArt(), so a phone never downloads the 6.9MB of art). But a link shared publicly is
-// mostly opened on phones, and those visitors should still meet PROPAGATE rather than a web page — so the
-// notice is the REAL animated title drawn through the REAL CRT shader onto the same #tv canvas. Nothing is
-// reimplemented: same `crt` instance, same drawTitleArt, same 3x5 font, so the overlay cannot drift from the
-// desktop one. The title sheet is the only image needed and is already in flight (see preloadTitle above).
-function mobileGate() {
-    document.documentElement.classList.add('gate-live');   // retires the no-JS HTML fallback in index.html
-    out.style.cursor = 'auto';                             // nothing to aim; the in-world pixel hand is a pointer device idea
-
-    // resize() pins GH to 300 and floors GW at 320, which on a portrait phone would map a 320x300 source onto
-    // a ~430x860 output — a vertically smeared logo. The gate owns its sizing and matches the output aspect.
-    function gateResize() {
-        const dpr = Math.min(window.devicePixelRatio || 1, 2);
-        out.width = Math.max(1, Math.round(out.clientWidth * dpr));
-        out.height = Math.max(1, Math.round(out.clientHeight * dpr));
-        // Match the OUTPUT aspect in both orientations, or the shader stretches the logo. Portrait pins the
-        // short side (width) and grows height; landscape pins height the way the game itself does.
-        //
-        // GATE_ZOOM magnifies the whole screen relative to the game's own 320x300 internal resolution. The
-        // logo scales in INTEGER steps only (256 -> 512; anything fractional half-pixels the pixel art and
-        // blurs it), so the way to make it fill more of a phone's width is to shrink the source canvas
-        // underneath it, not to scale the sprite. At 1.15 the 256px logo goes from 80% of a portrait width
-        // to 92%, and every glyph grows with it.
-        const GATE_ZOOM = 1.15, BASE_W = 320, BASE_H = 300;
-        const even = (v) => Math.round(v / 2) * 2;
-        const ar = out.clientWidth / Math.max(out.clientHeight, 1);
-        // The clamps are escape hatches for absurd aspect ratios only — inside them the source aspect must
-        // track the output exactly, so they are set wide enough never to bite on a real device.
-        if (ar >= 1) { GH = even(BASE_H / GATE_ZOOM); GW = Math.max(240, Math.min(1200, even(GH * ar))); }
-        else { GW = even(BASE_W / GATE_ZOOM); GH = Math.max(240, Math.min(1200, even(GW / ar))); }
-        if (game.width !== GW || game.height !== GH) {
-            game.width = GW; game.height = GH;
-            ctx.imageSmoothingEnabled = false;
-        }
-    }
-    // The game registers its own resize handler at module scope, and it pins GH to 300 — on a phone that
-    // fights gateResize for the same two globals. Today gateResize happens to win because it is registered
-    // second; that is registration order, not a guarantee. Drop the game's handler outright so the gate is
-    // the single owner of GW/GH while it is up.
-    window.removeEventListener('resize', resize);
-    window.addEventListener('resize', gateResize);
-    window.addEventListener('orientationchange', gateResize);
-    gateResize();
-
-    (function gateFrame(t) {
-        requestAnimationFrame(gateFrame);
-        // the start screen's own backdrop: near-black with a soft green lift behind the letters
-        ctx.fillStyle = '#05070a'; ctx.fillRect(0, 0, GW, GH);
-        const vg = ctx.createRadialGradient(GW / 2, GH / 2, 0, GW / 2, GH / 2, GH * 0.7);
-        vg.addColorStop(0, 'rgba(18,32,22,0.65)'); vg.addColorStop(1, 'rgba(5,7,10,0)');
-        ctx.fillStyle = vg; ctx.fillRect(0, 0, GW, GH);
-
-        const cx = GW / 2;
-        // Largest integer scale whose glyphs still fit the width. The 3x5 font at scale 1 is three source
-        // pixels tall — on a phone that is ~4 CSS px and genuinely unreadable, which is the whole failure this
-        // screen exists to avoid. Integer only: a fractional scale half-pixels the glyphs and blurs them.
-        const fit = (str, want) => { let sc = want; while (sc > 1 && textWidth(str, sc) > GW - 24) sc--; return sc; };
-        const centred = (str, y, color, sc) => drawText(ctx, str, Math.round(cx - textWidth(str, sc) / 2), y, color, sc);
-
-        // The logo also takes an INTEGER scale. drawTitleArt derives its own from maxW, so handing it an exact
-        // multiple of the frame width is how you ask for a crisp one (256/320 fills most of a phone's width).
-        const logoScale = Math.max(1, Math.floor(Math.min(GW - 32, 512) / TITLE_SHEET.fw));
-        const maxW = TITLE_SHEET.fw * logoScale;
-        const titleH = TITLE_SHEET.fh * logoScale;
-
-        const l1 = 'DESKTOP ONLY', l2 = 'TRY ON A DIFFERENT DEVICE';
-        const s1 = fit(l1, 3), s2 = fit(l2, 1);
-        // gaps measured from the art's bottom edge, which carries transparent frame padding
-        const d1 = 28, d2 = d1 + s1 * 5 + 12;
-        const BELOW = d2 + s2 * 5;
-
-        // Centre the WHOLE composition rather than pinning the title to a fraction of the height: the block's
-        // height varies with the logo scale, so a fixed fraction lands right in one aspect and shoves the copy
-        // against the bottom edge in the other.
-        const titleBottom = drawTitleArt(cx, Math.round((GH - (titleH + BELOW)) / 2), maxW);
-        centred(l1, titleBottom + d1, '#f0d060', s1);
-        centred(l2, titleBottom + d2, '#8a8f9c', s2);
-
-        crt.render(t || performance.now());
-    })(performance.now());
-}
-
-// a centred TEXT button (no plate). hotCol is the hover colour (defaults to the gold used elsewhere).
-function startTextButton(key, cx, y, label, scale, baseCol, hotCol = '#ffd24a') {
-    const tw = textWidth(label, scale), r = { x: Math.round(cx - tw / 2) - 6, y: y - 3, w: tw + 12, h: 5 * scale + 6 };
-    const hot = inRect(mouse, r);
-    drawText(ctx, label, Math.round(cx - tw / 2), y, hot ? hotCol : baseCol, scale);
-    startHits[key] = r;
-    return r;
-}
-
-// a full tinted-plate button in the game's FOUND-A-TOWN style. Registers its hit rect under `key`.
-function startPlateButton(key, bx, y, bw, bh, label, base, fill, fillHot, textCol) {
-    const cx = bx + bw / 2, r = { x: bx, y, w: bw, h: bh }, hot = inRect(mouse, r);
-    ctx.fillStyle = hot ? fillHot : fill; ctx.fillRect(r.x, r.y, r.w, r.h);
-    ctx.strokeStyle = base; ctx.lineWidth = 1; ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
-    drawText(ctx, label, Math.round(cx - textWidth(label) / 2), r.y + (bh - 5) / 2, hot ? '#ffffff' : textCol);
-    startHits[key] = r;
-}
-
-// #START choose-screen WALKERS — a looping, right-facing walk sprite per culture, cropped straight from the
-// CraftPix WALK sheets (both 384x256 = 6 cols x 4 rows of 64px cells, side = row 2) so each gets a smooth
-// 6-frame gait WITH its baked-in foot shadow. Human: Swordsman lvl1 walk (side faces RIGHT — no mirror).
-// Orc: orc1 walk (side faces LEFT → mirrored). The old in-game farmer sprite (2-frame walk) remains only as
-// a last-ditch fallback while a sheet loads. Fake farmer objects satisfy the fallback sprite builders.
-const MENU_HUMAN = { sheet: { culture: 'human', seed: 77 }, moveDir: 'side', facing: 1, state: 'walk', animTime: 0 };
-const MENU_ORC_FB = { sheet: { culture: 'orc', seed: 33 }, moveDir: 'side', facing: 1, state: 'walk', animTime: 0 };
-// Crop cells from a 64px sheet → array of frame canvases
-// maxCols limits how many columns to extract (default = all columns in the sheet)
-function menuWalkFrames(img, sx0, sy0, sw, sh, row, maxCols) {
-    if (!img || !img.complete || !img.naturalWidth) return null;
-    row = row != null ? row : 2;
-    const FW = 64;
-    const totalCols = Math.max(1, Math.round(img.naturalWidth / FW));
-    const cols = maxCols != null ? Math.min(maxCols, totalCols) : totalCols;
-    const frames = [];
-    for (let c = 0; c < cols; c++) {
-        const [o, ox] = makeCanvas(sw, sh); ox.imageSmoothingEnabled = false;
-        ox.drawImage(img, c * FW + sx0, row * FW + sy0, sw, sh, 0, 0, sw, sh);
-        frames.push(o);
-    }
-    return frames;
-}
-let menuOrcWalk = null;
-function menuOrcFrames() {
-    if (menuOrcWalk) return menuOrcWalk;
-    const walkSrc = orcWalkImg && orcWalkImg[1];
-    return (menuOrcWalk = menuWalkFrames(walkSrc, 12, 6, 40, 44, 2));
-}
-let menuHumanWalk = null;
-function menuHumanFrames() {
-    if (menuHumanWalk) return menuHumanWalk;
-    const walkSrc = menuHumanWalkImg;
-    return (menuHumanWalk = menuWalkFrames(walkSrc, 18, 14, 30, 36, 2));
-}
-// draw a walking `culture` sprite with its FEET centred at (footX, footY), scaled to targetH.
-// Loops the walk frames continuously.
-function drawMenuWalker(culture, footX, footY, targetH, t) {
-    const frames = culture === 'orc' ? menuOrcFrames() : menuHumanFrames();
-    if (!frames || !frames.length) {
-        // sheet not ready → in-game farmer sprite (2-frame walk) fallback
-        const fr = farmerSprites(culture === 'orc' ? MENU_ORC_FB : MENU_HUMAN);
-        const frame = Math.floor(t * 7) % 2 ? fr.walk1 : fr.walk2;
-        const flip = culture === 'orc';
-        const scale = targetH / frame.height, w = Math.round(frame.width * scale), h = Math.round(frame.height * scale);
-        const dx = Math.round(footX - w / 2), dy = Math.round(footY - h);
-        const sm = ctx.imageSmoothingEnabled; ctx.imageSmoothingEnabled = false;
-        if (flip) { ctx.save(); ctx.translate(dx + w, dy); ctx.scale(-1, 1); ctx.drawImage(frame, 0, 0, w, h); ctx.restore(); }
-        else ctx.drawImage(frame, dx, dy, w, h);
-        ctx.imageSmoothingEnabled = sm;
-        return w;
-    }
-    const frame = frames[Math.floor(t * 6) % frames.length];
-    // human walk frames face right, orc walk frames face left
-    const flip = culture === 'orc';
-    if (!frame || !frame.width) return 0;
-    const scale = targetH / frame.height, w = Math.round(frame.width * scale), h = Math.round(frame.height * scale);
-    const dx = Math.round(footX - w / 2), dy = Math.round(footY - h);
-    const sm = ctx.imageSmoothingEnabled; ctx.imageSmoothingEnabled = false;
-    if (flip) { ctx.save(); ctx.translate(dx + w, dy); ctx.scale(-1, 1); ctx.drawImage(frame, 0, 0, w, h); ctx.restore(); }
-    else ctx.drawImage(frame, dx, dy, w, h);
-    ctx.imageSmoothingEnabled = sm;
-    return w;
 }
 
 function drawStartScreen() {
@@ -8247,7 +8041,8 @@ function drawStartScreen() {
     // pointer attached; only a device with no usable pointer at all is turned away.
     const isMobile = window.matchMedia('(hover: none) and (pointer: coarse) and (any-hover: none) and (any-pointer: coarse)').matches;
     if (isMobile) {
-        mobileGate();   // the branded notice — draws the title through the CRT; never touches the sim or the art
+        // index.html routes phones to mobile-gate.js, so this normally never runs. Kept as defence in depth:
+        // if main.js is ever loaded on a phone directly, it must still refuse to boot the sim.
         return;
     }
 

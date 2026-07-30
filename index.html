@@ -108,11 +108,29 @@
                     </div>
     </div>
     <script>
-        // If main.js never arrives (offline, blocked, a bad deploy) a phone would sit on black forever.
-        // Reveal the plain-text notice only in that case. mobileGate() sets `gate-live` as its first act,
-        // so on any healthy load this class is added to a rule that no longer matches.
-        setTimeout(function () { document.documentElement.classList.add('gate-fallback'); }, 6000);
+        // ONE entry or the other, never both. A phone loading main.js would execute its whole module scope —
+        // measured at 96 image requests and ~2MB of art on production, plus the entire sim graph — to show a
+        // static notice. mobile-gate.js pulls in crt.js, pixel.js and the one title sheet instead.
+        // The query MUST stay character-identical to the CSS rule above and to the guard in main.js.
+        (function () {
+            var MOBILE = window.matchMedia('(hover: none) and (pointer: coarse) and (any-hover: none) and (any-pointer: coarse)').matches;
+            // Desktop loses the preload scanner's head start once the entry is chosen in script rather than
+            // written in markup, so hand it back explicitly. Skipped on the gate path, which does not want it.
+            if (!MOBILE) {
+                var l = document.createElement('link');
+                l.rel = 'modulepreload'; l.href = './main.js';
+                document.head.appendChild(l);
+            }
+            var s = document.createElement('script');
+            s.type = 'module';
+            s.src = MOBILE ? './mobile-gate.js' : './main.js';
+            document.head.appendChild(s);
+
+            // If the chosen entry never arrives (offline, blocked, a bad deploy) a phone would sit on black
+            // forever. Reveal the plain-text notice only in that case: the gate adds `gate-live` after its
+            // FIRST SUCCESSFUL FRAME, so on any healthy load this lands on a rule that no longer matches.
+            setTimeout(function () { document.documentElement.classList.add('gate-fallback'); }, 6000);
+        })();
     </script>
-    <script type="module" src="./main.js"></script>
 </body>
 </html>
