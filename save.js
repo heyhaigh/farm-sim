@@ -67,17 +67,25 @@ export async function saveTown(world) {
         const committed = await new Promise((resolve, reject) => {
             const tx = db.transaction(STORE, 'readwrite');
             const store = tx.objectStore(STORE);
-            let ahead = false, retired = false;
+            let ahead = false, retired = false, superseded = false, storedGen = 0;
+            // Codex #56-1 — read the slot's GENERATION in the same transaction as the CAS. A rev comparison
+            // cannot see that the slot was vacated and restarted under this writer (quarantine/restore), so
+            // without this a tab holding the superseded town overwrites its replacement.
+            // ORDER MATTERS: IndexedDB fires success callbacks in REQUEST order, so the generation must be
+            // requested BEFORE the snapshot or `storedGen` is still 0 when the check below runs.
+            const gg = store.get(genKey(world.seed));
+            gg.onsuccess = () => { storedGen = gg.result || 0; };
             const g = store.get(key);
             g.onsuccess = () => {
                 if (world._retired) { retired = true; return; }   // wiped after we began — do not recreate the slot
+                if ((world._gen || 0) < storedGen) { superseded = true; return; }   // this world is from an older epoch
                 const stored = g.result;
                 if (stored && (stored._rev || 0) > myRev) { ahead = true; return; }   // another tab is ahead — don't put
                 data._rev = myRev + 1;
                 store.put(data, key);
             };
             g.onerror = () => reject(g.error);
-            tx.oncomplete = () => resolve(!ahead && !retired);
+            tx.oncomplete = () => resolve(!ahead && !retired && !superseded);
             tx.onerror = () => reject(tx.error);
             tx.onabort = () => reject(tx.error || new Error('save txn aborted'));
         });
@@ -107,30 +115,63 @@ export async function saveTown(world) {
 //     could not save. Vacating the slot fixes that without weakening the CAS.
 //
 // One quarantine per seed, overwritten if it happens again (same one-deep discipline as the wipe backup).
-// Returns the quarantine record, or null if there was nothing to move.
+//
+// Codex #56-1 — VACATING A SLOT RESETS THE REVISION EPOCH, and `_rev` alone cannot detect that. saveTown
+// refuses a write only when the STORED rev is AHEAD of the writer's, which is sound while revs climb
+// monotonically in one slot. Quarantine breaks that assumption: the slot restarts at rev 0, so a tab still
+// holding the quarantined town at rev 47 sails through the check (1 > 47 is false), overwrites the
+// replacement town, resurrects the old snapshot at rev 48 — and every save from the new session is refused
+// from then on. Exactly the state quarantine existed to prevent.
+//
+// Revs cannot distinguish the two generations, because both count in the same sequence. So the slot carries a
+// durable GENERATION counter, bumped every time the slot's identity changes under it (quarantine, restore).
+// It belongs to the SLOT, not to the snapshot: a reader learns the live generation when it loads, so nothing
+// needs to be written into the save and SAVE_VERSION does not move. A writer whose generation is behind the
+// stored one is from a superseded epoch and is refused no matter what its rev says.
+const genKey = seed => 'gen:' + String(seed);
+
+// The slot's current generation (0 when it has never changed hands). Read at load/found time into world._gen.
+export async function readGen(seed) {
+    try { return (await idbReq('readonly', s => s.get(genKey(seed)))) || 0; }
+    catch { return 0; }
+}
+
+// Returns { ok, rec, gen }:
+//   ok   — did the move actually commit? Codex #56-2: a storage failure used to be flattened to null, which
+//          the caller could not tell apart from "there was nothing to move" — so boot carried on over a
+//          snapshot that was STILL THERE, and the rev guard refused every save for the session. The caller
+//          must be able to distinguish, and must not persist over a save it failed to preserve.
+//   rec  — the preserved record, or null when the slot was already empty (which is a success, not a failure).
+//   gen  — the slot's generation AFTER the bump, for the replacement world to adopt.
 export async function quarantineTown(seed, reason) {
     try {
         const db = await openDb();
         return await new Promise((resolve, reject) => {
             const tx = db.transaction(STORE, 'readwrite');
             const store = tx.objectStore(STORE);
-            let rec = null;
+            let rec = null, gen = 0;
+            // Generation FIRST — callbacks fire in request order, so reading it after the snapshot would
+            // leave `gen` at 0 and the bump below would always write 1 instead of storedGen + 1.
+            const gg = store.get(genKey(seed));
+            gg.onsuccess = () => { gen = (gg.result || 0); };
             const g = store.get('town:' + seed);
             g.onsuccess = () => {
                 const snap = g.result;
                 if (!snap) return;                      // nothing stored — nothing to preserve
-                rec = { seed, snap, reason: String(reason || 'unreadable'), at: Date.now(), v: snap.v ?? null, day: snap.day ?? null };
+                rec = { seed, snap, reason: String(reason || 'unreadable'), at: Date.now(), v: snap.v ?? null, day: snap.day ?? null, rev: snap._rev ?? 0 };
                 store.put(rec, 'unreadable:' + seed);
                 store.delete('town:' + seed);           // vacate the slot so the new session can save
+                gen = gen + 1;                          // the slot changed hands — supersede every older writer
+                store.put(gen, genKey(seed));
             };
             g.onerror = () => reject(g.error);
-            tx.oncomplete = () => resolve(rec);
+            tx.oncomplete = () => resolve({ ok: true, rec, gen });
             tx.onerror = () => reject(tx.error);
             tx.onabort = () => reject(tx.error || new Error('quarantine txn aborted'));
         });
     } catch (err) {
         console.warn('ry-farms: could not quarantine the unreadable save', err);
-        return null;
+        return { ok: false, rec: null, gen: 0 };
     }
 }
 
@@ -144,13 +185,35 @@ export async function peekQuarantined(seed) {
 
 // Put a quarantined snapshot back in the live slot, so a build that CAN read it opens the real town.
 // Deliberately manual: it overwrites whatever has been played since, so only ever call it on an explicit ask.
+// Codex #56-4 — ONE transaction for the get + put + delete, matching the discipline the #25/#26/#27 rounds
+// established for wipe/undo. Across three separate transactions the read-modify-write was racy: tab A reads
+// quarantine A, tab B replaces it with quarantine B, then tab A deletes B after restoring A — losing B
+// entirely. It also bumps the slot's GENERATION, because restoring changes the slot's identity under any tab
+// still holding the replacement town, and that tab must not be able to write over the town just recovered.
 export async function restoreQuarantined(seed) {
     try {
-        const rec = await idbReq('readonly', s => s.get('unreadable:' + seed));
-        if (!rec || !rec.snap) return null;
-        await idbReq('readwrite', s => s.put(rec.snap, 'town:' + seed));
-        await idbReq('readwrite', s => s.delete('unreadable:' + seed));
-        return rec.snap.day ?? true;
+        const db = await openDb();
+        return await new Promise((resolve, reject) => {
+            const tx = db.transaction(STORE, 'readwrite');
+            const store = tx.objectStore(STORE);
+            let day = null;
+            const gg = store.get(genKey(seed));      // generation first — callbacks fire in request order
+            let gen = 0;
+            gg.onsuccess = () => { gen = gg.result || 0; };
+            const r = store.get('unreadable:' + seed);
+            r.onsuccess = () => {
+                const rec = r.result;
+                if (!rec || !rec.snap) return;       // nothing to restore — leave everything untouched
+                store.put(rec.snap, 'town:' + seed);
+                store.delete('unreadable:' + seed);  // consume the SAME record we just read, never a newer one
+                store.put(gen + 1, genKey(seed));
+                day = rec.snap.day ?? true;
+            };
+            r.onerror = () => reject(r.error);
+            tx.oncomplete = () => resolve(day);
+            tx.onerror = () => reject(tx.error);
+            tx.onabort = () => reject(tx.error || new Error('restore txn aborted'));
+        });
     } catch (err) {
         console.warn('ry-farms: restore of the quarantined save failed', err);
         return null;

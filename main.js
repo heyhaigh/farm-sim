@@ -12,7 +12,7 @@ import {
     fillDiamond, strokeDiamond,
 } from './pixel.js';
 import { CRT } from './crt.js';
-import { saveTown, loadTown, wipeTown, undoWipe, loadWorldIndex, registerTownInWorld, saveWorldIndex, updateWorldIndex, quarantineTown, peekQuarantined, restoreQuarantined, requestPersistentStorage } from './save.js';
+import { saveTown, loadTown, wipeTown, undoWipe, loadWorldIndex, registerTownInWorld, saveWorldIndex, updateWorldIndex, quarantineTown, peekQuarantined, restoreQuarantined, requestPersistentStorage, readGen } from './save.js';
 import { computeLayout, detectEncounters, encounterLine, townPos, townReach, townTint } from './worldmap.js';
 import { enrichStories } from './dm.js';
 import { requestCongregation } from './congregation.js';
@@ -8072,23 +8072,41 @@ function drawStartScreen() {
     // lineage array itself, not memorySource. Empty when no store answered at all.
     lineagePool = Array.isArray(result.lineage) ? result.lineage : [];
 
-    let resumed = false, quarantined = null;
+    let resumed = false, quarantined = null, quarantineFailed = false;
+    // Codex #56-3 — the seed the replacement town is founded on. A no-seed boot (?play=1) resolves `latest`,
+    // so the unreadable snapshot's seed is NOT the random `worldSeed` this boot generated. Founding on the
+    // random one left the preserved town under a seed the player was no longer in, which made
+    // RYFARMS.peekSave()/restoreSave() — both defaulting to world.seed — unable to find it at all. Found on
+    // the SAME seed, matching what an explicit ?seed=N boot already does.
+    let foundSeed = worldSeed, foundGen = 0;
     if (!wantFresh) {
         const saved = await loadTown(urlSeed != null && urlSeed !== '' ? worldSeed : undefined);
         if (saved) {
-            try { world = World.fromSave(saved); resumed = true; }
+            try { world = World.fromSave(saved); resumed = true; foundGen = await readGen(world.seed); }
             catch (err) {
                 // A save this build cannot read is PRESERVED, not buried. Founding a fresh town over it used
                 // to destroy a played town on the next autosave — and, because saveTown is a compare-and-set
                 // against the stored `_rev`, the fresh session could not save either. Moving it aside keeps
                 // the town for a build that can open it AND vacates the slot so this session persists.
                 console.warn('ry-farms: save unreadable — preserving it and founding fresh', err);
-                quarantined = await quarantineTown(saved.seed ?? worldSeed, err?.message);
+                const seed = saved.seed ?? worldSeed;
+                const q = await quarantineTown(seed, err?.message);
+                quarantined = q.rec;
+                // Codex #56-2 — only persist if the move actually COMMITTED. A storage failure leaves the
+                // unreadable snapshot in place, and founding over it means the rev guard refuses every save
+                // for the session anyway; worse, persisting here is how the town would eventually be lost.
+                // So on failure this session runs unsaved, deliberately, and says so.
+                quarantineFailed = !q.ok;
+                foundSeed = seed;
+                foundGen = q.gen;
                 world = null;
             }
         }
     }
-    if (!world) world = new World(worldSeed, bootCulture);
+    if (!world) world = new World(foundSeed, bootCulture);
+    // The slot's generation this world belongs to. saveTown refuses a writer from a superseded epoch, which
+    // is what stops a tab holding the quarantined town from overwriting this replacement.
+    world._gen = foundGen || await readGen(world.seed);
     // #START the menu backdrop is a SPECTATOR town: it lives and animates but never persists — no
     // autosave, no SuperMemory writeback, no world-index entry, no cross-town raid ambush. Browsing
     // the start screen must leave zero trace (no save slots littered, no junk fed to the memory store).
@@ -8100,7 +8118,14 @@ function drawStartScreen() {
     // should learn that it was KEPT, not that nothing happened.
     if (quarantined) {
         world.addLog(`A previous town on this seed (day ${quarantined.day ?? '?'}) could not be opened by this version — it has been kept safe, not overwritten.`, '#e8b34a');
-        console.warn(`ry-farms: preserved town seed ${quarantined.seed} (day ${quarantined.day}, schema v${quarantined.v}) at 'unreadable:${quarantined.seed}' — RYFARMS.restoreSave() puts it back`);
+        console.warn(`ry-farms: preserved town seed ${quarantined.seed} (day ${quarantined.day}, schema v${quarantined.v}, rev ${quarantined.rev}) at 'unreadable:${quarantined.seed}' — RYFARMS.restoreSave() puts it back`);
+    }
+    if (quarantineFailed) {
+        // The unreadable town is STILL in its slot and we could not move it. Refuse to persist rather than
+        // risk overwriting it: an unsaved session is recoverable, a buried town is not.
+        world._spectator = true;
+        world.addLog(`A previous town on this seed could not be opened OR moved aside, so this session will not be saved — it must not overwrite it.`, '#e07a5a');
+        console.error('ry-farms: quarantine FAILED — running unsaved so the unreadable town is not overwritten. Free up storage and reload.');
     }
 
     // hook tile changes to terrain redraw
