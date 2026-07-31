@@ -304,6 +304,10 @@ let touchHoldTimer = 0, touchHoldActive = false;
 // IDs are ignored outright until the owner releases. null = no gesture; hover moves always flow.
 let activePointerId = null;
 let _hadRehearsal = false;   // #Codex67-1 edge-detects the curtain falling (rehearsal -> null)
+// #continue The menu's CONTINUE offer: the latest-played town in THIS browser, read from the same 'latest'
+// pointer ?play=1 resumes. null until the async read lands (the menu draws without it, then it appears) —
+// and stays null for a first-time visitor, whose menu is unchanged.
+let startContinue = null;   // { name, day, seed }
 const TOUCH_HOLD_MS = 450;
 
 const spriteCache = new Map();   // farmer -> frames
@@ -6904,6 +6908,7 @@ out.addEventListener('pointerup', (e) => {
         const H = startHits || {};
         if (H.sound && inRect(p, H.sound)) { menuMuted = !menuMuted; audio.ensure(); audio.setMuted(menuMuted); return; }   // #START universal mute (music + SFX)
         if (startPage === 'title') {
+            if (H.continue && inRect(p, H.continue)) { location.search = '?play=1'; return; }   // #continue resume the latest town via the tested boot path
             if (H.start && inRect(p, H.start)) { startPage = 'choose'; return; }     // → the choose screen
             if (H.view && inRect(p, H.view)) { startScreen = false; audio.ensure(); audio.setMenuMode(false); audio.setMuted(false); return; }   // dismiss → spectate the town behind (this click is a gesture: unlock the audio ctx + lift the menu mute so game audio — chops, music — plays)
         } else {
@@ -8151,9 +8156,12 @@ function drawStartScreen() {
         const tag = 'A world that remembers itself';
         drawText(ctx, tag.toUpperCase(), Math.round(cx - textWidth(tag) / 2), titleBottom - 8, '#9aa0b4');
 
-        // PRIMARY: yellow ▶ START GAME — dropped well below the title/tagline so the CTA reads as its own
-        // beat, with a gently BLINKING play arrow to pull the eye (steady/solid on hover).
-        const gy = titleBottom + 62, iconH = 10, label = 'START GAME';   // iconH = scale-2 text cap height (5*2), top-aligned
+        // PRIMARY: the gold ▶ with the gently BLINKING arrow. When this browser holds a played town, the
+        // primary is CONTINUE — <TOWN> (#continue: a returning player's path back used to be spectate a
+        // random town -> world map -> find yours); starting fresh steps down a rung. First visit: START
+        // GAME stays primary and the menu reads exactly as it always did.
+        const gy = titleBottom + 62, iconH = 10;
+        const label = startContinue ? `CONTINUE - ${startContinue.name.toUpperCase()}` : 'START GAME';
         const iconW = Math.max(3, Math.round(iconH * 0.82)), pad = 7, lw = textWidth(label, 2);
         const groupW = iconW + pad + lw, gx = Math.round(cx - groupW / 2);
         const startRect = { x: gx - 8, y: gy - 5, w: groupW + 16, h: iconH + 10 };
@@ -8162,10 +8170,14 @@ function drawStartScreen() {
         const arrowCol = startHot ? '#ffffff' : `rgba(255,210,74,${blink.toFixed(2)})`;
         drawPlayIcon(gx, gy, iconH, arrowCol);                                        // top-aligned with the label
         drawText(ctx, label, gx + iconW + pad, gy, startHot ? '#ffffff' : '#ffd24a', 2);
-        startHits.start = startRect;
+        startHits[startContinue ? 'continue' : 'start'] = startRect;
 
-        // SECONDARY: a quiet white text button — fades to 30% opacity on hover (a soft, receding feel)
-        startTextButton('view', cx, gy + iconH + 13, 'Or view existing town'.toUpperCase(), 1, '#ffffff', 'rgba(255,255,255,0.3)');
+        // the rungs beneath: start-fresh (only when CONTINUE took the top slot), then the spectate line —
+        // relabelled honestly (#continue): it dismisses to a live RANDOM town, and "view existing town"
+        // promised somebody's creation. WATCH A WILD TOWN is what it actually does.
+        let ry = gy + iconH + 13;
+        if (startContinue) { startTextButton('start', cx, ry, 'START A NEW TOWN', 1, '#ffffff', 'rgba(255,255,255,0.3)'); ry += 18; }
+        startTextButton('view', cx, ry, 'OR WATCH A WILD TOWN', 1, startContinue ? '#8a8f9c' : '#ffffff', 'rgba(255,255,255,0.3)');
         return;
     }
 
@@ -8195,7 +8207,7 @@ function drawStartScreen() {
     ctaBox('orc',   'orc',   labelOrc,   36, '#e0806a', 'rgba(224,128,106,0.30)', '#f0b0a0');    // ember — an orc town
 
     y += viewGap - boxGap;
-    startTextButton('view', cx, y, 'OR VIEW EXISTING TOWN'.toUpperCase(), 1, '#ffffff', 'rgba(255,255,255,0.3)');
+    startTextButton('view', cx, y, 'OR WATCH A WILD TOWN', 1, '#ffffff', 'rgba(255,255,255,0.3)');
 
     // BACK — top-left, aligned with volume button center (y=17)
     startTextButton('back', 34, 17, 'BACK', 1, '#8a8f9c');
@@ -8378,6 +8390,15 @@ function drawStartScreen() {
     // are display, and suppressing them was an accident of reusing one flag.
     // Established HERE, before any storage/inbox/index/writeback setup reads them.
     if (startMode) { world._spectator = true; world._persistenceDisabled = true; }
+    // #continue offer the latest-played town on the menu. Same read ?play=1 boots from (loadTownState with
+    // no seed follows the 'latest' pointer in one transaction), so the button can never offer a town the
+    // resume path would then fail to find. Fire-and-forget: the menu draws without it, the button appears
+    // when the read lands; a first-time browser resolves to nothing and the menu is unchanged.
+    if (startMode) {
+        loadTownState().then(st => {
+            if (st && st.ok && st.snap && st.snap.name) startContinue = { name: st.snap.name, day: st.snap.day, seed: st.snap.seed };
+        }).catch(() => { /* no offer — the menu simply stays as-is */ });
+    }
     if (noPersistReason) world._persistenceDisabled = true;
     // Only a town that actually persists is worth asking the browser to protect. Doing this on the start
     // screen's throwaway backdrop would spend the one permission prompt on a town nobody keeps.
