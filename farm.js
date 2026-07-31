@@ -13017,6 +13017,14 @@ export class Farmer {
         }
     }
 
+    // #chop-facing — turn toward a target TILE using the iso screen-x convention (screen-x grows with i - j,
+    // matching the walk-step facing math). Deadband so a dead-centre stand doesn't flip-flop the sprite.
+    #faceTarget(tgt) {
+        if (!tgt) return;
+        const sx = (tgt.i + 0.5 - this.pos.i) - (tgt.j + 0.5 - this.pos.j);
+        if (Math.abs(sx) > 0.05) this.facing = sx > 0 ? 1 : -1;
+    }
+
     #completeChop() {
         const w = this.world, tgt = this.woodTarget;
         if (tgt) {
@@ -13304,8 +13312,13 @@ export class Farmer {
 
             case 'work': this.action.timer -= dt; if (this.action.timer <= 0) this.#completeWork(); break;
             case 'poach': this.poachTimer -= dt; if (this.poachTimer <= 0) this.#completePoach(); break;
-            case 'chop': case 'break': this.chopTimer -= dt; if (this.chopTimer <= 0) this.#completeChop(); break;
-            case 'mine': this.chopTimer -= dt; if (this.chopTimer <= 0) this.#completeMine(); break;
+            // #chop-facing — square up to the timber/rock while swinging (like fishing faces the water at
+            // #completeFish's setup): #standNear parks the walker on whichever adjacent tile the path arrived
+            // from, leaving `facing` pointing wherever the last step went — an axeman with his back to the
+            // tree. facing is write-only in the sim (renderer flip only, absent from the determinism digest),
+            // so this is display-safe.
+            case 'chop': case 'break': this.#faceTarget(this.woodTarget); this.chopTimer -= dt; if (this.chopTimer <= 0) this.#completeChop(); break;
+            case 'mine': this.#faceTarget(this.mineTarget); this.chopTimer -= dt; if (this.chopTimer <= 0) this.#completeMine(); break;
             case 'craft': this.craftTimer -= dt; if (this.craftTimer <= 0) this.#completeCraft(); break;
             case 'forage': this.forageTimer -= dt; if (this.forageTimer <= 0) this.#completeForage(); break;
             case 'fish': this.fishTimer -= dt; if (this.fishTimer <= 0) this.#completeFish(); break;
@@ -13533,7 +13546,13 @@ export class Farmer {
                 break;
             }
             case 'sleep': if (!this.world.isNight()) { this.state = 'decide'; this.say(this.#wakeLine(), '#e8d8a0'); this.visitedSick.clear(); } break;
-            case 'rest': if (this.energy > 0.5) { this.state = 'decide'; this.say('back to it'); } break;
+            // #rest-hold — a NIGHT rest (the roofless "no den yet" hunker) holds until dawn or until the sleep
+            // urge clears, exactly like the sleep state: without the hold, rest exits the tick energy crosses
+            // 0.5 and #decide immediately sends them back (#shouldSleepNow still true) — a per-tick
+            // rest<->decide flip-flop that resets the "back to it"/"enough rest" bubble forever (stuck at
+            // "EN|") and twitches the sprite all night. Same class as the V2 sleep<->walk flicker fix. A
+            // DAYTIME breather still ends at 0.5, and a rester pulled onto watch duty still stands up.
+            case 'rest': if (this.energy > 0.5 && !(this.world.isNight() && this.#shouldSleepNow() && !this.#onWatchDuty())) { this.state = 'decide'; this.say('back to it'); } break;
             case 'sick': if (this.health !== 'sick') this.state = 'decide'; break;
             case 'shelter': if (this.world.weather !== 'storm' && this.world.weather !== 'blizzard') { this.state = 'decide'; this.say(this.#shelterExitLine(), '#9fd0e0'); } break;
             // #106 hold at the square, deliberating, until the world reads the ballot at dusk (then -> decide)

@@ -119,10 +119,16 @@ const BASELINE = {
     // step (endpoint-only collision let a 2.5-tile hunt burst tunnel clean through a blocked tile) both
     // need the right geometry to bite, and only those two seeds hit it inside 30 days. The project-frontage
     // guard, the merchant target and the underfoot-terrain escape move nothing here. same-twice held.
-    20260706: '74e5e14f',
-    42: 'e3d005be',
-    7: 'bc6cf698',
-    3: 'fe365353',
+    // re-pinned 2026-07-31 for the #rest-hold fix: a roofless farmer's NIGHT rest now holds until dawn (or
+    // until the sleep urge clears / watch duty calls) instead of exiting the tick energy crosses 0.5 — which
+    // had #decide re-resting them EVERY TICK all night (a rest<->decide flip-flop: bubble stuck at "EN|",
+    // sprite twitching; the sibling of the V2 sleep<->walk flicker). Behavioural: early roofless nights now
+    // hold rest through the night, so every seed's day-2+ energy/chore trajectory moves. Measured: worst
+    // per-farmer rest-exit count over 3 days fell 822 -> 11. same-twice held all seeds.
+    20260706: '856cfecb',
+    42: '7fa06f3d',
+    7: '11748a8c',
+    3: 'ed0dd2b5',
 };
 
 function boot(seed, culture) {
