@@ -19,7 +19,12 @@ const REQUEST_TIMEOUT_MS = 8000;
 // server-side wall-clock budget — the ONLY cost control that survives tabs/reloads/fast-forward (sim-time
 // cooldowns don't): at most BUDGET_MAX model requests per rolling BUDGET_WINDOW_MS across the whole process.
 const BUDGET_WINDOW_MS = 60_000;
-const BUDGET_MAX = 90;
+// #groq-rpm — sized UNDER the upstream ceiling, not over it: Groq's free tier meters llama-3.1-8b-instant
+// at 30 requests/minute, and the old value (90) let bursts (a congregation scene = one call per speaker
+// turn, a whisper = classify+reply) sail 3x past that straight into 429s. 26 leaves headroom for window
+// skew between our clock and theirs; past the cap callers get the in-character fallback, same as a 429 —
+// but without burning Groq's goodwill or the log noise.
+const BUDGET_MAX = 26;
 // global circuit breaker — after BREAKER_TRIP consecutive failures, block ALL calls for BREAKER_COOLDOWN_MS
 // (one shared breaker, so N callers failing in parallel can't each keep hammering).
 const BREAKER_TRIP = 4;
@@ -125,6 +130,9 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
                 });
                 if (r.ok) { const out = parseJson(extractContent(await r.json())); _breaker.fails = 0; return out; }
                 lastErr = new Error(`LLM request failed (${r.status})`);
+                // #groq-rpm — a 429 means the upstream minute is BURNED: open the shared breaker at once
+                // instead of letting two more callers pay failed requests to trip it the slow way.
+                if (r.status === 429) { _breaker.openUntil = Date.now() + BREAKER_COOLDOWN_MS; _breaker.fails = 0; }
                 if (r.status !== 400 && r.status !== 422) break;   // only a format-rejection is worth retrying
                 if (response_format) _formatSkip.add(`${model}|${response_format.type}`);   // #stickyformat
             } finally { clearTimeout(timer); }

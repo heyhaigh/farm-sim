@@ -76,11 +76,25 @@ function shortNameOf(f) { return f.sheet.name.split(' ')[0]; }
 function moodWord(m) { return m > 0.4 ? 'buoyant' : m > 0.1 ? 'content' : m < -0.4 ? 'out of sorts' : m < -0.1 ? 'low' : 'even'; }
 function energyWord(e) { return e < 0.2 ? 'exhausted' : e < 0.4 ? 'tired' : e < 0.75 ? 'steady' : 'fresh'; }
 
+// a 0-1 trait rolled into a word an 8B can actually act on (numbers get ignored; words get voiced)
+function traitWord(v) { return v < 0.25 ? 'very low' : v < 0.45 ? 'low' : v < 0.6 ? 'middling' : v < 0.8 ? 'high' : 'very high'; }
+
+const STATE_WORDS = { sleep: 'asleep', rest: 'resting up for the night', sick: 'laid up sick', shelter: 'sheltering from the weather', fight: 'in a fight', flee: 'fleeing danger' };
+
 function characterView(f) {
     const s = f.sheet, p = s.personality;
     const bonds = f.allRegard(1, 0.2, 3).map(r => shortNameOf(r.who));
     const grudges = f.allRegard(-1, 0.2, 3).map(r => shortNameOf(r.who));
     const journal = f.journal.filter(m => m.strength > 0.6).slice(-4).map(m => m.text);
+    // #sheet-is-the-soul — the two things live play showed were MISSING from replies: the six trait words
+    // (a low-honesty schemer answered like a mild neighbour) and the CREEDS the sim itself quotes when a
+    // farmer holds their ground (a whisper spoke a farmer's literal creed back to them and they didn't
+    // recognise it). Both are what the Story tab already shows the player — the reply must know at least
+    // as much as the panel beside it.
+    const traits = {};
+    for (const [k, label] of [['collaboration', 'teamwork'], ['competitiveness', 'drive'], ['honesty', 'honesty'], ['diligence', 'work ethic'], ['volatility', 'temper'], ['curiosity', 'curiosity']])
+        if (f.p && f.p[k] != null) traits[label] = traitWord(f.p[k]);
+    const creeds = (f.creeds || []).filter(k => !k.overwritten && k.quote).slice(0, 3).map(k => k.quote);
     return {
         name: shortNameOf(f),
         culture: f.world.culture,   // the orc voice filter keys off this server-side
@@ -94,6 +108,8 @@ function characterView(f) {
         rival: s.dream && s.dream.rivalName || null,
         keepsake: s.memory && String(s.memory.title).slice(0, 48),
         personality: p ? { label: p.label, creed: p.creed } : null,
+        traits,
+        creeds,
         stance: f.conscience.stance,
         mood: moodWord(f.mood),
         energy: energyWord(f.energy),
@@ -108,7 +124,11 @@ function characterView(f) {
 // so a world that ticks on during generation can never contradict the answer.
 function snapshotOf(f) {
     const w = f.world;
-    return { day: w.day, season: w.seasonName, year: w.year, weather: w.weather, doing: (f.thought || '').slice(0, 48) };   // year: the temporal-truth anchor (day-1 towns kept inventing 'last autumn')
+    return {
+        day: w.day, season: w.seasonName, year: w.year, weather: w.weather,
+        doing: (f.thought || '').slice(0, 48),   // their actual inner thought — replies ground on this
+        state: STATE_WORDS[f.state] || 'up and about their day',   // so a roused sleeper KNOWS they were roused
+    };   // year: the temporal-truth anchor (day-1 towns kept inventing 'last autumn')
 }
 
 async function postJson(payload) {

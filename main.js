@@ -3313,18 +3313,6 @@ function drawFarmer(f, sx, sy) {
     else if (f.barterDeal || (f.path && f.path.then === 'barter')) intent = 'barter';
     else if (f.helpTask) intent = 'help';
     if (intent && f.state !== 'sleep') drawIntentIcon(intent, sx + 8, py + 1);
-    // #legibility Slice 2 — a farmer currently acting on YOUR whisper wears a small gold speech-bubble mark
-    // (the same glyph as the whisper widget), so the ripple is visible: whisper → HEED → this tell → watch
-    // them follow through. Gently pulses to read as "notice this". Only while up-and-about.
-    const urge = (f.activeUrge && f.activeUrge()) || null;
-    if (urge && urge.armed && f.state !== 'sleep' && f.state !== 'sleepwalk' && !f.downed) {
-        const ux = sx - 4, uy = py - 15, pulse = 0.72 + 0.28 * Math.sin(performance.now() / 320);
-        ctx.save(); ctx.globalAlpha = pulse;
-        ctx.fillStyle = 'rgba(240,208,120,0.18)'; ctx.fillRect(ux - 2, uy - 2, 11, 10);   // soft gold halo
-        ctx.fillStyle = 'rgba(12,14,22,0.7)'; ctx.fillRect(ux - 1, uy - 1, 9, 8);
-        drawChatIcon(ux, uy, true);   // gold speech bubble = "heeding a whisper"
-        ctx.restore();
-    }
     // EMOTE: a transient social tell over the head — a pink heart when a bond forms, a red X when recoiling
     // from someone they can't stand. #109: drawn from the 1-bit icon pack (heart=1, X=19) so the tells match
     // the new UI icon style; falls back to the hand-drawn glyph until the sheet loads. Fades out.
