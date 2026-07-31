@@ -20,9 +20,52 @@
     <meta name="twitter:title" content="Propagate">
     <meta name="twitter:description" content="A procedural pixel farm sim — a world that remembers itself.">
     <meta name="twitter:image" content="https://propagate.heyhaigh.ai/og-image.png">
+    <link rel="canonical" href="https://propagate.heyhaigh.ai/">
+
+    <!-- GA4 — the same property as heyhaigh.ai; the hostname dimension separates the game's traffic -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-R499JX7DJ7"></script>
+    <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag() { dataLayer.push(arguments); }
+        gtag('js', new Date());
+        gtag('config', 'G-R499JX7DJ7');
+    </script>
+
+    <!-- Structured data: tells crawlers this is a playable browser game, not a mystery canvas -->
+    <script type="application/ld+json">
+{
+    "@context": "https://schema.org",
+    "@type": "VideoGame",
+    "name": "Propagate",
+    "url": "https://propagate.heyhaigh.ai/",
+    "image": "https://propagate.heyhaigh.ai/og-image.png",
+    "description": "A procedural pixel farm sim where every farmer has rolled stats and a real personality. They till, bond, barter, invent recipes, hold elections, and stand watch against orc raids under a CRT glow \u2014 and the town persists in your browser and remembers itself between visits.",
+    "genre": [
+        "Simulation",
+        "Farming",
+        "God game"
+    ],
+    "playMode": "SinglePlayer",
+    "gamePlatform": "Web browser",
+    "operatingSystem": "Any desktop or tablet browser",
+    "author": {
+        "@type": "Person",
+        "name": "Ryan Haigh",
+        "url": "https://heyhaigh.ai"
+    },
+    "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD"
+    }
+}
+    </script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html, body { height: 100%; overflow: hidden; background: #000; }
+        /* off-canvas, not display:none — crawlers and screen readers read it; sighted players never see it */
+        .page-copy { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
         #tv {
             position: fixed;
             inset: 0;
@@ -162,6 +205,20 @@
     </style>
 </head>
 <body>
+    <!-- The game is a canvas: without this block, the only text a crawler or screen reader gets is the
+         device-gate copy ("Flip horizontally... Desktop only") — which is what Google would snippet. This is
+         the page's real content, off-canvas but fully crawler- and screen-reader-visible. Not cloaking:
+         it says exactly what the page is. -->
+    <header class="page-copy">
+        <h1>Propagate — a procedural pixel farm sim</h1>
+        <p>Propagate is a free browser farming simulation played on desktop or tablet. Every farmer is grown
+        procedurally with rolled ability scores and a real personality: they till fields, form bonds, barter
+        goods, invent recipes, hold elections, and stand watch against orc raids — all rendered in pixel art
+        under a CRT shader. Found a human town or an orc war-hoard; your town persists in your browser and
+        remembers itself, greeting you with a "previously on" catch-up when you return. A world that
+        remembers itself.</p>
+        <p>Made by <a href="https://heyhaigh.ai">Ryan Haigh</a>.</p>
+    </header>
     <canvas id="tv"></canvas>
     <div id="rotate-gate" role="status">
         <div class="rg-inner">
