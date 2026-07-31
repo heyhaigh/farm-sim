@@ -2827,6 +2827,14 @@ export class World {
     };
 
     serialize() {
+        // #Codex67-1 "GHOST RUNS, NOTHING RECORDED" is enforced HERE, at the chokepoint every save path
+        // funnels through: while a rehearsal is live, the town's persistable truth is the PRE-CURTAIN
+        // snapshot, not the show in progress. Without this, the actors' walked positions, explored tiles
+        // and timers rode every autosave/page-hide save — a durable mutation behind a URL param (the
+        // premise Codex falsified with a deterministic probe). structuredClone, NOT a JSON round-trip:
+        // serialize() output carries Maps/Sets (chunks among them) that survive IndexedDB's structured
+        // clone but silently become {} under JSON — fromSave then throws "d.chunks is not iterable".
+        if (this._rehearsalSnapshot) return structuredClone(this._rehearsalSnapshot);
         const plotIdx = new Map(this.plots.map((p, i) => [p, i]));
         const snap = {
             v: World.SAVE_VERSION, seed: this.seed, name: this.name, culture: this.culture, lineageRoot: this.lineageRoot,
@@ -6939,6 +6947,7 @@ export class World {
         // assignment below clobbered whatever remained). A live real raid outranks the director — refuse.
         if ((this.pendingRaid && !this.pendingRaid.rehearsal) || (this.raidEvent && !this.raidEvent.rehearsal)) return false;
         this.cancelRehearsal();
+        this._rehearsalSnapshot = this.serialize();   // #Codex67-1 pre-curtain truth; restored when the show ends
         const rid = 'rehearsal:' + (nonce >>> 0);
         const dir = (hashString('raiddir:' + rid) % 360) * Math.PI / 180;
         const dirName = screenCompass(dir);   // #raid-feel label the SCREEN direction, not the grid angle
@@ -6978,6 +6987,7 @@ export class World {
     startElectionRehearsal(nonce = 1) {
         this.cancelRehearsal();
         if (this.farmers.filter(f => f.health !== 'sick' && !f.downed).length < 2) return false;
+        this._rehearsalSnapshot = this.serialize();   // #Codex67-1
         this.rehearsal = { kind: 'election', phase: 'gather', t: 0, nonce: nonce >>> 0, spoken: 0, speakQueue: null, result: null };
         return true;
     }
@@ -6991,6 +7001,7 @@ export class World {
     startSortieRehearsal(nonce = 1, targetName = null) {
         if ((this.pendingRaid && !this.pendingRaid.rehearsal) || (this.raidEvent && !this.raidEvent.rehearsal)) return false;
         this.cancelRehearsal();
+        this._rehearsalSnapshot = this.serialize();   // #Codex67-1
         const rid = 'sortie:' + (nonce >>> 0);
         const roster = this.rememberedTowns || [];
         const target = targetName || (roster.length ? roster[hashString('sortietgt:' + rid) % roster.length].name
@@ -7325,6 +7336,8 @@ export class World {
         this.rehearsal = null;
         // farmers hijacked into 'muster'/'assemble' release on their own next check (their hold conditions
         // read pendingRaid / foundingGathering, both false again now) — no stuck states.
+        // NOTE: _rehearsalSnapshot deliberately survives this call — main.js's curtain watcher edge-detects
+        // rehearsal -> null and REWINDS the world to the snapshot, which is what makes the ghost literal.
     }
 
     // The election rehearsal's stage director: gather at the well -> the candidates make their case, one

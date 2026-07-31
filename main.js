@@ -298,6 +298,12 @@ const mouse = { x: -1, y: -1, downX: 0, downY: 0, dragging: false, panStart: nul
 // the same tooltip the mouse gets on hover appears (the held point simply stays in mouse.x/y, which is all
 // hover ever reads). The release of a long-press is NOT a click — it was an inspect gesture.
 let touchHoldTimer = 0, touchHoldActive = false;
+// #Codex67-3 one pointer owns the gesture. Every pointer shares panStart/dragging/settingsDrag/the hold
+// timer, so a second finger down mid-drag used to overwrite the first finger's origin — the camera jumped
+// to the new finger's frame of reference, and either release could phantom-click for the other. Non-active
+// IDs are ignored outright until the owner releases. null = no gesture; hover moves always flow.
+let activePointerId = null;
+let _hadRehearsal = false;   // #Codex67-1 edge-detects the curtain falling (rehearsal -> null)
 const TOUCH_HOLD_MS = 450;
 
 const spriteCache = new Map();   // farmer -> frames
@@ -6286,17 +6292,7 @@ async function switchTown(seed, ang) {
         next._tabHidden = document.hidden;
         world = next;
         lastSavedDay = world.day;
-        // reset every per-town lens in this module (anything keyed to the town we just left)
-        selected = null; selectedSlotKey = null; followMode = false; followTarget = null;
-        raidFocus = null; dramaSpotlight = null; _lastRaidEvent = null; _raidStruck = false; _raidDetected = false; raidFx = null; raidShake = 0;
-        faceoff = null; faceoffSeenEvent = null;
-        _battleWatch = null; pendingInscription = null; simAccumulator = 0;   // #Codex36 P1-1: no cross-town battle finalization, fresh sim clock
-        chatFarmer = null; chatWidgetOpen = false; chatDropdownOpen = false; blurChatInput();
-        momentQueue.length = 0; calloutQueue.length = 0; activeMoment = null; activeCallout = null; momentsPrimed = false;
-        chronReadTotal = world._chronTotal || 0; lastChronLen = -1; recapSeq = -1;
-        sawCongregating = null;   // #firstwatch re-observe the new town before edge-detecting
-        miniKey = null; chunkCanvases.clear();
-        worldMapSel = world.seed;
+        resetTownLenses();
         // arrive on the frontier you entered by — the side facing the town you left — looking inward
         const ea = (ang != null ? ang : 0);
         const ei = CENTER - Math.cos(ea) * 44, ej = CENTER - Math.sin(ea) * 44;
@@ -6307,7 +6303,6 @@ async function switchTown(seed, ang) {
             beats: world.chronicle.slice(-5).map(c => ({ text: c.text, color: c.color, day: c.day })),
         };
         try { history.replaceState(null, '', '?seed=' + s32); } catch { /* sandboxed contexts */ }
-        if (window.RYFARMS) window.RYFARMS.world = world;
         return true;
     } finally { _switching = false; }
 }
@@ -6790,9 +6785,47 @@ async function consumeInbox(w, events) {
     }, { seed: w.seed, gen: w._gen || 0, rev: summary.rev || 0 });   // #59 full pair; summary.rev is the committed rev
 }
 
+// reset every per-town lens in this module (anything keyed to a town being swapped out) — shared by the
+// border crossing and the rehearsal rewind (#Codex67-1), so the two swap paths cannot drift
+function resetTownLenses() {
+    if (window.RYFARMS) window.RYFARMS.world = world;   // the debug handle tracks every swap, not just crossings
+    selected = null; selectedSlotKey = null; followMode = false; followTarget = null;
+    raidFocus = null; dramaSpotlight = null; _lastRaidEvent = null; _raidStruck = false; _raidDetected = false; raidFx = null; raidShake = 0;
+    faceoff = null; faceoffSeenEvent = null;
+    _battleWatch = null; pendingInscription = null; simAccumulator = 0;   // #Codex36 P1-1: no cross-town battle finalization, fresh sim clock
+    chatFarmer = null; chatWidgetOpen = false; chatDropdownOpen = false; blurChatInput();
+    momentQueue.length = 0; calloutQueue.length = 0; activeMoment = null; activeCallout = null; momentsPrimed = false;
+    chronReadTotal = world._chronTotal || 0; lastChronLen = -1; recapSeq = -1;
+    sawCongregating = null;   // #firstwatch re-observe the new town before edge-detecting
+    miniKey = null; chunkCanvases.clear();
+    worldMapSel = world.seed;
+}
+
 // ---------------------------------------------------------------------------
 // Input
 // ---------------------------------------------------------------------------
+
+// #Codex67-1 THE REWIND. A rehearsal's actors are the real farmers — they really walked, explored, burned
+// timers. serialize() already refuses to persist any of that (it returns the pre-curtain snapshot while a
+// show is live); this makes the world itself agree the moment the show ends: rebuild from the snapshot,
+// exactly the way a border crossing installs a neighbour. The admin sees the town snap back to the instant
+// before the curtain — which is the promise "GHOST RUNS, NOTHING RECORDED" made all along.
+function rewindFromRehearsal() {
+    const snap = world && world._rehearsalSnapshot;
+    if (!snap) return;
+    let next;
+    try { next = World.fromSave(structuredClone(snap)); }   // structured clone, same semantics as IndexedDB — the snapshot carries Maps/Sets
+    catch (err) { console.error('ry-farms: rehearsal rewind failed - keeping live state', err); world._rehearsalSnapshot = null; return; }
+    next._gen = world._gen; next._rev = world._rev;
+    next._spectator = world._spectator; next._persistenceDisabled = world._persistenceDisabled; next._retired = world._retired;
+    const origSet = next.set.bind(next);
+    next.set = (i, j, t) => { origSet(i, j, t); next._tilesChanged = true; };
+    next._tilesChanged = true;
+    next._live = world._live; next._tabHidden = document.hidden;
+    world = next;
+    lastSavedDay = world.day;
+    resetTownLenses();
+}
 
 function gamePoint(e) {
     const rect = out.getBoundingClientRect();
@@ -6800,6 +6833,8 @@ function gamePoint(e) {
 }
 
 out.addEventListener('pointerdown', (e) => {
+    if (activePointerId !== null && e.pointerId !== activePointerId) return;   // #Codex67-3 second finger: ignored
+    activePointerId = e.pointerId;
     audio.ensure();   // browsers only allow audio to start on a user gesture
     const p = gamePoint(e);
     mouse.downX = p.x; mouse.downY = p.y;
@@ -6829,6 +6864,7 @@ out.addEventListener('pointerdown', (e) => {
 });
 
 out.addEventListener('pointermove', (e) => {
+    if (activePointerId !== null && e.pointerId !== activePointerId) return;   // #Codex67-3 (hover: null -> flows)
     const p = gamePoint(e);
     mouse.x = p.x; mouse.y = p.y;
     if (settingsDrag && settingsHits) {
@@ -6849,6 +6885,8 @@ out.addEventListener('pointermove', (e) => {
 function inRect(p, r) { return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h; }
 
 out.addEventListener('pointerup', (e) => {
+    if (activePointerId !== null && e.pointerId !== activePointerId) return;   // #Codex67-3
+    activePointerId = null;
     const wasDrag = mouse.dragging;
     const wasSlider = settingsDrag;
     const wasHold = touchHoldActive;   // #touch captured before reset — the late cleanup listener parks the pointer
@@ -7091,11 +7129,16 @@ out.addEventListener('pointerup', (e) => {
 // park the pointer offscreen — otherwise the last touch point keeps a phantom hover tooltip and the pixel
 // hand painted on screen. Mouse users are untouched (their position keeps flowing from pointermove).
 out.addEventListener('pointerup', (e) => {
-    if (e.pointerType === 'touch') { mouse.x = -1; mouse.y = -1; }
+    // #Codex67-3 activePointerId === null here means the OWNER just released (the main handler, which runs
+    // first, cleared it). An ignored second finger's release leaves the owner's id in place — parking then
+    // would yank the held tooltip out from under the finger that still owns the gesture.
+    if (e.pointerType === 'touch' && activePointerId === null) { mouse.x = -1; mouse.y = -1; }
 });
 // #touch pointercancel was previously UNHANDLED: the browser stealing a gesture (system edge swipe,
 // notification pull) would strand panStart mid-drag and the next finger would teleport the camera.
 out.addEventListener('pointercancel', (e) => {
+    if (activePointerId !== null && e.pointerId !== activePointerId) return;   // #Codex67-3
+    activePointerId = null;
     clearTimeout(touchHoldTimer); touchHoldActive = false;
     settingsDrag = null; mouse.panStart = null; mouse.dragging = false;
     if (e.pointerType === 'touch') { mouse.x = -1; mouse.y = -1; }
@@ -7670,6 +7713,13 @@ function frame(now) {
     // at extreme speeds keep a bounded backlog (spread over coming frames) rather than dropping
     // all the leftover time, but cap it so we never spiral.
     if (steps >= 800) simAccumulator = Math.min(simAccumulator, 800 * FIXED_DT);
+
+    // #Codex67-1 curtain watcher: the show ended (booth cancel OR the election's natural curtain inside
+    // farm.js, which main.js otherwise never sees) -> rewind to the pre-curtain snapshot. Edge-triggered so
+    // chained shows (cancel -> immediately stage another, same frame) never rewind mid-session: the frame
+    // never observes the intermediate null.
+    if (_hadRehearsal && world && !world.rehearsal && world._rehearsalSnapshot) rewindFromRehearsal();
+    _hadRehearsal = !!(world && world.rehearsal);
 
     // #raidfx / #131b — a raid now plays in two beats. On STAGE the warband is still out at the fog edge
     // ('approach'): snap the camera to the well so the player watches them stream in out of the dark — but hold
@@ -8576,6 +8626,7 @@ function drawStartScreen() {
         },
         // deterministic stepping for reproducibility tests: N uniform FIXED_DT sim ticks
         runSteps: (n) => { for (let k = 0; k < n; k++) world.tick(FIXED_DT); },
+        rehearsalDebug: () => ({ had: _hadRehearsal, reh: !!(world && world.rehearsal), snap: !!(world && world._rehearsalSnapshot), speed: world && world._speedMult }),   // #Codex67-1 watcher visibility
         FIXED_DT,
         // QA: open the town chronicle straight to a tab (0 NEWS / 1 RECIPES / 2 TALES)
         openChron: (tab = 0) => { rosterOpen = boardOpen = worldMapOpen = settingsOpen = false; chronOpen = true; chronTab = tab; chronScroll = 0; },

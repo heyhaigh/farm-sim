@@ -149,11 +149,13 @@
             font-size: 15px;
             letter-spacing: 0.12em;
         }
-        @media (orientation: portrait) {
-            html.entry-tablet #rotate-gate { display: flex; }
-            /* no touches reach a game that should not be played this way up */
-            html.entry-tablet #tv { pointer-events: none; }
-        }
+        /* #Codex67-2 keyed on a JS-maintained class, NOT a raw orientation query: CSS orientation describes
+           the VIEWPORT, and an iPad Split View / Stage Manager window can be portrait-shaped in every
+           physical orientation — a pure orientation gate would be impossible to satisfy by rotating. The
+           entry chooser only sets rotate-block when the window is portrait AND effectively full-screen. */
+        html.entry-tablet.rotate-block #rotate-gate { display: flex; }
+        /* no touches reach a game that should not be played this way up */
+        html.entry-tablet.rotate-block #tv { pointer-events: none; }
         /* The plain-text block is only a fallback for "the gate never rendered". The inline script below
            arms it on a timer; the canvas gate normally sets `gate-live` long before that. */
         html.entry-mobile.gate-fallback:not(.gate-live) #mobile-gate { display: flex; }
@@ -194,7 +196,21 @@
             // (detached keyboard, unplugged mouse) cannot disturb a running game. Orientation is the one
             // thing that stays live, via the CSS orientation query on #rotate-gate.
             if (MOBILE) document.documentElement.classList.add('entry-mobile');
-            if (TABLET) document.documentElement.classList.add('entry-tablet');
+            if (TABLET) {
+                document.documentElement.classList.add('entry-tablet');
+                // #Codex67-2 the rotate gate arms only when the window is portrait-shaped AND effectively
+                // full-screen. A Split View / Stage Manager window stays portrait-shaped no matter how the
+                // device rotates — gating on shape alone would trap those users forever; they get the game
+                // (cramped, but playable) instead. Rotation fires resize, so this stays live.
+                var applyRot = function () {
+                    var portrait = window.innerHeight > window.innerWidth;
+                    var fullish = window.innerWidth >= Math.min(window.screen.width, window.screen.height) * 0.85;
+                    document.documentElement.classList.toggle('rotate-block', portrait && fullish);
+                };
+                window.addEventListener('resize', applyRot);
+                window.addEventListener('orientationchange', applyRot);
+                applyRot();
+            }
             // Desktop loses the preload scanner's head start once the entry is chosen in script rather than
             // written in markup, so hand it back explicitly. Skipped on the gate path, which does not want it.
             if (!MOBILE) {
