@@ -27,6 +27,7 @@ const BREAKER_COOLDOWN_MS = 20_000;   // cardless free tier: recover fast — a 
 
 const _budget = { windowStart: 0, count: 0 };
 const _breaker = { fails: 0, openUntil: 0 };
+const _formatSkip = new Set();   // #stickyformat `${model}|${format}` proven unsupported — skip forever (process lifetime)
 
 // Resolve the mode from config. FAIL-CLOSED: anything not explicitly local-or-opted-into-paid is 'off'.
 function resolveLLM() {
@@ -93,9 +94,15 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
     };
     if (typeof temperature === 'number') baseBody.temperature = temperature;
 
-    const formats = schema
+    // #stickyformat Groq's llama-3.1-8b rejects strict json_schema with a 400 — and this loop was paying
+    // that 400 on EVERY call before succeeding with json_object: each whisper burned DOUBLE the requests
+    // against a free tier metered per minute (the owner's console showed every call as a 400+200 pair, and
+    // the 413 that made the feature feel dead). Once a format draws invalid_request from a model, remember
+    // and never send it to that model again — the 400 is paid once per process, not once per call.
+    const formats = (schema
         ? [{ type: 'json_schema', json_schema: { name: schemaName, strict: true, schema } }, { type: 'json_object' }, null]
-        : [null];
+        : [null]
+    ).filter(f => !_formatSkip.has(`${model}|${f ? f.type : 'none'}`));
 
     let lastErr;
     try {
@@ -110,6 +117,7 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
                 if (r.ok) { const out = parseJson(extractContent(await r.json())); _breaker.fails = 0; return out; }
                 lastErr = new Error(`LLM request failed (${r.status})`);
                 if (r.status !== 400 && r.status !== 422) break;   // only a format-rejection is worth retrying
+                if (response_format) _formatSkip.add(`${model}|${response_format.type}`);   // #stickyformat
             } finally { clearTimeout(timer); }
         }
         throw lastErr || new Error('LLM request failed');
