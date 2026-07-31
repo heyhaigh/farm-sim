@@ -137,9 +137,17 @@ If art starts changing often, the real fix is a content hash or `?v=` on asset U
 ## Railway configuration
 
 - **Source:** `heyhaigh/farm-sim-deploy`, branch `main`. Not the public repo — that produces art-less builds.
-- **Variables:** `PORT=8080`, and **nothing else**. Specifically **no `OPENAI_API_KEY`** (keeps the LLM
-  endpoints in fallback, so zero metered spend) and **never** the personal `SUPERMEMORY_URL` /
-  `SUPERMEMORY_API_KEY`.
+- **Variables:** `PORT=8080`, plus the FREE-TIER LLM set (2026-07-30, owner-approved): `OPENAI_BASE_URL=
+  https://api.groq.com/openai/v1`, `OPENAI_API_KEY=gsk_…` (a Groq free-tier key), `RY_FARMS_LLM_MODEL=
+  llama-3.1-8b-instant`, `RY_FARMS_ALLOW_PAID_LLM=1`. The flag's name is scarier than the reality: it means
+  "remote endpoint permitted" — the Groq account holds **no payment card**, so billing is structurally
+  impossible; the free quota (~14.4k req/day) just 429s when exhausted and every endpoint falls back to the
+  offline keyword/template path. Kill switch: set `RY_FARMS_LLM_OFF=1`. **Never** the personal
+  `SUPERMEMORY_URL` / `SUPERMEMORY_API_KEY`, and never a key from an account that has a card on file.
+- **Free-quota fair share:** server.mjs rate-limits the six LLM-backed endpoints per IP (40 per 10 min,
+  400/day) so one player cannot drink the town's shared daily quota; a limited request returns the same
+  `{fallback:true}` shape the clients already handle. _llm.js keeps the global 90-req/min budget, 8s
+  timeouts, and the circuit breaker on top.
 - `server.mjs` reads `process.env.PORT`; an explicit CLI arg still wins, so `node server.mjs 8123` is
   unchanged locally. Set `PORT` explicitly rather than trusting a default to match the domain's target port —
   a mismatch is a 502 with a perfectly healthy container.
@@ -167,5 +175,5 @@ points at a dead host. Re-check the target after every re-add.
 
 ## Cost doctrine
 
-No `OPENAI_API_KEY` in production, so the LLM endpoints fall back and metered spend is zero. Determinism and
+The LLM runs on a cardless free tier (see Variables above), so metered spend is structurally zero. Determinism and
 compile-don't-query must hold: the simulation never reads the LLM or SuperMemory in its loop.

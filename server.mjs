@@ -37,6 +37,27 @@ try {
 // so editing a handler lands on the next request with no server restart — matching the static files'
 // "edits always land" contract. (The old map required each handler ONCE at boot, so an edited handler stayed
 // frozen at its start-of-process version — e.g. memory-graph kept returning the old shape after a rewrite.)
+// #freequota the endpoints that reach the model (everything else — knowledge-graph, writeback — is exempt)
+const LLM_ROUTES = new Set(['/api/ry-farms-chat', '/api/ry-farms-dm', '/api/ry-farms-conscience',
+    '/api/ry-farms-congregation', '/api/ry-farms-raid-council', '/api/ry-farms-invent']);
+// Two windows per IP: a burst window (40 per 10 minutes — a whisper costs 2 requests, chat 1 per message,
+// so this is ~20 whispers or 40 chat turns in ten minutes, generous for a human) and a daily cap (400).
+const LLM_IP_BURST = 40, LLM_IP_BURST_MS = 10 * 60_000;
+const LLM_IP_DAY = 400, LLM_IP_DAY_MS = 24 * 60 * 60_000;
+const _llmIp = new Map();   // ip -> { b: count, bStart, d: count, dStart }
+function takeLlmToken(ip) {
+    const now = Date.now();
+    let e = _llmIp.get(ip);
+    if (!e) { e = { b: 0, bStart: now, d: 0, dStart: now }; _llmIp.set(ip, e); }
+    if (now - e.bStart > LLM_IP_BURST_MS) { e.b = 0; e.bStart = now; }
+    if (now - e.dStart > LLM_IP_DAY_MS) { e.d = 0; e.dStart = now; }
+    if (e.b >= LLM_IP_BURST || e.d >= LLM_IP_DAY) return false;
+    e.b++; e.d++;
+    // bounded memory: prune stale entries once the table grows past a few thousand IPs
+    if (_llmIp.size > 5000) for (const [k, v] of _llmIp) { if (now - v.dStart > LLM_IP_DAY_MS) _llmIp.delete(k); }
+    return true;
+}
+
 const API_ROUTES = {
     '/api/knowledge-graph': './api/knowledge-graph.js',
     '/api/memory-writeback': './api/memory-writeback.js',
@@ -137,6 +158,21 @@ http.createServer(async (req, res) => {
     }
 
     const apiRel = API_ROUTES[url.pathname];
+    // #freequota PER-IP FAIR SHARE for the LLM-backed endpoints. The model provider is a shared FREE tier
+    // (~14.4k requests/day): _llm.js's global budget stops runaway totals, but without this one enthusiastic
+    // player could drink the whole town's daily quota. A rejected request returns the exact fallback shape
+    // every client already handles — the player gets the offline keyword/template behaviour, not an error.
+    // In-process Maps are fine: Railway runs one instance, and a restart forgiving the counters is acceptable.
+    if (apiRel && LLM_ROUTES.has(url.pathname)) {
+        const ip = req.headers['cf-connecting-ip']
+            || String(req.headers['x-forwarded-for'] || '').split(',')[0].trim()
+            || req.socket.remoteAddress || 'unknown';
+        if (!takeLlmToken(ip)) {
+            res.writeHead(503, { 'Content-Type': 'application/json', 'Retry-After': '600' });
+            res.end(JSON.stringify({ fallback: true, error: 'rate limited - offline fallback' }));
+            return;
+        }
+    }
     if (apiRel) {
         try { const api = loadHandler(apiRel); await api(req, res); }
         catch (err) {
