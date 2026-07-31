@@ -23,7 +23,7 @@ const BUDGET_MAX = 90;
 // global circuit breaker — after BREAKER_TRIP consecutive failures, block ALL calls for BREAKER_COOLDOWN_MS
 // (one shared breaker, so N callers failing in parallel can't each keep hammering).
 const BREAKER_TRIP = 4;
-const BREAKER_COOLDOWN_MS = 60_000;
+const BREAKER_COOLDOWN_MS = 20_000;   // cardless free tier: recover fast — a 60s all-off window after one TPM burst read as the feature dying mid-conversation
 
 const _budget = { windowStart: 0, count: 0 };
 const _breaker = { fails: 0, openUntil: 0 };

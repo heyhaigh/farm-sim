@@ -32,6 +32,9 @@ function cleanReply(text) {
         .replace(/\s+/g, ' ')
         .trim();
     s = s.replace(/[^\x20-\x7E]/g, ' ').replace(/\s+/g, ' ').trim();
+    // small models sometimes append stray symbols after the sentence ("... a worry. =") — strip any
+    // trailing run of non-sentence junk (seen live on llama-3.1-8b via Groq)
+    s = s.replace(/[\s=\-_*#~^`|\\/+<>]+$/g, '').trim();
     if (s.length > REPLY_MAX) {
         // a hard length cut may land mid-sentence: keep the last COMPLETE sentence within the cap;
         // if there's no sentence end at all, drop the final (possibly partial) word.
@@ -105,7 +108,8 @@ async function classify(body) {
     ].filter(Boolean).join('\n');
     const out = await callLLM({
         system,
-        user: JSON.stringify({ message: String(body.message || '').slice(0, 400) }),
+        user: JSON.stringify({
+            recent: Array.isArray(body.recent) ? body.recent.slice(-4) : [], message: String(body.message || '').slice(0, 400) }),
         schema: classifySchema, schemaName: 'ry_farms_conscience_classify', maxTokens: 200, temperature: 0,
     });
     return classify_normalize(out, names);
@@ -158,6 +162,8 @@ async function reply(body) {
         `VERDICT (${verdict}): ${VERDICT_GUIDE[verdict]}`,
         `STANCE toward the voice: ${STANCE_GUIDE[stance]}`,
         'Stay true to their personality, mood, dream, and current situation as given. Never promise a specific mechanical result, never mention stats, rolls, or game terms.',
+        'THE THREAD: `recent` is this farmer\'s OWN inner life - earlier stray thoughts (who:"voice") and their own reactions (who:"ry"). If the new thought echoes, follows, or contradicts an earlier one, let them NOTICE the thread - "that thought again", "first rest, now this" - with growing familiarity, suspicion, curiosity, or irritation at their own mind. These intrusions accumulate; they are not amnesiac.',
+        'TEMPORAL TRUTH: the snapshot (day, season, year, weather) is the WHOLE of history. NEVER invent past seasons, past events, or people not given - a town on day 1 of year 1 has no "last autumn", no old raids, no history at all yet.',
         'ALWAYS speak as "I". Keep it grounded and human. Plain ASCII only: no markdown, no em dashes (use " - "), straight quotes, no emojis, no modern or technological references.',
         'Return JSON only: { "line": "<the farmer\'s reaction>" }.',
     ].join('\n');

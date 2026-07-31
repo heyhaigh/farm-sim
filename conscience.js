@@ -107,7 +107,7 @@ function characterView(f) {
 // so a world that ticks on during generation can never contradict the answer.
 function snapshotOf(f) {
     const w = f.world;
-    return { day: w.day, season: w.seasonName, weather: w.weather, doing: (f.thought || '').slice(0, 48) };
+    return { day: w.day, season: w.seasonName, year: w.year, weather: w.weather, doing: (f.thought || '').slice(0, 48) };   // year: the temporal-truth anchor (day-1 towns kept inventing 'last autumn')
 }
 
 async function postJson(payload) {
@@ -144,7 +144,7 @@ export async function whisper(world, farmer, message, save) {
 
     // stage 1: classify (LLM, else keyword)
     let cls;
-    try { cls = await postJson({ stage: 'classify', message: text, names }); }
+    try { cls = await postJson({ stage: 'classify', message: text, names, recent: c.log.slice(-4).map(e => ({ who: e.who, text: String(e.text).slice(0, 90) })) }); }
     catch { cls = offlineClassify(text, names); }
     const kind = cls.kind || 'none';
     const target = cls.target || null;
@@ -164,7 +164,9 @@ export async function whisper(world, farmer, message, save) {
             // roll-affecting pressure (day-stable) PLUS today's repeat count, so a nagged reply can
             // sound more irritated even though the verdict itself is locked for the day.
             pressure: Math.round(((c.pressure[kind] || 0) + Math.max(0, (c.asks?.[kind] || 1) - 1)) * 10) / 10,
-            history: c.log.slice(-12).map(e => ({ who: e.who, text: e.text })),
+            // -6 with capped lines, not -12 raw: Groq's free tier meters TOKENS PER MINUTE (6k), and the
+            // fat thread was the main reason rapid whispers 429'd into the breaker and read as "dropped"
+            history: c.log.slice(-6).map(e => ({ who: e.who, text: String(e.text).slice(0, 120) })),
             snapshot: snapshotOf(farmer),
         });
         line = r.line;
