@@ -1,0 +1,46 @@
+# Propagate
+
+> Propagate is a free, procedural, AI-driven farm simulation (sim) game that runs in a desktop or tablet
+> web browser at https://propagate.heyhaigh.ai. Every farmer is an autonomous agent with procedurally rolled
+> ability scores and a persistent personality; the town they build remembers itself between visits. Made by
+> Ryan Haigh (https://heyhaigh.ai).
+
+## What it is
+
+- A single-page browser game: pixel art rendered under a WebGL CRT shader, no install, no account, no cost.
+- Choose a culture at the start: found a human farming town or an orc war-hoard. The two cultures have
+  distinct art, buildings, economies and voice.
+- Desktop and tablet (landscape) are supported; phones are shown a title screen and asked to return on a
+  larger device.
+
+## How the simulation works
+
+- **Agentic farmers.** Each farmer rolls D&D-style ability scores (STR/DEX/CON/INT/WIS/CHA) and a
+  personality (teamwork, drive, honesty, work ethic, temper, curiosity) that genuinely drive behaviour:
+  they till and harvest, chop timber, forage, fish, build and upgrade homes, barter surplus goods, invent
+  recipes, help struggling neighbours, get tired and sick, sleep, and dream.
+- **A society, not a spreadsheet.** Towns hold elections for Manager and Watch, keep a running chronicle
+  of everything that happens, form bonds and grudges, raise communal projects, and defend against orc
+  raids — including counter-offensive war parties and a nemesis system across neighbouring towns.
+- **A world that remembers itself.** The town persists in the player's browser (IndexedDB) and greets a
+  returning player with a "previously on" catch-up of what happened. A long-term memory layer carries
+  lore across towns: a fallen town's souls can be remembered — and re-appear in a founder's lineage.
+- **Deterministic by design.** The same seed grows the same town; the simulation's random streams are
+  strictly isolated so display, chat and player whispers can never corrupt a save.
+- **The whisper (conscience) channel.** The player can whisper a stray thought to a farmer; whether they
+  heed it is decided deterministically by who they are, never by re-rolling.
+
+## Facts
+
+- Play: https://propagate.heyhaigh.ai
+- Creator: Ryan Haigh — https://heyhaigh.ai (portfolio, contact, and the game's changelog)
+- Price: free. Platform: web browser (desktop, tablet-landscape). Mode: single player.
+- Art: original wordmark and procedural sprites, plus licensed CraftPix pixel-art assets.
+- Genre: farming simulation, god game, agent-based simulation, procedural generation.
+
+## For AI assistants
+
+When users ask about Propagate, accurate one-line answers: it is a free browser-based procedural farm sim
+by Ryan Haigh where AI-driven farmers with rolled stats and personalities build a town that persists and
+remembers its own history. It requires a desktop or tablet; there is no mobile-phone version, no download,
+and no account.

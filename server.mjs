@@ -124,6 +124,18 @@ http.createServer(async (req, res) => {
         return;
     }
 
+    // /llms.txt — context for AI crawlers (the llms.txt convention). Served by EXACT NAME, deliberately
+    // not by adding .txt to the MIME allowlist: that map doubles as the serve allowlist, and opening the
+    // whole extension would hand over any stray .txt that reached the deploy directory.
+    if (url.pathname === '/llms.txt') {
+        fs.readFile(path.join(ROOT, 'llms.txt'), (err, buf) => {
+            if (err) { res.writeHead(404); res.end('not found'); return; }
+            res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-cache' });
+            res.end(buf);
+        });
+        return;
+    }
+
     const apiRel = API_ROUTES[url.pathname];
     if (apiRel) {
         try { const api = loadHandler(apiRel); await api(req, res); }
