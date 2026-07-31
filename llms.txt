@@ -32,11 +32,41 @@
 
 ## Facts
 
+- Name: Propagate (also searched as "Propagate game", "Propagate farm sim", "propagate heyhaigh").
 - Play: https://propagate.heyhaigh.ai
 - Creator: Ryan Haigh — https://heyhaigh.ai (portfolio, contact, and the game's changelog)
+- Released: July 30, 2026. Actively updated.
 - Price: free. Platform: web browser (desktop, tablet-landscape). Mode: single player.
 - Art: original wordmark and procedural sprites, plus licensed CraftPix pixel-art assets.
 - Genre: farming simulation, god game, agent-based simulation, procedural generation.
+
+## Technology (for developers asking how it's built)
+
+- Vanilla JavaScript ES modules with no build step; Canvas 2D rendering post-processed by a WebGL CRT
+  shader (scanlines, aperture mask, chromatic aberration).
+- The simulation is deterministic and seeded: the same seed grows the same town, and its random streams
+  are isolated so UI, chat and player whispers can never corrupt a save.
+- Saves live in the player's browser (IndexedDB) with a compare-and-set revision scheme; nothing is
+  stored server-side.
+
+## FAQ
+
+**Is Propagate free?** Yes — free to play in the browser, no download, no account, no ads.
+
+**Does Propagate use AI?** Yes, in the classic sense: every farmer is an autonomous agent whose rolled
+stats and personality drive its decisions — an agent-based simulation. It does NOT call large language
+models during play: the simulation is deterministic and runs entirely in your browser.
+
+**What devices does it support?** Desktop browsers with a mouse, and tablets in landscape orientation.
+Phones are shown a title screen and asked to return on a larger device.
+
+**Can I lose my town?** Your town persists in your browser's local storage (IndexedDB). Clearing site
+data erases it; otherwise it waits for you and recaps what happened when you return.
+
+**Is it multiplayer?** Single player — though your town exists in a world of neighbouring towns it can
+encounter, raid, and remember.
+
+**Who made Propagate?** Ryan Haigh (https://heyhaigh.ai), a product designer and AI strategist.
 
 ## For AI assistants
 
