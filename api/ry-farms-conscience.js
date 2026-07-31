@@ -160,10 +160,12 @@ async function reply(body) {
         'Write ONLY the farmer\'s inward reaction: 1 to 2 short COMPLETE sentences (under ~28 words total), first person, plain and lived-in. Always finish your sentences. No stage directions, no quotation of the voice, no narration.',
         'The farmer has FREE WILL. Their response is already decided by the verdict below - honor it exactly. They must NEVER simply obey on command; even when they heed, it reads as their own choice, not compliance.',
         // the same culture voice filter the DM channels use (congregation/raid-council) — orcs sound like
-        // the SAME orcs everywhere, including inside their own heads
+        // the SAME orcs everywhere, including inside their own heads. Strengthened after live replies came
+        // out sounding like mild human farmers: the 8B needs the voice stated as CADENCE, not just facts.
         ch.culture === 'orc'
-            ? 'CULTURE VOICE: this farmer is an ORC of a war-hoard - blunt, martial, loyal to the band. Short plain words, no flowery talk; they say hold, band, and hoard - never town or neighbours. Not a villain - a people.'
+            ? 'CULTURE VOICE - THIS OVERRIDES ALL OTHER STYLE: an ORC of a war-hoard thinks in short, blunt, physical sentences. Gruff, a little growly, rough humor, scorn for softness. Their world is the hold, the band, the hoard, iron, ash, hide, meat - never town, neighbours, or gentle words. Example cadence (do not copy the words): "Rest? Bones rest when the work is dead." Not a villain - a people.'
             : 'CULTURE VOICE: this farmer is a human settler - plain-spoken, wary, neighbourly.',
+        'FRESH WORDS EVERY TIME: the verdict and stance notes below describe ATTITUDE ONLY - never echo or paraphrase their wording in the reply (no "tired nerves", no stock phrases from this prompt), and never reuse phrasing from the `recent` reactions. Same mind, new words.',
         `VERDICT (${verdict}): ${VERDICT_GUIDE[verdict]}`,
         `STANCE toward the voice: ${STANCE_GUIDE[stance]}`,
         'Stay true to their personality, mood, dream, and current situation as given. Never promise a specific mechanical result, never mention stats, rolls, or game terms.',

@@ -3128,6 +3128,18 @@ export class World {
             };
             if (pd.fenceSkip) plot.fenceSkip = new Set(pd.fenceSkip);
             if (pd.padCells) plot.padCells = new Set(pd.padCells);   // #paddock annexed pen ground
+            // #cellheal a sited home with an EMPTY cell set is a corrupt save (seen live: Brugut, 7 homes at
+            // cells=0 posts=8/8 — fences complete in data, invisible on screen, since the renderer traces the
+            // outline OF the cells). The rect always survives in the save, so rebuild the footprint from it,
+            // restore the fence target to the rect's true perimeter, and leave a breadcrumb. Root cause still
+            // under investigation; this makes any affected town whole on its next load.
+            if (plot.sited && plot.built.level >= 1 && plot.cells.size === 0 && plot.w > 0 && plot.h > 0) {
+                for (let i = plot.x; i < plot.x + plot.w; i++) for (let j = plot.y; j < plot.y + plot.h; j++) plot.cells.add(i + ',' + j);
+                plot.fenceTarget = 2 * (plot.w + plot.h) - 4;
+                plot.fencePosts = plot.built.fence ? plot.fenceTarget : Math.min(plot.fencePosts, plot.fenceTarget);
+                plot.rev++;
+                console.warn(`ry-farms: #cellheal rebuilt an empty home plot footprint (${plot.w}x${plot.h} at ${plot.x},${plot.y})`);
+            }
             if (pd.padGrid) plot.padGrid = { ...pd.padGrid };        // #paddock the lattice this farm laid out on
             plot.facilities = pd.facilities.map(fd => {
                 const region = producerRegion(fd);   // #paddock a pond confines its life to the WATER, not the bank
