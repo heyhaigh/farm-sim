@@ -24,7 +24,7 @@ export async function enrichInventions(world, isCurrent = () => true) {
     const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
     try {
         const res = await fetch(INVENT_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
-            body: JSON.stringify({ name: rec.name, effect: rec.effect, tier: rec.tier, quality: rec.quality, dominant: rec.dominant, ingredients: Object.keys(rec.inputs || {}) }) });
+            body: JSON.stringify({ culture: world.culture, name: rec.name, effect: rec.effect, tier: rec.tier, quality: rec.quality, dominant: rec.dominant, ingredients: Object.keys(rec.inputs || {}) }) });
         const data = await res.json().catch(() => null);
         if (!isCurrent()) return 0;
         if (!res.ok || !data || data.fallback || !data.name) { enrichFailAt = Date.now(); return 0; }

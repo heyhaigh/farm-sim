@@ -5382,8 +5382,12 @@ function drawConscienceChat(x, y, w, h) {
         lines.push({ text: 'head... whisper something.', col: '#5a5f6c' });
     }
     for (const e of c.log) {
+        // thoughts FADE: yesterday's dim, older than that leave the panel entirely (the stored log keeps
+        // its 40-entry cap for the LLM's memory — this is display hygiene, not amnesia)
+        const age = world.day - (e.day ?? world.day);
+        if (age >= 2) continue;
         const isVoice = e.who === 'voice';
-        const col = isVoice ? '#c8b060' : '#c8ccd8';   // gold = your whispered thought, white = their reply
+        const col = age >= 1 ? '#6a6f7c' : (isVoice ? '#c8b060' : '#c8ccd8');   // gold = your thought, white = their reply, grey = yesterday
         const prefix = isVoice ? '> ' : '  ';
         const wrapped = wrapLine(prefix + e.text, maxChars);
         wrapped.forEach((ln, i) => lines.push({ text: (i === 0 ? ln : '  ' + ln), col }));
@@ -5394,8 +5398,9 @@ function drawConscienceChat(x, y, w, h) {
     const viewH = bodyBot - bodyTop;
     const contentH = lines.length * lineH;
     const maxScroll = Math.max(0, contentH - viewH);
-    // keep pinned to the newest unless the player has scrolled up
-    if (chatScroll > maxScroll) chatScroll = maxScroll;
+    // chatScroll counts UP from the bottom: 0 = pinned to the NEWEST line. The old math anchored the TOP
+    // at scroll 0, so once the transcript overflowed, every new reply rendered below the clip — a full
+    // panel looked like whispering had stopped working (owner-found bug).
     chatScroll = Math.max(0, Math.min(chatScroll, maxScroll));
     chatViewport = { x, y, w, h, bodyTop, bodyBot, maxScroll };
 
@@ -5403,7 +5408,7 @@ function drawConscienceChat(x, y, w, h) {
     ctx.beginPath();
     ctx.rect(x + 1, bodyTop - 1, w - 2, viewH + 1);
     ctx.clip();
-    let ly = bodyTop - Math.round(chatScroll) + Math.max(0, viewH - contentH);
+    let ly = bodyTop + (viewH - contentH) + Math.round(chatScroll);
     for (const ln of lines) {
         if (ly + lineH >= bodyTop && ly <= bodyBot) drawText(ctx, ln.text, x + 6, ly, ln.col);
         ly += lineH;
@@ -5448,8 +5453,10 @@ function drawChatDropdown(PX, PW, splitY) {
     ctx.strokeRect(dx + 0.5, dy + 0.5, dw - 1, dh - 1);
     list.slice(0, maxRows).forEach((f, i) => {
         const ry = dy + 2 + i * rowH;
+        const hot = mouse.x >= dx + 1 && mouse.x <= dx + dw - 1 && mouse.y >= ry - 1 && mouse.y < ry - 1 + rowH;
         if (f === chatFarmer) { ctx.fillStyle = 'rgba(125,208,105,0.18)'; ctx.fillRect(dx + 1, ry - 1, dw - 2, rowH); }
-        drawText(ctx, f.sheet.name.split(' ')[0].slice(0, 14), dx + 4, ry + 1, f === chatFarmer ? '#7dd069' : '#c8ccd8');
+        else if (hot) { ctx.fillStyle = 'rgba(255,255,255,0.10)'; ctx.fillRect(dx + 1, ry - 1, dw - 2, rowH); }
+        drawText(ctx, f.sheet.name.split(' ')[0].slice(0, 14), dx + 4, ry + 1, f === chatFarmer ? '#7dd069' : (hot ? '#ffffff' : '#c8ccd8'));
         chatDropRows.push({ farmer: f, y0: ry - 1, y1: ry + rowH - 1, x0: dx, x1: dx + dw });
     });
 }
@@ -5496,6 +5503,7 @@ async function submitWhisper() {
         // #Codex36 P1-2: capture the town the whisper belongs to — the callback fires up to 20s later, and a
         // crossing in between would otherwise save the DESTINATION town and lose the whisper on the source.
         const w = world;
+        chatScroll = 0;   // a new exchange snaps the transcript to the newest line
         await whisper(w, f, text, () => { if (w && !w._retired) saveTown(w); });   // #Codex37 P1-2: a retired (wiped) town stays wiped
     } catch (err) {
         console.warn('ry-farms: whisper failed', err);
@@ -7151,11 +7159,18 @@ out.addEventListener('pointercancel', (e) => {
 });
 
 out.addEventListener('wheel', (e) => {
+    // the standalone whisper widget scrolls its transcript — previously only the roster-embedded chat did,
+    // so the widget's history was unreachable once it overflowed
+    if (chatWidgetOpen && chatViewport && inRect(mouse, { x: chatViewport.x, y: chatViewport.y, w: chatViewport.w, h: chatViewport.h })) {
+        e.preventDefault();
+        chatScroll -= e.deltaY * 0.5;   // wheel up = back in time; clamped in the draw
+        return;
+    }
     if (rosterOpen) {
         e.preventDefault();
         // scroll the chat history when the pointer is over its viewport, else the roster list
         const cv = chatViewport;
-        if (cv && mouse.y >= cv.bodyTop && mouse.y <= cv.y + cv.h) chatScroll += e.deltaY * 0.5;
+        if (cv && mouse.y >= cv.bodyTop && mouse.y <= cv.y + cv.h) chatScroll -= e.deltaY * 0.5;
         else rosterScroll += e.deltaY * 0.5;
         return;
     }

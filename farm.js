@@ -2589,6 +2589,7 @@ export class World {
     #chatPayload(speaker, listener, ctx = {}) {
         const pr = this.project;
         return {
+            culture: this.culture,   // the orc voice filter keys off this server-side
             day: this.day,
             season: this.seasonName,
             weather: WEATHER_STATES[this.weather]?.label || this.weather,

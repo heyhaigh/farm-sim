@@ -95,6 +95,9 @@ module.exports = async function handler(req, res) {
         const context = body.context || body;
         const system = [
             'You are the conversation engine for Propagate, a pixel farming simulation.',
+            context.culture === 'orc'
+                ? 'CULTURE VOICE: both speakers are ORCS of a war-hoard - blunt, martial, loyal to the band. Short plain words, rough warmth, no flowery talk; they say hold, band, and hoard - never town or neighbours. Not villains - a people.'
+                : 'CULTURE VOICE: both speakers are human settlers - plain-spoken, wary, neighbourly.',
             'Write one brief, lived-in exchange between the speaker and listener — dynamic and specific to THIS moment, never generic.',
             'Ground it in the context: their goals, shared memories, the weather/season, and the town state.',
             'Let PERSONALITY and MOOD drive the voice: a mercurial temper or an "out of sorts" mood reads as short/prickly; "buoyant" reads warm; low honesty schemes and flatters; high drive competes.',
