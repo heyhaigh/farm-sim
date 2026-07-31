@@ -4359,7 +4359,7 @@ function foundNewTown(culture) {
 // Settings menu — New Town + music/SFX volume. Opened by the top-bar gear cog.
 // ---------------------------------------------------------------------------
 function drawSettings() {
-    const PW = Math.min(GW - 24, 240), PH = ADMIN_BOOTH ? 184 : 118;   // the booth rows only exist under ?admin=1
+    const PW = Math.min(GW - 24, 240), PH = ADMIN_BOOTH ? 184 : 100;   // the booth rows only exist under ?admin=1; coach line removed
     const PX = Math.floor((GW - PW) / 2), PY = Math.floor((GH - PH) / 2) - 6;
     ctx.fillStyle = 'rgba(6,7,11,0.72)'; ctx.fillRect(0, 18, GW, GH - 18);
     uiPanel(PX, PY, PW, PH);
@@ -4424,10 +4424,8 @@ function drawSettings() {
 
         // #Codex38 P2-5: the booth REFUSES to stage over a real raid — say so, instead of silently closing
         if (adminNote && performance.now() < adminNote.until) drawText(ctx, adminNote.text, IX, PY + 160, '#e0a850');
-        else drawText(ctx, 'ESC OR CLICK OUTSIDE TO CLOSE', IX, PY + 164, '#4a4f5c');
-    } else {
-        drawText(ctx, 'ESC OR CLICK OUTSIDE TO CLOSE', IX, PY + 98, '#4a4f5c');
     }
+    // (the "ESC OR CLICK OUTSIDE TO CLOSE" coach line is gone — owner call, the affordance is universal)
     settingsHits.panel = { x: PX, y: PY, w: PW, h: PH };
 }
 
@@ -5266,8 +5264,8 @@ function drawRoster() {
 // thought (farm.js conscienceCheck); this only renders the exchange + captures input.
 // ---------------------------------------------------------------------------
 
-const VERDICT_GLYPH = { HEED: '~', ALREADY: '=', BARGAIN: '>', DISMISS: '.', QUESTION: '?', DEFY: '!' };
-const VERDICT_COL   = { HEED: '#7dd069', ALREADY: '#7db0d0', BARGAIN: '#e8c860', DISMISS: '#8a8f9c', QUESTION: '#c8a0e0', DEFY: '#e0703c' };
+// (the verdict color/glyph alphabet is gone — the owner watched himself misread it as canned-vs-live on
+// launch night; if the designer can't decode a private alphabet, players never will. Replies are plain.)
 
 // the dropdown caret: a compact 2-row caret (the same shape as the "^" font glyph). `up` draws
 // it pointing up (dropdown OPEN); flipped vertically it points down (CLOSED) — one shape, mirrored.
@@ -5322,10 +5320,13 @@ function drawChatWidget() {
     CHAT_PANEL.x = x; CHAT_PANEL.y = y; CHAT_PANEL.w = w; CHAT_PANEL.h = h;
     ctx.fillStyle = 'rgba(8,9,13,0.93)'; ctx.fillRect(x, y, w, h);
     ctx.strokeStyle = '#3a3f4c'; ctx.lineWidth = 1; ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
-    drawChatIcon(x + 5, y + 3, true);
-    drawText(ctx, 'WHISPER', x + 15, y + 4, '#9a7fc0');
-    drawText(ctx, '_', x + w - 9, y + 3, '#c8ccd8');   // minimize back to the button
+    drawChatIcon(x + 5, y + 3, false);                 // white in the expanded state (owner call)
+    drawText(ctx, 'WHISPER', x + 15, y + 4, '#c8ccd8');
     CHAT_CLOSE.x = x + w - 12; CHAT_CLOSE.y = y; CHAT_CLOSE.w = 12; CHAT_CLOSE.h = 11;
+    // minimize: a hover plate so it reads as a BUTTON, not furniture
+    const minHot = mouse.x >= 0 && inRect(mouse, CHAT_CLOSE);
+    if (minHot) { ctx.fillStyle = 'rgba(255,255,255,0.12)'; ctx.fillRect(CHAT_CLOSE.x, CHAT_CLOSE.y + 1, CHAT_CLOSE.w - 1, CHAT_CLOSE.h - 2); }
+    drawText(ctx, '_', x + w - 9, y + 3, minHot ? '#ffffff' : '#c8ccd8');   // minimize back to the button
     drawConscienceChat(x, y + 12, w, h - 12);          // header([NAME v]) + transcript + input, sets the hit-rects
     if (chatDropdownOpen) drawChatDropdown(x, w, y + 12);
 }
@@ -5358,11 +5359,13 @@ function drawConscienceChat(x, y, w, h) {
     drawText(ctx, 'INSIDE THE HEAD OF', x + 6, hy, '#9a7fc0');
     const nm = f.sheet.name.split(' ')[0].toUpperCase();
     const nmX = x + 6 + textWidth('INSIDE THE HEAD OF ', 1);
-    drawText(ctx, nm, nmX, hy, '#e8ecf5');
-    // dropdown caret button
     const caretX = nmX + textWidth(nm + ' ', 1);
-    drawCaret(caretX, hy, chatDropdownOpen, '#7dd069');   // '^' open, same caret flipped for closed
     chatNameHit = { x0: nmX - 2, y0: hy - 2, x1: caretX + 8, y1: hy + 8 };
+    // name + caret hover as ONE shape — it is one control (the farmer picker), so it lights as one
+    const nameHot = mouse.x >= chatNameHit.x0 && mouse.x <= chatNameHit.x1 && mouse.y >= chatNameHit.y0 && mouse.y <= chatNameHit.y1;
+    if (nameHot) { ctx.fillStyle = 'rgba(255,255,255,0.10)'; ctx.fillRect(chatNameHit.x0, chatNameHit.y0, chatNameHit.x1 - chatNameHit.x0, chatNameHit.y1 - chatNameHit.y0); }
+    drawText(ctx, nm, nmX, hy, nameHot ? '#ffffff' : '#e8ecf5');
+    drawCaret(caretX, hy, chatDropdownOpen, nameHot ? '#ffffff' : '#7dd069');   // '^' open, same caret flipped for closed
     // stance, quietly, at the right
     drawText(ctx, c.stance.toUpperCase(), x + w - textWidth(c.stance, 1) - 6, hy, '#5a5f6c');
     ctx.fillStyle = '#171a22';
@@ -5380,10 +5383,9 @@ function drawConscienceChat(x, y, w, h) {
     }
     for (const e of c.log) {
         const isVoice = e.who === 'voice';
-        const col = isVoice ? '#c8b060' : (VERDICT_COL[e.verdict] || '#c8ccd8');
+        const col = isVoice ? '#c8b060' : '#c8ccd8';   // gold = your whispered thought, white = their reply
         const prefix = isVoice ? '> ' : '  ';
-        const glyph = (!isVoice && e.verdict && VERDICT_GLYPH[e.verdict]) ? ' ' + VERDICT_GLYPH[e.verdict] : '';
-        const wrapped = wrapLine(prefix + e.text + glyph, maxChars);
+        const wrapped = wrapLine(prefix + e.text, maxChars);
         wrapped.forEach((ln, i) => lines.push({ text: (i === 0 ? ln : '  ' + ln), col }));
     }
     if (chatThinking) lines.push({ text: '  ' + '.'.repeat(1 + (Math.floor(Date.now() / 300) % 3)), col: '#7dd069' });
@@ -5916,7 +5918,6 @@ function drawChronicle() {
         ctx.fillRect(PX + PW - 3, Math.floor(thumbY), 2, Math.floor(thumbH));
     }
 
-    drawText(ctx, selected ? "ONE RY'S STORY - CLICK A RY IN THE WORLD TO SWITCH" : 'CLICK A BEAT TO FOLLOW THAT RY - SCROLL FOR MORE', PX + 6, PY + PH - 8, '#4a4f5c');
 }
 
 // End-of-day RECAP card REMOVED — the day's beats now surface live through the Moments/callout banners and

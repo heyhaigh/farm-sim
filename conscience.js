@@ -83,6 +83,7 @@ function characterView(f) {
     const journal = f.journal.filter(m => m.strength > 0.6).slice(-4).map(m => m.text);
     return {
         name: shortNameOf(f),
+        culture: f.world.culture,   // the orc voice filter keys off this server-side
         trade: s.archetype,
         specialty: f.plot ? f.specialty() : null,
         background: s.story && s.story.bg,
