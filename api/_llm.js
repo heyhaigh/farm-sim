@@ -25,9 +25,18 @@ const BUDGET_MAX = 90;
 const BREAKER_TRIP = 4;
 const BREAKER_COOLDOWN_MS = 20_000;   // cardless free tier: recover fast — a 60s all-off window after one TPM burst read as the feature dying mid-conversation
 
-const _budget = { windowStart: 0, count: 0 };
-const _breaker = { fails: 0, openUntil: 0 };
-const _formatSkip = new Set();   // #stickyformat `${model}|${format}` proven unsupported — skip forever (process lifetime)
+// #hotreload server.mjs deletes api/* from the require cache ON EVERY REQUEST (a dev convenience that
+// shipped to prod), so this module's state was reborn per call — which silently killed the budget, the
+// breaker, AND the sticky-format memory: the owner's Groq logs showed 400+200 pairs continuing straight
+// through a session that was supposedly fixed. State that must outlive a reload lives on globalThis.
+const _S = globalThis.__ryFarmsLlmState || (globalThis.__ryFarmsLlmState = {
+    budget: { windowStart: 0, count: 0 },
+    breaker: { fails: 0, openUntil: 0 },
+    formatSkip: new Set(),   // #stickyformat `${model}|${format}` proven unsupported — skip for the PROCESS lifetime, for real this time
+});
+const _budget = _S.budget;
+const _breaker = _S.breaker;
+const _formatSkip = _S.formatSkip;
 
 // Resolve the mode from config. FAIL-CLOSED: anything not explicitly local-or-opted-into-paid is 'off'.
 function resolveLLM() {
