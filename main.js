@@ -247,6 +247,7 @@ const MEM_PREV = { x: 0, y: 0, w: 0, h: 0 };       // memories pager arrows, set
 const MEM_NEXT = { x: 0, y: 0, w: 0, h: 0 };
 const FOLLOW_PREV = { x: 0, y: 0, w: 0, h: 0 };    // FOLLOWING-banner ◄ cycle arrow, set in drawUI's banner
 const FOLLOW_NEXT = { x: 0, y: 0, w: 0, h: 0 };    // FOLLOWING-banner ► cycle arrow, set in drawUI's banner
+const AWAY_BAR = { x: 0, y: 0, w: 0, h: 0 };       // #away-banner strip under the top bar; hover = homecoming ETA
 let SHEET_TABS = [];                               // tab-bar hit-rects {x,y,w,h,tab}, rebuilt in drawSheet
 let sheetMemPage = 0;                              // current MEMORIES page (0 = newest)
 let sheetLastSel = null;                           // reset pager when the selection changes
@@ -3897,6 +3898,44 @@ function drawUI() {
     ctx.fillStyle = '#20242f';
     ctx.fillRect(0, 18, GW, 1);
 
+    // #away-banner — a persistent, screen-wide strip under the top bar while ANY soul is off-field with
+    // an expedition (war party / search party). The departure beat is easy to miss (another tab, a
+    // distracted minute), and an off-field rider is undrawable — this keeps the absence visible for the
+    // whole ride, in both directions. Click = trail the first rider (the follow banner then narrates).
+    AWAY_BAR.w = 0;
+    {
+        const away = world.farmers.filter(f => f.onSortie);
+        if (away.length && !startScreen) {
+            const cs = world.counterSortie, sp = world.searchParty;
+            const isWar = !!(cs && cs.party && away.some(f => cs.party.includes(f.sheet.seed)));
+            const isSearch = !isWar && !!(sp && sp.party && away.some(f => sp.party.includes(f.sheet.seed)));
+            const names = away.slice(0, 3).map(f => f.sheet.name.split(' ')[0].toUpperCase()).join(', ') + (away.length > 3 ? ' +' + (away.length - 3) : '');
+            const lbl = isWar ? `THE WAR PARTY RIDES - ${names} ${away.length === 1 ? 'IS' : 'ARE'} FAR FROM ${world.culture === 'orc' ? 'THE HOLD' : 'HOME'}`
+                : isSearch ? `THE SEARCH PARTY IS OUT - ${names}`
+                : `RIDES BEYOND THE FOG - ${names} PUSH${away.length === 1 ? 'ES' : ''} BEYOND THE FOG OF WAR`;
+            const pulse = 0.75 + 0.25 * Math.sin(performance.now() / 500);
+            ctx.fillStyle = 'rgba(52,18,16,0.85)'; ctx.fillRect(0, 19, GW, 10);            // ember-dark strip
+            ctx.fillStyle = `rgba(224,120,60,${(0.5 * pulse).toFixed(3)})`; ctx.fillRect(0, 28, GW, 1);   // pulsing ember rule
+            drawText(ctx, lbl, Math.floor((GW - textWidth(lbl)) / 2), 21, '#f0be96');
+            AWAY_BAR.x = 0; AWAY_BAR.y = 19; AWAY_BAR.w = GW; AWAY_BAR.h = 10;
+            // hover ETA (owner call: no click affordance — the strip informs, it doesn't navigate):
+            // returnAt is the expedition's monotonic homecoming once the away phase begins; before that
+            // (still mustering at the rally) `days` is the planned length of the road.
+            if (inRect(mouse, AWAY_BAR)) {
+                const exp = isWar ? cs : isSearch ? sp : (cs || sp);
+                let eta = 'THE ROAD IS UNCHARTED';
+                if (exp && exp.returnAt > 0) {
+                    const d = (exp.returnAt - world.time) / (DAY_LENGTH + NIGHT_LENGTH);
+                    eta = d <= 0.05 ? 'BACK ANY MOMENT' : d < 1 ? 'BACK WITHIN A DAY' : `BACK IN ~${Math.ceil(d)} DAYS`;
+                } else if (exp && exp.days) eta = exp.days > 1 ? `${exp.days} DAYS' RIDE AHEAD` : "A DAY'S RIDE AHEAD";
+                const tw2 = textWidth(eta), tx2 = Math.floor((GW - tw2) / 2);
+                ctx.fillStyle = 'rgba(12,14,22,0.92)'; ctx.fillRect(tx2 - 5, 31, tw2 + 10, 11);
+                ctx.fillStyle = 'rgba(224,120,60,0.6)'; ctx.fillRect(tx2 - 5, 31, 2, 11);
+                drawText(ctx, eta, tx2, 34, '#f0be96');
+            }
+        }
+    }
+
     // town name sits in a container that grows to fit its characters; the day/time info starts
     // AFTER it (dynamic, not a fixed x) so a long name like "SEDGEMARCH" never overlaps the clock
     const nameStr = (world.name || 'PROPAGATE').toUpperCase();
@@ -5987,7 +6026,9 @@ function drawCallouts() {
     // a full-screen modal panel is ON TOP — don't draw the toast over it (the timer above still advances, so it
     // expires behind the modal instead of popping stale when it closes).
     if (worldMapOpen || rosterOpen || chronOpen || boardOpen || settingsOpen) { CALLOUT_CLOSE.w = 0; return; }
-    const y = (RECAP_CARD.w ? RECAP_CARD.y + RECAP_CARD.h + 4 : 22);
+    // #away-banner — toasts STACK BELOW the persistent away strip instead of landing on top of it
+    // (owner call); the recap card, when present, still wins the lower anchor.
+    const y = Math.max(RECAP_CARD.w ? RECAP_CARD.y + RECAP_CARD.h + 4 : 0, AWAY_BAR.w ? AWAY_BAR.y + AWAY_BAR.h + 2 : 0, 22);
     {
         const c = activeCallout;
         const age = nowMs - c.shownAt;
@@ -7800,8 +7841,13 @@ function frame(now) {
         const ty = GH / 2 - isoY(raidFocus.i, raidFocus.j) - 12;
         if (!mouse.dragging) { cam.x += (tx - cam.x) * 0.16; cam.y += (ty - cam.y) * 0.16; }
     } else if (followMode && followTarget && world.farmers.includes(followTarget) && !mouse.dragging) {
-        const tx = GW / 2 - isoX(followTarget.pos.i, followTarget.pos.j);
-        const ty = GH / 2 - isoY(followTarget.pos.i, followTarget.pos.j) - 12;
+        // #follow-away — an on-sortie rider is OFF-FIELD (the draw pass skips them); their pos froze at
+        // the departure edge, so trailing it parks the camera on empty ground ("my farmer disappeared",
+        // owner-reported with the rally banner in frame). Hold on their homestead until they ride home —
+        // the FOLLOWING banner names where they've gone, and the return resumes the trail seamlessly.
+        const at = followTarget.onSortie ? world.houseDoor(followTarget.plot) : followTarget.pos;
+        const tx = GW / 2 - isoX(at.i, at.j);
+        const ty = GH / 2 - isoY(at.i, at.j) - 12;
         cam.x += (tx - cam.x) * 0.14; cam.y += (ty - cam.y) * 0.14;
     } else if (followMode && (!followTarget || !world.farmers.includes(followTarget))) {
         followMode = false; followTarget = null;   // nothing left to follow
@@ -7897,6 +7943,9 @@ function frame(now) {
     // a quiet indicator while the camera is trailing someone (F, or the sheet's crosshair, toggles it)
     FOLLOW_PREV.w = FOLLOW_NEXT.w = 0;   // no banner, no clickable arrows (cleared each frame)
     if (!startScreen && followMode && followTarget && world.farmers.includes(followTarget) && !rosterOpen && !chronOpen && !boardOpen) {
+        // #follow-away — the label stays TERSE by owner call (a wordy status here read as clutter): the
+        // persistent away strip under the top bar carries the story of an off-field rider, and the camera
+        // holds on their homestead meanwhile (the fix for "my farmer disappeared").
         const lbl = `FOLLOWING ${followTarget.sheet.name.split(' ')[0].toUpperCase()} - F TO STOP`;
         // sit the plate near the bottom edge (the log bar is gone) as a floating element
         const tw = textWidth(lbl), bx = Math.floor((GW - tw) / 2), boxTop = GH - 16, cy = GH - 11;
