@@ -1095,48 +1095,133 @@ export function makeScaffold() {
 // The TOOLSHED — a weathered-plank lean-to with a mono-pitch shingle roof, an open
 // recessed bay of hanging tools (rake / hoe / spade) and a closed plank door. A town
 // build. Exemplar: Harvest Moon outbuildings. (§2 farm-building class, §1b timber)
-export function makeToolshed() {
+// TOOLSHED — the town work shed on the shared TOP-DOWN grammar (§S.2b/§S.2d): a
+// LEAN-TO — one single-pitch shingled slab riding HIGH on the sunward left — over
+// plank walls that follow the eave, an OPEN BAY with the workbench + hanging tools
+// (the shed's charm) and a closed plank door. Roof + seasons route through the shared
+// helpers (shingleTile / roofLightPass / snowCourses / eaveIcicles / leafDrift) so the
+// treatment matches the mill/barn/coop set. NO ground/seat shadow (§S.2) — buildings
+// seat on their base AO. Cached per season; pure fillRect.
+const _toolshed = {};
+export function makeToolshed(season = 'SUMMER') {
+    if (_toolshed[season]) return _toolshed[season];
     const [c, ctx] = makeCanvas(48, 44);
-    const W = RAMPS.WOOD, S = RAMPS.STONE, OL = RAMPS.OUTLINE.brown;
-    const bx0 = 8, bx1 = 40, wy0 = 16, wy1 = 40;
-    groundShadow(ctx, 24, 41, 21, 5, 0.3);
-    // weathered plank walls + form self-shadow (drawWall)
-    drawWall(ctx, bx0, bx1, wy0, wy1, { base: W[2], hi: W[3], lo: W[1], ol: OL }, 6);
-    ctx.fillStyle = shade(W[1], 1.1); ctx.fillRect(bx0 - 1, wy1 - 2, bx1 - bx0 + 3, 1);   // sill relief
-    ctx.fillStyle = shade(OL, 0.85); ctx.fillRect(bx0 - 1, wy1 + 1, bx1 - bx0 + 3, 1);     // ground AO
-    // MONO-PITCH (lean-to) roof — slopes up to the LEFT (light side); shingled slab with
-    // an overhang. Per-column top y descends left→right; drawn as stepped plank rows.
-    const rL = bx0 - 3, rR = bx1 + 3, topL = 6, topR = 16, th = 5;
-    for (let x = rL; x <= rR; x++) {
-        const ty = Math.round(topL + (topR - topL) * (x - rL) / (rR - rL));
-        ctx.fillStyle = OL; ctx.fillRect(x, ty - 1, 1, 1);                       // top outline edge
-        for (let d = 0; d < th; d++) {
-            const col = d === 0 ? shade(W[3], 1.06) : d < 2 ? W[2] : d < th - 1 ? W[1] : shade(W[0], 0.9);
-            ctx.fillStyle = col; ctx.fillRect(x, ty + d, 1, 1);
-        }
-        if ((x - rL) % 5 === 2) { ctx.fillStyle = shade(W[0], 0.85); ctx.fillRect(x, ty + 1, 1, th - 1); }   // shingle seams
-        ctx.fillStyle = shade(W[0], 0.7); ctx.fillRect(x, ty + th, 1, 1);        // eave underside shadow
+    const winter = season === 'WINTER', fall = season === 'FALL';
+    const W = fall ? warmRamp(RAMPS.WOOD, 12, 1.04, 1.05) : RAMPS.WOOD;
+    const P = fall ? warmRamp(RAMPS.PLANK, 12, 1.05, 1.05) : RAMPS.PLANK;
+    const S = RAMPS.STONE;
+    const OLwood = outlineFor(W[1]), OLwall = outlineFor(P[1]);
+    const SNOW = { deep: '#ffffff', mid: '#eef4f4', thin: '#dbe8ec' };
+
+    // ---- GEOMETRY — mono-pitch: the plane sits HIGH on the sunward left, dips right ----
+    const RX0 = 3, RX1 = 44, DEPTH = 16;
+    const topAt = (x) => 4 + Math.round((x - RX0) * 3 / (RX1 - RX0));
+    const botAt = (x) => topAt(x) + DEPTH;
+    const WX0 = 6, WX1 = 41, WY1 = 39;
+
+    // ---- WALL — planks following the eave, lit-left per the committed light (§S.1.4) ----
+    for (let x = WX0; x <= WX1; x++) {
+        const yTop = botAt(x) + 1, h = WY1 - yTop + 1;
+        if (h <= 0) continue;
+        let col = P[2];
+        if (x <= WX0 + 2) col = shade(P[2], 1.14);
+        else if (x >= WX1 - 5) col = P[1];
+        if (x >= WX1 - 1) col = P[0];
+        ctx.fillStyle = col; ctx.fillRect(x, yTop, 1, h);
     }
-    ctx.fillStyle = shade(OL, 0.8); ctx.fillRect(bx0, wy0, bx1 - bx0 + 1, 1);    // eave AO band on wall
-    // open BAY (left) — a recessed dark interior with a back wall + hanging tools
-    recess(ctx, 11, 22, 13, 17, '#1a1611', OL);
-    ctx.fillStyle = shade(W[0], 1.2); ctx.fillRect(12, 23, 11, 1);               // faint back-wall top light
-    // rake: shaft + tines
-    ctx.fillStyle = W[3]; ctx.fillRect(14, 24, 1, 13); ctx.fillStyle = shade(W[3], 0.85); ctx.fillRect(15, 24, 1, 13);
-    ctx.fillStyle = S[3]; ctx.fillRect(12, 36, 5, 1); for (let t = 12; t <= 16; t += 2) ctx.fillRect(t, 37, 1, 2);
-    // hoe: shaft + angled head
-    ctx.fillStyle = W[3]; ctx.fillRect(19, 24, 1, 12); ctx.fillStyle = shade(W[3], 0.85); ctx.fillRect(20, 25, 1, 11);
-    ctx.fillStyle = S[4]; ctx.fillRect(18, 35, 1, 1); ctx.fillStyle = S[3]; ctx.fillRect(17, 36, 3, 2);
-    // spade leaning in the corner: shaft + blade
-    ctx.fillStyle = W[2]; ctx.fillRect(22, 25, 1, 9);
-    ctx.fillStyle = S[3]; ctx.fillRect(21, 34, 3, 3); ctx.fillStyle = shade(S[4], 1.1); ctx.fillRect(21, 34, 1, 1);
-    // closed plank DOOR (right) with hinges + handle
-    recess(ctx, 27, 24, 9, 15, '#20190f', OL);
-    ctx.fillStyle = W[2]; ctx.fillRect(28, 25, 7, 13);
-    ctx.fillStyle = W[3]; ctx.fillRect(28, 25, 1, 13);                            // lit board
-    ctx.fillStyle = shade(W[0], 0.9); ctx.fillRect(30, 25, 1, 13); ctx.fillRect(33, 25, 1, 13);   // plank seams
-    ctx.fillStyle = '#2a2620'; ctx.fillRect(28, 27, 2, 1); ctx.fillRect(28, 35, 2, 1);            // hinges
-    ctx.fillStyle = shade(S[4], 1.05); ctx.fillRect(34, 31, 1, 1);                // handle
+    for (const sx of [25, 39]) {                       // plank seams — PROPORTIONAL (§S.2)
+        const yTop = botAt(sx) + 3, hgt = WY1 - 2 - yTop;
+        if (hgt <= 0) continue;
+        ctx.fillStyle = TEX_DARK;  ctx.fillRect(sx, yTop, 1, hgt);
+        ctx.fillStyle = TEX_LIGHT; ctx.fillRect(sx + 1, yTop, 1, hgt);
+    }
+    // base, graded along the sun (§S.2)
+    for (let x = WX0 - 1; x <= WX1 + 1; x++) {
+        const t = (x - (WX0 - 1)) / ((WX1 + 1) - (WX0 - 1));
+        const base = shade(W[1], 1.07 - t * 0.15);
+        ctx.fillStyle = base;              ctx.fillRect(x, 40, 1, 3);
+        ctx.fillStyle = shade(base, 1.10); ctx.fillRect(x, 40, 1, 1);
+    }
+    ctx.fillStyle = OLwood; ctx.fillRect(WX0, 43, WX1 - WX0 + 1, 1);
+    ctx.fillStyle = OLwall;
+    ctx.fillRect(WX0 - 1, botAt(WX0) + 1, 1, WY1 - botAt(WX0));
+    ctx.fillRect(WX1 + 1, botAt(WX1) + 1, 1, WY1 - botAt(WX1));
+
+    // ---- OPEN BAY (left) — dark interior, workbench + tools: the shed's charm ----
+    { const bx = 9, bw = 14, byT = 26, byB = 39;
+      ctx.fillStyle = OLwood;    ctx.fillRect(bx - 1, byT - 1, bw + 2, byB - byT + 2);
+      ctx.fillStyle = '#1c1510'; ctx.fillRect(bx, byT, bw, byB - byT + 1);
+      ctx.fillStyle = shade(W[3], 1.10); ctx.fillRect(bx - 1, byT - 1, bw + 2, 1);      // lit lintel
+      ctx.fillStyle = shade('#1c1510', 1.9); ctx.fillRect(bx + 1, byT + 1, bw - 2, 1);  // back-wall top light
+      // hanging RAKE on the back wall: shaft + tine bar
+      ctx.fillStyle = W[2]; ctx.fillRect(bx + 2, byT + 2, 1, 8);
+      ctx.fillStyle = S[3]; ctx.fillRect(bx + 1, byT + 10, 4, 1);
+      ctx.fillStyle = S[2]; for (let t = 0; t < 4; t += 2) ctx.fillRect(bx + 1 + t, byT + 11, 1, 1);
+      // leaning SPADE
+      ctx.fillStyle = W[2]; ctx.fillRect(bx + 5, byT + 3, 1, 8);
+      ctx.fillStyle = S[3]; ctx.fillRect(bx + 4, byT + 11, 3, 2);
+      ctx.fillStyle = shade(S[4], 1.1); ctx.fillRect(bx + 4, byT + 11, 1, 1);           // lit blade corner
+      // WORKBENCH (right half): lit plank top on legs, a mallet resting on it
+      const wbx = bx + 7, wby = byT + 7, wbw = 6;
+      ctx.fillStyle = W[2]; ctx.fillRect(wbx, wby, wbw, 2);
+      ctx.fillStyle = shade(W[4], 1.10); ctx.fillRect(wbx, wby, wbw, 1);                // lit bench top
+      ctx.fillStyle = TEX_DARK; ctx.fillRect(wbx, wby + 1, wbw, 1);
+      ctx.fillStyle = W[1]; ctx.fillRect(wbx, wby + 2, 1, byB - wby - 2); ctx.fillRect(wbx + wbw - 1, wby + 2, 1, byB - wby - 2);
+      ctx.fillStyle = W[3]; ctx.fillRect(wbx + 1, wby - 2, 1, 2);                       // mallet handle
+      ctx.fillStyle = W[1]; ctx.fillRect(wbx + 2, wby - 2, 2, 2);                       // mallet head
+      ctx.fillStyle = shade(W[2], 1.1); ctx.fillRect(wbx + 2, wby - 2, 2, 1);
+      ctx.fillStyle = 'rgba(0,0,0,0.18)'; ctx.fillRect(bx, byB, bw, 1);                 // shadow in the mouth
+    }
+
+    // ---- closed plank DOOR (right) — reaches the ground (§S.2) ----
+    { const dx = 28, dw = 9, dyT = 27;
+      ctx.fillStyle = shade(W[3], 1.08); ctx.fillRect(dx - 1, dyT - 1, dw + 2, 1);      // lit lintel
+      ctx.fillStyle = OLwood; ctx.fillRect(dx - 1, dyT, dw + 2, 40 - dyT);
+      ctx.fillStyle = W[1]; ctx.fillRect(dx, dyT + 1, dw, 39 - dyT);
+      ctx.fillStyle = shade(W[2], 1.08); ctx.fillRect(dx, dyT + 1, 1, 39 - dyT);        // lit board
+      ctx.fillStyle = TEX_DARK; ctx.fillRect(dx + 3, dyT + 1, 1, 39 - dyT); ctx.fillRect(dx + 6, dyT + 1, 1, 39 - dyT);
+      ctx.fillStyle = '#2a2620'; ctx.fillRect(dx, dyT + 3, 2, 1); ctx.fillRect(dx, 36, 2, 1);   // hinges
+      ctx.fillStyle = shade(S[4], 1.05); ctx.fillRect(dx + dw - 2, 32, 1, 1);           // handle
+      ctx.fillStyle = 'rgba(0,0,0,0.18)'; ctx.fillRect(dx, 40, dw, 1);                  // threshold contact
+    }
+
+    // ---- LEAN-TO ROOF — one shingled plane that tips to the sky (§S.2b/§S.2d) ----
+    for (let x = RX0; x <= RX1; x++) {
+        const t0 = topAt(x), b0 = botAt(x);
+        let firstY = -1;
+        for (let y = t0; y <= b0; y++) {
+            if (Math.min(x - RX0, RX1 - x) < overhangInset(y)) continue;   // scalloped rakes only
+            let col = W[3];
+            const f = (y - t0) / Math.max(1, b0 - t0);
+            if (f < 0.12) col = shade(col, 1.08);
+            else if (f > 0.85) col = shade(col, 0.88);
+            const sh = shingleTile(col, x, y - t0, true);
+            col = roofLightPass(sh.col, sh.tcol, sh.rr, (x - RX0) / (RX1 - RX0), f,
+                                { strokeA: 1.10, strokeB: 1.04, lift: 1.05, fallX: 0.10, fallY: 0.06 });
+            if (y === b0) col = shade(W[1], 0.8);                          // dark eave fascia
+            if (firstY < 0) firstY = y;
+            ctx.fillStyle = col; ctx.fillRect(x, y, 1, 1);
+        }
+        if (firstY >= 0) { ctx.fillStyle = OLwood; ctx.fillRect(x, firstY - 1, 1, 1); }
+    }
+    // graded soffit shadow where the eave overhangs the wall (§S.2c)
+    for (let x = WX0; x <= WX1; x++) {
+        ctx.fillStyle = 'rgba(0,0,0,0.22)'; ctx.fillRect(x, botAt(x) + 1, 1, 1);
+        ctx.fillStyle = 'rgba(0,0,0,0.11)'; ctx.fillRect(x, botAt(x) + 2, 1, 1);
+    }
+
+    // ---- SEASONS (§6b0) — inherited from the shared helpers ----
+    if (winter) {
+        for (let x = RX0; x <= RX1; x++) {
+            snowCourses(ctx, x, topAt(x), botAt(x), { frac: 0.50, taper: 0.45, bright: true, tone: SNOW });
+            eaveIcicles(ctx, x, botAt(x), SNOW);
+        }
+        ctx.fillStyle = SNOW.mid; ctx.fillRect(8, 24, 16, 1);              // bay-lintel ledge
+        ctx.fillStyle = SNOW.mid; ctx.fillRect(27, 25, 11, 1);             // door-lintel ledge
+    }
+    if (fall) leafDrift(ctx, RX0, RX1, topAt, botAt, (x) => x >= RX0 && x <= RX1);
+
+    _toolshed[season] = c;
     return c;
 }
 
@@ -1805,16 +1890,31 @@ export function makeMonumentIso(kind = 'human', season = 'SUMMER') {
 //   3 Sworded Stele (taller stone + planted blade + laurel — defenders wounded)
 //   4 Cenotaph (twin/stepped + broken shield & helm + scorched earth — heavy losses)
 //   5 War Barrow (mound + obelisk cluster + crossed shattered weapon + blackened ground)
-// Tiny-sprite discipline throughout: STONE ramp, lit-left/shadow-right, ground AO, reads
-// at 1×. Each tier cached once. All BASE-anchored (bottom row = ground) so main.js can
-// drop any tier on the same spot. (§1b)
+// Tiny-sprite discipline throughout: STONE ramp, lit-left/shadow-right per the committed
+// light (§S.1.4), the fixed SEAT shadow (§S.2 shadow law — one flat tone, ≤1 tile),
+// hash2d-seeded proportional stone grain (§S.2), and §6b seasons: roofless stone, so
+// WINTER snow sits on up-facing LEDGES only and FALL drifts a few leaves at the foot.
+// Reads at 1×. Cached per (tier, season). All BASE-anchored (bottom row = ground) so
+// main.js can drop any tier on the same spot — canvas sizes are part of that contract
+// and are unchanged. (§1b)
 const _monuments = {};
-export function makeMonument(tier = 2) {
+export function makeMonument(tier = 2, season = 'SUMMER') {
     tier = Math.max(1, Math.min(5, tier | 0));
-    if (_monuments[tier]) return _monuments[tier];
+    const _k = tier + ':' + season;
+    if (_monuments[_k]) return _monuments[_k];
     const S = RAMPS.STONE, G = RAMPS.GRAIN, F = RAMPS.FOLIAGE, W = RAMPS.WOOD, OL = RAMPS.OUTLINE.warm;
+    const SNOW = { deep: '#ffffff', mid: '#eef4f4', thin: '#dbe8ec' };
     const steel = '#8a94a2', steelHi = '#b6c0cc', steelLo = '#5a626e';   // muted weapon metal
     let c, ctx;
+    // §S.2 proportional stone GRAIN — hash2d-seeded washes over the big faces, relative
+    // to whatever is under them (never absolute grays across a lit/shadow boundary)
+    const grain = (x0, y0, w, h) => {
+        for (let gy = y0; gy < y0 + h; gy++) for (let gx = x0; gx < x0 + w; gx++) {
+            const r = hash2d(gx + tier * 31, gy);
+            if (r > 0.93) { ctx.fillStyle = TEX_DARK; ctx.fillRect(gx, gy, 1, 1); }
+            else if (r < 0.06) { ctx.fillStyle = TEX_LIGHT; ctx.fillRect(gx, gy, 1, 1); }
+        }
+    };
     // small lit-left / shadow-right stone block (top bevel + base AO)
     const block = (x, y, w, h, idx) => {
         ctx.fillStyle = OL; ctx.fillRect(x - 1, y, w + 2, h + 1);
@@ -1827,14 +1927,14 @@ export function makeMonument(tier = 2) {
 
     if (tier === 1) {                 // CAIRN — a low pile of rough field stones
         [c, ctx] = makeCanvas(12, 14);
-        groundShadow(ctx, 6, 12, 5, 2, 0.3);
+        seatShadow(ctx, { cx: 6, cy: 12, rx: 5, ry: 2 }, { alpha: 0.3 });   // §S.2 fixed seat shadow
         block(2, 8, 5, 4, 2); block(6, 9, 4, 3, 1); block(4, 5, 4, 4, 3); block(5, 2, 3, 3, 2);
         ctx.fillStyle = F[3]; ctx.fillRect(3, 11, 1, 1); ctx.fillRect(8, 10, 1, 1);   // lichen flecks
 
     } else if (tier === 2) {          // MARKER STONE — obelisk + gold plaque (the original sprite)
         [c, ctx] = makeCanvas(12, 21);
         const cx = 6;
-        groundShadow(ctx, cx, 19, 6, 2, 0.32);
+        seatShadow(ctx, { cx, cy: 19, rx: 6, ry: 2 }, { alpha: 0.3 });      // §S.2 fixed seat shadow
         ctx.fillStyle = OL;  ctx.fillRect(1, 14, 10, 5);
         ctx.fillStyle = S[2]; ctx.fillRect(1, 15, 10, 3);
         ctx.fillStyle = S[3]; ctx.fillRect(1, 15, 10, 1);
@@ -1848,6 +1948,7 @@ export function makeMonument(tier = 2) {
         ctx.fillStyle = S[1]; ctx.fillRect(sx0 + sw - 1, sTop, 1, sBot - sTop);
         ctx.fillStyle = shade(S[2], 1.08); ctx.fillRect(sx0 + 1, sTop + 1, 3, 3);
         ctx.fillStyle = shade(S[2], 0.9);  ctx.fillRect(sx0 + 2, sTop + 8, 3, 3);
+        grain(sx0 + 1, sTop + 1, sw - 2, sBot - sTop - 2);
         ctx.fillStyle = S[0]; ctx.fillRect(sx0, sTop + 6, sw, 1);
         ctx.fillStyle = shade(S[3], 1.08); ctx.fillRect(sx0, sTop + 7, sw, 1);
         ctx.fillStyle = OL;  ctx.fillRect(cx - 3, 1, 6, 1);
@@ -1865,7 +1966,7 @@ export function makeMonument(tier = 2) {
     } else if (tier === 3) {          // SWORDED STELE — taller stone + a blade planted point-down + laurel
         [c, ctx] = makeCanvas(12, 24);
         const cx = 6;
-        groundShadow(ctx, cx, 22, 6, 2, 0.32);
+        seatShadow(ctx, { cx, cy: 22, rx: 6, ry: 2 }, { alpha: 0.3 });      // §S.2 fixed seat shadow
         ctx.fillStyle = OL;  ctx.fillRect(1, 18, 10, 4);              // plinth
         ctx.fillStyle = S[2]; ctx.fillRect(1, 19, 10, 2);
         ctx.fillStyle = S[3]; ctx.fillRect(1, 19, 10, 1);
@@ -1878,6 +1979,7 @@ export function makeMonument(tier = 2) {
         ctx.fillStyle = S[1]; ctx.fillRect(sx0 + sw - 1, sTop, 1, sBot - sTop);
         ctx.fillStyle = S[0]; ctx.fillRect(sx0, sTop + 7, sw, 1);     // seam
         ctx.fillStyle = shade(S[2], 1.08); ctx.fillRect(sx0 + 1, sTop + 1, 3, 3);
+        grain(sx0 + 1, sTop + 1, sw - 2, sBot - sTop - 2);
         ctx.fillStyle = OL;  ctx.fillRect(cx - 2, 1, 4, 2);           // rounded top
         ctx.fillStyle = S[3]; ctx.fillRect(cx - 2, 2, 4, 1);
         ctx.fillStyle = shade(S[4], 1.1); ctx.fillRect(cx - 1, 1, 2, 1);
@@ -1898,7 +2000,7 @@ export function makeMonument(tier = 2) {
         const cx = 7;
         ctx.fillStyle = 'rgba(30,22,16,0.5)';                         // scorched-earth speckle
         for (const [x, y] of [[1, 19], [3, 20], [11, 19], [12, 20], [5, 21], [9, 20], [2, 18]]) ctx.fillRect(x, y, 1, 1);
-        groundShadow(ctx, cx, 19, 7, 2, 0.32);
+        seatShadow(ctx, { cx, cy: 19, rx: 7, ry: 2 }, { alpha: 0.3 });      // §S.2 fixed seat shadow
         block(1, 15, 12, 3, 1); block(2, 12, 10, 3, 2);              // stepped base (2 courses)
         block(3, 4, 3, 9, 3); block(8, 6, 3, 7, 2);                  // twin pillars (tall + short)
         ctx.fillStyle = OL; ctx.fillRect(3, 2, 8, 1);                // lintel
@@ -1919,7 +2021,7 @@ export function makeMonument(tier = 2) {
         const cx = 8;
         ctx.fillStyle = 'rgba(24,18,14,0.55)';                       // blackened ground
         for (const [x, y] of [[1, 21], [3, 22], [5, 21], [7, 22], [9, 21], [11, 22], [13, 21], [14, 22], [2, 20], [12, 20]]) ctx.fillRect(x, y, 1, 1);
-        groundShadow(ctx, cx, 21, 8, 2, 0.34);
+        seatShadow(ctx, { cx, cy: 21, rx: 8, ry: 2 }, { alpha: 0.3 });      // §S.2 fixed seat shadow
         for (let dy = 0; dy < 5; dy++) { const hw = 7 - dy; ctx.fillStyle = W[1]; ctx.fillRect(cx - hw, 16 + dy, hw * 2, 1); }   // earth barrow mound
         ctx.fillStyle = W[2]; ctx.fillRect(cx - 6, 16, 5, 1);        // lit mound crest
         ctx.fillStyle = W[0]; ctx.fillRect(cx - 7, 20, 14, 1);       // mound base shadow
@@ -1927,6 +2029,7 @@ export function makeMonument(tier = 2) {
         block(1, 13, 2, 4, 1); block(13, 14, 2, 3, 1); block(4, 12, 2, 3, 2);   // small markers per life lost
         block(cx - 2, 3, 4, 14, 2);                                  // central obelisk
         ctx.fillStyle = shade(S[4], 1.05); ctx.fillRect(cx - 2, 3, 1, 14);
+        grain(cx - 1, 4, 2, 12);
         ctx.fillStyle = OL; ctx.fillRect(cx - 2, 1, 4, 2); ctx.fillStyle = S[3]; ctx.fillRect(cx - 1, 1, 2, 1);   // cap
         // crossed SHATTERED weapons (broken swords, an X with a gap in the middle)
         ctx.fillStyle = steel;
@@ -1935,35 +2038,93 @@ export function makeMonument(tier = 2) {
         ctx.fillStyle = G[1]; ctx.fillRect(cx - 2, 12, 4, 2); ctx.fillStyle = G[3]; ctx.fillRect(cx - 2, 12, 4, 1);   // plaque
         ctx.fillStyle = '#fffdf6'; ctx.fillRect(cx - 2, 12, 1, 1);
     }
-    _monuments[tier] = c;
+    // ---- SEASONS (§6b) — roofless stone: WINTER snow sits on up-facing LEDGES only
+    // (no roof planes anywhere on the set); FALL drifts a few leaves at the foot.
+    if (season === 'WINTER') {
+        const ledges = tier === 1 ? [[5, 2, 3], [4, 5, 2], [2, 8, 2], [7, 9, 3]]
+            : tier === 2 ? [[4, 0, 4], [1, 15, 2], [9, 15, 2]]
+            : tier === 3 ? [[4, 1, 4], [1, 19, 2], [9, 19, 2]]
+            : tier === 4 ? [[3, 2, 8], [1, 15, 1], [12, 15, 1], [2, 12, 1], [6, 12, 2], [11, 12, 1]]
+            : [[6, 1, 4], [2, 16, 4], [1, 13, 2], [13, 14, 2], [4, 12, 2]];
+        for (const [lx, ly, lw] of ledges) {
+            ctx.fillStyle = SNOW.mid;  ctx.fillRect(lx, ly, lw, 1);
+            ctx.fillStyle = SNOW.deep; ctx.fillRect(lx, ly, Math.max(1, lw - 1), 1);
+        }
+    }
+    if (season === 'FALL') {
+        for (let k = 0; k < 4; k++) {
+            if (hash2d(k * 7 + tier, 51) < 0.4) continue;
+            const lx = 1 + Math.floor(hash2d(k, 53 + tier) * (c.width - 2));
+            const ly = c.height - 1 - Math.floor(hash2d(k + 3, 57 + tier) * 2);
+            ctx.fillStyle = LEAF_PALETTE[(lx + ly + k) % LEAF_PALETTE.length];
+            ctx.fillRect(lx, ly, 1, 1);
+        }
+    }
+    _monuments[_k] = c;
     return c;
 }
 
-// A Dutch windmill: an ashlar stone tower + a timber cap, with FOUR lattice sails that
-// truly ROTATE across the 4 frames (22.5°/frame; the 4-fold symmetry makes the cycle
-// loop seamlessly at ~9fps — see main.js). Sails are plotted pixel-by-pixel along the
-// rotated arm (no ctx.rotate/arc → no anti-aliasing). frame = 0..3. (§7, §P11)
-export function makeWindmill(frame = 0) {
+// A Dutch windmill on the shared TOP-DOWN grammar: the tapered ASHLAR stone tower (kin
+// to the mill's masonry) under a small shingled timber CAP slab (§S.2b), with FOUR
+// lattice sails that truly ROTATE across the 4 frames (22.5°/frame; the 4-fold symmetry
+// makes the cycle loop seamlessly at ~9fps — see main.js). SAILS KEPT VERBATIM — the
+// loved screen-facing animation, plotted pixel-by-pixel along the rotated arm (no
+// ctx.rotate/arc → no anti-aliasing). frame = 0..3; optional season (defaults SUMMER so
+// existing callers are unchanged). Cached per (frame, season). (§7, §P11)
+const _windmillTD = {};
+export function makeWindmill(frame = 0, season = 'SUMMER') {
+    const _k = (frame | 0) + ':' + season;
+    if (_windmillTD[_k]) return _windmillTD[_k];
     const [c, ctx] = makeCanvas(44, 64);
-    const S = RAMPS.STONE, W = RAMPS.WOOD, OL = RAMPS.OUTLINE.warm;
+    const winter = season === 'WINTER', fall = season === 'FALL';
+    const S = RAMPS.STONE, OL = RAMPS.OUTLINE.warm;
+    const W = fall ? warmRamp(RAMPS.WOOD, 12, 1.04, 1.05) : RAMPS.WOOD;
+    const SNOW = { deep: '#ffffff', mid: '#eef4f4', thin: '#dbe8ec' };
     const cx = 22, hubY = 20;
-    groundShadow(ctx, 22, 61, 15, 4, 0.3);
+    // NO ground/seat shadow (§S.2) — the ashlar body carries its own base AO.
     // stone tower, gently tapered (wider at the base)
-    ashlarBody(ctx, cx, 26, 62, 9, 13, S, OL);
+    ashlarBody(ctx, cx, 27, 62, 9, 13, S, OL);
     // door + window recesses
     ctx.fillStyle = S[4]; ctx.fillRect(cx - 4, 50, 8, 1);            // door lintel
     recess(ctx, cx - 3, 51, 6, 11, '#171310', S[0]);
     ctx.fillStyle = W[1]; ctx.fillRect(cx - 2, 52, 4, 10);          // plank door
-    ctx.fillStyle = shade(W[0], 0.9); ctx.fillRect(cx, 52, 1, 10);
+    ctx.fillStyle = shade(W[2], 1.08); ctx.fillRect(cx - 2, 52, 1, 10);   // lit board
+    ctx.fillStyle = TEX_DARK; ctx.fillRect(cx, 52, 1, 10);                // seam — proportional (§S.2)
     recess(ctx, cx - 2, 36, 4, 4, '#161a20', S[0]);                 // small window
-    ctx.fillStyle = RAMPS.GLASS[1]; ctx.fillRect(cx - 2, 36, 4, 4);
-    ctx.fillStyle = shade(RAMPS.GLASS[2], 1.2); ctx.fillRect(cx - 2, 36, 1, 1);
-    // timber CAP (the rotating boat-cap that carries the sails) — overhangs the tower top
-    ctx.fillStyle = OL; ctx.fillRect(cx - 9, 21, 18, 6);
-    ctx.fillStyle = W[2]; ctx.fillRect(cx - 8, 22, 16, 4);
-    ctx.fillStyle = W[3]; ctx.fillRect(cx - 8, 22, 16, 1);          // lit ridge
-    ctx.fillStyle = shade(W[1], 0.85); ctx.fillRect(cx - 8, 25, 16, 1);   // under-cap shadow (eave AO on tower)
-    ctx.fillStyle = W[1]; ctx.fillRect(cx - 9, 19, 3, 3);          // finial stub
+    ctx.fillStyle = winter ? '#a9c4ce' : RAMPS.GLASS[1]; ctx.fillRect(cx - 2, 36, 4, 4);
+    ctx.fillStyle = winter ? '#e8f4f8' : shade(RAMPS.GLASS[2], 1.2); ctx.fillRect(cx - 2, 36, 1, 1);
+    // ---- timber CAP — a small shingled slab roof (§S.2b), overhanging the tower top ----
+    const CP0 = cx - 11, CP1 = cx + 10, cTop = 21, cBot = 26;
+    for (let x = CP0; x <= CP1; x++) {
+        let firstY = -1;
+        for (let y = cTop; y <= cBot; y++) {
+            if (Math.min(x - CP0, CP1 - x) < overhangInset(y)) continue;   // §S.2d scalloped ends only
+            let col = W[3];
+            const f = (y - cTop) / (cBot - cTop);
+            if (f < 0.15) col = shade(col, 1.08);
+            const sh = shingleTile(col, x, y - cTop, true, { courseH: 3, tileW: 4 });
+            col = roofLightPass(sh.col, sh.tcol, sh.rr, (x - CP0) / (CP1 - CP0), f,
+                                { strokeA: 1.10, strokeB: 1.04, lift: 1.05, fallX: 0.10, fallY: 0.06 });
+            if (y === cBot) col = shade(W[1], 0.8);                        // under-cap fascia
+            if (firstY < 0) firstY = y;
+            ctx.fillStyle = col; ctx.fillRect(x, y, 1, 1);
+        }
+        if (firstY >= 0) { ctx.fillStyle = outlineFor(W[1]); ctx.fillRect(x, firstY - 1, 1, 1); }
+    }
+    // graded soffit where the cap overhangs the tower (§S.2c)
+    ctx.fillStyle = 'rgba(0,0,0,0.30)'; ctx.fillRect(cx - 9, 27, 19, 1);
+    ctx.fillStyle = 'rgba(0,0,0,0.16)'; ctx.fillRect(cx - 9, 28, 19, 1);
+
+    // ---- SEASONS (§6b0) on the cap — BEFORE the sails, which stay clean (they turn) ----
+    if (winter) {
+        for (let x = CP0; x <= CP1; x++) {
+            snowCourses(ctx, x, cTop, cBot, { frac: 0.34, taper: 0.35, bright: true, tone: SNOW });
+            eaveIcicles(ctx, x, cBot, SNOW);
+        }
+        ctx.fillStyle = SNOW.mid; ctx.fillRect(cx - 4, 49, 8, 1);          // door-lintel ledge
+        ctx.fillStyle = SNOW.mid; ctx.fillRect(cx - 3, 35, 6, 1);          // window-lintel ledge
+    }
+    if (fall) leafDrift(ctx, CP0, CP1, () => cTop, () => cBot, (x) => x >= CP0 && x <= CP1);
     // ---- four lattice SAILS, rotated for this frame (plotted, not transformed) ----
     const cloth = '#e8e0d0', spar = W[1], sparHi = W[3];
     const len = 18, baseAng = frame * (Math.PI / 8);   // 22.5° per frame
@@ -1992,42 +2153,122 @@ export function makeWindmill(frame = 0) {
     ctx.fillStyle = W[0]; ctx.fillRect(cx - 2, hubY - 2, 4, 4);
     ctx.fillStyle = shade(W[2], 1.1); ctx.fillRect(cx - 2, hubY - 2, 2, 1);
     ctx.fillStyle = '#2a2620'; ctx.fillRect(cx - 1, hubY - 1, 2, 2);
+    _windmillTD[_k] = c;
     return c;
 }
 
-// The lightning-ward TOWER — a tapered ashlar obelisk with a carved rune band, a
-// battlemented crown, a steel rod and a glowing amber orb finial (soft halo). A
-// town-plaza landmark. Exemplar: Chrono Trigger / Terranigma stonework. (§2, §1b)
-export function makeTower() {
+// The lightning-ward TOWER on the shared TOP-DOWN grammar — an ashlar WATCH tower,
+// kin to the mill's masonry: tapered ashlarBody, a railed LOOKOUT PLATFORM (a light
+// top deck over a dark front face, the value gap doing the volume), a small peaked
+// shingle CAP through the roof laws (§S.2b), the steel rod and the glowing amber orb
+// finial. main.js overlays the pulsing glow anchored at sprite (14,3) — the orb must
+// stay there and the canvas must stay 28×56. Optional season; cached per season;
+// pure fillRect. Exemplar: Chrono Trigger / Terranigma stonework. (§2, §1b)
+const _tower = {};
+export function makeTower(season = 'SUMMER') {
+    if (_tower[season]) return _tower[season];
     const [c, ctx] = makeCanvas(28, 56);
-    const S = RAMPS.STONE, W = RAMPS.WOOD, G = RAMPS.GRAIN, OL = RAMPS.OUTLINE.warm;
+    const winter = season === 'WINTER', fall = season === 'FALL';
+    const S = RAMPS.STONE, G = RAMPS.GRAIN, OL = RAMPS.OUTLINE.warm;
+    const W = fall ? warmRamp(RAMPS.WOOD, 12, 1.04, 1.05) : RAMPS.WOOD;
+    const R = fall ? warmRamp(RAMPS.ROOF_RED, 16, 1.04, 1.06) : RAMPS.ROOF_RED;
+    const SNOW = { deep: '#ffffff', mid: '#eef4f4', thin: '#dbe8ec' };
     const cx = 14;
-    groundShadow(ctx, 14, 53, 11, 4, 0.3);
-    // tapered stone obelisk
-    ashlarBody(ctx, cx, 16, 54, 5, 8, S, OL);
-    // battlemented crown (crenellations) over the top course
-    ctx.fillStyle = OL; ctx.fillRect(cx - 6, 13, 12, 4);
-    ctx.fillStyle = S[3]; ctx.fillRect(cx - 5, 14, 10, 3);
-    ctx.fillStyle = shade(S[4], 1.1); ctx.fillRect(cx - 5, 14, 10, 1);        // lit merlon tops
-    ctx.fillStyle = S[1]; ctx.fillRect(cx - 3, 14, 2, 2); ctx.fillRect(cx + 1, 14, 2, 2);   // crenel gaps (shadowed)
-    // carved rune band mid-shaft — a recessed groove with lit glyph flecks
-    ctx.fillStyle = shade(S[0], 0.95); ctx.fillRect(cx - 6, 32, 12, 3);
-    ctx.fillStyle = shade(S[4], 1.15); ctx.fillRect(cx - 6, 32, 12, 1);       // lit top lip of the groove
-    ctx.fillStyle = G[4]; ctx.fillRect(cx - 4, 33, 1, 1); ctx.fillRect(cx - 1, 33, 1, 1); ctx.fillRect(cx + 3, 33, 1, 1);   // glyph glints
-    // arched ward-door recess at the base
-    ctx.fillStyle = S[4]; ctx.fillRect(cx - 3, 44, 6, 1);
-    recess(ctx, cx - 2, 45, 4, 9, '#161310', S[0]);
-    // steel rod up to the finial
-    ctx.fillStyle = OL; ctx.fillRect(cx - 1, 4, 3, 10);
-    ctx.fillStyle = S[4]; ctx.fillRect(cx - 1, 4, 1, 10);                     // lit rod edge
-    ctx.fillStyle = S[1]; ctx.fillRect(cx + 1, 4, 1, 10);                     // shaded rod edge
-    // glowing amber orb — soft translucent halo (2 layers) then the solid bead + glint
+    // NO ground/seat shadow (§S.2) — the ashlar body carries its own base AO.
+    // ---- tapered ASHLAR shaft (kin to the mill/windmill masonry) ----
+    ashlarBody(ctx, cx, 28, 54, 5, 8, S, OL);
+    // small window mid-shaft + arched ward-door at the base
+    recess(ctx, cx - 2, 35, 4, 4, '#161a20', S[0]);
+    ctx.fillStyle = winter ? '#a9c4ce' : RAMPS.GLASS[1]; ctx.fillRect(cx - 2, 35, 4, 4);
+    ctx.fillStyle = winter ? '#e8f4f8' : shade(RAMPS.GLASS[2], 1.2); ctx.fillRect(cx - 2, 35, 1, 1);
+    ctx.fillStyle = S[4]; ctx.fillRect(cx - 3, 45, 6, 1);                     // door lintel
+    recess(ctx, cx - 2, 46, 4, 8, '#161310', S[0]);
+    // ---- LOOKOUT PLATFORM — a top-down deck: light top plane over a dark front face,
+    // overhanging the shaft, with railing posts at the open corners ----
+    { const px0 = 4, px1 = 23, topY = 22, midY = 24, botY = 25;
+      const OLc = outlineFor(W[1]);
+      ctx.fillStyle = OLc; ctx.fillRect(px0 - 1, topY - 1, (px1 - px0) + 3, (botY - topY) + 3);
+      for (let x = px0; x <= px1; x++) {                                       // DECK, tipped to the sky
+          const t = (x - px0) / (px1 - px0);
+          for (let y = topY; y < midY; y++) { ctx.fillStyle = shade(W[4], 1.16 - t * 0.12); ctx.fillRect(x, y, 1, 1); }
+      }
+      ctx.fillStyle = shade(W[4], 1.22); ctx.fillRect(px0, topY, (px1 - px0) + 1, 1);   // lit deck rim
+      for (let x = px0; x <= px1; x++) {                                       // FRONT FACE, markedly darker
+          const litC = (x <= ((px0 + px1) >> 1)) === (LIGHT.x < 0);
+          for (let y = midY; y <= botY; y++) { ctx.fillStyle = litC ? W[1] : shade(W[0], 0.94); ctx.fillRect(x, y, 1, 1); }
+      }
+      ctx.fillStyle = 'rgba(0,0,0,0.34)'; ctx.fillRect(px0, midY, (px1 - px0) + 1, 1);  // plane break in shadow
+      ctx.fillStyle = 'rgba(0,0,0,0.30)'; ctx.fillRect(cx - 5, botY + 1, 11, 1);        // soffit on the shaft
+      ctx.fillStyle = 'rgba(0,0,0,0.16)'; ctx.fillRect(cx - 5, botY + 2, 11, 1);
+      // RAILING — corner posts + hand-rail stubs, outside the cap footprint
+      for (const rx of [px0, px1]) {
+          ctx.fillStyle = W[2]; ctx.fillRect(rx, topY - 4, 1, 4);
+          ctx.fillStyle = shade(W[4], 1.10); ctx.fillRect(rx, topY - 4, 1, 1);          // lit post cap
+      }
+      ctx.fillStyle = W[1]; ctx.fillRect(px0, topY - 3, 3, 1); ctx.fillRect(px1 - 2, topY - 3, 3, 1);   // hand-rail stubs
+    }
+    // ---- peaked CAP — a small top-down pyramid cap through the shingle laws (§S.2b).
+    // The EAVE is one STRAIGHT line seated on the deck (a V-shaped eave left daylight
+    // between cap and platform); only the crown is peaked. Rakes stay clean — at this
+    // size a scalloped edge reads as damage (§S.2d). ----
+    const CXL = 13, CXR = 14, HALF = 7, CAP_EAVE = 21;
+    const dOf = (x) => (x <= CXL ? CXL - x : x - CXR);
+    const capTop = (d) => 12 + Math.floor(d * 0.45);
+    const litLeft = LIGHT.x < 0;
+    const onCap = (x) => dOf(x) <= HALF;
+    const OLroof = outlineFor(R[1]);
+    for (let x = cx - HALF - 1; x <= cx + HALF; x++) {
+        if (!onCap(x)) continue;
+        const d = dOf(x), t0 = capTop(d), b0 = CAP_EAVE;
+        const lit = (x <= CXL) === litLeft;
+        let firstY = -1;
+        for (let y = t0; y <= b0; y++) {
+            let col = lit ? R[3] : R[1];
+            const f = (y - t0) / Math.max(1, b0 - t0);
+            if (f < 0.15) col = shade(col, lit ? 1.08 : 1.03);
+            else if (f > 0.85) col = shade(col, 0.86);
+            const sh = shingleTile(col, x, y - t0, lit, { courseH: 3, tileW: 5 });
+            col = roofLightPass(sh.col, sh.tcol, sh.rr, d / HALF, f,
+                                { strokeA: lit ? 1.06 : 1.03, strokeB: lit ? 1.02 : 1.01,
+                                  lift: lit ? 1.04 : 1.0, fallX: lit ? 0.08 : 0.05, fallY: 0.06 });
+            if (y === b0) col = lit ? shade(R[1], 0.8) : R[0];                 // eave fascia
+            if (firstY < 0) firstY = y;
+            ctx.fillStyle = col; ctx.fillRect(x, y, 1, 1);
+        }
+        if (firstY >= 0) { ctx.fillStyle = OLroof; ctx.fillRect(x, firstY - 1, 1, 1); }
+    }
+    // apex crease + cap outline
+    const capRidge = capTop(0);
+    ctx.fillStyle = shade(R[4], 1.08); ctx.fillRect(litLeft ? CXL : CXR, capRidge, 1, 8);
+    ctx.fillStyle = R[0];              ctx.fillRect(litLeft ? CXR : CXL, capRidge, 1, 9);
+    ctx.fillStyle = OLroof;            ctx.fillRect(CXL, capRidge - 1, 2, 1);
+
+    // ---- SEASONS (§6b0) — inherited from the shared helpers ----
+    if (winter) {
+        for (let x = cx - HALF - 1; x <= cx + HALF; x++) {
+            if (!onCap(x)) continue;
+            const d = dOf(x), lit = (x <= CXL) === litLeft;
+            snowCourses(ctx, x, capTop(d), CAP_EAVE, { frac: lit ? 0.52 : 0.42, bright: lit, tone: SNOW });
+        }
+        ctx.fillStyle = SNOW.deep; ctx.fillRect(CXL, capRidge, 2, 2);
+        ctx.fillStyle = SNOW.mid;  ctx.fillRect(4, 22, 20, 1);                 // snow lying on the deck rim
+        for (let x = 4; x <= 23; x++) eaveIcicles(ctx, x, 25, SNOW);           // icicles at the PLATFORM edge (§6b0)
+        ctx.fillStyle = SNOW.mid;  ctx.fillRect(cx - 3, 34, 6, 1);             // window-lintel ledge
+    }
+    if (fall) leafDrift(ctx, cx - HALF - 1, cx + HALF, (x) => capTop(dOf(x)), () => CAP_EAVE, onCap);
+
+    // ---- steel ROD up to the finial (after the seasons, so it stays clean) ----
+    ctx.fillStyle = OL;   ctx.fillRect(cx - 1, 6, 3, 7);
+    ctx.fillStyle = S[4]; ctx.fillRect(cx - 1, 6, 1, 7);                      // lit rod edge
+    ctx.fillStyle = S[1]; ctx.fillRect(cx + 1, 6, 1, 7);                      // shaded rod edge
+    // ---- glowing amber ORB — halo + bead + glint (main.js pulses this at (14,3)) ----
     ctx.fillStyle = 'rgba(240,200,80,0.16)'; ctx.fillRect(cx - 5, 0, 12, 10);
     ctx.fillStyle = 'rgba(248,214,110,0.28)'; ctx.fillRect(cx - 3, 0, 8, 7);
     ctx.fillStyle = G[3]; ctx.fillRect(cx - 3, 1, 6, 5); ctx.fillRect(cx - 2, 0, 4, 7);   // orb body
     ctx.fillStyle = G[5]; ctx.fillRect(cx - 2, 1, 3, 2);                      // hot core
     ctx.fillStyle = '#fffdf6'; ctx.fillRect(cx - 2, 1, 1, 1);                 // spec glint
     ctx.fillStyle = shade(G[2], 0.9); ctx.fillRect(cx - 2, 5, 4, 1);          // orb underside
+    _tower[season] = c;
     return c;
 }
 
