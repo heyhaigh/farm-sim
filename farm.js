@@ -3134,11 +3134,22 @@ export class World {
             // restore the fence target to the rect's true perimeter, and leave a breadcrumb. Root cause still
             // under investigation; this makes any affected town whole on its next load.
             if (plot.sited && plot.built.level >= 1 && plot.cells.size === 0 && plot.w > 0 && plot.h > 0) {
-                for (let i = plot.x; i < plot.x + plot.w; i++) for (let j = plot.y; j < plot.y + plot.h; j++) plot.cells.add(i + ',' + j);
-                plot.fenceTarget = 2 * (plot.w + plot.h) - 4;
+                // Codex #69-1 — heal to what claimHomestead would have STAKED (the centred INITIAL_PLOT
+                // starter claim), not the whole reservation: filling plot.w x plot.h granted a corrupted
+                // starter a full 13x13 estate and 48 "built" posts for its 8. An estate that had genuinely
+                // expanded before corrupting re-grows through the ordinary milestones; undergranting is the
+                // safe direction (the cells are gone — the starter footprint is the only stake we can prove).
+                // Codex #70-1 — per-AXIS offsets: expanded plots are naturally non-square (#recomputeBounds
+                // recalculates w and h independently after annexation), and reusing the width's offset for j
+                // healed a 17x9 plot 36 cells outside its own saved rectangle.
+                const span = Math.min(World.INITIAL_PLOT, plot.w, plot.h);
+                const offI = (plot.w - span) >> 1, offJ = (plot.h - span) >> 1;
+                for (let j = plot.y + offJ; j < plot.y + offJ + span; j++)
+                    for (let i = plot.x + offI; i < plot.x + offI + span; i++) plot.cells.add(i + ',' + j);
+                plot.fenceTarget = 4 * span - 4;
                 plot.fencePosts = plot.built.fence ? plot.fenceTarget : Math.min(plot.fencePosts, plot.fenceTarget);
                 plot.rev++;
-                console.warn(`ry-farms: #cellheal rebuilt an empty home plot footprint (${plot.w}x${plot.h} at ${plot.x},${plot.y})`);
+                console.warn(`ry-farms: #cellheal rebuilt an empty home plot as its ${span}x${span} starter claim (at ${plot.x},${plot.y})`);
             }
             if (pd.padGrid) plot.padGrid = { ...pd.padGrid };        // #paddock the lattice this farm laid out on
             plot.facilities = pd.facilities.map(fd => {
@@ -3548,10 +3559,58 @@ export class World {
             this.addChronicle('town', `${this.name} downs its tools and gathers at ${where} to weigh who should lead.`,
                 null, null, '#f0d060', { tier: 'callout', tone: 'triumph', why: 'the town assembles to deliberate' });
         } else if (r.foundingPhase === 'gathering' && this.clock >= DAY_LENGTH) {   // dusk: the ballot is read
-            r.foundingPhase = 'done';
+            r.foundingPhase = 'done'; this._voteScene = null;
             this.#resolveFounding();
+        } else if (r.foundingPhase === 'gathering') {
+            this.#tickVoteDay();   // #vote-voice the candidates make their case (display-only)
         }
     }
+
+    // #vote-voice — the REAL day-10 gathering finally gets the rehearsal's speech scene: once enough of the
+    // town has arrived, the candidates for both offices step up one by one on the speech floor and make their
+    // case — the LLM-authored stump (world._electionScript, fetched by congregation.js at the gathering edge)
+    // when it landed, else the seeded STUMP_LINES pool. Display-only BY CONSTRUCTION: candidate slates are
+    // pure reads, line picks are hashes, output is say() bubbles + the display floor — no rng draws, no digest
+    // fields, so a watched and a dormant vote day stay byte-identical. Transient (_voteScene/_electionScript
+    // are not serialized): a mid-scene reload simply falls back to the procedural stumps.
+    #tickVoteDay() {
+        const vs = this._voteScene || (this._voteScene = { queue: null, spoken: 0, nextAt: 0, t0: this.clock });
+        if (this.clock < vs.nextAt) return;
+        if (!vs.queue) {   // arm once a quorum has walked in (mirrors the rehearsal's gather gate) — counted
+            // against the farmers who CAN come (a sick-season vote day with half the town abed must still get
+            // its speeches), with the rehearsal's timeout as the backstop.
+            const able = this.farmers.filter(f => !f.downed && f.health !== 'sick');
+            const near = this.farmers.filter(f => f.state === 'assemble').length;
+            if (near < Math.max(2, Math.ceil(able.length * 0.6)) && this.clock - vs.t0 < 30) { vs.nextAt = this.clock + 0.5; return; }
+            vs.queue = [...new Set([...this.#electionCandidates('manager'), ...this.#electionCandidates('watch')])];
+        }
+        if (vs.spoken >= vs.queue.length) return;   // all cases made — the ambient deliberation carries to dusk
+        if (!this.floorFree()) { vs.nextAt = this.clock + 0.4; return; }
+        const f = this.farmers.find(x => x.sheet.seed === vs.queue[vs.spoken]);
+        vs.spoken++;
+        // skip only the abed (downed/sick) — matching the rehearsal. A candidate still WALKING in speaks
+        // en route (requiring 'assemble' at the exact turn moment silently muted healthy candidates).
+        if (!f || f.downed || f.health === 'sick') { vs.nextAt = this.clock + 0.3; return; }
+        const scripted = Array.isArray(this._electionScript) ? this._electionScript.find(t => t.seed === f.sheet.seed && !t.used) : null;
+        if (scripted) scripted.used = true;
+        let line;
+        if (scripted) line = scripted.text;
+        else {   // seeded pick, probing past lines already used this scene (three same-pitch stumps in a row read as a bug)
+            const pool = this.culture === 'orc' ? STUMP_LINES.orc : STUMP_LINES.human;
+            let i = hashString('stump:' + f.sheet.seed + ':real:' + this.year) % pool.length;
+            vs.used = vs.used || new Set();
+            let tries = 0; while (vs.used.has(i) && tries++ < pool.length) i = (i + 1) % pool.length;
+            vs.used.add(i);
+            line = pool[i];
+        }
+        f.say(line, '#e8d060');
+        this.holdFloor(Math.max(2.8, line.length * 0.055));
+        vs.nextAt = this.clock + 1.0;
+    }
+
+    // PUBLIC — the candidate slates, for the client's election-scene request (congregation.js). Pure reads
+    // (#electionCandidates draws no rng), safe to call from the display layer any tick.
+    electionSlates() { return { manager: this.#electionCandidates('manager'), watch: this.#electionCandidates('watch') }; }
     // True while the town is assembled and deliberating (drives the farmers' walk-to-square behaviour).
     foundingGathering() {
         // #admin an election REHEARSAL borrows the day-10 gathering behavior wholesale: farmers converge on
@@ -10900,8 +10959,15 @@ export class Farmer {
     // as founders reach and claim their land, rather than all pre-outlined from the first frame.
     #seekHomestead() {
         const w = this.world, list = this.scoutList;
-        if (!list || !list.length) {   // safety — no itinerary, stake the claim if we have one
-            if (this.claim) w.claimHomestead(this); else this.plot.sited = true; return;
+        if (!list || !list.length) {
+            // #scout-resume — THE cells:0 ROOT CAUSE (the naked-tipi corruption, seed 1344037703): scoutList/
+            // claim are transient, so a save+reload MID-SCOUT (the whole town, on day 1) resumed every founder
+            // here with neither — and the old `else this.plot.sited = true` marked the plot sited WITHOUT ever
+            // staking cells. From there the house built and the fence "completed" at fencePostTarget's
+            // empty-ring floor of 8 posts: the exact 8/8+cells:0 signature. claimHomestead needs NO claim —
+            // it stakes the reserved rect (which IS serialized) — so a resumed founder simply stakes here,
+            // skipping only the scenic itinerary. (#cellheal in the load path remains the net for old saves.)
+            w.claimHomestead(this); return;
         }
         const stop = list[Math.min(this.scoutIdx, list.length - 1)];
         if (Math.abs(this.pos.i - (stop.i + 0.5)) + Math.abs(this.pos.j - (stop.j + 0.5)) >= 2.5) {
@@ -12651,6 +12717,24 @@ export class Farmer {
         return spot ? { i: spot.i + 0.5, j: spot.j + 0.5 } : null;
     }
     #goTo(i, j, then) {
+        // #chop-side — when the walk's purpose is WORKING a blocked resource tile (tree/stump/rock),
+        // pre-pick the stand tile instead of letting findPath stop on whichever adjacent tile the route
+        // happened to arrive from (the source of axemen buried behind their own canopy). Preference:
+        // the two camera-facing south faces (larger i+j — the worker draws IN FRONT of the trunk),
+        // nearer-first between them, then the north pair as fallback; no open face at all falls through
+        // to the old blocked-goal behaviour. Deterministic: geometry + the farmer's own position only.
+        if (then === 'chop' || then === 'break' || then === 'mine') {
+            const ti = Math.floor(i), tj = Math.floor(j), tt = this.world.get(ti, tj);
+            // trees/stumps are WALKABLE (only rock is pathBlocked) — the old behaviour was to stand ON
+            // the trunk tile, which is precisely the buried-in-canopy read being fixed
+            if (tt === T.TREE || tt === T.STUMP || this.world.pathBlocked(ti, tj)) {
+                const dist = c => Math.abs(c[0] + 0.5 - this.pos.i) + Math.abs(c[1] + 0.5 - this.pos.j);
+                const cands = [[ti + 1, tj], [ti, tj + 1], [ti - 1, tj], [ti, tj - 1]]
+                    .sort((a, b) => ((b[0] + b[1]) - (a[0] + a[1])) || (dist(a) - dist(b)) || (a[0] - b[0]));
+                const open = cands.find(c => !this.world.pathBlocked(c[0], c[1]) && this.world.get(c[0], c[1]) !== T.TREE);
+                if (open) { i = open[0] + 0.5; j = open[1] + 0.5; }
+            }
+        }
         const tiles = this.world.findPath(this.pos, { i, j });
         if (tiles === null) { this.path = null; this.state = 'decide'; return false; }
         let waypoints = null;

@@ -104,6 +104,10 @@ async function classify(body) {
         names.length ? `Town people (match target case-insensitively to one of these first names): ${names.join(', ')}.` : '',
         `tone MUST be one of: ${TONES.join(', ')}. suggest = a nudge to act; observe = a neutral remark; press = insistent / repeated / demanding; praise = encouragement; meta = talking ABOUT the voice/thought itself.`,
         'If the person named for a visit is not in the town list, use kind "none".',
+        // #classify-examples — the 8B kept mapping plainly actionable thoughts to none ("go chop some wood").
+        // Definitions alone don\'t land at this size; examples do.
+        'Examples (thought -> kind): "go chop some wood" -> chop. "those fields look thirsty" -> water. "you should get some sleep" -> rest. "put something in the ground" -> plant. "go see what is past the ridge" -> explore. "your home could use another room" -> build. "meat would be good tonight" -> hunt. "swap some goods with a neighbour" -> trade. "someone should stand guard tonight" -> watch. "nice work today" -> none.',
+        'A clear action verb or need that maps to a kind ALWAYS beats none; use none only when no kind fits at all.',
         'Return JSON only.',
     ].filter(Boolean).join('\n');
     const out = await callLLM({

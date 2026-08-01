@@ -125,10 +125,15 @@ const BASELINE = {
     // sprite twitching; the sibling of the V2 sleep<->walk flicker). Behavioural: early roofless nights now
     // hold rest through the night, so every seed's day-2+ energy/chore trajectory moves. Measured: worst
     // per-farmer rest-exit count over 3 days fell 822 -> 11. same-twice held all seeds.
-    20260706: '856cfecb',
-    42: '7fa06f3d',
-    7: '11748a8c',
-    3: 'ed0dd2b5',
+    // re-pinned 2026-07-31 for #chop-side: a walk whose purpose is working a tree/stump/rock now pre-picks
+    // its stand tile (camera-facing south faces first, nearer-first, then the north pair; deterministic
+    // geometry + own position) instead of stopping ON the walkable trunk tile or wherever findPath's route
+    // arrived — measured 129/129 chop stands on the camera-facing side (was 0, all ON the trunk). Every
+    // wood/ore trip's end tile moves, so all four seeds drift. same-twice held all seeds.
+    20260706: '9dd911d6',
+    42: '09a7130d',
+    7: '0b30e9d5',
+    3: '8d271013',
 };
 
 function boot(seed, culture) {

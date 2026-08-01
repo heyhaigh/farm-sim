@@ -100,7 +100,37 @@ async function generate(body) {
     return normalize(out, names);
 }
 
-function normalize(raw, names) {
+// #vote-voice — the day-10 STUMP SPEECHES: each candidate makes their one case to the assembled town.
+// Same display-only contract as the founding conversation; the client falls back to the authored
+// STUMP_LINES pool on any failure.
+async function generateElection(body) {
+    const orc = body.culture === 'orc';
+    const cands = (Array.isArray(body.candidates) ? body.candidates : []).slice(0, 8);
+    const names = cands.map(c => c.name).filter(Boolean);
+    if (!names.length) throw new Error('no candidates');
+    const post = orc ? 'the war-post' : 'the town well';
+    const offices = orc ? 'WARCHIEF (the manager) and the WATCH (the guard)' : 'MANAGER and the WATCH';
+    const system = [
+        `You write the STUMP SPEECHES of a founding election in PROPAGATE, a pixel farming sim. After ten days of shared watches, the whole ${orc ? 'warband' : 'town'} has downed tools and gathered at ${post} to choose its first officers: ${offices}. Each CANDIDATE steps up once and makes their case.`,
+        'Rules:',
+        '- EVERY candidate speaks EXACTLY once, in the order given.',
+        '- Each speech is 1 to 2 short sentences, under ~22 words total, first person, addressed to the assembled crowd. Always complete sentences.',
+        '- speaker MUST be exactly one of the candidate names given (match spelling).',
+        '- Ground each speech in who they ARE (trade, personality, dream, what they were grown from) and the office they stand for. Distinct voices - a rival sounds nothing like a peacemaker. No two speeches share a shape.',
+        '- No empty promises of specific outcomes; they pitch CHARACTER and intent, the way real stump speeches do.',
+        orc ? '- These are orcs of a war-hoard: short, blunt, physical sentences - the hold, the band, iron, meat. Not villains - a people.' : '- These are human settlers: plain-spoken, wary, neighbourly.',
+        '- Plain ASCII only. No markdown, no em dashes (use " - "), straight quotes, no emojis, no stage directions, no narration, no modern/technological words.',
+        'Return JSON only: { "script": [ { "speaker": "<name>", "line": "<their speech>" }, ... ] }.',
+    ].join('\n');
+    const out = await callLLM({
+        system,
+        user: JSON.stringify({ culture: orc ? 'orc' : 'human', candidates: cands }),
+        schema: scriptSchema, schemaName: 'ry_farms_congregation', maxTokens: 700, temperature: 0.8,
+    });
+    return normalize(out, names, 2);
+}
+
+function normalize(raw, names, minTurns = 4) {
     const lower = new Map(names.map(n => [n.toLowerCase(), n]));
     const script = [];
     for (const t of (raw && Array.isArray(raw.script) ? raw.script : [])) {
@@ -109,14 +139,16 @@ function normalize(raw, names) {
         if (speaker && line && line.length > 1) script.push({ speaker, line });
         if (script.length >= 16) break;
     }
-    if (script.length < 4) throw new Error('script too short');
+    if (script.length < minTurns) throw new Error('script too short');
     // #Codex29 P1 — COVERAGE: a script that only voices a couple of the founders isn't an ensemble conversation.
     // Require it to name a healthy fraction of the cast, else reject so the client falls back to the sim director's
     // authored pools (which cover every founder). The director ALSO guarantees coverage at runtime, so this is
     // defense-in-depth against a lopsided model answer, not the sole safeguard.
+    // (#vote-voice: the election scene tolerates partial coverage — the sim director voices any candidate the
+    // script skipped from the authored stump pool per-candidate, so minTurns doubles as the coverage floor.)
     const distinct = new Set(script.map(t => t.speaker)).size;
-    const need = Math.min(names.length, Math.max(4, Math.ceil(names.length * 0.6)));
-    if (distinct < need) throw new Error(`script covers only ${distinct}/${names.length} founders (need ${need})`);
+    const need = Math.min(names.length, Math.max(minTurns, minTurns >= 4 ? Math.ceil(names.length * 0.6) : minTurns));
+    if (distinct < need) throw new Error(`script covers only ${distinct}/${names.length} speakers (need ${need})`);
     return { script };
 }
 
@@ -126,7 +158,7 @@ module.exports = async function handler(req, res) {
     if (typeof fetch !== 'function') return send(res, 501, { fallback: true, error: 'fetch unavailable' });
     try {
         const body = await parseBody(req);
-        return send(res, 200, await generate(body));
+        return send(res, 200, await (body.scene === 'election' ? generateElection(body) : generate(body)));
     } catch (err) {
         return send(res, 500, { fallback: true, error: err?.message || 'congregation generation failed' });
     }

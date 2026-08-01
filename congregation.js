@@ -25,6 +25,61 @@ function founderView(f) {
     };
 }
 
+// #vote-voice — the DAY-10 ELECTION SCENE. When the real founding gathering opens (roles.foundingPhase ===
+// 'gathering', never a rehearsal), the candidate slates (pure reads via world.electionSlates()) are sent with
+// scene:'election'; the returned stump speeches land in world._electionScript for the sim's #tickVoteDay
+// director. Same contract as the founding conversation: display text only, any failure leaves the authored
+// STUMP_LINES pool carrying the scene, and a script that names only some candidates still helps (the director
+// falls back per-candidate).
+let electionInflight = false;
+let electionDoneFor = null;      // `${seed}#${day}` we've already asked for (once per vote day)
+
+export async function requestElectionScene(world) {
+    if (!world || world.rehearsal || !world.roles || world.roles.foundingPhase !== 'gathering') return;
+    if (typeof world.electionSlates !== 'function') return;
+    const key = world.seed + '#' + world.day;
+    if (electionInflight || electionDoneFor === key) return;
+    const slates = world.electionSlates();
+    const seeds = [...new Set([...slates.manager, ...slates.watch])];
+    const cands = seeds.map(s => world.farmers.find(f => f.sheet.seed === s)).filter(Boolean);
+    if (cands.length < 2) return;
+    electionInflight = true; electionDoneFor = key;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), CONG_TIMEOUT_MS);
+    try {
+        const res = await fetch(CONG_ENDPOINT, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                scene: 'election',
+                culture: world.culture,
+                candidates: cands.map(f => ({
+                    ...founderView(f),
+                    standingFor: [slates.manager.includes(f.sheet.seed) && 'manager', slates.watch.includes(f.sheet.seed) && 'watch'].filter(Boolean),
+                })),
+            }),
+            signal: controller.signal,
+        });
+        if (!res.ok) throw new Error(`congregation endpoint ${res.status}`);
+        const data = await res.json();
+        if (!data || data.fallback || !Array.isArray(data.script)) throw new Error(data?.error || 'no script');
+        const byName = new Map(cands.map(f => [shortNameOf(f).toLowerCase(), f.sheet.seed]));
+        const script = [];
+        for (const t of data.script) {
+            const seed = byName.get(String(t.speaker || '').trim().toLowerCase());
+            const text = String(t.line || '').trim();
+            if (seed != null && text) script.push({ seed, text });
+        }
+        // adopt while the gathering still holds — a slow answer landing after dusk is useless
+        if (script.length >= 2 && world.roles.foundingPhase === 'gathering') world._electionScript = script;
+    } catch {
+        /* any failure: the authored stump pool stands in — nothing to do */
+    } finally {
+        clearTimeout(timer);
+        electionInflight = false;
+    }
+}
+
 // Kick the generation for `world` if it's a fresh founding congregation we haven't asked about yet. Fire-and-
 // forget: it stores world._foundingScript when (if) it arrives; the director swaps it in from that turn on.
 export async function requestCongregation(world) {

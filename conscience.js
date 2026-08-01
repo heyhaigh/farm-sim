@@ -29,11 +29,45 @@ const KW = [
     ['visit',  /\b(visit|see|talk to|call on|check on|go to|find)\b/i],
 ];
 
-function offlineClassify(message, names) {
-    const m = String(message || '');
+// Codex #69-2 + #70-2 — the KW rows key on topical NOUNS (tree, wood, meat, home...) so the offline
+// classifier stays generous when it's the ONLY classifier. As a backstop OVER a model that already judged
+// the thought non-actionable, the bar is higher: a global cue gate wasn't enough, because an unrelated cue
+// + noun re-combined ("you should be proud of that tree" -> chop; "the guard told a funny story" -> watch).
+// Strict mode therefore uses its OWN table where the VERB and its OBJECT must belong to the SAME intention,
+// and raid alerts get their own anchored row. No visit row on purpose: a name-drop is never promoted.
+const STRICT_KW = [
+    ['watch',  /\b(stand|take|keep|hold)\s+(the\s+)?(watch|guard)\b|\bstand guard\b|\bman the (wall|fence|gate)\b|\b(post|set)\s+a?\s*(lookout|sentry)\b|\braiders?\b[^.!?]*\b(coming|near|close|north|south|east|west|attack|closing|sighted|tonight)\b|\b(sound|raise)\s+the\s+alarm\b/i],
+    ['chop',   /\b(chop|cut|fell)\b[^.!?]*\b(tree|wood|timber|log)s?\b|\b(get|gather|fetch|stock)\b[^.!?]*\b(wood|timber|firewood)\b/i],
+    ['water',  /\bwater\b[^.!?]*\b(field|crop|plant|garden)s?\b|\b(field|crop|plant)s?\b[^.!?]*\b(thirsty|dry|need\w*\s+water)\b/i],
+    ['plant',  /\b(plant|sow)\b[^.!?]*\b(seed|crop|field|something|bean|carrot|wheat)s?\b|\bput\b[^.!?]*\bin the ground\b/i],
+    ['rest',   /\b(get|take|need)\b[^.!?]*\b(rest|sleep|nap|break)\b|\bgo\s+(to\s+)?(bed|sleep|rest)\b|\bslow down\b|\btake a break\b/i],
+    // Codex #71 — explore lost its bare-verb alternation ("my thoughts wander at night" promoted) and
+    // trade its bare to/with tails ("I sell paintings to travelers" promoted): both now need an object
+    // from their own world (ground to roam, goods to move).
+    ['explore',/\b(go|head|scout|set out)\b[^.!?]*\b(explore|wander|roam|beyond|past the|out there|horizon|ridge|the fog)\b|\b(explore|roam)\b[^.!?]*\b(land|ground|ridge|woods|wilds|map|world|horizon|fog|frontier)\b/i],
+    ['hunt',   /\b(hunt|stalk|track)\b[^.!?]*\b(deer|rabbit|turkey|game|meat|prey|something)\b|\b(get|catch|bring)\b[^.!?]*\b(meat|game|deer|rabbit|turkey)\b|\bgo\s+hunt\w*\b/i],
+    ['trade',  /\b(trade|barter|swap|sell)\b[^.!?]*\b(goods?|surplus|crops?|wood|ore|eggs?|milk|wares)\b|\bgo\b[^.!?]*\bmarket\b/i],
+    ['build',  /\b(build|expand|upgrade|raise|add)\b[^.!?]*\b(house|home|room|fence|homestead|it bigger)\b|\b(house|home)\b[^.!?]*\b(could use|needs)\b/i],
+];
+
+function offlineClassify(message, names, strict = false) {
+    // Codex #72 — phones type typographic apostrophes: "Don’t" sailed past every don'?t pattern (and
+    // would past the KW rows too). Normalize BEFORE any matching so the whole table sees ASCII.
+    const m = String(message || '').replace(/[’‘]/g, "'");
     const tone = /(!!|now|again|do it|must|listen|i said|come on)/i.test(m) ? 'press'
         : /(good|nice|well done|proud|great)/i.test(m) ? 'praise'
         : /\?/.test(m) ? 'observe' : 'suggest';
+    if (strict) {
+        // Codex #71 (the NO-SHIP finding) — POLARITY: a negated thought must NEVER promote. "Don't chop
+        // that tree" is a chop PROHIBITION, but conscienceCheck receives only the kind — promoting it
+        // could HEED the very act the player forbade. Any negation keeps the model's `none` standing;
+        // conservative by design ("don't forget to water" is missed, and that's the acceptable cost at
+        // the model-already-said-none bar).
+        if (/\b(don'?t|do not|never|no|not|stop|quit|won'?t|wouldn'?t|shouldn'?t|can'?t|cannot)\b/i.test(m))
+            return { kind: 'none', target: '', tone };
+        for (const [kind, re] of STRICT_KW) if (re.test(m)) return { kind, target: '', tone };
+        return { kind: 'none', target: '', tone };
+    }
     for (const [kind, re] of KW) {
         if (re.test(m)) {
             if (kind === 'visit') {
@@ -44,9 +78,12 @@ function offlineClassify(message, names) {
             return { kind, target: '', tone };
         }
     }
-    // a bare name with no verb still reads as "go see them"
-    const bare = names.find(n => new RegExp(`\\b${n.replace(/[^a-z0-9]/gi, '')}\\b`, 'i').test(m));
-    if (bare) return { kind: 'visit', target: bare, tone };
+    // a bare name with no verb still reads as "go see them" — but NOT in strict mode (the #classify-backstop
+    // uses strict: a smalltalk mention of a name must not be promoted to a visit over the model's "none")
+    if (!strict) {
+        const bare = names.find(n => new RegExp(`\\b${n.replace(/[^a-z0-9]/gi, '')}\\b`, 'i').test(m));
+        if (bare) return { kind: 'visit', target: bare, tone };
+    }
     return { kind: 'none', target: '', tone };
 }
 
@@ -167,6 +204,14 @@ export async function whisper(world, farmer, message, save) {
     let cls;
     try { cls = await postJson({ stage: 'classify', message: text, names, recent: c.log.slice(-4).map(e => ({ who: e.who, text: String(e.text).slice(0, 90) })) }); }
     catch { cls = offlineClassify(text, names); }
+    // #classify-backstop — the 8B sometimes whiffs plainly actionable thoughts to "none" ("go chop some
+    // wood"). The keyword map is high-precision on action verbs, so when it finds a kind and the model
+    // found none, trust the keywords. STRICT mode: the bare-name→visit last resort stays off here, so a
+    // smalltalk mention of a neighbour is never promoted to a visit over the model's judgement.
+    if ((cls.kind || 'none') === 'none') {
+        const kw = offlineClassify(text, names, true);
+        if (kw.kind !== 'none') cls = kw;
+    }
     const kind = cls.kind || 'none';
     const target = cls.target || null;
     const tone = cls.tone || 'suggest';

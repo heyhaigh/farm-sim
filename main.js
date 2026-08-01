@@ -20,7 +20,7 @@ import { TITLE_SHEET, drawTitleArt as drawTitleSheet, isTitleSettled } from './t
 import { saveTown, loadTownState, wipeTown, undoWipe, loadWorldIndex, updateWorldIndex, quarantineTown, peekQuarantined, restoreQuarantined, requestPersistentStorage } from './save.js';
 import { computeLayout, detectEncounters, encounterLine, townPos, townReach, townTint } from './worldmap.js';
 import { enrichStories } from './dm.js';
-import { requestCongregation } from './congregation.js';
+import { requestCongregation, requestElectionScene } from './congregation.js';
 import { requestRaidCouncil, requestRaidDebrief, requestDuelBeat } from './raidcouncil.js';
 import { persistLives, persistTownHistory, persistBattle } from './memory-writeback.js';
 import { enrichInventions, persistTownInventions } from './memory-invent.js';
@@ -6838,6 +6838,7 @@ out.addEventListener('pointerdown', (e) => {
     activePointerId = e.pointerId;
     audio.ensure();   // browsers only allow audio to start on a user gesture
     const p = gamePoint(e);
+    mouse.noCursor = false;   // Codex #69-3 a fresh press re-engages the cursor (next tap may re-pin)
     mouse.downX = p.x; mouse.downY = p.y;
     if (startScreen) { mouse.panStart = null; return; }   // #START the menu owns the canvas — never pan the town behind it
     // #98 a grand Moment spotlight eats the next click (dismiss it, don't fall through to world/pan)
@@ -6868,6 +6869,7 @@ out.addEventListener('pointermove', (e) => {
     if (activePointerId !== null && e.pointerId !== activePointerId) return;   // #Codex67-3 (hover: null -> flows)
     const p = gamePoint(e);
     mouse.x = p.x; mouse.y = p.y;
+    mouse.noCursor = false;   // Codex #69-3 a live pointer always shows the hand again
     if (settingsDrag && settingsHits) {
         const s = settingsDrag === 'music' ? settingsHits.musicSlider : settingsHits.sfxSlider;
         if (s) { const v = (p.x - s.x) / s.w; settingsDrag === 'music' ? audio.setMusicVolume(v) : audio.setSfxVolume(v); }
@@ -7134,7 +7136,15 @@ out.addEventListener('pointerup', (e) => {
     // #Codex67-3 activePointerId === null here means the OWNER just released (the main handler, which runs
     // first, cleared it). An ignored second finger's release leaves the owner's id in place — parking then
     // would yank the held tooltip out from under the finger that still owns the gesture.
-    if (e.pointerType === 'touch' && activePointerId === null) { mouse.x = -1; mouse.y = -1; }
+    if (e.pointerType !== 'touch' || activePointerId !== null) return;
+    // #tap-to-pin — a tap INSIDE the open detail card keeps the hover seeded at the tap point, so its
+    // hover-only affordances (inventory/tool slot tooltips, crafting ingredient names) show on tap for
+    // touch players. World taps still park offscreen — the phantom-tooltip/painted-cursor fix stands.
+    // Codex #69-3: the pin keeps POSITION only — noCursor suppresses the painted hand until a real
+    // pointer moves again (there is no finger on the glass; a hand there is a phantom).
+    const p = gamePoint(e);
+    if (selected && inRect(p, SHEET_RECT)) { mouse.noCursor = true; return; }
+    mouse.x = -1; mouse.y = -1;
 });
 // #touch pointercancel was previously UNHANDLED: the browser stealing a gesture (system edge swipe,
 // notification pull) would strand panStart mid-drag and the next finger would teleport the camera.
@@ -7616,6 +7626,10 @@ function frame(now) {
         if (world.raidEvent && world.raidEvent !== _re) maybeFaceoff();
     }
     maybeFaceoff();   // #faceoff also covers a raid already present at frame start (e.g. right after a load)
+    // #vote-voice — kick the election-scene generation the moment the REAL day-10 gathering opens, so the
+    // stump script has the walk-in window to land before the candidates take the floor. Self-guarded (once
+    // per seed+day, rehearsals excluded) so the per-frame call costs two compares.
+    if (world && !world._spectator && world.roles && world.roles.foundingPhase === 'gathering') requestElectionScene(world);
     // #firstwatch the day-1 congregation has just broken up, having agreed a shared watch: take hold of the
     // founder standing it tonight. The first frame with a world only RECORDS the state (no edge), so loading
     // any save from later never triggers this. A player already trailing someone, or mid-raid, keeps what
@@ -7930,8 +7944,10 @@ function frame(now) {
     // skip crt.render and black out the whole game (the town behind stays visible); log the first failure only.
     if (startScreen) { try { drawStartScreen(); } catch (e) { if (!_startScreenErr) { _startScreenErr = true; console.error('start screen draw error:', e); } } }
 
-    // custom pixel hand cursor, on top of everything (dragging = pressed/gold too)
-    if (mouse.x >= 0) drawCursor(mouse.x, mouse.y, mouse.dragging || cursorIsHot(worldHover) || startHovering());
+    // custom pixel hand cursor, on top of everything (dragging = pressed/gold too). Codex #69-3: a
+    // tap-to-pin keeps mouse.x/y seeded for the tooltip AFTER the finger lifted — hover position and
+    // cursor visibility are separate states, so the pin sets mouse.noCursor and the hand stays unpainted.
+    if (mouse.x >= 0 && !mouse.noCursor) drawCursor(mouse.x, mouse.y, mouse.dragging || cursorIsHot(worldHover) || startHovering());
 
     crt.render(t);   // Codex #44 P2 — the CRT does full-color; the old per-season DMG palette feed was inert (removed)
 }
