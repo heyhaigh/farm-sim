@@ -136,10 +136,15 @@ const BASELINE = {
     // vote ceremony (deferred raids land after the ballot); (3) a town with fewer than half its souls able
     // postpones the vote to the next dawn (no baseline town hits this — verified separately on a forged
     // 5-sick town: waits day 10, founds day 12). same-twice held all seeds.
-    20260706: 'c9dde5c0',
-    42: '374f6d2e',
-    7: 'fea2a360',
-    3: '56b56354',
+    // re-pinned 2026-08-03 (2) for #delib-variety: the assemble-mutter beat slowed 3-8s -> 9-17s (same
+    // single rand draw per beat, but FEWER beats fire across the day-10 gathering, so each seed's draw
+    // stream shifts from the vote day onward). Display cadence change; all four seeds drift, same-twice
+    // held. The other overlap/variety fixes (pending-say ceremony gate, walk-in pool, chat silence) are
+    // bubble-display only and move nothing on their own.
+    20260706: '46142773',
+    42: '6bf1c185',
+    7: '5cf3fa3c',
+    3: '07cfe62e',
 };
 
 function boot(seed, culture) {

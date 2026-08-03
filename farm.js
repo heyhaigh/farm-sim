@@ -2790,8 +2790,14 @@ export class World {
         // #dialogue-pacing: the speaker speaks NOW; the listener's reply lands AFTER the speaker's line is
         // readable, so the exchange reads as turn-taking instead of both bubbles popping at once. Display-only —
         // the authoritative outcome (opinions/bonds/journal below) is applied immediately, unaffected by timing.
-        speaker.say(speakerLine, speakerColor);
-        listener.sayAfter(speaker.speechReadTime(speakerLine), listenerLine, listenerColor);
+        // #vote-quiet (owner) — during the vote ceremony the converging crowd generates a burst of
+        // passing-chat pairs right at the square, all talking over the speeches. The exchange still
+        // HAPPENS (opinions/bonds/journal below are authoritative and unaffected); only the bubbles are
+        // suppressed while the ceremony holds the floor.
+        if (!this.ceremonyActive()) {
+            speaker.say(speakerLine, speakerColor);
+            listener.sayAfter(speaker.speechReadTime(speakerLine), listenerLine, listenerColor);
+        }
         speaker.facing = (listener.pos.i - listener.pos.j) >= (speaker.pos.i - speaker.pos.j) ? 1 : -1;
         listener.facing = (speaker.pos.i - speaker.pos.j) >= (listener.pos.i - listener.pos.j) ? 1 : -1;
 
@@ -3662,12 +3668,16 @@ export class World {
                 // releases the line — the deferred raid meets a re-mustered town after the ballot.
                 // (Codex #75-1: including farmers still WALKING to the line — path.then carries the intent)
                 for (const f of this.farmers) if (f.state === 'muster' || (f.path && f.path.then === 'muster')) { f.state = 'decide'; f.path = null; f.threatAlert = 0; }
+                // Codex #79-3 — pre-ceremony speech doesn't carry over the threshold: bubbles spoken during
+                // ordinary work and replies still queued are display residue (their outcomes long applied);
+                // the gathering opens in silence and the floor builds the scene from zero.
+                for (const f of this.farmers) { f.bubble = null; f._pendingSay = null; }
                 const where = this.culture === 'orc' ? 'the war-post' : 'the town well';
                 this.addChronicle('town', `${this.name} downs its tools and gathers at ${where} to weigh who should lead.`,
                     null, null, '#f0d060', { tier: 'callout', tone: 'triumph', why: 'the town assembles to deliberate' });
             }
         } else if (r.foundingPhase === 'gathering' && this.clock >= DAY_LENGTH) {   // dusk: the ballot is read
-            r.foundingPhase = 'done'; this._voteScene = null;
+            r.foundingPhase = 'done'; this._voteScene = null; this._delibUsed = null; this._electionMutters = null; this._electionScript = null;
             // Codex #75-1 — a telegraph that matured DURING the vote must not ambush the town on the very
             // tick the ballot closes: the alarm sounds now, and the landing waits a full rally window so
             // the line re-forms. Deterministic (state at a deterministic edge).
@@ -3720,8 +3730,56 @@ export class World {
             line = pool[i];
         }
         f.say(line, '#e8d060');
-        this.holdFloor(Math.max(2.8, line.length * 0.055));
+        this.holdFloor((f.bubble ? f.bubble.t0 : 2.8) + 0.15);   // Codex #79-4 — hold for the ACTUAL bubble (the longer tail outlived the old length estimate)
         vs.nextAt = this.clock + 1.0;
+    }
+
+    // #vote-panel (owner) — the LIVE TALLY the vote panel watches: every present voter's ballot via
+    // the SAME pure math the dusk election runs (#ballotPref: pure reads + per-tuple keyed jitter, no
+    // rng), revealed progressively across the gathering so the room visibly fills with votes. The
+    // fully-revealed preview and the dusk reading are the same numbers by construction. Display-only
+    // caller; safe to evaluate any tick, any number of times.
+    electionPreview() {
+        if (this.roles.foundingPhase !== 'gathering') return null;
+        const voters = this.farmers.filter(f => World.#civicPresent(f));
+        if (!voters.length) return null;
+        const order = [...voters].sort((a, b) => (hashString('ballotorder:' + a.sheet.seed) - hashString('ballotorder:' + b.sheet.seed)) || (a.sheet.seed - b.sheet.seed));
+        const start = DAY_LENGTH * FOUNDING_GATHER_START + 22;   // the stump speeches open the floor first
+        const span = Math.max(30, DAY_LENGTH - 20 - start);
+        const revealed = Math.max(0, Math.min(order.length, Math.floor((this.clock - start) / (span / order.length))));
+        const seen = order.slice(0, revealed);
+        // Codex #79-1 — the FOUNDING ballot runs on this.year (see #resolveFounding), not year+1 (that
+        // was the REHEARSAL's math, which previews NEXT year's election); the mismatch skewed the keyed
+        // jitter and the displayed leader could disagree with the dusk seating.
+        const year = this.year, r = this.roles;
+        const offices = [];
+        let mgrLeader = null;
+        for (const office of ['manager', 'watch']) {
+            let candSeeds = this.#electionCandidates(office);
+            if (office === 'watch' && mgrLeader != null) candSeeds = candSeeds.filter(sd => sd !== mgrLeader);   // one role each, like the real seating
+            const cands = candSeeds.map(sd => this.farmers.find(f => f.sheet.seed === sd)).filter(Boolean);
+            if (!cands.length) { offices.push({ office, rows: [] }); continue; }
+            const fitFn = office === 'manager' ? (f => this.#managerFitness(f)) : (f => this.#watchFitness(f));
+            const maxFit = Math.max(0.001, ...cands.map(fitFn));
+            const incumbentSeed = office === 'manager' ? r.manager : r.watch;
+            const tally = new Map(cands.map(c => [c.sheet.seed, 0]));
+            for (const v of seen) {
+                let best = null, bestP = -1e9;
+                for (const c of cands) {
+                    const pref = this.#ballotPref(v, c, office, incumbentSeed, year, fitFn, maxFit);
+                    if (pref > bestP || (pref === bestP && (best == null || c.sheet.seed < best.sheet.seed))) { bestP = pref; best = c; }
+                }
+                tally.set(best.sheet.seed, tally.get(best.sheet.seed) + 1);
+            }
+            let leader = null, bestVotes = -1;   // votes first, fitness-then-seed tiebreak (mirrors #ghostOffice)
+            for (const c of [...cands].sort((a, b) => (fitFn(b) - fitFn(a)) || (a.sheet.seed - b.sheet.seed))) {
+                const vc = tally.get(c.sheet.seed);
+                if (vc > bestVotes) { bestVotes = vc; leader = c; }
+            }
+            if (office === 'manager') mgrLeader = leader ? leader.sheet.seed : null;
+            offices.push({ office, rows: cands.map(c => ({ seed: c.sheet.seed, name: shortName(c), votes: tally.get(c.sheet.seed), leader: leader === c && revealed > 0 })) });
+        }
+        return { offices, revealed, total: order.length };
     }
 
     // PUBLIC — the candidate slates, for the client's election-scene request (congregation.js). Pure reads
@@ -4039,7 +4097,7 @@ export class World {
         const appr = office === 'manager' ? r.approval : r.watchApproval;
         const tag = office === 'manager' ? 0x1111 : 0x2222;
         const jitter = mulberry32((this.seed ^ v.sheet.seed ^ c.sheet.seed ^ tag ^ (year * 0x9e37)) >>> 0)();
-        let p = 0.4 * clamp(v.opinionOf(c), -1, 1) + 0.3 * v.civicImpression(c.sheet.seed) + 0.2 * (fitFn(c) / maxFit);
+        let p = 0.4 * clamp(v.opinionOf(c), -1, 1) + 0.3 * v.civicImpressionRO(c.sheet.seed) + 0.2 * (fitFn(c) / maxFit);
         if (v === c) p += 0.3;                                                  // people back themselves
         if (isInc) p += (0.12 + (appr - 0.5) * 0.4) - 0.08 * Math.max(0, terms - 1);   // record helps/hurts; fatigue with tenure
         p += this.#civicRegret(v, c, office);                                   // successor proved worse -> warm back
@@ -4050,7 +4108,11 @@ export class World {
     // Does this voter regret how their last vote for this office turned out? If they helped unseat this
     // candidate and the town is worse off since, the ousted looks like a better option again.
     #civicRegret(v, c, office) {
-        const log = v.civic.voteLog;
+        // Codex #80 — a NON-MATERIALIZING read: `v.civic.voteLog` invoked the lazy getter and persisted
+        // civic containers, so the display-only preview still changed serialize() by looking. Same value
+        // (the getter defaults voteLog to []); the getter's creation now happens only when a REAL
+        // election writes to it.
+        const log = (v.sheet.civic && v.sheet.civic.voteLog) || [];
         for (let i = log.length - 1; i >= 0; i--) {
             const e = log[i]; if (e.office !== office) continue;
             if (e.incSeed === c.sheet.seed && e.forSeed !== c.sheet.seed) {     // I voted to replace c
@@ -7609,7 +7671,7 @@ export class World {
                 if (f && !f.downed && f.health !== 'sick') {
                     const line = this.#stumpLine(f, rh.nonce);
                     f.say(line, '#e8d060');
-                    this.holdFloor(Math.max(2.8, line.length * 0.055));
+                    this.holdFloor((f.bubble ? f.bubble.t0 : 2.8) + 0.15);   // Codex #79-4 — mirrored fix
                 }
             }
             if ((!rh.speakQueue || rh.spoken >= rh.speakQueue.length) && this.floorFree()) { rh.phase = 'tally'; rh.t = 0; }
@@ -9539,6 +9601,9 @@ export class Farmer {
     }
     // this farmer's remembered impression of `seed` as a leader (0 if never served over them)
     civicImpression(seed) { return this.civic.impressions[seed] || 0; }
+    // Codex #79-2 — the READ-ONLY sibling: same value, but never triggers the lazy getter's container
+    // creation, so a display-only reader (the vote panel's preview) cannot change serialize() by looking.
+    civicImpressionRO(seed) { const c = this.sheet.civic; return (c && c.impressions && c.impressions[seed]) || 0; }
     isManager() { return this.world.roles.manager === this.sheet.seed; }
     isHealer() { return this.world.roles.healer === this.sheet.seed; }
     get grass() { return (this.sheet.goods && this.sheet.goods.grass) || 0; }
@@ -10283,15 +10348,41 @@ export class Farmer {
     // name the peer they most respect (their likely vote); otherwise a general line. Deterministic (seeded).
     #deliberationThought() {
         const orc = this.world.culture === 'orc';
-        if (this.rand() < 0.5) {
+        const usedE = this.world._delibUsed || (this.world._delibUsed = new Set());
+        if (this.rand() < 0.5) {   // the draw is unconditional — dedup only filters the TEXT afterward
             let best = null, bv = 0.15;
             for (const o of this.world.farmers) { if (o === this || o.health === 'sick' || o.downed) continue; const v = this.opinionOf(o); if (v > bv) { bv = v; best = o; } }
-            if (best) return orc ? `${shortName(best).toUpperCase()} IS STRONG — THEY SHOULD LEAD` : `${shortName(best)} HAS A STEADY HAND`;
+            if (best) {
+                // Codex #79-5 — endorsements obey the same cross-farmer dedup as every other mutter:
+                // the SAME favourite earns ONE spoken endorsement per gathering; later admirers fall
+                // through to the pools instead of chanting it.
+                const line = orc ? `${shortName(best).toUpperCase()} IS STRONG — THEY SHOULD LEAD` : `${shortName(best)} HAS A STEADY HAND`;
+                if (!usedE.has(line)) { usedE.add(line); return line; }
+            }
         }
+        // #delib-variety (owner: several orcs chanting the same line) — LLM-written mutters first (the
+        // election scene endpoint returns a crowd pool alongside the stump script), the enlarged authored
+        // pools as the net; EITHER way a cross-farmer used-set probe keeps any line from sounding twice
+        // until its pool is spent. Hash picks + transient set — the rng draw above is untouched.
+        const used = this.world._delibUsed || (this.world._delibUsed = new Set());
+        const pickFrom = (arr, salt) => {
+            let i = hashString(this.sheet.seed + salt + Math.floor(this.world.clock / 4)) % arr.length, tries = 0;
+            while (used.has(arr[i]) && tries++ < arr.length) i = (i + 1) % arr.length;
+            used.add(arr[i]);
+            return arr[i];
+        };
+        const mut = this.world._electionMutters;
+        if (Array.isArray(mut) && mut.length) return pickFrom(mut, ':delibm:');
         const pool = orc
-            ? ['WHO IS STRONGEST TO LEAD US?', 'THE WARBAND MUST CHOOSE WELL', "I'VE WEIGHED MY CHOICE", 'A CHIEF IS EARNED, NOT GIVEN']
-            : ['WHO SHOULD LEAD US?', 'THE TOWN MUST CHOOSE WELL', "I'VE MADE UP MY MIND", 'A FAIR HAND FOR THE CHAIR'];
-        return pool[hashString(this.sheet.seed + ':delib:' + Math.floor(this.world.clock / 4)) % pool.length];
+            ? ['WHO IS STRONGEST TO LEAD US?', 'THE WARBAND MUST CHOOSE WELL', "I'VE WEIGHED MY CHOICE", 'A CHIEF IS EARNED, NOT GIVEN',
+               'STRENGTH ALONE IS NOT ENOUGH', 'WHOEVER LEADS CARRIES US ALL', 'MY GUT KNOWS ITS NAME ALREADY', 'LET THE WORTHY STAND FORWARD',
+               'I FOLLOW DEEDS, NOT NOISE', 'THE WRONG FIST BREAKS THE HOLD', 'I REMEMBER WHO FED US IN THE LEAN DAYS', 'NO CROWN. JUST A DEBT TO US ALL.',
+               'THE QUIET ONES WATCH CLOSEST', 'MY BLADE FOLLOWS MY BALLOT', 'WE RISE OR ROT ON THIS CHOICE', 'LET THEM EARN IT EVERY DAWN']
+            : ['WHO SHOULD LEAD US?', 'THE TOWN MUST CHOOSE WELL', "I'VE MADE UP MY MIND", 'A FAIR HAND FOR THE CHAIR',
+               'STEADY BEATS BOLD, I RECKON', 'WHOEVER WINS, WE ALL PULL TOGETHER', 'MY HEART SETTLED ON A NAME LAST NIGHT', 'LET THE WORK SPEAK FOR THEM',
+               'I VOTE FOR THE ONE WHO SHOWS UP', 'NO SPEECHES SWAY ME NOW', 'I OWE MY VOTE TO A KINDNESS', 'THE CHAIR IS A BURDEN, NOT A PRIZE',
+               'MAY THE STEADIEST HAND TAKE IT', 'I THOUGHT ON IT ALL THROUGH SUPPER', 'THE FIELDS WILL TELL US IF WE CHOSE RIGHT', 'A QUIET LEADER SUITS ME FINE'];
+        return pickFrom(pool, ':delib:');
     }
 
     // #counteroffensive PHASE 2 — what a farmer argues at the WAR VOTE: their stance on riding out. A HAWK
@@ -10461,7 +10552,12 @@ export class Farmer {
         // #bubble ONE line at a time (typewriter within the line), advancing through EVERY line — a 9-line saying
         // shows all 9, one after the other (no 4-line cap). t0 scales with the line count so it stays up for all
         // of them + a tail; the congregation director reads t0 for its turn cadence.
-        const t0 = lines.length * SAY_LINE_SEC + 0.4;
+        // #bubble-tail (owner: "the last line vanishes too quickly") — the FINAL line used to get only
+        // 0.4s after its typing finished; it now lingers a real beat, scaled a touch by its own length
+        // so a long closing thought gets read. Display pacing only (holdFloor callers read t0, so scene
+        // turn-taking slows by the same breath — deliberate).
+        const lastLen = lines[lines.length - 1] ? lines[lines.length - 1].length : 0;
+        const t0 = lines.length * SAY_LINE_SEC + 1.2 + Math.min(0.8, lastLen * 0.02);
         this.bubble = { lines, text: lines[0], color, t: t0, t0, lineSec: SAY_LINE_SEC, charSec: SAY_CHAR_SEC };
     }
 
@@ -11759,7 +11855,25 @@ export class Farmer {
             const spot = w.assembleSpot(this);
             if (Math.abs(this.pos.i - spot.i) + Math.abs(this.pos.j - spot.j) > 1.3) {
                 // #132b walking IN to the gathering — a neutral intent; the spoken exchange is the director's job.
-                if (this.#goTo(spot.i, spot.j, 'assemble')) { this.think(w.culture === 'orc' ? 'THE BAND GATHERS' : 'THE TOWN IS GATHERING'); return; }
+                // #vote-quiet (owner: orcs talking over one another walking in) — the walk-in thought rides
+                // the speech floor like every other ceremony voice: one bubble at a time, the rest think it
+                // silently (the sheet's NOW keeps it).
+                if (this.#goTo(spot.i, spot.j, 'assemble')) {
+                    const floorFree = w.floorFree();
+                    // #delib-variety — the walk-in line draws from a pool with the ceremony's shared
+                    // used-set, so eight arrivals don't chant the same phrase in single file
+                    const gPool = w.culture === 'orc'
+                        ? ['THE BAND GATHERS', 'TO THE WAR-POST', 'THE CHOOSING IS UPON US', 'EVERY VOICE. EVERY BLADE.', 'THE HOLD PICKS ITS FIST TODAY']
+                        : ['THE TOWN IS GATHERING', 'TO THE WELL, THEN', 'CHOOSING DAY IS HERE', 'EVERY VOICE COUNTS TODAY', 'THE CHAIR GETS ITS NAME TODAY'];
+                    const gUsed = w._delibUsed || (w._delibUsed = new Set());
+                    let gi = hashString(this.sheet.seed + ':gath') % gPool.length, gt = 0;
+                    while (gUsed.has(gPool[gi]) && gt++ < gPool.length) gi = (gi + 1) % gPool.length;
+                    gUsed.add(gPool[gi]);
+                    this.think(gPool[gi]);
+                    if (!floorFree) this.bubble = null;
+                    else if (this.bubble) w.holdFloor(this.bubble.t0 + 0.2);
+                    return;
+                }
             }
             this.state = 'assemble'; return;
         }
@@ -13468,7 +13582,9 @@ export class Farmer {
         else if (!this.world.isNight() && (this.state === 'walk' || this.state === 'idle')) this.#maybeChat();
         if (this.bubble) { this.bubble.t -= dt; if (this.bubble.t <= 0) this.bubble = null; }
         // #dialogue-pacing: promote a deferred line once its delay elapses (display-only)
-        if (this._pendingSay) { this._pendingSay.delay -= dt; if (this._pendingSay.delay <= 0) { const p = this._pendingSay; this.say(p.text, p.color); } }
+        if (this._pendingSay) { this._pendingSay.delay -= dt; if (this._pendingSay.delay <= 0) { const p = this._pendingSay;
+            // #vote-quiet — a reply queued BEFORE the ceremony must not mature into it (the last cross-talk source)
+            if (!this.world.ceremonyActive()) this.say(p.text, p.color); else this._pendingSay = null; } }
         this.memEchoCd = Math.max(0, (this.memEchoCd || 0) - dt);   // #legibility Slice 1 (display-only)
         if (this.memoryEcho) { this.memoryEcho.t -= dt; if (this.memoryEcho.t <= 0) this.memoryEcho = null; }
         if (this.carryCrop) { this.carryCrop.t -= dt; if (this.carryCrop.t <= 0) this.carryCrop = null; }
@@ -13874,7 +13990,7 @@ export class Farmer {
                 if (w.congregating()) break;
                 this.assembleT = (this.assembleT || 0) - dt;
                 if (this.assembleT <= 0) {
-                    this.assembleT = 3 + this.rand() * 5;              // unchanged rng draw
+                    this.assembleT = 9 + this.rand() * 8;              // unchanged rng draw (#delib-variety: slower mutter cadence — same ONE draw, longer beat)
                     const floorWasFree = w.floorFree();                // #speech-floor (display-only check)
                     this.think(w.counterGathering() ? this.#warStanceThought() : w.congregating() ? this.#foundingLine() : this.#deliberationThought());   // war vote / day-1 congregation / day-10 vote
                     // if another voice holds the floor, keep this muttering SILENT this beat (display suppression

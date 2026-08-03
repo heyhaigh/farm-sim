@@ -120,14 +120,23 @@ async function generateElection(body) {
         '- No empty promises of specific outcomes; they pitch CHARACTER and intent, the way real stump speeches do.',
         orc ? '- These are orcs of a war-hoard: short, blunt, physical sentences - the hold, the band, iron, meat. Not villains - a people.' : '- These are human settlers: plain-spoken, wary, neighbourly.',
         '- Plain ASCII only. No markdown, no em dashes (use " - "), straight quotes, no emojis, no stage directions, no narration, no modern/technological words.',
-        'Return JSON only: { "script": [ { "speaker": "<name>", "line": "<their speech>" }, ... ] }.',
+        // #delib-variety — the crowd gets LLM voices too, replacing the canned deliberation chants
+        'ALSO return "mutters": 10 distinct one-line inner murmurs of the CROWD weighing their vote (each under 9 words, varied sentiments - resolve, doubt, loyalty, private calculation; no two share a shape; candidate names optional).',
+        'Return JSON only: { "script": [ { "speaker": "<name>", "line": "<their speech>" }, ... ], "mutters": [ "<line>", ... ] }.',
     ].join('\n');
+    const electionSchema = { ...scriptSchema, properties: { ...scriptSchema.properties,
+        mutters: { type: 'array', items: { type: 'string', maxLength: LINE_SCHEMA_MAX } } } };
     const out = await callLLM({
         system,
         user: JSON.stringify({ culture: orc ? 'orc' : 'human', candidates: cands }),
-        schema: scriptSchema, schemaName: 'ry_farms_congregation', maxTokens: 700, temperature: 0.8,
+        schema: electionSchema, schemaName: 'ry_farms_congregation', maxTokens: 900, temperature: 0.8,
     });
-    return normalize(out, names, 2);
+    const result = normalize(out, names, 2);
+    // crowd mutters ride along, cleaned + deduped (display pool; the client's authored pool is the net)
+    const seenM = new Set();
+    result.mutters = (Array.isArray(out?.mutters) ? out.mutters : [])
+        .map(m => cleanLine(m)).filter(m => m && m.length > 1 && !seenM.has(m) && seenM.add(m)).slice(0, 12);
+    return result;
 }
 
 function normalize(raw, names, minTurns = 4) {

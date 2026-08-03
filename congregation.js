@@ -72,6 +72,9 @@ export async function requestElectionScene(world) {
         }
         // adopt while the gathering still holds — a slow answer landing after dusk is useless
         if (script.length >= 2 && world.roles.foundingPhase === 'gathering') world._electionScript = script;
+        // #delib-variety — the LLM crowd murmurs replace the canned deliberation pool for this vote day
+        if (Array.isArray(data.mutters) && data.mutters.length >= 4 && world.roles.foundingPhase === 'gathering')
+            world._electionMutters = data.mutters.map(m => String(m).trim()).filter(Boolean).slice(0, 12);
     } catch {
         /* any failure: the authored stump pool stands in — nothing to do */
     } finally {

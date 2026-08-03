@@ -222,6 +222,7 @@ function cursorIsHot(worldTooltip) {
     for (const b of [ROSTER_BTN, CHRON_BTN, SND_BTN, SETTINGS_BTN, FWD_BTN, FF_BTN, SPEED1_BTN]) if (b.w && inRect(m, b)) return true;
     if (!BOARD_BTN.hidden && inRect(m, BOARD_BTN)) return true;
     if (RECAP_CARD.w && inRect(m, RECAP_CARD)) return true;
+    if (UPDATE_NUDGE.w && inRect(m, UPDATE_NUDGE)) return true;   // #update-nudge — the pill is a button; the glove says so
     if (activeMoment && MOMENTS_HIT.w) return true;   // #98 a grand Moment is up — the whole screen is "click to continue"
     if (selected) {
         if (inRect(m, SHEET_CLOSE)) return true;
@@ -248,6 +249,28 @@ const MEM_NEXT = { x: 0, y: 0, w: 0, h: 0 };
 const FOLLOW_PREV = { x: 0, y: 0, w: 0, h: 0 };    // FOLLOWING-banner ◄ cycle arrow, set in drawUI's banner
 const FOLLOW_NEXT = { x: 0, y: 0, w: 0, h: 0 };    // FOLLOWING-banner ► cycle arrow, set in drawUI's banner
 const AWAY_BAR = { x: 0, y: 0, w: 0, h: 0 };       // #away-banner strip under the top bar; hover = homecoming ETA
+// #update-nudge — a deploy lands while sessions are in flight: the loaded modules never change mid-run, so
+// the only road to the new build is a reload. Remember the server's build rev at boot, re-check on a slow
+// clock + whenever the tab returns to view (a player coming back is already at a natural pause), and when
+// it moves raise a quiet persistent pill: click = save, then reload. Never auto-reloads; never blocks play.
+// Display-side only — no sim reads/writes. Offline/local (no /api/build) the fetch fails and it stays dark.
+const UPDATE_NUDGE = { x: 0, y: 0, w: 0, h: 0 };
+let _bootRev = null;          // the build rev this session loaded under (null until the first sighting)
+let _updateReady = false;     // a newer build is live — the pill is up
+let _updateReloading = false; // click received: saving, then reloading (guards double-clicks)
+async function checkBuildRev() {
+    if (_updateReady) return;
+    try {
+        const j = await (await fetch('/api/build', { cache: 'no-store' })).json();
+        if (!j || !j.rev) return;
+        if (_bootRev === null) { _bootRev = j.rev; return; }   // first sighting = our own generation
+        if (j.rev !== _bootRev) _updateReady = true;
+    } catch { /* offline or local dev — the nudge never fires */ }
+}
+setInterval(checkBuildRev, 5 * 60 * 1000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) checkBuildRev(); });
+checkBuildRev();
+if (new URLSearchParams(location.search).has('nudge')) _updateReady = true;   // QA: preview the pill on load, survives refresh
 let SHEET_TABS = [];                               // tab-bar hit-rects {x,y,w,h,tab}, rebuilt in drawSheet
 let sheetMemPage = 0;                              // current MEMORIES page (0 = newest)
 let sheetLastSel = null;                           // reset pager when the selection changes
@@ -289,6 +312,7 @@ let lastSavedDay = 0;                              // last world.day autosaved (
 let saveFlashAt = -1e9;                            // brief "SAVED" tick in the top bar
 let _whisperNudged = false;                        // #curate one whisper-nudge toast per page load (localStorage gates per browser)
 let _heldToasted = false;                          // #fresh-held one refused-?fresh explanation toast per page load
+let _voteWindowWas = false;                        // #vote-panel edge-detects the gathering opening (replaces the detail card once)
 let resumeCard = null;                             // "PREVIOUSLY ON PROPAGATE" catch-up card (shown once on resume)
 let faceoff = null;                                // #faceoff the pre-battle VS card raised when the warband lands (render-only)
 let faceoffSeenEvent = null;                       // the raidEvent object we've raised a faceoff for (one card per raid; identity-keyed)
@@ -1360,7 +1384,7 @@ function houseSprite(color) {
 // #card-anim (owner, task #8) — the SHOWCASE walker for popup cards: the improved full walk cycle
 // (6f orc sheets / 6f human side rows; graceful 2-frame fallback), always FACING RIGHT, rig-aware.
 // One helper so every sprite-featuring modal shares the same look.
-function showcaseWalkFrames(f) {
+function showcaseWalkFrames(f, mode = 'walk') {
     let sets = null;
     if (f.sheet.culture === 'orc' && orcSpriteReady()) {
         sets = orcCharCache.get(f);
@@ -1375,6 +1399,15 @@ function showcaseWalkFrames(f) {
     const side = sets && (sets.side || sets.left);
     if (side) {
         const mirror = f.sheet.culture === 'orc';
+        // #card-state (owner) — a DOWNED farmer's card shows the laying pose (the death cycle's final
+        // frame, exactly what the field renderer holds); brink/walk use the walk cycle (brink adds the
+        // red injury flash at draw). Falls through to walking frames when a cycle sheet isn't loaded.
+        if (mode === 'downed') {
+            const death = f.sheet.culture === 'orc'
+                ? (side.cycle && side.cycle('death'))
+                : ((charReady() && battleReady()) ? (battleSprites(f) || {}).death : null);
+            if (death && death.length && death[death.length - 1]) return { frames: [death[death.length - 1]], mirror };
+        }
         const cyc = side.cycle && side.cycle('walk');
         if (cyc && cyc.length && cyc[0]) return { frames: cyc, mirror };
         const two = [side.walk1, side.walk2].filter(Boolean);
@@ -1384,15 +1417,17 @@ function showcaseWalkFrames(f) {
     const s = spriteCache.get(f);
     return { frames: [s.walk1, s.walk2].filter(Boolean), mirror: false };
 }
-// Draw the walking showcase with its FEET at feetY, centred on cx. Returns the anchor box {x,y,w,h}
-// (the body box, rig-corrected) so callers can hang overlays — e.g. a discovered object — off it.
-function drawShowcaseWalker(f, cx, feetY, S = 1.6, fps = 7) {
-    const { frames, mirror } = showcaseWalkFrames(f);
+// Draw the showcase CENTRED on (cx, centerY) — vertical centring is the caller's contract (owner: the
+// walker sat too low when callers guessed a nominal body height). Returns the anchor box {x,y,w,h}
+// so callers can hang overlays — e.g. a discovered object — off it. `mode`: 'walk' | 'downed' (laying,
+// held on the death cycle's last frame) | 'brink' (walk + the field renderer's red injury flash).
+function drawShowcaseWalker(f, cx, centerY, S = 1.6, fps = 7, mode = 'walk') {
+    const { frames, mirror } = showcaseWalkFrames(f, mode);
     if (!frames.length || !frames[0]) return null;
     const fr = frames[Math.floor(performance.now() / 1000 * fps) % frames.length];
     const rig = fr._rig;
     const bw = (rig ? rig.w : fr.width) * S, bh = (rig ? rig.h : fr.height) * S;
-    const ax = Math.round(cx - bw / 2), ay = Math.round(feetY - bh);
+    const ax = Math.round(cx - bw / 2), ay = Math.round(centerY - bh / 2);
     ctx.imageSmoothingEnabled = false;
     if (mirror) {
         ctx.save(); ctx.translate(ax + bw, ay); ctx.scale(-1, 1);
@@ -1400,6 +1435,12 @@ function drawShowcaseWalker(f, cx, feetY, S = 1.6, fps = 7) {
         ctx.restore();
     } else {
         ctx.drawImage(fr, ax + (rig ? Math.round(rig.dx * S) : 0), ay + (rig ? Math.round(rig.dy * S) : 0), Math.round(fr.width * S), Math.round(fr.height * S));
+    }
+    // #card-state 'brink' — the exact red flash the field uses for the badly hurt, pulsing so a
+    // "pulled back from the brink" card reads as fragile, not fine
+    if (mode === 'brink' && Math.floor(performance.now() / 280) % 2) {
+        ctx.fillStyle = 'rgba(224,64,48,0.42)';
+        ctx.fillRect(ax + 2, ay + 2, Math.round(bw) - 4, Math.round(bh) - 4);
     }
     return { x: ax, y: ay, w: bw, h: bh };
 }
@@ -4095,7 +4136,7 @@ function drawUI() {
         const saveAge = performance.now() - saveFlashAt;
         if (saveAge < 2400) {
             const label = 'GAME SAVED';
-            const shown = Math.min(label.length, Math.ceil(saveAge / 60));
+            const shown = Math.min(label.length, Math.ceil(saveAge / 30));   // owner: type-in 2x faster
             const bw = textWidth(label) + 10;
             const bx = SETTINGS_BTN.x - bw + 8, by = 21;
             ctx.save();
@@ -4120,7 +4161,11 @@ function drawUI() {
     if (rosterOpen) drawRoster();
     else if (chronOpen) drawChronicle();
     else if (worldMapOpen) drawWorldMap();
-    else { drawMinimap(); if (boardOpen) drawBoard(); else if (selected) drawSheet(selected); }
+    // #vote-panel — while the vote window holds it OWNS the sheet slot outright: even a programmatic
+    // selection (spotlight jump, follow cycling) can't cover the tally (live-found: the follow machinery
+    // re-selected a farmer right after the edge cleared one). The selection survives underneath and the
+    // sheet returns at dusk.
+    else { drawMinimap(); if (boardOpen) drawBoard(); else if (voteWindowActive()) drawVotePanel(); else if (selected) drawSheet(selected); }
     if (settingsOpen) drawSettings();
 
     drawChatWidget();    // #legibility Slice 2 — the whisper button/panel, bottom-left (hidden under full panels)
@@ -4842,6 +4887,58 @@ function currentStatus(f) {
         donate: 'HAULING PLUNDER TO THE HOARD', scarecrow: 'RAISING A WARDING-SKULL' });
     return map[f.state] || (f.thought ? f.thought : 'GOING ABOUT THEIR DAY');
 }
+// #vote-panel (owner: "a screen of votes... so you get a sense of where things are heading") — the
+// live tally, in the detail sheet's slot, while the founding gathering holds. Reads the sim's pure
+// electionPreview (the same ballot math the dusk reading runs); votes reveal progressively, the
+// leader glows gold, and the panel yields to any farmer sheet the moment the vote ends.
+function voteWindowActive() {
+    return !!(world && !world._spectator && world.roles && world.roles.foundingPhase === 'gathering');
+}
+function drawVotePanel() {
+    const pv = world.electionPreview && world.electionPreview();
+    if (!pv) return;
+    const PW = 154, PX = GW - PW - 4, PY = 22;
+    const PH = GH - 22 - PY - 3;
+    uiPanel(PX, PY, PW, PH);
+    const IX = PX + 7, IW = PW - 14;
+    const orc = world.culture === 'orc';
+    // title band, matching the sheet's
+    ctx.fillStyle = '#2b2016'; ctx.fillRect(IX - 2, PY + 6, IW + 4, 21);
+    ctx.fillStyle = '#e8c860'; ctx.fillRect(IX - 2, PY + 6, IW + 4, 1); ctx.fillRect(IX - 2, PY + 26, IW + 4, 1);
+    drawText(ctx, orc ? 'THE WARBAND CHOOSES' : 'THE TOWN DECIDES', IX, PY + 10, '#ffffff', 1);
+    drawText(ctx, 'THE BALLOT IS READ AT DUSK', IX, PY + 19, '#8a7ca0');
+    let y = PY + 34;
+    const OFFICE_LABEL = { manager: orc ? 'WARCHIEF' : 'MANAGER', watch: 'THE WATCH' };
+    for (const off of pv.offices) {
+        ctx.fillStyle = '#3a2c10'; ctx.fillRect(IX - 2, y, IW + 4, 9);
+        drawText(ctx, OFFICE_LABEL[off.office] || off.office.toUpperCase(), IX + 1, y + 2, '#e8c860');
+        y += 12;
+        const rows = [...off.rows].sort((a, b) => b.votes - a.votes || (a.seed - b.seed));
+        const maxV = Math.max(1, ...rows.map(r => r.votes));
+        for (const r of rows) {
+            const col = r.leader ? '#f0d060' : '#c8ccd8';
+            drawText(ctx, r.name.slice(0, 12), IX + 1, y, col);
+            const vs = String(r.votes);
+            drawText(ctx, vs, IX + IW - textWidth(vs) - 1, y, col);
+            // vote bar under the name — filled share of the current max
+            ctx.fillStyle = '#20242f'; ctx.fillRect(IX + 1, y + 6, IW - 2, 2);
+            ctx.fillStyle = r.leader ? '#f0d060' : '#5a6f8c';
+            ctx.fillRect(IX + 1, y + 6, Math.max(r.votes > 0 ? 2 : 0, Math.round((IW - 2) * (r.votes / maxV))), 2);
+            y += 11;
+        }
+        y += 4;
+    }
+    y += 2;
+    if (pv.revealed <= 0) {
+        drawText(ctx, 'THE SPEECHES HOLD THE FLOOR', IX, y, '#6a6f7c');
+        drawText(ctx, 'VOTES FOLLOW SOON', IX, y + 7, '#6a6f7c');
+    } else {
+        drawText(ctx, `${pv.revealed}/${pv.total} VOTES CAST`, IX, y, '#7dd069');
+        if (pv.revealed < pv.total) drawText(ctx, 'STILL COMING IN...', IX, y + 7, '#6a6f7c');
+        else drawText(ctx, 'ALL VOICES HEARD', IX, y + 7, '#8a7ca0');
+    }
+}
+
 function drawSheet(f) {
     const s = f.sheet, p = s.personality;
     const PW = 154, PX = GW - PW - 4, PY = 22;
@@ -6542,7 +6639,12 @@ function drawMoments() {
     // vertical midline of the content band (between the header rule and the bottom border).
     const cTop = PY + 16, cBot = PY + PH - 5, cMid = Math.floor((cTop + cBot) / 2);
     let sprBox = null;
-    if (f) sprBox = drawShowcaseWalker(f, colCX, cMid + 27, 1.6);   // nominal ~54px body — feet ride below the midline
+    if (f) {
+        // #card-state — the pose tells the truth: downed farmers lay where they fell, the barely-saved
+        // flash red (the brink threshold matches the field renderer's badly-wounded limp at 35% HP)
+        const mode = f.downed ? 'downed' : ((f.maxHp && f.hp / f.maxHp < 0.35) ? 'brink' : 'walk');
+        sprBox = drawShowcaseWalker(f, colCX, cMid, 1.6, 7, mode);
+    }   // nominal ~54px body — feet ride below the midline
     if (hasObject) {
         if (sprBox) drawGem(e.icon.slice(5), Math.round(sprBox.x + sprBox.w - 1), Math.round(sprBox.y + 5), 5, e.tone);
         else drawGem(e.icon.slice(5), colCX, cMid, 7, e.tone);
@@ -6962,6 +7064,15 @@ out.addEventListener('pointerdown', (e) => {
     if (activeMoment && MOMENTS_HIT.w) { activeMoment = null; mouse.panStart = null; return; }
     // #callout the X on a discovery toast dismisses it (only the X — clicking the bar itself falls through)
     if (activeCallout && CALLOUT_CLOSE.w && inRect(p, CALLOUT_CLOSE)) { activeCallout = null; mouse.panStart = null; return; }
+    // #update-nudge — click the pill: save first, then reload into the new build (reload proceeds even if
+    // the save path rejects — the tab-hide handler is the second net, and a retired town has nothing to save)
+    if (UPDATE_NUDGE.w && inRect(p, UPDATE_NUDGE) && !_updateReloading) {
+        _updateReloading = true;
+        const go = () => location.reload();
+        if (world && !world._retired && !world._persistenceDisabled) saveTown(world).then(go, go);
+        else go();
+        mouse.panStart = null; return;
+    }
     // settings volume sliders: press to grab, drag to set
     if (settingsOpen && settingsHits) {
         if (inRect(p, settingsHits.musicSlider)) { settingsDrag = 'music'; audio.setMusicVolume((p.x - settingsHits.musicSlider.x) / settingsHits.musicSlider.w); mouse.panStart = null; return; }
@@ -7235,6 +7346,9 @@ out.addEventListener('pointerup', (e) => {
     if (inRect(p, boardScreen)) { boardOpen = true; selected = null; boardScroll = 0; return; }
 
     // farmer?
+    // #vote-panel (owner) — while the vote window holds, clicking farmers is NEUTRALIZED so the detail
+    // card can't cover the live tally (hover names still work; every top-bar surface stays clickable).
+    if (voteWindowActive()) return;
     let best = null, bestD = 1.6;
     const tile = screenToTile(p.x, p.y);
     for (const f of world.farmers) {
@@ -7753,6 +7867,11 @@ function frame(now) {
         _heldToasted = true;
         calloutQueue.push({ text: 'This ground already holds a living town - resumed it. Start a new town from the menu to begin again', tone: 'neutral' });
     }
+    // #vote-panel edge (owner) — when the vote window OPENS it replaces the farmer detail card (and
+    // only that: settings/chronicle/roster/board live above and are untouched); while it holds,
+    // clicking farmers is neutralized (see the pointerup gate) though hover names still work.
+    if (voteWindowActive() && !_voteWindowWas) { selected = null; selectedSlotKey = null; }
+    _voteWindowWas = voteWindowActive();
     // #curate whisper nudge (council) — the game's ONE verb, named once, early, then never again: a
     // single toast ~50s into a fresh town's day 1, once per BROWSER (returning players know). Display-only.
     if (!_whisperNudged && !startScreen && world && !world._spectator && world.day === 1 && world.clock > 50 && world.clock < 200) {
@@ -8062,6 +8181,48 @@ function frame(now) {
         // clickable hit zones over each arrow (padded a little so the 3px glyphs are easy to hit)
         FOLLOW_PREV.x = bxL; FOLLOW_PREV.y = boxTop; FOLLOW_PREV.w = 11; FOLLOW_PREV.h = 11;
         FOLLOW_NEXT.x = bxL + bxW - 11; FOLLOW_NEXT.y = boxTop; FOLLOW_NEXT.w = 11; FOLLOW_NEXT.h = 11;
+    }
+
+    // #update-nudge — the persistent "a new build is live" pill. Owner call: it lives WHERE THE GAME
+    // SAVED BADGE APPEARS (top-right, under the gear) — not bottom-center, which the follow plate owns —
+    // and wears the badge family's look (green plate, black text). It steps below the away strip and the
+    // typing save badge when either holds that row; yields under full-screen panels like the toasts do.
+    UPDATE_NUDGE.w = 0;
+    if (_updateReady && booted && !startScreen && !worldMapOpen && !rosterOpen && !chronOpen && !boardOpen && !settingsOpen) {
+        const lbl = _updateReloading ? 'SAVING...' : 'NEW BUILD READY';
+        const ICON_W = 7;
+        const w = textWidth(lbl) + 10 + ICON_W + 3;
+        const x = SETTINGS_BTN.x - w + 8;                                       // right-aligned like the save badge
+        let y = 21;
+        if (AWAY_BAR.w) y = AWAY_BAR.y + AWAY_BAR.h + 2;                        // the away strip owns that row
+        if (performance.now() - saveFlashAt < 2400) y = Math.max(y, 33);        // let the save badge type through above
+        const hov = inRect(mouse, { x, y, w, h: 11 });
+        const pulse = 0.9 + 0.1 * Math.sin(performance.now() / 500);            // a quiet breath, not an alarm
+        ctx.save();
+        ctx.globalAlpha = hov ? 1 : pulse;
+        ctx.fillStyle = hov ? '#a8e890' : '#7dd069'; ctx.fillRect(x, y, w, 11);
+        ctx.fillStyle = '#4a8a3c'; ctx.fillRect(x, y + 10, w, 1);               // grounded lower rim, badge-style
+        if (hov) { ctx.fillStyle = 'rgba(255,255,255,0.55)'; ctx.fillRect(x, y, w, 1); }   // lit top rim — the button lifts
+        drawText(ctx, lbl, x + 5, y + 3, '#0c0e16');
+        {   // refresh glyph — a pixel ring with a clockwise arrowhead at its top-right gap
+            const ix = x + 5 + textWidth(lbl) + 3, iy = y + 2;
+            ctx.fillStyle = '#0c0e16';
+            ctx.fillRect(ix + 1, iy, 3, 1);          // top arc
+            ctx.fillRect(ix, iy + 1, 1, 4);          // left side
+            ctx.fillRect(ix + 1, iy + 5, 3, 1);      // bottom arc
+            ctx.fillRect(ix + 4, iy + 3, 1, 2);      // right side (below the gap)
+            ctx.fillRect(ix + 4, iy + 1, 3, 1);      // arrowhead bar...
+            ctx.fillRect(ix + 5, iy + 2, 1, 1);      // ...and tip, pointing clockwise into the ring
+        }
+        ctx.restore();
+        UPDATE_NUDGE.x = x; UPDATE_NUDGE.y = y; UPDATE_NUDGE.w = w; UPDATE_NUDGE.h = 11;
+        if (hov && !_updateReloading) {
+            const tip = 'YOUR TOWN IS SAVED - IT RETURNS AS YOU LEFT IT';
+            const tw2 = textWidth(tip), tx2 = Math.min(x + w, GW - 4) - (tw2 + 10);   // right-aligned under the pill
+            ctx.fillStyle = 'rgba(12,14,22,0.92)'; ctx.fillRect(tx2, y + 13, tw2 + 10, 11);
+            ctx.fillStyle = 'rgba(125,208,105,0.6)'; ctx.fillRect(tx2, y + 13, 2, 11);
+            drawText(ctx, tip, tx2 + 7, y + 16, '#a8e890');
+        }
     }
 
     // building hover tooltip — only when hovering the world (not over a panel, not dragging,
@@ -8748,6 +8909,7 @@ function drawStartScreen() {
         //   RYFARMS.crt.set('ntsc', 0.7)    → keys: ntsc, scan, mask, glow, aberr, vig
         //   RYFARMS.crt.get() / .reset() / .mode('classic')
         crt: { toggle: () => crt.toggle(), mode: (m) => crt.setMode(m), set: (k, v) => crt.set(k, v), get: () => crt.get(), reset: () => crt.reset() },
+        updateNudge: () => { _updateReady = true; },   // QA: raise the new-build pill without a real deploy
         select: (i) => { selected = world.farmers[i] || null; },
         speed: (mult) => { world._speedMult = mult; },
         // #98 fire a test Moment: RYFARMS.moment() spotlights farmer 0 finding a star-crystal (with its memory why)
