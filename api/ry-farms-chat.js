@@ -105,6 +105,8 @@ module.exports = async function handler(req, res) {
             'If the speaker carries a grudge (gossipTarget) or has heard rumors (rumorsHeard) about a third party, they may quietly warn the listener about that person.',
             'A farmer far along may share a hard-won tip; a well-travelled one may mention what they found out past the map.',
             'Avoid generic greetings unless the context truly calls for one.',
+            // #chat-address — in a crowded lane the watcher can't tell who an exchange belongs to
+            'The SPEAKER opens by addressing the listener BY FIRST NAME, woven naturally into the line ("Rover, that fence of yours..."). The LISTENER replies without the name unless it is natural - a follow-up question, a pointed retort, or redirecting to a third person.',
             'No emojis, markdown, modern tech references, or narration.',
             `Each visible line must be ${LINE_MAX} characters or less.`,
             'Return JSON only.',

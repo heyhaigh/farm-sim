@@ -1917,6 +1917,43 @@ export class World {
     // same inbox => same town", the honest determinism claim for this layer). Returns how many were applied.
     applyInbox(events) {
         if (!Array.isArray(events) || !events.length) return 0;
+        // Codex #75-2 — CANONICAL STATE BEATS THE GHOST. While a rehearsal runs, serialize() returns the
+        // pre-curtain snapshot; applying real inbox events to the LIVE (ghost-mutated) world meant a save
+        // could persist a snapshot that never saw the event — and consumeInbox would then clear it
+        // externally: a real raid acknowledged and erased. So: any active rehearsal ENDS NOW, in place —
+        // restore the pre-curtain world here (main.js's watcher no-ops on the nulled snapshot), THEN apply.
+        if (this._rehearsalSnapshot) {
+            // Codex #76-2 + #77-1 — TRANSACTIONAL, validated OFF-OBJECT first: a throwaway world trial-
+            // hydrates the snapshot, so a bad snapshot can never half-mutate the live world (the #76 catch
+            // could strand a raid rehearsal whose ghost telegraph the partial restore had already cleared —
+            // no telegraph, no natural curtain, no recovery). Trial failure aborts cleanly: the live world
+            // is UNTOUCHED, the rehearsal plays on to its own curtain, and the events stay unacknowledged
+            // for at-least-once redelivery.
+            try {
+                new World(this.seed, this.culture).#restoreFrom(structuredClone(this._rehearsalSnapshot));   // trial: throws here touch nothing
+            } catch (err) {
+                console.error('ry-farms: rehearsal settle failed validation - inbox deferred, rehearsal plays on', err);
+                return 0;
+            }
+            try {
+                this.#restoreFrom(structuredClone(this._rehearsalSnapshot));
+                this._tilesChanged = true;
+            } catch (err) {
+                // near-unreachable (the identical data just hydrated cleanly) — but if it fires, force the
+                // curtain NOW with the snapshot intact so main.js's watcher performs the full rewind.
+                console.error('ry-farms: rehearsal settle failed after validation - forcing curtain', err);
+                this.cancelRehearsal();
+                return 0;
+            }
+            this._rehearsalSnapshot = null;
+            this.cancelRehearsal();
+            // Codex #76-3 + #77-2 — a normal rewind builds a FRESH world, so every live-only scene
+            // transient dies with the ghost; the in-place settle must sweep them explicitly or the
+            // canonical raid staged next can speak the ghost rehearsal's counsel.
+            this._floorHold = 0;
+            this._raidScript = null; this._duelBeat = null; this._debrief = null;
+            this._settleEpoch = (this._settleEpoch || 0) + 1;   // main.js resets selection/follow/raid lenses on this edge
+        }
         // Codex r20 P1: idempotency. Inbox delivery is at-least-once (a crash between applying and clearing the
         // inbox re-delivers on reload); tracking APPLIED event ids makes the effect exactly-once — a re-delivered
         // raid can't dock the stores twice. The applied set rides the save (capped so it can't grow unbounded).
@@ -1958,7 +1995,15 @@ export class World {
                 // no raid is ever dropped (the #Codex23 no-clobber guarantee holds — only one pending slot).
                 // (#admin exception: a REHEARSAL occupying the slot is a ghost — the real raid supersedes it, curtain down.)
                 if (this.pendingRaid && this.pendingRaid.rehearsal) this.cancelRehearsal();
-                if (this.pendingRaid) { const p = this.pendingRaid; this.pendingRaid = null; this.#landRaid(p.e, p.dir, p.dirName); }
+                // Codex #74-1 — landing the displaced raid SYNCHRONOUSLY here bypassed the sacred-vote pause:
+                // during the ceremony it joins the deferred queue instead (serialized; drained exactly-once
+                // right after the curtain by #tickDeferredRaids). The no-clobber guarantee still holds — no
+                // raid is ever dropped, some just wait for the ballot.
+                if (this.pendingRaid) {
+                    const p = this.pendingRaid; this.pendingRaid = null;
+                    if (this.ceremonyActive()) (this.deferredRaids = this.deferredRaids || []).push({ e: p.e, dir: p.dir, dirName: p.dirName });
+                    else this.#landRaid(p.e, p.dir, p.dirName);
+                }
                 const rid = e.id || `${e.pairKey}:${e.ordinal}`;
                 const dir = (hashString('raiddir:' + rid) % 360) * Math.PI / 180;   // seeded flank they come from (cosmetic, but consistent across tell/muster/cinematic)
                 const dirName = screenCompass(dir);   // #raid-feel label the SCREEN direction, not the grid angle
@@ -1983,7 +2028,13 @@ export class World {
                 // gone" recap (as it did pre-#131), NOT a fresh alarm+ambush RAID_LEAD into the resumed session.
                 // Docking the stores now also means a town that's synced-but-never-reopened can't be left with an
                 // un-resolved raid. Only a raid arriving during LIVE play telegraphs (the intel-edge loop).
-                if (!this._live) { this.#landRaid(evt, dir, dirName); n++; }
+                if (!this._live) {
+                    // Codex #74-1 — a dormant-consumed raid landing DURING a loaded-mid-ceremony vote also
+                    // violated the pause: it defers the same way and lands right after the ballot.
+                    if (this.ceremonyActive()) (this.deferredRaids = this.deferredRaids || []).push({ e: evt, dir, dirName });
+                    else this.#landRaid(evt, dir, dirName);
+                    n++;
+                }
                 else {
                     // keep ONLY what #resolveRaid + the chronicle need, so the pending raid clones plain into the save
                     this.pendingRaid = { e: evt, landsAt: this.time + RAID_LEAD, detectAt: this.time + RAID_LEAD - RAID_RALLY, dir, dirName, detected: false };
@@ -2173,6 +2224,11 @@ export class World {
         this.#seedTales();     // #97 P4: the town's founding myths of rare ingredients, grown from its memories
         this.#seedSuperstition();  // #97 P3+: a seeded crafting superstition gives each town its own folk culture
         this.#updateCivic();   // #94: seat the first Town Manager + post day-one directive
+        // #curate (owner: "day 1 should open with the town's birth") — the saga's FIRST line is the
+        // founding headline, before any heir or claim. Runs once, on the fresh-boot path only.
+        const orcish = this.culture === 'orc';
+        this.addChronicle('town', `${fs.length} souls raised the ${orcish ? 'war-post' : 'well'} at ${this.name} — a ${orcish ? 'hold' : 'town'} begins.`,
+            null, null, '#f0d060', { tier: 'callout', tone: 'triumph', why: 'a beginning' });
     }
 
     // #97 P3+ — a seeded crafting SUPERSTITION per town: a 'lucky' ingredient folk favour, and sometimes a
@@ -2483,7 +2539,11 @@ export class World {
         const reason = this.#claimReason(f);
         f.say(reason, '#7dd069'); f.think(reason); f.sparkle = 1.5;
         this.addLog(`${f.sheet.name} staked a homestead — "${reason.toLowerCase()}"`, '#7dd069');
-        this.addChronicle('found', `${f.sheet.name.split(' ')[0]} staked a homestead — ${reason.toLowerCase()}.`, f, null, '#eef0f4');
+        // #curate (council) — the staking beats carry each founder's actual VOICE (their claim reason)
+        // and were tier-less: invisible unless the chronicle panel was open. They ARE the opening
+        // episode — promoted to callout toasts, one per founder as each stakes their ground.
+        this.addChronicle('found', `${f.sheet.name.split(' ')[0]} staked a homestead — ${reason.toLowerCase()}.`, f, null, '#eef0f4',
+            { tier: 'callout', tone: 'triumph', why: 'ground of their own, chosen for a reason' });
     }
     // Why did this settler pick THIS ground? Read the nearby resources + nearest neighbour + their
     // nature, and voice the most salient reason. This is the settlement decision made LEGIBLE.
@@ -2500,22 +2560,29 @@ export class World {
         // settlement made legible as a relationship decision, not just a resource one.
         const { driver } = this.#socialEval(f, cx, cy);
         const collab = f.p.collaboration, loner = collab < 0.42, sociable = collab > 0.55;
-        if (driver) {
-            const nm = driver.o.sheet.name.split(' ')[0];
-            if (driver.rapport <= -0.28) return `keeping my distance from ${nm}`;
-            if (driver.rapport >= 0.28 && driver.near) return `settling near ${nm} — we get on well`;
-            if (loner && !driver.near) return 'far from everyone — just how I like it';
-            if (sociable && driver.near && driver.d < 26) return `good — ${nm}'s right over there`;
-        }
-        // no neighbour nearby: solitude reads differently by nature
-        if (loner) return 'far from everyone — just how I like it';
-        if (sociable && !driver) return "a bit lonely out here, but the land's good";
-        if (trees >= 4) return 'plenty of timber to build with';
-        if (ore >= 3) return 'good stone in these rocks';
-        if (water >= 2) return "water's close — the crops'll thank me";
-        if (forage >= 4) return 'wild food all around — easy pickings';
-        if (driver && driver.near) return `neighbourly enough — ${driver.o.sheet.name.split(' ')[0]}'s not far`;
-        return "room to grow, and quiet. this'll do";
+        // #curate-claims (owner: seven of eight founders "keeping my distance from X") — the social
+        // driver used to RETURN first and flattened the whole founding into one broken-record line.
+        // Now every salient reason becomes a CANDIDATE in priority order, and a reason SHAPE that two
+        // founders already used steps aside for the next-most-true thing — same judgment, varied voice.
+        // Transient counter, display text only.
+        const nm = driver ? driver.o.sheet.name.split(' ')[0] : '';
+        const cands = [];
+        if (driver && driver.rapport <= -0.28) cands.push(['distance', `keeping my distance from ${nm}`]);
+        if (driver && driver.rapport >= 0.28 && driver.near) cands.push(['friend', `settling near ${nm} — we get on well`]);
+        if (driver && loner && !driver.near) cands.push(['loner', 'far from everyone — just how I like it']);
+        if (driver && sociable && driver.near && driver.d < 26) cands.push(['nearby', `good — ${nm}'s right over there`]);
+        if (loner) cands.push(['loner', 'far from everyone — just how I like it']);
+        if (sociable && !driver) cands.push(['lonely', "a bit lonely out here, but the land's good"]);
+        if (trees >= 4) cands.push(['timber', 'plenty of timber to build with']);
+        if (ore >= 3) cands.push(['stone', 'good stone in these rocks']);
+        if (water >= 2) cands.push(['water', "water's close — the crops'll thank me"]);
+        if (forage >= 4) cands.push(['forage', 'wild food all around — easy pickings']);
+        if (driver && driver.near) cands.push(['neighbourly', `neighbourly enough — ${nm}'s not far`]);
+        cands.push(['quiet', "room to grow, and quiet. this'll do"]);
+        const shapes = this._claimShapes || (this._claimShapes = new Map());
+        const pick = cands.find(([s]) => (shapes.get(s) || 0) < 2) || cands[0];
+        shapes.set(pick[0], (shapes.get(pick[0]) || 0) + 1);
+        return pick[1];
     }
     // Reveal a straight trail of fog between two points so a settler can path along it.
     #revealCorridor(i0, j0, i1, j1, r) {
@@ -2688,7 +2755,7 @@ export class World {
         const speakerLine = cleanChatText(data?.speakerLine || data?.speaker_line || first?.text || data?.speaker?.text || '');
         const listenerLine = cleanChatText(data?.listenerLine || data?.listener_line || second?.text || data?.listener?.text || '');
         if (!speakerLine || !listenerLine) return false;
-        speaker.say(speakerLine, this.#toneColor(data?.speakerTone || first?.tone || data?.tone));
+        speaker.say(this.addressedLine(speakerLine, listener), this.#toneColor(data?.speakerTone || first?.tone || data?.tone));   // Codex #74-4
         listener.say(listenerLine, this.#toneColor(data?.listenerTone || second?.tone || data?.tone));
         return true;
     }
@@ -2702,9 +2769,22 @@ export class World {
         return '#c8ccd8';
     }
 
+    // #chat-address (owner; Codex #74-4) — in a crowded lane you can't tell who an exchange belongs
+    // to: the opener carries the listener's first name (the congregation's address convention) unless
+    // the words already do. ONE helper so the deterministic fallback and the async LLM replacement
+    // can never disagree. Display text only.
+    addressedLine(line, listener) {
+        const lname = shortName(listener).replace(/[^a-z0-9]/gi, '');
+        if (lname && !new RegExp(`\\b${lname}\\b`, 'i').test(line)) return `${lname} - ${line}`;
+        return line;
+    }
+
     applyChatLines(speaker, listener, chat, opts = {}) {
-        const speakerLine = cleanChatText(chat.speakerLine || chat.line || chat.speaker || '...');
+        let speakerLine = cleanChatText(chat.speakerLine || chat.line || chat.speaker || '...');
         const listenerLine = cleanChatText(chat.listenerLine || chat.reply || chat.listener || '...');
+        // #chat-address (owner) — the INITIATOR opens with the listener's name unless the line already
+        // carries it (shared helper — Codex #74-4: the async LLM replacement must apply the same rule).
+        speakerLine = this.addressedLine(speakerLine, listener);
         const speakerColor = chat.speakerColor || chat.color || '#c8ccd8';
         const listenerColor = chat.listenerColor || chat.replyColor || '#c8ccd8';
         // #dialogue-pacing: the speaker speaks NOW; the listener's reply lands AFTER the speaker's line is
@@ -2849,6 +2929,9 @@ export class World {
             pendingRaid: (this.pendingRaid && !this.pendingRaid.rehearsal)
                 ? { ...this.pendingRaid, e: { ...this.pendingRaid.e } }   // a real telegraph rides the save — a plain clone (nested `e` copied so the save shares no live ref)
                 : null,
+            // Codex #74-1 — raids deferred by the sacred vote MUST survive a reload (exactly-once landing)
+            deferredRaids: (this.deferredRaids || []).map(dr => ({ e: { ...dr.e }, dir: dr.dir, dirName: dr.dirName })),
+            defRaidAt: this._defRaidAt || 0,   // Codex #76-1 — the drain pacer GATES #landRaid (authoritative), so it rides the save
             raidsSuffered: this.raidsSuffered || 0, learned: this.learned || null,   // #134 the learning arc rides the save
             // #counteroffensive PHASE 1 — the grievance ledger + the war vote + a passed mandate all ride the save (plain data)
             grievance: this.grievance || 0,
@@ -2866,6 +2949,7 @@ export class World {
                 order: this._congState.order, rr: this._congState.rr || 0, nextAt: this._congState.nextAt || 0,
                 turns: this._congState.turns || 0, last: this._congState.last ?? null,
                 used: [...(this._congState.used || [])], spokenSet: [...(this._congState.spokenSet || [])], scriptUsed: [...(this._congState.scriptUsed || [])],
+                closeStep: this._congState.closeStep || 0,   // Codex #74-3 — a reload mid-gavel restored undefined -> NaN
             } : null,
             // continue the RNG from a save-derived seed WITHOUT consuming the live stream
             // (saving must never be observable to the sim)
@@ -3028,7 +3112,9 @@ export class World {
         this._rev = d._rev || 0;   // Codex #22.1 save revision (loaded snapshot's rev; saveTown advances it)
         this._inboxApplied = Array.isArray(d.inboxApplied) ? d.inboxApplied : [];   // #reconciliation exactly-once
         this._inboxWatermark = (d.inboxWatermark && typeof d.inboxWatermark === 'object') ? { ...d.inboxWatermark } : {};
-        this.pendingRaid = (d.pendingRaid && d.pendingRaid.e) ? { ...d.pendingRaid, e: { ...d.pendingRaid.e } } : null;   // #131 restore a telegraphed raid mid-flight
+        this.pendingRaid = (d.pendingRaid && d.pendingRaid.e) ? { ...d.pendingRaid, e: { ...d.pendingRaid.e } } : null;
+        this.deferredRaids = Array.isArray(d.deferredRaids) ? d.deferredRaids.map(dr => ({ e: { ...dr.e }, dir: dr.dir, dirName: dr.dirName })) : [];   // Codex #74-1
+        this._defRaidAt = d.defRaidAt || 0;   // Codex #76-1 — reload must not accelerate authoritative landings   // #131 restore a telegraphed raid mid-flight
         this.raidsSuffered = d.raidsSuffered || 0; this.learned = d.learned || null;   // #134 the learning arc
         // #counteroffensive PHASE 1 — restore the grievance ledger + any in-flight vote / passed mandate (old saves: defaults).
         // Codex #43 P0 — DEEP-clone each: `d.*` may be a live snapshot tree (a test structuredClones serialize() rather
@@ -3047,6 +3133,7 @@ export class World {
         this._congState = (d.congState && Array.isArray(d.congState.order)) ? {
             order: d.congState.order, rr: d.congState.rr || 0, nextAt: d.congState.nextAt || 0, turns: d.congState.turns || 0, last: d.congState.last ?? null,
             used: new Set(d.congState.used || []), spokenSet: new Set(d.congState.spokenSet || []), scriptUsed: new Set(d.congState.scriptUsed || []),
+            closeStep: d.congState.closeStep || 0,   // Codex #74-3 — old saves default 0, never NaN
         } : null;
         this.lineageRoot = d.lineageRoot != null ? String(d.lineageRoot) : String(this.seed);   // #reconciliation lineage root
         this.rememberedTowns = Array.isArray(d.rememberedTowns) ? d.rememberedTowns.map(t => ({ seed: t.seed, name: t.name })) : [];   // #lineage prior towns
@@ -3554,12 +3641,41 @@ export class World {
             return;
         }
         if (r.foundingPhase === 'pre' && this.clock >= DAY_LENGTH * FOUNDING_GATHER_START) {
-            r.foundingPhase = 'gathering';
-            const where = this.culture === 'orc' ? 'the war-post' : 'the town well';
-            this.addChronicle('town', `${this.name} downs its tools and gathers at ${where} to weigh who should lead.`,
-                null, null, '#f0d060', { tier: 'callout', tone: 'triumph', why: 'the town assembles to deliberate' });
+            // #vote-postpone (owner: one orc holding the founding ceremony ALONE while five lay sick abed —
+            // "very anticlimactic and odd") — a town that cannot stand does not vote. If fewer than half the
+            // souls (floor 3, capped at the headcount) are able — healthy, upright, home — the vote WAITS:
+            // the phase clears, dawn re-arms it, and the day it finally happens the whole band is there for
+            // it. Deterministic (pure counts of sim state); illness and downed both resolve in days, so a
+            // postponed vote always comes.
+            const able = this.farmers.filter(f => f.health === 'healthy' && !f.downed && !f.onSortie).length;
+            const quorum = Math.min(this.farmers.length, Math.max(3, Math.ceil(this.farmers.length * 0.5)));
+            if (able < quorum) {
+                r.foundingPhase = null;
+                this.addChronicle('town', this.culture === 'orc'
+                    ? `The vote waits — too much of the band lies sick abed. The war-post stands silent another day.`
+                    : `The vote waits — too many lie sick abed. The well stands quiet another day.`,
+                    null, null, '#8a9ade', { tier: 'callout', tone: 'somber', why: 'a town that cannot stand does not vote' });
+            } else {
+                r.foundingPhase = 'gathering';
+                // Codex #74-2 — an alarm sounded BEFORE midday latched the whole town in 'muster' while the
+                // paused telegraph never landed; the ballot then resolved with nobody assembled. The ceremony
+                // releases the line — the deferred raid meets a re-mustered town after the ballot.
+                // (Codex #75-1: including farmers still WALKING to the line — path.then carries the intent)
+                for (const f of this.farmers) if (f.state === 'muster' || (f.path && f.path.then === 'muster')) { f.state = 'decide'; f.path = null; f.threatAlert = 0; }
+                const where = this.culture === 'orc' ? 'the war-post' : 'the town well';
+                this.addChronicle('town', `${this.name} downs its tools and gathers at ${where} to weigh who should lead.`,
+                    null, null, '#f0d060', { tier: 'callout', tone: 'triumph', why: 'the town assembles to deliberate' });
+            }
         } else if (r.foundingPhase === 'gathering' && this.clock >= DAY_LENGTH) {   // dusk: the ballot is read
             r.foundingPhase = 'done'; this._voteScene = null;
+            // Codex #75-1 — a telegraph that matured DURING the vote must not ambush the town on the very
+            // tick the ballot closes: the alarm sounds now, and the landing waits a full rally window so
+            // the line re-forms. Deterministic (state at a deterministic edge).
+            if (this.pendingRaid && !this.pendingRaid.rehearsal) {
+                const pr = this.pendingRaid;
+                pr.landsAt = Math.max(pr.landsAt, this.time + RAID_RALLY);
+                pr.detectAt = Math.min(pr.detectAt, this.time);
+            }
             this.#resolveFounding();
         } else if (r.foundingPhase === 'gathering') {
             this.#tickVoteDay();   // #vote-voice the candidates make their case (display-only)
@@ -3611,6 +3727,12 @@ export class World {
     // PUBLIC — the candidate slates, for the client's election-scene request (congregation.js). Pure reads
     // (#electionCandidates draws no rng), safe to call from the display layer any tick.
     electionSlates() { return { manager: this.#electionCandidates('manager'), watch: this.#electionCandidates('watch') }; }
+    // #vote-sacred (owner) — the VOTE ceremony is PROTECTED time: no raid telegraph advances and no
+    // lethal foe spawns while the town deliberates (a deferred raid lands right after the curtain —
+    // often at dusk, straight after the ballot, which is its own drama). Deliberately the vote phase
+    // ONLY: the day-1 congregation is unreachable by natural raids, and the adversarial raid suite
+    // stages boot-time raids that must keep landing on schedule. Pure phase read, deterministic.
+    ceremonyActive() { return this.roles.foundingPhase === 'gathering'; }
     // True while the town is assembled and deliberating (drives the farmers' walk-to-square behaviour).
     foundingGathering() {
         // #admin an election REHEARSAL borrows the day-10 gathering behavior wholesale: farmers converge on
@@ -3627,8 +3749,11 @@ export class World {
         this.roles.watchRotation = this.farmers.map(f => f.sheet.seed)
             .sort((a, b) => (hashString('watchrot:' + a) - hashString('watchrot:' + b)) || (a - b));
         this.roles.watchTurn = 0;
-        this.addChronicle('town', `${this.name} agreed to keep a shared watch — each taking a turn, so none bears it alone.`,
-            null, null, '#c8a860', { tier: 'callout', tone: 'triumph', why: 'the founders agreed to share the watch' });
+        // #curate (owner: "the chronicle doesn't record who volunteered") — the pact line names the
+        // first stander, matching the volunteer the player just heard claim the night at the gavel.
+        const first = this.farmers.find(f => f.sheet.seed === this.roles.watchRotation[0]);
+        this.addChronicle('town', `${this.name} agreed to keep a shared watch — each taking a turn, so none bears it alone.${first ? ` ${shortName(first)} stands the first night.` : ''}`,
+            first || null, null, '#c8a860', { tier: 'callout', tone: 'triumph', why: 'the founders agreed to share the watch' });
     }
 
     // #speech-floor — a scene-scoped conversation mutex (the founding congregation + the day-10 vote): one voice
@@ -3703,9 +3828,41 @@ export class World {
     #tickCongregation() {
         const cs = this._congState || (this._congState = {
             order: this.farmers.map(f => f.sheet.seed).sort((a, b) => (hashString('cong:' + a) - hashString('cong:' + b)) || (a - b)),
-            rr: 0, nextAt: 1.0, turns: 0, last: null, used: new Set(), spokenSet: new Set(), scriptUsed: new Set(),
+            rr: 0, nextAt: 1.0, turns: 0, last: null, used: new Set(), spokenSet: new Set(), scriptUsed: new Set(), closeStep: 0,
         });
         if (this.clock < cs.nextAt) return;
+        // #cong-close (owner: "the conversation just breaks abruptly") — the talk gets a GAVEL: in the
+        // final window the free exchange yields to a directed three-beat resolution — SETTLE (the last
+        // voice calls it), VOLUNTEER (the actual first watch-stander claims tonight — same seeded
+        // rotation #seedFoundingWatch will commit), ASSENT — so the pact toast lands on a decision the
+        // player just watched them reach. Hash picks + say() only; the rng is untouched.
+        if (this.clock >= CONGREGATE_END - 13) {
+            if (cs.closeStep >= 3 || !this.floorFree()) return;
+            const orc = this.culture === 'orc';
+            const ready = f => f && f.state === 'assemble' && f.health !== 'sick' && !f.downed;
+            const speakClose = (f, line) => {
+                if (!f) return;
+                f.say(line, '#f0e2b0');
+                this.holdFloor((f.bubble ? f.bubble.t0 : 1.6) + 0.15);
+                cs.last = f.sheet.seed;
+            };
+            if (cs.closeStep === 0) {
+                const settler = this.farmers.find(x => x.sheet.seed === cs.last && ready(x)) || this.farmers.find(ready);
+                speakClose(settler, orc ? 'ENOUGH WORDS. WE SHARE THE WATCH - HAND TO HAND, EVERY NIGHT.'
+                    : "then it's settled - we share the watch, each of us in turn.");
+            } else if (cs.closeStep === 1) {
+                // the SAME seeded rotation #seedFoundingWatch commits at the curtain — its first name speaks
+                const rot = this.farmers.map(f => f.sheet.seed)
+                    .sort((a, b) => (hashString('watchrot:' + a) - hashString('watchrot:' + b)) || (a - b));
+                const first = rot.map(s => this.farmers.find(f => f.sheet.seed === s)).find(ready);
+                speakClose(first, orc ? 'THE FIRST NIGHT IS MINE. SLEEP - I DO NOT.' : "i'll stand the first night. rest easy, all.");
+            } else {
+                const other = this.farmers.find(f => ready(f) && f.sheet.seed !== cs.last);
+                speakClose(other, orc ? 'SO IT IS SWORN.' : 'aye - agreed, then.');
+            }
+            cs.closeStep++;
+            return;
+        }
         const ready = f => f && f.state === 'assemble' && f.health !== 'sick' && !f.downed;
         const readyFounders = this.farmers.filter(ready);
         if (!readyFounders.length) { cs.nextAt = this.clock + 0.4; return; }   // nobody's arrived yet — re-check soon, never stall
@@ -4909,8 +5066,11 @@ export class World {
             this.addLog(b.level === 1 ? `${farmer.sheet.name} finished pitching a tipi — a first home!`
                 : `${farmer.sheet.name} finished raising a ${HOUSE_TIERS[b.level].name}!`, '#f0d060');
             const fn = farmer.sheet.name.split(' ')[0];
+            // #curate (council) — the FIRST ROOF is a day-2 charm beat a stranger should see without
+            // opening a panel; later tiers stay panel-only (they're progression, not story).
             this.addChronicle('build', b.level === 1 ? `${fn} pitched a tipi — a first roof.`
-                : b.level === 2 ? `${fn} raised a yurt.` : `${fn} raised a cottage — the estate is complete.`, farmer, null, '#eef0f4');
+                : b.level === 2 ? `${fn} raised a yurt.` : `${fn} raised a cottage — the estate is complete.`, farmer, null, '#eef0f4',
+                b.level === 1 ? { tier: 'callout', tone: 'triumph', why: 'a first roof over their head' } : null);
         }
     }
 
@@ -6548,6 +6708,15 @@ export class World {
         if (this._floorHold > 0) this._floorHold -= dt;   // #speech-floor countdown (display-only; see floorFree/holdFloor)
         if (this.clock >= DAY_LENGTH + NIGHT_LENGTH) {
             const endedDay = this.day, endedSeason = this.season;   // capture before the rollover mutates them
+            // #curate — flush the day's pooled level-ups as ONE digest line, stamped on the day they
+            // happened (before day++). Transient accumulator: a mid-day reload just drops the pending
+            // digest — display-only loss, no sim surface.
+            if (this._lvlDigest && this._lvlDigest.count) {
+                const dg = this._lvlDigest;
+                const names = dg.names.join(', ') + (dg.count > dg.names.length ? ` and ${dg.count - dg.names.length} more` : '');
+                this.addChronicle('level', `The ${this.culture === 'orc' ? 'band' : 'town'} grew stronger - ${names} leveled up.`, null, null, '#8ad0a0');
+            }
+            this._lvlDigest = null;
             this.clock = 0; this.day++;
             // age out expired fishing-spot cooldowns so the map doesn't accumulate stale entries forever
             for (const [k, d] of this.fishedAt) if (this.day - d > FISH_COOLDOWN) this.fishedAt.delete(k);
@@ -6581,6 +6750,15 @@ export class World {
         }
         this.#tickFounding();   // #106 drive the day-10 gathering -> dusk ballot across the day
         this.#tickCounterCeremony();   // #counteroffensive PHASE 2 drive the war-vote gathering -> dusk ballot
+        // Codex #74-1 — drain vote-deferred raids once the ceremony lifts, in arrival order, BEFORE the
+        // pending telegraph advances. Codex #75-3: ONE per beat (25s) so each raid's cinematic/battle
+        // record is observable. Codex #76-1: the pacer gates #landRaid — AUTHORITATIVE, so it is
+        // serialized (defRaidAt) and a reload continues the exact cadence instead of accelerating it.
+        if (this.deferredRaids && this.deferredRaids.length && !this.ceremonyActive() && this.time >= (this._defRaidAt || 0)) {
+            const dr = this.deferredRaids.shift();
+            this.#landRaid(dr.e, dr.dir, dr.dirName);
+            this._defRaidAt = this.time + 25;
+        }
         this.#tickPendingRaid(); // #131 drive a telegraphed raid across its lead window (no-op unless one is pending)
         this.#tickSortie();      // #counteroffensive drive the ghost war party (no-op unless one is staged; no rng)
         this.#tickCounterSortie();   // #counteroffensive PHASE 2 bring the REAL war party home when its deadline lands (no rng)
@@ -6728,7 +6906,7 @@ export class World {
         // #foe-cadence a LETHAL foe (orc/assassin) can only spawn when its long cooldown has elapsed — otherwise
         // this is a beast (fox/boar), the ordinary wilderness "weather". So raids are rare + well-spaced, and most
         // wilds encounters are non-lethal. When a foe DOES land, re-arm the gate so the next one is days away.
-        const foeReady = (this.foeCooldown || 0) <= 0;
+        const foeReady = (this.foeCooldown || 0) <= 0 && !this.ceremonyActive();   // #vote-sacred: no lethal foe crashes a ceremony (beasts stay ordinary weather)
         let kind;
         if (foeReady && standout && r < 0.20) kind = 'assassin';       // the RARE stalker — only ever after the standout
         else if (foeReady && r < 0.65) kind = 'orc';                   // the usual raider when a foe is due
@@ -7490,6 +7668,7 @@ export class World {
     // the warband arrives and #landRaid resolves it. No rng, no wall-clock — pure state + this.time comparisons.
     #tickPendingRaid() {
         const pr = this.pendingRaid; if (!pr) return;
+        if (this.ceremonyActive()) return;   // #vote-sacred — the telegraph holds its breath until the curtain
         // #raid-feel SIGHTING THE MUSTER: a hand working near where the warband gathers (the seeded edge point
         // in pr.dir — the same spot the cosmetic muster figures stand) SEES them and raises the alarm EARLY,
         // bolting back toward town. The world reacts to what's on its doorstep instead of waiting out the clock.
@@ -10069,8 +10248,16 @@ export class Farmer {
     #disperseLine() {
         const orc = this.world.culture === 'orc', p = this.p || {};
         const origin = this.sheet.origin && this.sheet.origin.name;
-        if (origin && hashString(this.sheet.seed + ':disp:o') % 3 === 0)
-            return this.#tr(`GROUND OF OUR OWN — LIKE ${origin.toUpperCase()} ONCE WAS`, `GROUND OF MY OWN — LIKE WE HAD BACK IN ${origin.toUpperCase()}`);
+        // #curate-dispersal — founders SHARE an origin, so the origin line used to come out of four
+        // mouths verbatim in one scene (owner-observed). First voice gets it; the rest fall through to
+        // their personality pools, probed past lines already spoken this dispersal. Transient set,
+        // hash picks only — display text, no rng.
+        const used = this.world._dispUsed || (this.world._dispUsed = new Set());
+        if (this._dispLine) return this._dispLine;   // one pick per farmer — re-thinks reuse it (and spare the pool)
+        if (origin && hashString(this.sheet.seed + ':disp:o') % 3 === 0 && !used.has('origin')) {
+            used.add('origin');
+            return this._dispLine = this.#tr(`GROUND OF OUR OWN — LIKE ${origin.toUpperCase()} ONCE WAS`, `GROUND OF MY OWN — LIKE WE HAD BACK IN ${origin.toUpperCase()}`);
+        }
         const warm = (p.collaboration ?? 0.5) > 0.55, bold = (p.competitiveness ?? 0.5) > 0.6, quiet = (p.diligence ?? 0.5) > 0.6;
         const pool = orc
             ? (bold ? ['I CLAIM THE HIGH GROUND.', 'THIS SPINE OF ROCK IS MINE.']
@@ -10081,7 +10268,15 @@ export class Farmer {
                 : quiet ? ['SOMEWHERE QUIET TO PUT DOWN ROOTS.', 'A STILL CORNER, AWAY FROM THE BUSTLE.']
                 : warm ? ['NEAR THE WELL, NEAR THE OTHERS.', 'CLOSE ENOUGH TO LEND A HAND.']
                 : ['GOOD SOIL AND A LITTLE SPACE.', 'FLAT GROUND NEAR WATER.']);
-        return pool[hashString(this.sheet.seed + ':disp') % pool.length];
+        // seeded start, probing past lines already spoken this dispersal; the farmer's own bucket
+        // first, then the neutral pool as spillover (three quiet founders share a 2-line bucket -
+        // without spillover the third is a forced duplicate)
+        const neutral = orc ? ['SOMEWHERE TO DIG IN.', 'FLAT GROUND FOR A CAMP.'] : ['GOOD SOIL AND A LITTLE SPACE.', 'FLAT GROUND NEAR WATER.'];
+        const space = pool.concat(neutral.filter(l => !pool.includes(l)));
+        let di = hashString(this.sheet.seed + ':disp') % space.length, tries = 0;
+        while (used.has(space[di]) && tries++ < space.length) di = (di + 1) % space.length;
+        used.add(space[di]);
+        return this._dispLine = space[di];
     }
 
     // #106 what a farmer mutters while the town deliberates at the founding gathering. Half the time they
@@ -10326,7 +10521,19 @@ export class Farmer {
             s.xp -= need; s.level++;
             const up = ['str', 'dex', 'con', 'int', 'wis', 'cha'][Math.floor(this.rand() * 6)];
             s.stats[up] = Math.min(20, s.stats[up] + 1);
-            this.world.addChronicle('level', `${s.name.split(' ')[0]} reached level ${s.level} - +1 ${up.toUpperCase()}.`, this, null, '#8ad0a0');
+            // #curate (council 2026-08-01) — day 1 logged ~17 "reached level N" lines, drowning the
+            // character beats a stranger should meet first. Level-ups POOL into one digest line per
+            // day (flushed at rollover); the on-field sparkle + "LEVEL UP!" say stays. Display-only:
+            // the stat-pick rand draw above is untouched, and addChronicle never draws.
+            // Codex #74-5 — count DISTINCT farmers, not levels: one hand gaining many levels used to read
+            // as "...and 17 more leveled up" about people who don't exist.
+            const dg = this.world._lvlDigest || (this.world._lvlDigest = { names: [], count: 0, seen: new Set() });
+            const fn0 = s.name.split(' ')[0];
+            if (!dg.seen.has(s.seed)) {
+                dg.seen.add(s.seed);
+                dg.count++;
+                if (dg.names.length < 4) dg.names.push(fn0);
+            }
             this.sparkle = 2.5; this.say('LEVEL UP!', '#7dd069');
             need = xpForLevel(s.level);
         }
@@ -10975,12 +11182,25 @@ export class Farmer {
             // in unison. Each now thinks a personality/lineage-flavoured line of their OWN — so even when two
             // speak on the same frame they say different things, and their per-farmer thought-timers (already
             // seeded) diverge the cadence from there. Same call pattern as before → the rng is untouched.
+            // #curate-dispersal (owner-reported cross-talk) — the whole cast leaves the SAME spot at the
+            // same moment, so eight un-gated thought bubbles collide mid-screen. Route the dispersal
+            // bubbles through the speech floor exactly like the assemble mutters: everyone still THINKS
+            // their line (the sheet's NOW: keeps it), but only one bubble holds the stage at a time.
+            // Display suppression only — think()'s rng-free, the floor is display state.
+            const floorWasFree = w.floorFree();
             this.think(this.#disperseLine());
+            if (!floorWasFree) this.bubble = null;
+            else if (this.bubble) w.holdFloor(this.bubble.t0 + 0.3);
             if (!this.#goTo(stop.i + 0.5, stop.j + 0.5, 'scout')) this.#backoff();
             return;
         }
         if (stop.best) { w.claimHomestead(this); return; }              // reached the chosen ground — stake it
+        // #curate-dispersal — same floor gate for the scout-stop rejections ("NOT HERE — KEEP LOOKING"
+        // pairs were colliding too); the note still lands in the journal-facing think either way.
+        const rejFree = w.floorFree();
         this.say(stop.note, '#c8a878'); this.think('NOT HERE — KEEP LOOKING');   // pass on this spot, say why
+        if (!rejFree) this.bubble = null;
+        else if (this.bubble) w.holdFloor(this.bubble.t0 + 0.3);
         this.scoutIdx++; this.scoutTimer = 1.4; this.state = 'scout';   // pause a beat to weigh it, then move on
     }
 
@@ -11578,7 +11798,9 @@ export class Farmer {
         // raiders come). Above the sleep branch, so a night alarm rouses sleepers to the muster — one clean
         // transition each way (when the raid clears they resume normal #decide and bed down again). Deterministic:
         // the trigger is a seeded this.time edge in #tickPendingRaid, so it fires alike in a watched or dormant town.
-        if (w.pendingRaid && w.pendingRaid.detected && !this.#onWatchDuty() && this.plot.sited) {
+        // Codex #74-2 — during the sacred vote the telegraph is paused, so the line has nothing to meet:
+        // no NEW muster forms while the ceremony holds (latched musters are released at the gathering edge).
+        if (w.pendingRaid && w.pendingRaid.detected && !this.#onWatchDuty() && this.plot.sited && !w.ceremonyActive()) {
             const spot = w.musterSpot(this);
             if (Math.abs(this.pos.i - spot.i) + Math.abs(this.pos.j - spot.j) > 1.3) {
                 this.think(this.p.competitiveness > 0.5 ? 'RAIDERS?! FORM UP!' : 'TO THE LINE — WE HOLD TOGETHER!');
@@ -11606,7 +11828,11 @@ export class Farmer {
         // Placed AFTER rally + survival but before ordinary chores: on watch, keeping the beat IS the job (the
         // farming-day cost is the point of a shared rotation). Pre-election it's the rotation-holder; once elected,
         // the Watch; a whisper-posted volunteer (#132) relieves either. Spotting a foe, they sound the alarm.
-        if (this.#onWatchDuty()) { this.#takeWatch(); return; }
+        // #vote-sacred (owner: "whoever is on watch should stop their watch for the town vote") - on the
+        // FOUNDING vote day the sentry stands down and joins the gathering like everyone else (the raid
+        // telegraph is paused for the ceremony, so the perimeter can spare them); every other day the
+        // beat comes first, exactly as before.
+        if (this.#onWatchDuty() && !w.foundingGathering()) { this.#takeWatch(); return; }
 
         if (w.weather === 'storm') {
             const ripe = this.#findCrop(c => c.stage === 3 && !c.withered);
@@ -13363,7 +13589,7 @@ export class Farmer {
                         this.state = 'decide';
                     }
                     else if (then === 'patrol') { this.state = 'watch'; this.watchScanT = WATCH_SCAN; }   // #watch reached a post — scan
-                    else if (then === 'muster') this.state = 'muster';   // #131 reached the line — hold it until the raid lands or passes
+                    else if (then === 'muster') this.state = this.world.ceremonyActive() ? 'decide' : 'muster';   // #131 reached the line (Codex #75-1: never INTO muster mid-vote)
                     else if (then === 'confer') this.state = 'decide';   // #132 reached the Manager — re-decide immediately (the confer resolves this tick)
                     else { this.state = 'idle'; this.wanderTimer = 1 + this.rand() * 2.5; }
                 } else {

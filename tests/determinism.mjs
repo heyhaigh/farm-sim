@@ -130,10 +130,16 @@ const BASELINE = {
     // geometry + own position) instead of stopping ON the walkable trunk tile or wherever findPath's route
     // arrived — measured 129/129 chop stands on the camera-facing side (was 0, all ON the trunk). Every
     // wood/ore trip's end tile moves, so all four seeds drift. same-twice held all seeds.
-    20260706: '9dd911d6',
-    42: '09a7130d',
-    7: '0b30e9d5',
-    3: '8d271013',
+    // re-pinned 2026-08-03 for #vote-sacred + #vote-postpone (owner-directed): (1) the day-10 sentry now
+    // stands down and ATTENDS the founding gathering (every seed's sentry path + post-vote trajectory
+    // moves — hence all four drift); (2) the raid telegraph pauses and lethal foes can't spawn during the
+    // vote ceremony (deferred raids land after the ballot); (3) a town with fewer than half its souls able
+    // postpones the vote to the next dawn (no baseline town hits this — verified separately on a forged
+    // 5-sick town: waits day 10, founds day 12). same-twice held all seeds.
+    20260706: 'c9dde5c0',
+    42: '374f6d2e',
+    7: 'fea2a360',
+    3: '56b56354',
 };
 
 function boot(seed, culture) {

@@ -287,6 +287,8 @@ let settingsDrag = null;                           // 'music' | 'sfx' while drag
 // (the settings NEW TOWN reset hatch is gone — founding lives on the world map; RYFARMS.wipeSave remains for QA)
 let lastSavedDay = 0;                              // last world.day autosaved (rollover-triggered)
 let saveFlashAt = -1e9;                            // brief "SAVED" tick in the top bar
+let _whisperNudged = false;                        // #curate one whisper-nudge toast per page load (localStorage gates per browser)
+let _heldToasted = false;                          // #fresh-held one refused-?fresh explanation toast per page load
 let resumeCard = null;                             // "PREVIOUSLY ON PROPAGATE" catch-up card (shown once on resume)
 let faceoff = null;                                // #faceoff the pre-battle VS card raised when the warband lands (render-only)
 let faceoffSeenEvent = null;                       // the raidEvent object we've raised a faceoff for (one card per raid; identity-keyed)
@@ -304,6 +306,7 @@ let touchHoldTimer = 0, touchHoldActive = false;
 // to the new finger's frame of reference, and either release could phantom-click for the other. Non-active
 // IDs are ignored outright until the owner releases. null = no gesture; hover moves always flow.
 let activePointerId = null;
+let _seenSettleEpoch = 0;    // Codex #76-3 — lens reset after an in-place rehearsal settle (farm.js bumps world._settleEpoch)
 let _hadRehearsal = false;   // #Codex67-1 edge-detects the curtain falling (rehearsal -> null)
 // #continue The menu's CONTINUE offer: the latest-played town in THIS browser, read from the same 'latest'
 // pointer ?play=1 resumes. null until the async read lands (the menu draws without it, then it appears) —
@@ -1352,6 +1355,60 @@ function farmerSprites(f) {
 function houseSprite(color) {
     if (!houseCache.has(color)) houseCache.set(color, makeHouse(color));
     return houseCache.get(color);
+}
+
+// #card-anim (owner, task #8) — the SHOWCASE walker for popup cards: the improved full walk cycle
+// (6f orc sheets / 6f human side rows; graceful 2-frame fallback), always FACING RIGHT, rig-aware.
+// One helper so every sprite-featuring modal shares the same look.
+function showcaseWalkFrames(f) {
+    let sets = null;
+    if (f.sheet.culture === 'orc' && orcSpriteReady()) {
+        sets = orcCharCache.get(f);
+        if (!sets || sets._gen !== orcGen()) { sets = orcCharSets(f); orcCharCache.set(f, sets); }
+    } else if (charReady()) {
+        sets = charCache.get(f);
+        if (!sets || sets._gen !== charGen()) { sets = buildCharSets(f); charCache.set(f, sets); }
+    }
+    // Codex #74-6 — the two sheets DISAGREE on which way "side" faces: the ORC side row faces LEFT
+    // (mirror for right), the HUMAN side row already faces RIGHT (drawFarmer's documented contract —
+    // mirroring it made human showcase walkers march backwards out of the card).
+    const side = sets && (sets.side || sets.left);
+    if (side) {
+        const mirror = f.sheet.culture === 'orc';
+        const cyc = side.cycle && side.cycle('walk');
+        if (cyc && cyc.length && cyc[0]) return { frames: cyc, mirror };
+        const two = [side.walk1, side.walk2].filter(Boolean);
+        if (two.length) return { frames: two, mirror };
+    }
+    if (!spriteCache.has(f)) spriteCache.set(f, makeFarmerSprites(f.sheet));
+    const s = spriteCache.get(f);
+    return { frames: [s.walk1, s.walk2].filter(Boolean), mirror: false };
+}
+// Draw the walking showcase with its FEET at feetY, centred on cx. Returns the anchor box {x,y,w,h}
+// (the body box, rig-corrected) so callers can hang overlays — e.g. a discovered object — off it.
+function drawShowcaseWalker(f, cx, feetY, S = 1.6, fps = 7) {
+    const { frames, mirror } = showcaseWalkFrames(f);
+    if (!frames.length || !frames[0]) return null;
+    const fr = frames[Math.floor(performance.now() / 1000 * fps) % frames.length];
+    const rig = fr._rig;
+    const bw = (rig ? rig.w : fr.width) * S, bh = (rig ? rig.h : fr.height) * S;
+    const ax = Math.round(cx - bw / 2), ay = Math.round(feetY - bh);
+    ctx.imageSmoothingEnabled = false;
+    if (mirror) {
+        ctx.save(); ctx.translate(ax + bw, ay); ctx.scale(-1, 1);
+        ctx.drawImage(fr, rig ? Math.round(rig.dx * S) : 0, rig ? Math.round(rig.dy * S) : 0, Math.round(fr.width * S), Math.round(fr.height * S));
+        ctx.restore();
+    } else {
+        ctx.drawImage(fr, ax + (rig ? Math.round(rig.dx * S) : 0), ay + (rig ? Math.round(rig.dy * S) : 0), Math.round(fr.width * S), Math.round(fr.height * S));
+    }
+    return { x: ax, y: ay, w: bw, h: bh };
+}
+// #card-close (owner, task #8) — the shared X button for dismissable cards: hover plate so it reads
+// as a button. Clicking anywhere still dismisses (unchanged behaviour); the X is the visible door.
+function drawCardClose(rx, ry) {
+    const hot = inRect(mouse, { x: rx - 2, y: ry - 2, w: 13, h: 13 });
+    if (hot) { ctx.fillStyle = 'rgba(220,120,110,0.28)'; ctx.fillRect(rx - 2, ry - 2, 13, 13); }
+    drawText(ctx, 'X', rx + 1, ry + 1, hot ? '#f0b0a8' : '#b08078');
 }
 
 // iso transforms
@@ -2605,7 +2662,14 @@ function collectDrawables() {
         const sx = cam.x + isoX(f.pos.i, f.pos.j);
         const sy = cam.y + isoY(f.pos.i, f.pos.j);
         maybeWorkSfx(f, sx, sy);
-        list.push({ y: sy + TILE_H * 0.5 + 0.1, draw: () => drawFarmer(f, sx, sy) });
+        // #speaker-forward (owner: a talker "blinking in and out of view") — the gatherings pack the
+        // cast so tightly that bodies eclipse each other, and a hidden farmer WITH A LIVE BUBBLE reads
+        // as a vanishing speaker. Scene-scoped: during the day-1 congregation and the vote-day
+        // gathering, whoever holds a bubble sorts to the very front of the scene (+1e6) so the voice
+        // always has a visible body. Everyday occlusion stays honest everywhere else.
+        const gathering = world.congregating() || world.foundingGathering();
+        const lift = gathering && f.bubble ? 1e6 : 0;
+        list.push({ y: sy + TILE_H * 0.5 + 0.1 + lift, draw: () => drawFarmer(f, sx, sy) });
         farmerBubbles.push({ f, sx });   // #bubble-overlay: drawn on top after the sort loop (never occluded)
     }
 
@@ -4025,9 +4089,23 @@ function drawUI() {
     barIconBtn(CHRON_BTN, 12, (x, y, act) => drawBankIcon(x + 2, y + 2, act), chronOpen, '#c8a0e0');   // bank icon (was CHRONICLE/THE SAGA text)
     if ((world._chronTotal || 0) > chronReadTotal && !chronOpen) drawCoin(CHRON_BTN.x + CHRON_BTN.w - 3, CHRON_BTN.y - 2, 6);   // UNREAD only
 
-    // (NEW TOWN moved into the settings menu.) A quiet "SAVED" tick under the cog whenever the town
-    // autosaves — trust that the memory is real.
-    if (performance.now() - saveFlashAt < 1500) drawText(ctx, 'SAVED', SETTINGS_BTN.x - 4, 18, '#7dd069');
+    // (NEW TOWN moved into the settings menu.) #save-badge (owner) — a GREEN BADGE with black text,
+    // letters typing in one by one so the eye catches it, fading out at the tail. Trust made visible.
+    {
+        const saveAge = performance.now() - saveFlashAt;
+        if (saveAge < 2400) {
+            const label = 'GAME SAVED';
+            const shown = Math.min(label.length, Math.ceil(saveAge / 60));
+            const bw = textWidth(label) + 10;
+            const bx = SETTINGS_BTN.x - bw + 8, by = 21;
+            ctx.save();
+            ctx.globalAlpha = saveAge > 2000 ? Math.max(0, (2400 - saveAge) / 400) : 1;
+            ctx.fillStyle = '#7dd069'; ctx.fillRect(bx, by, bw, 11);
+            ctx.fillStyle = '#4a8a3c'; ctx.fillRect(bx, by + 10, bw, 1);   // grounded lower rim
+            drawText(ctx, label.slice(0, shown), bx + 5, by + 3, '#0c0e16');
+            ctx.restore();
+        }
+    }
 
     BOARD_BTN.hidden = !world.board;   // only exists once the town has built the board
     if (!BOARD_BTN.hidden) {
@@ -4046,7 +4124,8 @@ function drawUI() {
     if (settingsOpen) drawSettings();
 
     drawChatWidget();    // #legibility Slice 2 — the whisper button/panel, bottom-left (hidden under full panels)
-    drawBarTooltips();   // LAST — hover labels must sit above any open panel/modal (top of z-order)
+    // (drawBarTooltips moved to the frame's true tail — after drawMoments — so hover labels sit above
+    // the TOASTS too, not just the panels; owner-reported z-order gap.)
 }
 
 // hover tooltips for the top-bar buttons — the icon-only ones (sound/settings/roster/world/chronicle) gave
@@ -6456,29 +6535,29 @@ function drawMoments() {
         const nm2 = (world.name || '').toUpperCase().slice(0, 10);
         if (nm2) drawText(ctx, nm2, Math.round(tcx - textWidth(nm2) / 2), tcy + r + 4, '#e8c860');
     }
-    if (f) {
-        const fr = farmerSprites(f);
-        const spr = (Math.floor(performance.now() / 1000 * 7) % 2) ? fr.walk1 : fr.walk2;   // 2-frame walk cycle
-        const S = 2;
-        ctx.imageSmoothingEnabled = false;
-        ctx.drawImage(spr, Math.round(colCX - spr.width * S / 2), Math.round(PY + 48 - spr.height * S / 2), spr.width * S, spr.height * S);
-    }
-    // the object in a beveled square slot (matches the inventory), glow clipped inside the frame
+    // #card-anim (owner, task #8) — the improved right-facing walk cycle at 80% of the old scale,
+    // with the discovered object OVERLAPPING the walker's upper-right shoulder, frameless (no slot,
+    // no stroke) — the find rides with the finder instead of sitting in a box below them.
+    // #card-align (owner: "characters and text feel ill-aligned") — both columns centre on the same
+    // vertical midline of the content band (between the header rule and the bottom border).
+    const cTop = PY + 16, cBot = PY + PH - 5, cMid = Math.floor((cTop + cBot) / 2);
+    let sprBox = null;
+    if (f) sprBox = drawShowcaseWalker(f, colCX, cMid + 27, 1.6);   // nominal ~54px body — feet ride below the midline
     if (hasObject) {
-        const sz = 22, sx = colCX - sz / 2, sy = PY + 70;
-        drawItemSlot(sx, sy, sz, null, null, { hi: true });
-        ctx.save(); ctx.beginPath(); ctx.rect(sx + 1, sy + 1, sz - 2, sz - 2); ctx.clip();
-        drawGem(e.icon.slice(5), sx + sz / 2, sy + sz / 2, 6, e.tone);
-        ctx.restore();
+        if (sprBox) drawGem(e.icon.slice(5), Math.round(sprBox.x + sprBox.w - 1), Math.round(sprBox.y + 5), 5, e.tone);
+        else drawGem(e.icon.slice(5), colCX, cMid, 7, e.tone);
     }
 
-    // title (what happened) + the memory WHY — a right column beside the showcase, or full width if none
+    // title (what happened) + the memory WHY — a right column beside the showcase, vertically centred
     const tx = hasLeft ? PX + 78 : PX + 10, tw = Math.floor((PX + PW - 10 - tx) / 4.2);
-    let ty = PY + 22;
-    for (const ln of wrapText(e.text.toUpperCase(), tw).slice(0, 3)) { drawText(ctx, ln, tx, ty, '#f4ead0'); ty += 8; }
-    if (e.why) { ty += 2; for (const ln of wrapText(e.why, tw).slice(0, 4)) { drawText(ctx, ln, tx, ty, '#9a86c0'); ty += 7; } }
+    const tLines = wrapText(e.text.toUpperCase(), tw).slice(0, 3);
+    const wLines = e.why ? wrapText(e.why, tw).slice(0, 4) : [];
+    const blockH = tLines.length * 8 + (wLines.length ? 2 + wLines.length * 7 : 0);
+    let ty = Math.max(cTop + 1, Math.floor(cMid - blockH / 2) + 1);
+    for (const ln of tLines) { drawText(ctx, ln, tx, ty, '#f4ead0'); ty += 8; }
+    if (wLines.length) { ty += 2; for (const ln of wLines) { drawText(ctx, ln, tx, ty, '#9a86c0'); ty += 7; } }
 
-    drawText(ctx, 'CLICK TO CONTINUE', PX + PW - textWidth('CLICK TO CONTINUE') - 5, PY + PH - 8, '#5a5f6c');
+    drawCardClose(PX + PW - 11, PY + 3);   // #card-close (owner, task #8): the X replaces "CLICK TO CONTINUE"
     ctx.restore();
 }
 
@@ -6516,8 +6595,7 @@ function drawResumeCard() {
     let y = PY + headH + 3;
     if (!lines.length) drawText(ctx, cultureWord(world.culture, 'boot.unwritten'), PX + 8, y, '#6a6f7c');
     else for (const ln of lines) { if (ln.head) { ctx.fillStyle = ln.c; ctx.fillRect(PX + 6, y + 2, 2, 2); } drawText(ctx, ln.t, PX + 11, y, ln.c); y += 8; }
-    const cue = 'CLICK TO CONTINUE';
-    drawText(ctx, cue, PX + Math.floor((PW - textWidth(cue)) / 2), PY + PH - 9, performance.now() % 1000 < 620 ? '#c8ccd8' : '#6a6f7c');
+    drawCardClose(PX + PW - 11, PY + 3);   // #card-close (owner, task #8): the X replaces the blinking cue
     ctx.restore();
 }
 
@@ -6687,13 +6765,11 @@ function drawFaceoff() {
     drawFaceoffBust(defImg, defReady, true, cx - gap, bustCy, PHt, -1, -slide);          // defender, LEFT, FLIPPED → faces right/inward
     drawFaceoffBust(raiderImg, raiderReady, false, cx + gap, bustCy, PHt, +1, +slide);   // raider, RIGHT, faces left/inward
 
-    // ===== full-width YELLOW banner along the bottom (kept ABOVE the busts so CLICK TO CONTINUE stays readable)
+    // ===== full-width YELLOW banner along the bottom (the card's footer rule; the cue text is gone —
+    // #card-close (owner, task #8): the X in the top corner is the door now)
     ctx.fillStyle = '#e8c650'; ctx.fillRect(0, banY, GW, banH);
     ctx.fillStyle = '#7a5e12'; ctx.fillRect(0, banY, GW, 1);                       // thin darker lip on top
-    if (performance.now() % 900 < 560) {
-        const cue = 'CLICK TO CONTINUE';
-        drawText(ctx, cue, cx - Math.floor(textWidth(cue, 1) / 2), banY + Math.floor((banH - 5) / 2), '#1a1206', 1);
-    }
+    drawCardClose(GW - 14, 26);
     ctx.restore();
 }
 
@@ -7671,6 +7747,23 @@ function frame(now) {
     // stump script has the walk-in window to land before the candidates take the floor. Self-guarded (once
     // per seed+day, rehearsals excluded) so the per-frame call costs two compares.
     if (world && !world._spectator && world.roles && world.roles.foundingPhase === 'gathering') requestElectionScene(world);
+    // #fresh-held — a ?fresh request that found the ground occupied resumed the LIVING town instead
+    // (by design); say so once, visibly, instead of only in the console.
+    if (!_heldToasted && !startScreen && world && new URLSearchParams(location.search).has('held')) {
+        _heldToasted = true;
+        calloutQueue.push({ text: 'This ground already holds a living town - resumed it. Start a new town from the menu to begin again', tone: 'neutral' });
+    }
+    // #curate whisper nudge (council) — the game's ONE verb, named once, early, then never again: a
+    // single toast ~50s into a fresh town's day 1, once per BROWSER (returning players know). Display-only.
+    if (!_whisperNudged && !startScreen && world && !world._spectator && world.day === 1 && world.clock > 50 && world.clock < 200) {
+        _whisperNudged = true;
+        try {
+            if (!localStorage.getItem('ryfarms-whisper-nudge')) {
+                localStorage.setItem('ryfarms-whisper-nudge', '1');
+                calloutQueue.push({ text: 'You are a quiet presence here - click a farmer and whisper a thought into their head', tone: 'neutral' });
+            }
+        } catch { /* private mode - skip */ }
+    }
     // #firstwatch the day-1 congregation has just broken up, having agreed a shared watch: take hold of the
     // founder standing it tonight. The first frame with a world only RECORDS the state (no edge), so loading
     // any save from later never triggers this. A player already trailing someone, or mid-raid, keeps what
@@ -7784,6 +7877,14 @@ function frame(now) {
     // never observes the intermediate null.
     if (_hadRehearsal && world && !world.rehearsal && world._rehearsalSnapshot) rewindFromRehearsal();
     _hadRehearsal = !!(world && world.rehearsal);
+    // Codex #76-3 — an IN-PLACE settle (canonical inbox ended a rehearsal inside farm.js) replaced every
+    // farmer object without the watcher above firing (snapshot already nulled): the settle epoch is the
+    // signal to run the same lens reset the normal rewind does, so selection/follow/raid caches never
+    // point at obsolete ghosts.
+    if (world && (world._settleEpoch || 0) !== _seenSettleEpoch) {
+        _seenSettleEpoch = world._settleEpoch || 0;
+        resetTownLenses();
+    }
 
     // #raidfx / #131b — a raid now plays in two beats. On STAGE the warband is still out at the fog edge
     // ('approach'): snap the camera to the well so the player watches them stream in out of the dark — but hold
@@ -7928,6 +8029,7 @@ function frame(now) {
     // (end-of-day recap card removed — the Moments/callout banners + the chronicle carry the day's beats now;
     // the "PREVIOUSLY ON" catch-up card on RESUME is separate and stays, see drawResumeCard)
     if (!startScreen) drawMoments();   // #98: spotlight the profound beats on top of the HUD (still under the CRT shader)
+    if (!startScreen) drawBarTooltips();   // TRUE top of z-order (owner): tooltips above toasts, panels, cards — everything but the cursor
     if (raidFx) {   // #raidfx battle-transition, topmost in-game layer; the war-horn sounds three times across it
         drawRaidFx(); raidFx.t += dt;
         if (raidFx.stings < 3 && raidFx.t >= raidFx.stings * 1.05) { raidFx.stings++; if (audio.raidSting) audio.raidSting(); }
@@ -8378,7 +8480,9 @@ function drawStartScreen() {
             console.error(`ry-farms: ?fresh refused — seed ${worldSeed} already holds a town (day ${st.snap.day ?? '?'}); resuming it instead. Use the NEW TOWN hatch to retire it.`);
             // REPLACE, not assign: assigning leaves the refused ?fresh URL in history, so Back returns to it
             // and it immediately redirects again — a trap between two entries (Codex #61-1).
-            location.replace('?seed=' + worldSeed);   // reboots into the resume path
+            // &held=1: the refusal was console-only and read as silent weirdness (it confused the game's own
+            // creator within a day of shipping) — the resumed boot shows a toast explaining what happened.
+            location.replace('?seed=' + worldSeed + '&held=1');   // reboots into the resume path
             return;
         } else foundGen = st.gen;   // observed EMPTY at this generation — a rev-0 claim is legitimate
     }
