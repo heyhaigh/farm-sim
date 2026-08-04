@@ -8055,7 +8055,7 @@ export class World {
                 re.raiders = re.raiders.filter(r => !r.fell && !r.falls); re.phase = 'flee'; re.timer = 2.8;
             }
         } else {   // flee — survivors run back out to the fog, then vanish
-            for (const f of this.farmers) { f._skirmish = false; f._freed = false; }   // the clash is over — the line stands down (pursuers re-flag below until the runners are seen off)
+            for (const f of this.farmers) { f._skirmish = false; f._freed = false; f._supMove = false; }   // the clash is over — the line stands down (pursuers re-flag below until the runners are seen off)
             for (const r of re.raiders) {
                 const dx = r.i - CENTER, dy = r.j - CENTER, dist = Math.hypot(dx, dy) || 1;
                 // same screen-x rule fleeing outward: moving toward greater (i - j) reads as running RIGHT.
@@ -8114,33 +8114,86 @@ export class World {
         // pure-hash cadence. A FREED defender (their raider felled) drifts to the nearest LIVE duel to flank
         // it. No dice here — the outcome was already scored by #resolveRaid; this pass makes it VISIBLE.
         if (re.phase !== 'flee' && this.raidEvent) {
+            // #raid-allhands (owner: "about half the town just stood there") — the duels are RAIDER-driven,
+            // so a town with more line-holders than raiders left the unclaimed half statues. Now EVERY
+            // line-holder without a duel of their own (and not mid-pursuit) fights as SUPPORT once the clash
+            // is joined: they move to a deterministic flank slot around a target raider and take a D&D-style
+            // action on their own turn cadence — strike, grapple, ready, or evade. Same contract as the
+            // flanker this generalizes: pure keyed hashes, no world.rand, the resolver's verdict untouched.
+            const dueling = new Set();
+            for (const r of re.raiders) if (!r.fell && r.duel && !r.duel.done && r.duel.opp) dueling.add(r.duel.opp);
+            const pursuing = new Set();
+            for (const r of re.raiders) if (r.pursuedBy != null && !r.fell) pursuing.add(r.pursuedBy);
             for (const f of this.farmers) {
-                if (!this.#holdsLine(f)) { f._skirmish = false; f._freed = false; continue; }
-                if (f._freed) {   // join the nearest live duel as a flanker
+                if (!this.#holdsLine(f)) { f._skirmish = false; f._freed = false; f._supMove = false; continue; }
+                // Codex #82 P1 — the tick that flips approach→march reaches here BEFORE the march branch has
+                // initialized duels/fx/record (next tick's work): a close-contact supporter hit `re.fx.push`
+                // on undefined. Support waits for `duelsAssigned` — which also stops every defender taking a
+                // pre-assignment support step while the pairing doesn't exist yet.
+                if (re.phase === 'march' && re.duelsAssigned && !dueling.has(f) && !pursuing.has(f.sheet.seed)) {   // support: flank, strike, grapple, ready, evade
                     let tgt = null, td = Infinity;
                     for (const r of re.raiders) {
-                        if (r.fell || !r.duel || r.duel.done) continue;
+                        if (r.fell) continue;
                         // #nemesis THE WITHHELD GANG-UP (fable's beat): none touch the named foe — the one he
                         // swore against fights him alone, and says so, once. The flanker finds another duel.
                         if (r.nemesis) {
-                            if (!re._mineSaid && r.duel.opp && !(r.duel.opp.bubble && r.duel.opp.bubble.t > 0)) {
+                            if (!re._mineSaid && r.duel && !r.duel.done && r.duel.opp && !(r.duel.opp.bubble && r.duel.opp.bubble.t > 0)) {
                                 re._mineSaid = true;
                                 r.duel.opp.say(this.culture === 'orc' ? 'NONE TOUCH HIM. MINE.' : "NO - he's mine!", '#ff6a50');
                             }
                             continue;
                         }
-                        const d2 = Math.hypot(r.i - f.pos.i, r.j - f.pos.j);
+                        // live duels are the fight — prefer them; a loose raider (making for the stores with
+                        // no pursuer on him) only draws support when no duel wants another blade.
+                        const bias = (r.duel && !r.duel.done) ? 0 : 6;
+                        const d2 = Math.hypot(r.i - f.pos.i, r.j - f.pos.j) + bias;
                         if (d2 < td) { td = d2; tgt = r; }
                     }
-                    if (tgt && td > 1.8) this.creatureStep(f.pos, (tgt.i - f.pos.i) / td, (tgt.j - f.pos.j) / td, 2.6 * dt);
-                    else if (tgt && this.time >= (f._flankAt || 0)) {   // a flanking swing from the second angle
-                        f._flankAt = this.time + 2.1;
-                        f._swingAt = this.time; f._swingI = tgt.i - f.pos.i; f._swingJ = tgt.j - f.pos.j;
-                        const hf = hashString('flank:' + f.sheet.seed + ':' + Math.floor(this.time * 2));
-                        if (re.record) re.record.push({ who: 'the flank', text: (hf % 3) ? 'HIT!' : 'PARRY!' });
-                        re.fx.push({ i: tgt.i, j: tgt.j, text: (hf % 3) ? 'HIT!' : 'PARRY!', color: (hf % 3) ? '#ffa040' : '#9ad0e0',
-                                     who: `${shortName(f)} flanks ${tgt.foeName || 'a raider'}`, at: this.time });
-                        if (re.fx.length > 64) re.fx.shift();
+                    f._supMove = false;
+                    if (tgt) {
+                        const dist = Math.hypot(tgt.i - f.pos.i, tgt.j - f.pos.j);
+                        // each supporter owns a seeded angle around the raider, so the gang-up fans out
+                        // into a ring instead of stacking into one shoving pile
+                        const ang = ((hashString('flankslot:' + f.sheet.seed) % 360) / 360) * Math.PI * 2;
+                        const gi = tgt.i + Math.cos(ang) * 1.3, gj = tgt.j + Math.sin(ang) * 1.3;
+                        const gd = Math.hypot(gi - f.pos.i, gj - f.pos.j);
+                        if (gd > 0.5) {
+                            // Codex #82 P2 — face the step ACTUALLY TAKEN (creatureStep slides along collisions),
+                            // not the goal bearing: goal-facing ran backwards on ~12% of support-run ticks.
+                            const pi = f.pos.i, pj = f.pos.j;
+                            this.creatureStep(f.pos, (gi - f.pos.i) / gd, (gj - f.pos.j) / gd, 2.6 * dt);
+                            // owner: "they're just floating" — a mustered supporter mid-relocation gets REAL
+                            // run frames (renderer reads _supMove; muster state alone drew the standing pose)
+                            f._supMove = true;
+                            const ddx = (f.pos.i - pi) - (f.pos.j - pj);
+                            if (Math.abs(ddx) > 1e-6) f.facing = ddx >= 0 ? 1 : -1;
+                        }
+                        if (dist < 2.4 && this.time >= (f._supAt || 0)) {   // in reach — take this turn's action
+                            const h = hashString('support:' + f.sheet.seed + ':' + Math.floor(this.time * 2));
+                            f._supAt = this.time + 2.4 + ((h >>> 8) % 90) / 100;
+                            const foe = tgt.foeName || 'a raider';
+                            const roll = h % 6;
+                            let text, color, who, atFoe = true;
+                            if (roll === 0) { text = 'GRAPPLE!'; color = '#e0c078'; who = `${shortName(f)} grapples ${foe}`; }
+                            else if (roll === 1) { text = 'READIES!'; color = '#9ad0e0'; who = `${shortName(f)} readies a strike`; atFoe = false; }
+                            else if (roll === 2) {
+                                text = 'EVADES!'; color = '#9a9a8a'; who = `${shortName(f)} slips a blow`; atFoe = false;
+                                const pd = dist || 1;   // a quick sidestep off the line of the swing
+                                const bi = f.pos.i, bj = f.pos.j;
+                                this.creatureStep(f.pos, (tgt.j - f.pos.j) / pd, -(tgt.i - f.pos.i) / pd, 10 * dt);
+                                // Codex #82 P2 / #83 — the burst dominates this tick's movement; face it, and
+                                // CLAIM RUN OWNERSHIP (a supporter already in reach took no flank step, so
+                                // _supMove was false and the square-up below overwrote the burst facing).
+                                const bx = (f.pos.i - bi) - (f.pos.j - bj);
+                                if (Math.hypot(f.pos.i - bi, f.pos.j - bj) > 1e-6) f._supMove = true;
+                                if (Math.abs(bx) > 1e-6) f.facing = bx >= 0 ? 1 : -1;
+                            }
+                            else { text = ((h >>> 4) % 3) ? 'HIT!' : 'PARRY!'; color = ((h >>> 4) % 3) ? '#ffa040' : '#9ad0e0'; who = `${shortName(f)} flanks ${foe}`; }
+                            if (roll !== 1 && roll !== 2) { f._swingAt = this.time; f._swingI = tgt.i - f.pos.i; f._swingJ = tgt.j - f.pos.j; }
+                            if (re.record) re.record.push({ who, text });
+                            re.fx.push({ i: atFoe ? tgt.i : f.pos.i, j: atFoe ? tgt.j : f.pos.j, text, color, who, at: this.time });
+                            if (re.fx.length > 64) re.fx.shift();
+                        }
                     }
                 }
                 let best = null, bd = Infinity;
@@ -8150,7 +8203,11 @@ export class World {
                 }
                 f._skirmish = bd < 3.2;
                 if (f._skirmish && best) {
-                    f.facing = ((best.i - best.j) - (f.pos.i - f.pos.j)) >= 0 ? 1 : -1;   // square up (iso screen-x)
+                    // Codex #82 P2 — while the support RUN frame owns the tick, movement owns the facing: the
+                    // square-up here was spinning runners to face the nearest raider mid-stride (backwards-run
+                    // animations, ~12% of support-run ticks). A live swing still turns them toward the target.
+                    if (!f._supMove || (f._swingAt && this.time - f._swingAt < 0.42))
+                        f.facing = ((best.i - best.j) - (f.pos.i - f.pos.j)) >= 0 ? 1 : -1;   // square up (iso screen-x)
                     // war-cries at FIRST CONTACT only, then quiet — once the exchanges start, speech bubbles
                     // fighting the combat text was two channels talking over each other (council Phase 0).
                     if ((re.cryUntil == null || this.time < re.cryUntil) && !(f.bubble && f.bubble.t > 0)) {
@@ -13928,8 +13985,14 @@ export class Farmer {
                     // breaks up over seconds on a seeded stagger — longer while the DEBRIEF is running, so they
                     // linger, take stock of the fight, and drift back to their lives one by one.
                     if (this._standAt == null) {
-                        const spanIdx = (w._debrief && w.time < w._debrief.until) ? 170 : 55;
-                        this._standAt = w.time + 1.2 + (hashString('stand:' + this.sheet.seed) % spanIdx) / 10;
+                        // #raid-decompress (owner: "they immediately start talking about their next chores
+                        // before the battle music even ends") — under a debrief the line HOLDS through the
+                        // ~7s battle-music comedown (8s floor), then disperses one by one across the window
+                        // (8-35s of the 40s debrief), talking the fight over the whole while. The no-debrief
+                        // stand-down (a raid that fizzled unstruck) keeps its quick 1.2-6.7s drift.
+                        const deb = w._debrief && w.time < w._debrief.until;
+                        this._standAt = w.time + (deb ? 8 + (hashString('stand:' + this.sheet.seed) % 270) / 10
+                                                      : 1.2 + (hashString('stand:' + this.sheet.seed) % 55) / 10);
                     }
                     if (w.time >= this._standAt) { this._standAt = null; this.state = 'decide'; this._skirmish = false; break; }
                 } else this._standAt = null;

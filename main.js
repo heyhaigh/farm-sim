@@ -3258,8 +3258,8 @@ function drawFarmer(f, sx, sy) {
             if (frame && !isOrc) swordBaked = true;
             // a line-holder between swings falls through → armed guard (idle breathe + the sword overlay below)
         }
-        if (!frame && (f.state === 'walk' || f.state === 'flee')) {
-            const run = (f.state === 'flee' || battleRush) ? cyc('run') : null;
+        if (!frame && (f.state === 'walk' || f.state === 'flee' || f._supMove)) {   // #raid-allhands a mustered supporter relocating mid-battle runs, not glides
+            const run = (f.state === 'flee' || battleRush || f._supMove) ? cyc('run') : null;
             if (run) frame = loop(run, f.state === 'flee' ? 15 : 12);
             else {
                 const walk = cyc('walk');
@@ -8190,7 +8190,7 @@ function frame(now) {
     UPDATE_NUDGE.w = 0;
     if (_updateReady && booted && !startScreen && !worldMapOpen && !rosterOpen && !chronOpen && !boardOpen && !settingsOpen) {
         const lbl = _updateReloading ? 'SAVING...' : 'NEW BUILD READY';
-        const ICON_W = 7;
+        const ICON_W = 4;
         const w = textWidth(lbl) + 10 + ICON_W + 3;
         const x = SETTINGS_BTN.x - w + 8;                                       // right-aligned like the save badge
         let y = 21;
@@ -8204,20 +8204,15 @@ function frame(now) {
         ctx.fillStyle = '#4a8a3c'; ctx.fillRect(x, y + 10, w, 1);               // grounded lower rim, badge-style
         if (hov) { ctx.fillStyle = 'rgba(255,255,255,0.55)'; ctx.fillRect(x, y, w, 1); }   // lit top rim — the button lifts
         drawText(ctx, lbl, x + 5, y + 3, '#0c0e16');
-        {   // refresh glyph — a pixel ring with a clockwise arrowhead at its top-right gap
-            const ix = x + 5 + textWidth(lbl) + 3, iy = y + 2;
+        {   // ► right arrow (owner: the refresh ring didn't read) — the follow plate's cycle-arrow glyph
+            const ix = x + 5 + textWidth(lbl) + 3, iy = y + 3;
             ctx.fillStyle = '#0c0e16';
-            ctx.fillRect(ix + 1, iy, 3, 1);          // top arc
-            ctx.fillRect(ix, iy + 1, 1, 4);          // left side
-            ctx.fillRect(ix + 1, iy + 5, 3, 1);      // bottom arc
-            ctx.fillRect(ix + 4, iy + 3, 1, 2);      // right side (below the gap)
-            ctx.fillRect(ix + 4, iy + 1, 3, 1);      // arrowhead bar...
-            ctx.fillRect(ix + 5, iy + 2, 1, 1);      // ...and tip, pointing clockwise into the ring
+            for (let c = 0; c < 3; c++) ctx.fillRect(ix + c, iy + c, 1, 5 - c * 2);   // tip points right
         }
         ctx.restore();
         UPDATE_NUDGE.x = x; UPDATE_NUDGE.y = y; UPDATE_NUDGE.w = w; UPDATE_NUDGE.h = 11;
         if (hov && !_updateReloading) {
-            const tip = 'YOUR TOWN IS SAVED - IT RETURNS AS YOU LEFT IT';
+            const tip = 'REFRESH';
             const tw2 = textWidth(tip), tx2 = Math.min(x + w, GW - 4) - (tw2 + 10);   // right-aligned under the pill
             ctx.fillStyle = 'rgba(12,14,22,0.92)'; ctx.fillRect(tx2, y + 13, tw2 + 10, 11);
             ctx.fillStyle = 'rgba(125,208,105,0.6)'; ctx.fillRect(tx2, y + 13, 2, 11);
