@@ -234,6 +234,8 @@ function cursorIsHot(worldTooltip) {
     }
     if (!selected && inRect(m, MINIMAP)) return true;
     if (rosterOpen) { for (const r of rosterRows) if (m.y >= r.y0 && m.y < r.y1) return true; }
+    // #credits — the settings panel's CraftPix link (and its other buttons) wear the gold glove
+    if (settingsOpen && settingsHits) { for (const k of ['close', 'music', 'sfx', 'portalBtn', 'craftpix']) if (settingsHits[k] && inRect(m, settingsHits[k])) return true; }
     if (chronOpen) { for (const r of chronRows) if (m.y >= r.y0 && m.y < r.y1) return true; }
     return !!worldTooltip;   // hovering a building/farmer/merchant that shows a tooltip
 }
@@ -4510,7 +4512,7 @@ function foundNewTown(culture) {
 // Settings menu — New Town + music/SFX volume. Opened by the top-bar gear cog.
 // ---------------------------------------------------------------------------
 function drawSettings() {
-    const PW = Math.min(GW - 24, 240), PH = ADMIN_BOOTH ? 184 : 100;   // the booth rows only exist under ?admin=1; coach line removed
+    const PW = Math.min(GW - 24, 240), PH = ADMIN_BOOTH ? 198 : 114;   // the booth rows only exist under ?admin=1; coach line removed
     const PX = Math.floor((GW - PW) / 2), PY = Math.floor((GH - PH) / 2) - 6;
     ctx.fillStyle = 'rgba(6,7,11,0.72)'; ctx.fillRect(0, 18, GW, GH - 18);
     uiPanel(PX, PY, PW, PH);
@@ -4555,12 +4557,23 @@ function drawSettings() {
     ctx.fillStyle = '#20242f'; ctx.fillRect(PX + 4, PY + 92, PW - 8, 1);
     // (NEW TOWN removed — founding lives on the world map's CREATE TOWN now; the wipe hatch stays as RYFARMS.wipeSave)
 
+    // #credits — CraftPix character sprites (licence: deployed-game use OK). Click opens their pack page.
+    {
+        const cLabel = 'CHARACTER SPRITES BY CRAFTPIX.NET';
+        const cw = textWidth(cLabel);
+        const cb = { x: IX, y: PY + 97, w: cw + 4, h: 9 };
+        const chov = inRect(mouse, cb);
+        drawText(ctx, cLabel, IX, PY + 99, chov ? '#9ad0e0' : '#5a5f6c');
+        ctx.fillStyle = chov ? '#9ad0e0' : '#3a3f4c'; ctx.fillRect(IX, PY + 105, cw, 1);   // underline: it's a link
+        settingsHits.craftpix = cb;
+    }
+
     // #admin THE DIRECTOR'S BOOTH — stage a ghost rehearsal (raid / the vote) for videos and stress-tests.
     // Nothing a rehearsal does is recorded (no chronicle, no roles, no SuperMemory, stripped from saves).
     // #adminbooth ?admin=1 only — see the flag's comment at module scope.
     if (ADMIN_BOOTH) {
         const rh = world.rehearsal;
-        drawText(ctx, 'ADMIN - REHEARSALS (GHOST RUNS, NOTHING RECORDED)', IX, PY + 98, '#8a6fae');
+        drawText(ctx, 'ADMIN - REHEARSALS (GHOST RUNS, NOTHING RECORDED)', IX, PY + 112, '#8a6fae');
         const admRow = (y, key, live, liveLabel, idleLabel) => {
             const b = { x: IX, y, w: PW - 16, h: 14 };
             ctx.fillStyle = live ? '#2e2410' : '#141824'; ctx.fillRect(b.x, b.y, b.w, b.h);
@@ -4569,12 +4582,12 @@ function drawSettings() {
             drawText(ctx, label, b.x + Math.floor((b.w - textWidth(label)) / 2), b.y + 4, live ? '#f0c860' : '#9ab8e8');
             settingsHits[key] = b;
         };
-        admRow(PY + 108, 'admRaid', rh && rh.kind === 'raid', 'RAID REHEARSAL LIVE - CANCEL', 'STAGE A RAID');
-        admRow(PY + 126, 'admVote', rh && rh.kind === 'election', 'VOTE REHEARSAL LIVE - CANCEL', 'STAGE THE VOTE');
-        admRow(PY + 144, 'admSortie', rh && rh.kind === 'sortie', 'WAR PARTY LIVE - CANCEL', 'STAGE A WAR PARTY');   // #counteroffensive
+        admRow(PY + 122, 'admRaid', rh && rh.kind === 'raid', 'RAID REHEARSAL LIVE - CANCEL', 'STAGE A RAID');
+        admRow(PY + 140, 'admVote', rh && rh.kind === 'election', 'VOTE REHEARSAL LIVE - CANCEL', 'STAGE THE VOTE');
+        admRow(PY + 158, 'admSortie', rh && rh.kind === 'sortie', 'WAR PARTY LIVE - CANCEL', 'STAGE A WAR PARTY');   // #counteroffensive
 
         // #Codex38 P2-5: the booth REFUSES to stage over a real raid — say so, instead of silently closing
-        if (adminNote && performance.now() < adminNote.until) drawText(ctx, adminNote.text, IX, PY + 160, '#e0a850');
+        if (adminNote && performance.now() < adminNote.until) drawText(ctx, adminNote.text, IX, PY + 174, '#e0a850');
     }
     // (the "ESC OR CLICK OUTSIDE TO CLOSE" coach line is gone — owner call, the affordance is universal)
     settingsHits.panel = { x: PX, y: PY, w: PW, h: PH };
@@ -7178,6 +7191,11 @@ out.addEventListener('pointerup', (e) => {
         if (inRect(p, settingsHits.musicSlider)) { audio.setMusicVolume((p.x - settingsHits.musicSlider.x) / settingsHits.musicSlider.w); return; }
         if (inRect(p, settingsHits.sfxSlider)) { audio.setSfxVolume((p.x - settingsHits.sfxSlider.x) / settingsHits.sfxSlider.w); return; }
         if (inRect(p, settingsHits.portalBtn)) { window.open('/memory-graph.html', '_blank', 'noopener'); return; }
+        // #credits — the CraftPix attribution link
+        if (settingsHits.craftpix && inRect(p, settingsHits.craftpix)) {
+            window.open('https://craftpix.net/freebies/free-swordsman-1-3-level-pixel-top-down-sprite-character-pack/', '_blank', 'noopener');
+            return;
+        }
         // #admin the director's booth: stage/cancel a ghost rehearsal (raid / the vote). The wall-clock nonce
         // is the rehearsal's ONLY randomness (farm.js keys pure hashes off it — the sim's rng is never touched).
         if (settingsHits.admRaid && inRect(p, settingsHits.admRaid)) {
