@@ -3204,6 +3204,32 @@ export class World {
         this.structures = d.structures.map(s => ({ ...s }));
         this.scarecrows = d.scarecrows.map(s => ({ ...s }));
         this.monuments = d.monuments.map(m => ({ ...m }));
+        // #monument-place MIGRATION — saves from before the placement law hold their raid stones on the
+        // old 7-10-tile ring around the silo (the "graveyard cluster"). Re-seat any raid stone inside the
+        // old ring out to the muster band, on a hashed angle from the stone's own identity (deterministic,
+        // idempotent: once beyond 14 tiles the rule never touches it again). Foe-stand stones (no `raid`
+        // flag) mark the actual fight spot and are left where they stand.
+        // Codex #85 P2 — nearestOpenTile checks TERRAIN only, so two stones could land the same tile
+        // (one hides the other's sprite + hover). Track every occupied coordinate through the sweep and
+        // accept a destination only if it is open, out of the ring, AND unoccupied.
+        const _monTaken = new Set(this.monuments.map(m => m.i + ',' + m.j));
+        for (const m of this.monuments) {
+            if (!m.raid) continue;
+            if (Math.hypot(m.i - CENTER, m.j - CENTER) > 14) continue;
+            _monTaken.delete(m.i + ',' + m.j);   // its own tile never blocks it (legacy stacks all re-seat)
+            const idk = 'monmig:' + (m.day || 0) + ':' + (m.foe || '') + ':' + (m.hero || '') + ':' + m.i + ',' + m.j;
+            // MOVE ONLY TO A SPOT THAT ESCAPES THE RING — a nearestOpenTile nudge back inside would
+            // change m.i/m.j (and so this key) and make the stone WALK to a fresh target every load.
+            // Probing candidates until one lands beyond 14 keeps both outcomes stable: moved ⇒ out of
+            // range forever; unmovable (never in practice) ⇒ untouched ⇒ same key, same no-op next load.
+            for (let t = 0; t < 12; t++) {
+                const ang = (hashString(idk + ':a' + t) % 360) * Math.PI / 180;
+                const dist = 16 + (hashString(idk + ':d' + t) % 12);
+                const spot = this.nearestOpenTile({ i: Math.round(CENTER + Math.cos(ang) * dist), j: Math.round(CENTER + Math.sin(ang) * dist) });
+                if (spot && Math.hypot(spot.i - CENTER, spot.j - CENTER) > 14 && !_monTaken.has(spot.i + ',' + spot.j)) { m.i = spot.i; m.j = spot.j; break; }
+            }
+            _monTaken.add(m.i + ',' + m.j);      // re-register wherever it now stands (moved or not)
+        }
         this.chronicle = d.chronicle.map(c => ({ ...c }));
         this._chronBonds = new Set(d.chronBonds); this._chronRifts = new Set(d.chronRifts);
         this.log = d.log.map(l => ({ ...l, t: 0 }));   // rebase the render clock to this page's epoch
@@ -7118,7 +7144,7 @@ export class World {
     // wounds on the ranked defenders, the whole town roused, and the result line. Runs SYNCHRONOUSLY in both the
     // watched and dormant path. Returns the felled monument spots so a watched town's cinematic can march its
     // raiders to fall there (display-only). Draws NO sim rng (seed-hashed placement only).
-    #applyRaidOutcome(out, e) {
+    #applyRaidOutcome(out, e, dir) {
         const rid = e.id || `${e.pairKey}:${e.ordinal}`;
         const hero = out.heroSeed != null ? this.farmers.find(f => f.sheet.seed === out.heroSeed) : null;
         // #nemesis the arc advances on the verdict the resolver already fixed (deterministic — no new rolls):
@@ -7150,10 +7176,37 @@ export class World {
         }
         const monSpots = [];
         for (let k = 0; k < out.felled; k++) {
-            const ang = (hashString('raidmon:' + rid + ':' + k) % 360) * Math.PI / 180;
-            const d = 7 + (hashString('raidmd:' + rid + ':' + k) % 4);   // 7-10 tiles out — the town's edge, where the warband is met
+            // #monument-place (owner: "they all appear around the town silo... consolidating in the same
+            // location") — the stone rises WHERE THE STAND HAPPENED: on the muster line's own arc facing
+            // the raid's approach (same frontier math as musterSpot), fanned across the line, not on a
+            // random ring around the centre. `dir` is the landing's approach angle (sim state); fully
+            // seeded fallback if a caller ever lacks it.
+            const ang = (dir != null ? dir : (hashString('raidmon:' + rid + ':' + k) % 360) * Math.PI / 180)
+                + (((hashString('raidmona:' + rid + ':' + k) % 100) / 100) - 0.5) * 1.4;
+            const d = Math.max(16, Math.min(this.townRadius() + 3, 26)) + (hashString('raidmd:' + rid + ':' + k) % 6);
             const mi = Math.round(CENTER + Math.cos(ang) * d), mj = Math.round(CENTER + Math.sin(ang) * d);
-            const spot = this.nearestOpenTile({ i: mi, j: mj }) || { i: mi, j: mj };
+            let spot = this.nearestOpenTile({ i: mi, j: mj }) || { i: mi, j: mj };
+            // Codex #85 P2 / #86 — NEVER insert onto a tile another monument holds (one stone hides
+            // the other). If the terrain nudge lands on an occupied tile: widen ring by ring (true
+            // spiral, r<=8), preferring REVEALED tiles like the foe-stand rule, falling back to any
+            // open unoccupied tile so fog alone never blocks a stone. If even r<=8 is exhausted
+            // (a hemmed pocket), the stone is NOT raised — no stacking; the deed still lives in the
+            // chronicle, and the cinematic simply has one fewer fall spot.
+            const takenAt = (i, j) => this.monuments.some(m => m.i === i && m.j === j);
+            if (takenAt(spot.i, spot.j)) {
+                let found = null;
+                search: for (const needReveal of [true, false]) {
+                    for (let r = 1; r <= 8; r++) for (let dj = -r; dj <= r; dj++) for (let di = -r; di <= r; di++) {
+                        if (Math.max(Math.abs(di), Math.abs(dj)) !== r) continue;   // ring perimeter only — nearest first
+                        const ni = spot.i + di, nj = spot.j + dj;
+                        if (takenAt(ni, nj) || this.pathBlocked(ni, nj)) continue;
+                        if (needReveal && !this.isRevealed(ni, nj)) continue;
+                        found = { i: ni, j: nj }; break search;
+                    }
+                }
+                if (!found) continue;   // exhausted — refuse the stack (Codex #86: no insertion on an occupied tile)
+                spot = found;
+            }
             this.#addMonument({ i: spot.i, j: spot.j, heroSeed: out.heroSeed, hero: hero ? shortName(hero) : 'the Watch', foe: out.felledNames[k] || 'a raider', day: this.day, party: 1, raid: true, tier: this.#raidMonumentTier(out, e) });
             monSpots.push(spot);
         }
@@ -7238,7 +7291,7 @@ export class World {
         this.addChronicle('raid', `${out.clan} fell upon ${this.name}, carrying off ${out.harvestLost} of its stored harvest — and the town rose to meet them.`,
             null, null, '#e05840', { tier: 'grand', tone: 'somber', label: 'RAIDERS AT THE GATE', why: `raided by ${out.clan}`, icon: `foe:orc:${out.n}` });
         this.addLog(`${out.clan} descends on ${this.name} — raiders at the fence!`, '#e05040');
-        const monSpots = this.#applyRaidOutcome(out, e);
+        const monSpots = this.#applyRaidOutcome(out, e, dir);
         if (this._live) this.#stageRaidCinematic(out, e, monSpots, dir);
     }
 
@@ -7283,9 +7336,10 @@ export class World {
     #landRehearsalRaid(e, dir) {
         const out = this.#resolveRaid(e, this.harvestTotal || 0);   // pure — computed for the show only
         const monSpots = [];
-        for (let k = 0; k < out.felled; k++) {   // fall SPOTS only (same seeded placement) — no monuments raised
-            const ang = (hashString('raidmon:' + e.id + ':' + k) % 360) * Math.PI / 180;
-            const d = 7 + (hashString('raidmd:' + e.id + ':' + k) % 4);
+        for (let k = 0; k < out.felled; k++) {   // fall SPOTS only (same seeded placement as #monument-place) — no monuments raised
+            const ang = (dir != null ? dir : (hashString('raidmon:' + e.id + ':' + k) % 360) * Math.PI / 180)
+                + (((hashString('raidmona:' + e.id + ':' + k) % 100) / 100) - 0.5) * 1.4;
+            const d = Math.max(16, Math.min(this.townRadius() + 3, 26)) + (hashString('raidmd:' + e.id + ':' + k) % 6);
             const mi = Math.round(CENTER + Math.cos(ang) * d), mj = Math.round(CENTER + Math.sin(ang) * d);
             monSpots.push(this.nearestOpenTile({ i: mi, j: mj }) || { i: mi, j: mj });
         }

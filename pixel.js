@@ -1925,127 +1925,142 @@ export function makeMonument(tier = 2, season = 'SUMMER') {
         ctx.fillStyle = shade(OL, 0.9); ctx.fillRect(x, y + h, w, 1);           // base AO
     };
 
-    if (tier === 1) {                 // CAIRN — a low pile of rough field stones
-        [c, ctx] = makeCanvas(12, 14);
-        seatShadow(ctx, { cx: 6, cy: 12, rx: 5, ry: 2 }, { alpha: 0.3 });   // §S.2 fixed seat shadow
-        block(2, 8, 5, 4, 2); block(6, 9, 4, 3, 1); block(4, 5, 4, 4, 3); block(5, 2, 3, 3, 2);
-        ctx.fillStyle = F[3]; ctx.fillRect(3, 11, 1, 1); ctx.fillRect(8, 10, 1, 1);   // lichen flecks
+    // #monument-bright (owner: "the monuments begin looking like a graveyard... they're to honor a
+    // stand, not mourn the dead") — the whole set reworked CELEBRATORY: warm ivory marble, gold and
+    // laurels, colorful gems, a victory banner, a heroic BUST tier. Round 2 (owner: "the outer stroke
+    // is very harsh... not sure it looks designed with our top-down approach"): outlines now obey the
+    // §S.2 OUTLINE LAW (one step darker IN-HUE, never the dark OUTLINE ramp), and every horizontal
+    // surface carries a sunlit TOP PLANE with a §S.2c soffit line under each overhang — the same
+    // from-above grammar as the building set.
+    const MS = RAMPS.MOSS_STONE;   // the warm rock ramp ("mythic relics — not cold steel-gray")
+    const M = [shade(MS[3], 1.02), shade(MS[4], 1.04), shade(MS[4], 1.18), shade(MS[4], 1.32)];   // warm ivory marble
+    const edge = (col) => shade(col, 0.78);          // §S.2 selective outline: in-hue, one step down, never black
+    // a marble BLOCK on the top-down grammar: soft in-hue rim, a 2px sunlit TOP PLANE, lit-left front
+    const slab = (x, y, w, h, idx = 1) => {
+        ctx.fillStyle = edge(M[idx]); ctx.fillRect(x - 1, y - 1, w + 2, h + 2);   // soft rim (in-hue)
+        ctx.fillStyle = M[3]; ctx.fillRect(x, y, w, Math.min(2, h));              // TOP face — the from-above read
+        if (h > 2) {
+            ctx.fillStyle = M[idx]; ctx.fillRect(x, y + 2, w, h - 2);             // front face
+            ctx.fillStyle = M[Math.min(3, idx + 1)]; ctx.fillRect(x, y + 2, 1, h - 2);   // lit-left (§S.1.4)
+            ctx.fillStyle = shade(M[idx], 0.88); ctx.fillRect(x + w - 1, y + 2, 1, h - 2); // soft shade-right
+        }
+    };
+    const soffit = (x, y, w) => { ctx.fillStyle = shade(M[0], 0.86); ctx.fillRect(x, y, w, 1); };   // §S.2c under-overhang shade
+    const GEMS = {
+        cyan:    { d: '#1f7e86', m: '#46c8cc', l: '#9ef2ee', rgb: '90,220,220' },
+        ruby:    { d: '#8a2440', m: '#d84868', l: '#f8a0b4', rgb: '230,90,130' },
+        emerald: { d: '#1f7a36', m: '#4cc060', l: '#a8f0b0', rgb: '90,220,120' },
+        amber:   { d: '#9a6a1a', m: '#e8b040', l: '#ffe694', rgb: '240,200,90' },
+    };
+    const gemAt = (gx, gy, sz, g) => {
+        mysticHalo(ctx, gx, gy, sz + 2, 0.14, g.rgb);
+        mysticHalo(ctx, gx, gy, sz + 1, 0.2, g.rgb);
+        for (let dy = -sz; dy <= sz; dy++) { const half = sz - Math.abs(dy); if (half < 0) continue; ctx.fillStyle = g.m; ctx.fillRect(gx - half, gy + dy, half * 2 + 1, 1); }
+        ctx.fillStyle = g.l; ctx.fillRect(gx - 1, gy - sz + 1, 1, sz);
+        ctx.fillStyle = g.d; ctx.fillRect(gx + 1, gy, 1, sz);
+        ctx.fillStyle = '#ffffff'; ctx.fillRect(gx - 1, gy - sz + 1, 1, 1);
+    };
+    const flowers = (spots) => { for (const [fx, fy, col] of spots) { ctx.fillStyle = col; ctx.fillRect(fx, fy, 1, 1); ctx.fillStyle = F[4]; ctx.fillRect(fx, fy + 1, 1, 1); } };
+    const FLOWER_COLS = ['#e86a8a', '#f0d060', '#8ab8f0', '#f0f0e8'];
 
-    } else if (tier === 2) {          // MARKER STONE — obelisk + gold plaque (the original sprite)
+    if (tier === 1) {                 // VICTORY CAIRN — sunlit pale stones, wildflowers, an amber spark
+        [c, ctx] = makeCanvas(12, 14);
+        seatShadow(ctx, { cx: 6, cy: 12, rx: 5, ry: 2 }, { alpha: 0.24 });
+        slab(2, 8, 5, 4, 1); slab(6, 9, 4, 3, 0); slab(4, 5, 4, 4, 2); slab(5, 2, 3, 3, 1);
+        gemAt(6, 2, 1, GEMS.amber);
+        flowers([[2, 11, FLOWER_COLS[0]], [9, 10, FLOWER_COLS[1]], [4, 12, FLOWER_COLS[2]]]);
+
+    } else if (tier === 2) {          // BANNER STONE — squat marker under a wide cap, the town's colors flying
+        [c, ctx] = makeCanvas(12, 19);
+        const cx = 6;
+        seatShadow(ctx, { cx, cy: 17, rx: 6, ry: 2 }, { alpha: 0.24 });
+        slab(1, 13, 9, 4, 1);                                         // base
+        slab(3, 4, 5, 9, 2);                                          // shaft
+        grain(4, 6, 3, 6);
+        slab(2, 1, 7, 3, 2);                                          // WIDE cap — overhangs the shaft
+        soffit(3, 4, 5);                                              // shadow under the overhang
+        // gold plaque
+        ctx.fillStyle = G[3]; ctx.fillRect(cx - 2, 8, 4, 3);
+        ctx.fillStyle = G[5]; ctx.fillRect(cx - 2, 8, 4, 1);
+        ctx.fillStyle = G[1]; ctx.fillRect(cx - 2, 10, 4, 1);
+        ctx.fillStyle = '#fffdf6'; ctx.fillRect(cx - 1, 8, 1, 1);
+        // banner pole off the right shoulder, green pennant
+        ctx.fillStyle = W[2]; ctx.fillRect(9, 2, 1, 12);
+        ctx.fillStyle = G[4]; ctx.fillRect(9, 1, 1, 1);
+        ctx.fillStyle = F[5]; ctx.fillRect(10, 2, 2, 1); ctx.fillRect(10, 3, 2, 1);
+        ctx.fillStyle = F[6]; ctx.fillRect(10, 2, 1, 1);
+        ctx.fillStyle = F[3]; ctx.fillRect(10, 4, 1, 1);
+        flowers([[1, 16, FLOWER_COLS[0]], [10, 16, FLOWER_COLS[3]]]);
+
+    } else if (tier === 3) {          // GEMMED STELE — white stele, wide gold-topped cap, cyan heart-gem
         [c, ctx] = makeCanvas(12, 21);
         const cx = 6;
-        seatShadow(ctx, { cx, cy: 19, rx: 6, ry: 2 }, { alpha: 0.3 });      // §S.2 fixed seat shadow
-        ctx.fillStyle = OL;  ctx.fillRect(1, 14, 10, 5);
-        ctx.fillStyle = S[2]; ctx.fillRect(1, 15, 10, 3);
-        ctx.fillStyle = S[3]; ctx.fillRect(1, 15, 10, 1);
-        ctx.fillStyle = S[1]; ctx.fillRect(1, 17, 10, 1);
-        ctx.fillStyle = shade(OL, 0.9); ctx.fillRect(1, 18, 10, 1);
-        const sx0 = 3, sw = 6, sTop = 2, sBot = 14;
-        ctx.fillStyle = OL;   ctx.fillRect(sx0 - 1, sTop, sw + 2, sBot - sTop);
-        ctx.fillStyle = S[2]; ctx.fillRect(sx0, sTop, sw, sBot - sTop);
-        ctx.fillStyle = S[3]; ctx.fillRect(sx0, sTop, 2, sBot - sTop);
-        ctx.fillStyle = shade(S[4], 1.05); ctx.fillRect(sx0, sTop, 1, sBot - sTop);
-        ctx.fillStyle = S[1]; ctx.fillRect(sx0 + sw - 1, sTop, 1, sBot - sTop);
-        ctx.fillStyle = shade(S[2], 1.08); ctx.fillRect(sx0 + 1, sTop + 1, 3, 3);
-        ctx.fillStyle = shade(S[2], 0.9);  ctx.fillRect(sx0 + 2, sTop + 8, 3, 3);
-        grain(sx0 + 1, sTop + 1, sw - 2, sBot - sTop - 2);
-        ctx.fillStyle = S[0]; ctx.fillRect(sx0, sTop + 6, sw, 1);
-        ctx.fillStyle = shade(S[3], 1.08); ctx.fillRect(sx0, sTop + 7, sw, 1);
-        ctx.fillStyle = OL;  ctx.fillRect(cx - 3, 1, 6, 1);
-        ctx.fillStyle = S[3]; ctx.fillRect(cx - 2, 1, 4, 1);
-        ctx.fillStyle = shade(S[4], 1.1); ctx.fillRect(cx - 1, 0, 2, 1);
-        ctx.fillStyle = S[1]; ctx.fillRect(cx + 1, 1, 1, 1);
-        ctx.fillStyle = OL;  ctx.fillRect(cx - 3, 6, 6, 5);
-        ctx.fillStyle = G[1]; ctx.fillRect(cx - 2, 7, 4, 3);
-        ctx.fillStyle = G[3]; ctx.fillRect(cx - 2, 7, 4, 1);
-        ctx.fillStyle = G[4]; ctx.fillRect(cx - 2, 7, 2, 1);
-        ctx.fillStyle = shade(G[1], 0.82); ctx.fillRect(cx - 2, 9, 4, 1);
-        ctx.fillStyle = shade(G[0], 0.9); ctx.fillRect(cx - 1, 8, 2, 1);
-        ctx.fillStyle = '#fffdf6'; ctx.fillRect(cx - 2, 7, 1, 1);
+        seatShadow(ctx, { cx, cy: 19, rx: 6, ry: 2 }, { alpha: 0.24 });
+        slab(1, 15, 9, 4, 1);                                         // plinth
+        slab(3, 5, 5, 10, 2);                                         // shaft
+        grain(4, 7, 3, 7);
+        slab(2, 1, 7, 3, 2);                                          // wide cap
+        ctx.fillStyle = G[4]; ctx.fillRect(2, 1, 7, 1);               // gilt top plane on the cap
+        ctx.fillStyle = G[5]; ctx.fillRect(2, 1, 3, 1);
+        soffit(3, 5, 5);
+        gemAt(cx - 1, 10, 2, GEMS.cyan);
+        ctx.fillStyle = F[4]; ctx.fillRect(1, 13, 2, 1); ctx.fillRect(8, 13, 2, 1);   // laurel sprigs
+        ctx.fillStyle = F[6]; ctx.fillRect(1, 13, 1, 1); ctx.fillRect(9, 13, 1, 1);
+        flowers([[2, 18, FLOWER_COLS[1]], [9, 18, FLOWER_COLS[2]]]);
 
-    } else if (tier === 3) {          // SWORDED STELE — taller stone + a blade planted point-down + laurel
-        [c, ctx] = makeCanvas(12, 24);
-        const cx = 6;
-        seatShadow(ctx, { cx, cy: 22, rx: 6, ry: 2 }, { alpha: 0.3 });      // §S.2 fixed seat shadow
-        ctx.fillStyle = OL;  ctx.fillRect(1, 18, 10, 4);              // plinth
-        ctx.fillStyle = S[2]; ctx.fillRect(1, 19, 10, 2);
-        ctx.fillStyle = S[3]; ctx.fillRect(1, 19, 10, 1);
-        ctx.fillStyle = shade(OL, 0.9); ctx.fillRect(1, 21, 10, 1);
-        const sx0 = 3, sw = 6, sTop = 3, sBot = 18;                   // taller shaft
-        ctx.fillStyle = OL;   ctx.fillRect(sx0 - 1, sTop, sw + 2, sBot - sTop);
-        ctx.fillStyle = S[2]; ctx.fillRect(sx0, sTop, sw, sBot - sTop);
-        ctx.fillStyle = S[3]; ctx.fillRect(sx0, sTop, 2, sBot - sTop);
-        ctx.fillStyle = shade(S[4], 1.05); ctx.fillRect(sx0, sTop, 1, sBot - sTop);
-        ctx.fillStyle = S[1]; ctx.fillRect(sx0 + sw - 1, sTop, 1, sBot - sTop);
-        ctx.fillStyle = S[0]; ctx.fillRect(sx0, sTop + 7, sw, 1);     // seam
-        ctx.fillStyle = shade(S[2], 1.08); ctx.fillRect(sx0 + 1, sTop + 1, 3, 3);
-        grain(sx0 + 1, sTop + 1, sw - 2, sBot - sTop - 2);
-        ctx.fillStyle = OL;  ctx.fillRect(cx - 2, 1, 4, 2);           // rounded top
-        ctx.fillStyle = S[3]; ctx.fillRect(cx - 2, 2, 4, 1);
-        ctx.fillStyle = shade(S[4], 1.1); ctx.fillRect(cx - 1, 1, 2, 1);
-        // planted SWORD in front, point-down into the plinth (hilt up)
-        ctx.fillStyle = steelLo; ctx.fillRect(cx, 9, 1, 11);
-        ctx.fillStyle = steel;   ctx.fillRect(cx - 1, 9, 1, 11);
-        ctx.fillStyle = steelHi; ctx.fillRect(cx - 1, 9, 1, 6);       // lit upper blade
-        ctx.fillStyle = W[1]; ctx.fillRect(cx - 2, 7, 4, 1);          // crossguard (bronze/wood)
-        ctx.fillStyle = W[3]; ctx.fillRect(cx - 2, 7, 1, 1);
-        ctx.fillStyle = W[2]; ctx.fillRect(cx - 1, 4, 1, 3);          // grip
-        ctx.fillStyle = G[3]; ctx.fillRect(cx - 1, 3, 1, 1);          // pommel (gold)
-        // small laurel sprigs at the base
-        ctx.fillStyle = F[3]; ctx.fillRect(1, 16, 2, 1); ctx.fillRect(2, 15, 1, 1); ctx.fillRect(9, 16, 2, 1); ctx.fillRect(9, 15, 1, 1);
-        ctx.fillStyle = F[5]; ctx.fillRect(1, 16, 1, 1); ctx.fillRect(10, 16, 1, 1);
-
-    } else if (tier === 4) {          // CENOTAPH — twin/stepped memorial + broken shield & helm + scorched earth
-        [c, ctx] = makeCanvas(14, 22);
+    } else if (tier === 4) {          // HERO'S BUST — a carved likeness on stepped marble, gold laurel crown
+        [c, ctx] = makeCanvas(14, 20);
         const cx = 7;
-        ctx.fillStyle = 'rgba(30,22,16,0.5)';                         // scorched-earth speckle
-        for (const [x, y] of [[1, 19], [3, 20], [11, 19], [12, 20], [5, 21], [9, 20], [2, 18]]) ctx.fillRect(x, y, 1, 1);
-        seatShadow(ctx, { cx, cy: 19, rx: 7, ry: 2 }, { alpha: 0.3 });      // §S.2 fixed seat shadow
-        block(1, 15, 12, 3, 1); block(2, 12, 10, 3, 2);              // stepped base (2 courses)
-        block(3, 4, 3, 9, 3); block(8, 6, 3, 7, 2);                  // twin pillars (tall + short)
-        ctx.fillStyle = OL; ctx.fillRect(3, 2, 8, 1);                // lintel
-        ctx.fillStyle = S[3]; ctx.fillRect(3, 3, 8, 2);
-        ctx.fillStyle = shade(S[4], 1.1); ctx.fillRect(3, 3, 8, 1);
-        ctx.fillStyle = G[1]; ctx.fillRect(5, 3, 4, 1); ctx.fillStyle = G[3]; ctx.fillRect(5, 3, 2, 1);   // plaque
-        // broken shield at the foot-left (cracked, boss)
-        ctx.fillStyle = W[1]; ctx.fillRect(1, 16, 3, 3); ctx.fillStyle = W[2]; ctx.fillRect(1, 16, 2, 1);
-        ctx.fillStyle = steel; ctx.fillRect(2, 17, 1, 1);
-        ctx.fillStyle = OL; ctx.fillRect(2, 16, 1, 3);               // crack
-        // helm at the foot-right (visor slit)
-        ctx.fillStyle = steelLo; ctx.fillRect(10, 17, 3, 2); ctx.fillStyle = steel; ctx.fillRect(10, 16, 3, 1);
-        ctx.fillStyle = steelHi; ctx.fillRect(10, 16, 1, 1);
-        ctx.fillStyle = OL; ctx.fillRect(11, 17, 1, 2);
+        seatShadow(ctx, { cx, cy: 18, rx: 7, ry: 2 }, { alpha: 0.24 });
+        slab(1, 14, 12, 3, 1); slab(3, 11, 8, 3, 2);                  // stepped pedestal, top planes on each
+        soffit(3, 14, 8);
+        // shoulders + head, warm carved stone with in-hue edges
+        ctx.fillStyle = edge(M[2]); ctx.fillRect(cx - 4, 6, 8, 5);
+        ctx.fillStyle = M[3]; ctx.fillRect(cx - 3, 6, 6, 1);          // shoulder top plane
+        ctx.fillStyle = M[2]; ctx.fillRect(cx - 3, 7, 6, 3);
+        ctx.fillStyle = shade(M[1], 0.9); ctx.fillRect(cx + 2, 8, 1, 2);
+        ctx.fillStyle = edge(M[2]); ctx.fillRect(cx - 2, 1, 4, 6);
+        ctx.fillStyle = M[2]; ctx.fillRect(cx - 1, 2, 3, 4);
+        ctx.fillStyle = M[3]; ctx.fillRect(cx - 1, 2, 1, 3);          // lit brow
+        ctx.fillStyle = shade(M[1], 0.88); ctx.fillRect(cx + 1, 3, 1, 2);
+        ctx.fillStyle = G[4]; ctx.fillRect(cx - 2, 1, 4, 1);          // gold laurel crown (its own top plane)
+        ctx.fillStyle = G[5]; ctx.fillRect(cx - 2, 1, 2, 1);
+        ctx.fillStyle = G[3]; ctx.fillRect(cx - 2, 12, 4, 1);         // plaque
+        ctx.fillStyle = G[5]; ctx.fillRect(cx - 2, 12, 2, 1);
+        gemAt(3, 16, 1, GEMS.emerald); gemAt(10, 16, 1, GEMS.ruby);   // Codex #85 P3: inset so the halos (reach cx-3..cx+2) stay on the 14px canvas
+        flowers([[1, 18, FLOWER_COLS[0]], [12, 18, FLOWER_COLS[1]], [6, 18, FLOWER_COLS[2]]]);
 
-    } else {                          // 5 · WAR BARROW — mound + obelisk cluster + crossed shattered weapon + blackened ground
-        [c, ctx] = makeCanvas(16, 24);
+    } else {                          // 5 · TRIUMPHAL COLUMN — sunlit column, gold sunburst, gems + bunting
+        [c, ctx] = makeCanvas(16, 22);
         const cx = 8;
-        ctx.fillStyle = 'rgba(24,18,14,0.55)';                       // blackened ground
-        for (const [x, y] of [[1, 21], [3, 22], [5, 21], [7, 22], [9, 21], [11, 22], [13, 21], [14, 22], [2, 20], [12, 20]]) ctx.fillRect(x, y, 1, 1);
-        seatShadow(ctx, { cx, cy: 21, rx: 8, ry: 2 }, { alpha: 0.3 });      // §S.2 fixed seat shadow
-        for (let dy = 0; dy < 5; dy++) { const hw = 7 - dy; ctx.fillStyle = W[1]; ctx.fillRect(cx - hw, 16 + dy, hw * 2, 1); }   // earth barrow mound
-        ctx.fillStyle = W[2]; ctx.fillRect(cx - 6, 16, 5, 1);        // lit mound crest
-        ctx.fillStyle = W[0]; ctx.fillRect(cx - 7, 20, 14, 1);       // mound base shadow
-        ctx.fillStyle = F[3]; ctx.fillRect(cx - 4, 16, 1, 1); ctx.fillRect(cx + 2, 17, 1, 1);   // grass tufts
-        block(1, 13, 2, 4, 1); block(13, 14, 2, 3, 1); block(4, 12, 2, 3, 2);   // small markers per life lost
-        block(cx - 2, 3, 4, 14, 2);                                  // central obelisk
-        ctx.fillStyle = shade(S[4], 1.05); ctx.fillRect(cx - 2, 3, 1, 14);
-        grain(cx - 1, 4, 2, 12);
-        ctx.fillStyle = OL; ctx.fillRect(cx - 2, 1, 4, 2); ctx.fillStyle = S[3]; ctx.fillRect(cx - 1, 1, 2, 1);   // cap
-        // crossed SHATTERED weapons (broken swords, an X with a gap in the middle)
-        ctx.fillStyle = steel;
-        for (let d = 0; d < 6; d++) { if (d === 2 || d === 3) continue; ctx.fillRect(cx - 3 + d, 6 + d, 1, 1); ctx.fillRect(cx + 2 - d, 6 + d, 1, 1); }
-        ctx.fillStyle = steelHi; ctx.fillRect(cx - 3, 6, 1, 1); ctx.fillRect(cx + 2, 6, 1, 1);   // lit tips
-        ctx.fillStyle = G[1]; ctx.fillRect(cx - 2, 12, 4, 2); ctx.fillStyle = G[3]; ctx.fillRect(cx - 2, 12, 4, 1);   // plaque
-        ctx.fillStyle = '#fffdf6'; ctx.fillRect(cx - 2, 12, 1, 1);
+        seatShadow(ctx, { cx, cy: 20, rx: 8, ry: 2 }, { alpha: 0.24 });
+        slab(1, 17, 14, 3, 1); slab(3, 14, 10, 3, 2);                 // grand stepped base, lit top planes
+        soffit(3, 17, 10);
+        slab(cx - 2, 5, 4, 9, 2);                                     // the column
+        ctx.fillStyle = M[3]; ctx.fillRect(cx - 2, 7, 1, 7);          // sunlit flute
+        grain(cx - 1, 7, 2, 6);
+        // gold sunburst crown: gilt cap with a lit top plane + rays
+        ctx.fillStyle = edge(G[3]); ctx.fillRect(cx - 3, 1, 6, 4);
+        ctx.fillStyle = G[5]; ctx.fillRect(cx - 2, 1, 4, 1);          // sun top plane
+        ctx.fillStyle = G[4]; ctx.fillRect(cx - 2, 2, 4, 2);
+        ctx.fillStyle = G[5]; ctx.fillRect(cx - 4, 2, 1, 1); ctx.fillRect(cx + 3, 2, 1, 1);   // rays
+        ctx.fillStyle = '#fffdf6'; ctx.fillRect(cx - 1, 2, 1, 1);
+        soffit(cx - 2, 5, 4);
+        // festival bunting swagged from the column toward the base corners
+        ctx.fillStyle = FLOWER_COLS[0]; ctx.fillRect(cx - 4, 7, 1, 1); ctx.fillRect(cx + 3, 7, 1, 1);
+        ctx.fillStyle = FLOWER_COLS[1]; ctx.fillRect(cx - 5, 8, 1, 1); ctx.fillRect(cx + 4, 8, 1, 1);
+        ctx.fillStyle = FLOWER_COLS[2]; ctx.fillRect(cx - 6, 9, 1, 1); ctx.fillRect(cx + 5, 9, 1, 1);
+        gemAt(3, 15, 1, GEMS.ruby); gemAt(cx, 16, 1, GEMS.cyan); gemAt(13, 15, 1, GEMS.emerald);
+        flowers([[1, 20, FLOWER_COLS[0]], [5, 20, FLOWER_COLS[3]], [10, 20, FLOWER_COLS[1]], [14, 20, FLOWER_COLS[2]]]);
     }
     // ---- SEASONS (§6b) — roofless stone: WINTER snow sits on up-facing LEDGES only
     // (no roof planes anywhere on the set); FALL drifts a few leaves at the foot.
     if (season === 'WINTER') {
         const ledges = tier === 1 ? [[5, 2, 3], [4, 5, 2], [2, 8, 2], [7, 9, 3]]
-            : tier === 2 ? [[4, 0, 4], [1, 15, 2], [9, 15, 2]]
-            : tier === 3 ? [[4, 1, 4], [1, 19, 2], [9, 19, 2]]
-            : tier === 4 ? [[3, 2, 8], [1, 15, 1], [12, 15, 1], [2, 12, 1], [6, 12, 2], [11, 12, 1]]
-            : [[6, 1, 4], [2, 16, 4], [1, 13, 2], [13, 14, 2], [4, 12, 2]];
+            : tier === 2 ? [[2, 1, 7], [1, 13, 3], [7, 13, 3]]
+            : tier === 3 ? [[2, 1, 7], [1, 15, 2], [8, 15, 2]]
+            : tier === 4 ? [[5, 1, 4], [4, 6, 3], [3, 11, 2], [9, 11, 2], [1, 14, 2], [11, 14, 2]]
+            : [[6, 1, 4], [3, 14, 2], [11, 14, 2], [1, 17, 3], [12, 17, 3]];
         for (const [lx, ly, lw] of ledges) {
             ctx.fillStyle = SNOW.mid;  ctx.fillRect(lx, ly, lw, 1);
             ctx.fillStyle = SNOW.deep; ctx.fillRect(lx, ly, Math.max(1, lw - 1), 1);
