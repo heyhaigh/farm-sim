@@ -4559,12 +4559,15 @@ function drawSettings() {
 
     // #credits — CraftPix character sprites (licence: deployed-game use OK). Click opens their pack page.
     {
-        const cLabel = 'CHARACTER SPRITES BY CRAFTPIX.NET';
-        const cw = textWidth(cLabel);
-        const cb = { x: IX, y: PY + 97, w: cw + 4, h: 9 };
+        // owner: only the "CRAFTPIX.NET" tail is the link — the prefix is plain caption text
+        const cPrefix = 'CERTAIN SPRITES ARE CREATED BY ';
+        const cLink = 'CRAFTPIX.NET';
+        const pw2 = textWidth(cPrefix), lw = textWidth(cLink);
+        const cb = { x: IX + pw2, y: PY + 97, w: lw + 2, h: 9 };
         const chov = inRect(mouse, cb);
-        drawText(ctx, cLabel, IX, PY + 99, chov ? '#9ad0e0' : '#5a5f6c');
-        ctx.fillStyle = chov ? '#9ad0e0' : '#3a3f4c'; ctx.fillRect(IX, PY + 105, cw, 1);   // underline: it's a link
+        drawText(ctx, cPrefix, IX, PY + 99, '#5a5f6c');
+        drawText(ctx, cLink, IX + pw2, PY + 99, chov ? '#9ad0e0' : '#8a8f9c');
+        ctx.fillStyle = chov ? '#9ad0e0' : '#3a3f4c'; ctx.fillRect(IX + pw2, PY + 105, lw, 1);   // underline: only the link
         settingsHits.craftpix = cb;
     }
 
