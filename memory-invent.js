@@ -7,6 +7,11 @@
 // persistTownInventions(): writes the town's book of inventions to self-hosted SuperMemory (recipe nodes off
 // the town hub, sibling to the town-history doc). Both off the sim loop, best-effort.
 
+// #local-memory — inventions persist to the browser store first (memory-store.js); the server
+// POST rides the shared echo channel for self-hosted SuperMemory dev setups.
+import { storePayload } from './memory-store.js';
+import { echoToServer } from './memory-writeback.js';
+
 const INVENT_ENDPOINT = '/api/ry-farms-invent';
 const WRITEBACK_ENDPOINT = '/api/memory-writeback';
 const COOLDOWN_MS = 60 * 1000;
@@ -51,19 +56,17 @@ export async function persistTownInventions(world, isCurrent = () => true) {
     const sig = inventSignature(world);
     if (sig === invSig) return false;                                // nothing new since last write
     invInflight = true;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
     const nameOf = seed => { const f = world.farmers.find(x => x.sheet.seed === seed); return f ? f.sheet.name : null; };
     try {
-        const res = await fetch(WRITEBACK_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
-            body: JSON.stringify({ town: world.name || 'PROPAGATE', townSeed: world.seed, townInventions: {
+        const body = { town: world.name || 'PROPAGATE', townSeed: world.seed, townInventions: {
                 recipes: recipes.map(r => ({ id: r.id, name: (world.recipeFlavor[r.id]?.name) || r.name, lore: world.recipeFlavor[r.id]?.lore || null,
                     effect: r.effect, tier: r.tier, ingredients: Object.keys(r.inputs || {}), inventor: nameOf(r.discovererSeed) })),
-            } }) });
-        const data = await res.json().catch(() => null);
+            } };
+        const local = await storePayload(body);          // #local-memory the browser store is the authority
+        echoToServer(body);                              // best-effort echo for a self-hosted SuperMemory
         if (!isCurrent()) return false;
-        if (!res.ok || !data || !data.townInventionsWritten) { invFailAt = Date.now(); return false; }
+        if (!local || !local.written) { invFailAt = Date.now(); return false; }
         invSig = sig; return true;
     } catch (err) { invFailAt = Date.now(); return false; }
-    finally { clearTimeout(timer); invInflight = false; }
+    finally { invInflight = false; }
 }

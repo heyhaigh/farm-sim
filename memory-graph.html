@@ -98,6 +98,17 @@ async function load() {
   catch { data = { towns:[], source:'offline' }; }
   document.getElementById('boot').style.display='none';
   let towns = data.towns || [];
+  // #local-memory — the browser store is a first-class source: towns THIS browser remembers render
+  // alongside (or instead of) anything a self-hosted server returns. Server wins per-seed on conflicts.
+  try {
+    const MS = await import('./memory-store.js');
+    // Codex #88 P1 — BOUNDED like the game boot: a never-settling IndexedDB open must not hang the
+    // portal blank (the boot overlay is already gone by here). 3s, then the server result stands alone.
+    const localTowns = await Promise.race([MS.localGraphTowns(), new Promise(res => setTimeout(() => res([]), 3000))]);
+    const have = new Set(towns.map(t => String(t.seed)));
+    for (const t of localTowns) if (!have.has(String(t.seed))) towns.push(t);
+    if (localTowns.length && (!data.source || data.source === 'offline' || data.source === 'empty' || data.source === 'error')) data.source = 'this browser';
+  } catch { /* IDB refused — the server result stands alone */ }
   // backward-compat: a dev server that hasn't reloaded the API still returns the OLD single-town {farmers}
   // shape. Wrap it as one town so the portal populates from either server version (restart for all towns).
   if (!towns.length && Array.isArray(data.farmers) && data.farmers.length) {
@@ -109,9 +120,8 @@ async function load() {
   window._src = data.source;
   window._ties = towns.reduce((a,t)=>a+(t.links||[]).length,0);
   window._townCount = towns.length;
-  if (!totalFarmers && !towns.length) { window._empty = data.source==='offline'
-      ? 'SUPERMEMORY IS OFFLINE - RUN ./SUPERMEMORY-START.SH'
-      : 'NO MEMORIES STORED YET - OPEN A TOWN AND LET IT RUN'; requestAnimationFrame(tick); return; }
+  if (!totalFarmers && !towns.length) { window._empty =
+      'NO MEMORIES STORED YET - OPEN A TOWN AND LET IT RUN'; requestAnimationFrame(tick); return; }
   const names = await townNames();
   const cx=GW/2, cy=GH/2, R=Math.min(GW,GH)*0.34;
   // Each TOWN is its own cluster: a gold-diamond hub pinned on a ring, its farmers orbiting, their memories

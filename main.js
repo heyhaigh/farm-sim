@@ -1,6 +1,7 @@
 // main.js — Propagate: rendering, camera, input, UI, boot.
 
 import { fetchMemories, generateCrew, mod, fmtMod, STAT_NAMES, TRAIT_NAMES, TRAIT_LABELS, hashString, mulberry32 } from './dna.js';
+import { localLineage, mergeLineage, localLifeCount } from './memory-store.js';
 import { audio } from './audio.js';
 import { World, CHUNK, T, GRID, CENTER, DAY_LENGTH, NIGHT_LENGTH, ITEMS, CRAFTABLES, RECIPE_BY_ID, INVENTION_TABLE, RARE_NAME, xpForLevel, obstacleTier, treeVariant, treeIsFruit, SEASONS } from './farm.js';
 import {
@@ -66,15 +67,21 @@ let memorySource = 'offline';
 // Honest memory-source copy: the town is grown from REAL SuperMemory docs only when a store was reachable;
 // otherwise it's the invented fallback crew, and the UI must SAY so rather than claim SuperMemory (Fable
 // finding). 'offline' is the transient pre-load state during the boot static.
+let localMemoryCount = 0;   // #local-memory lives held in THIS BROWSER's store (refreshed at boot + settings-open)
 function memoryTagline() {
-    return memorySource === 'invented' ? 'GROWN FROM IMAGINED LIVES'
-        : memorySource === 'offline' ? 'TUNING IN'
-        : 'GROWN FROM SUPERMEMORY';
+    if (memorySource === 'offline') return 'TUNING IN';
+    if (memorySource !== 'invented') return 'GROWN FROM SUPERMEMORY';
+    // #local-memory honest copy: an invented cast that carries heirs of the player's OWN past towns
+    // has closed the loop locally — say that, not "no memory".
+    return lineagePool.length ? 'A WORLD THAT REMEMBERS ITSELF' : 'GROWN FROM IMAGINED LIVES';
 }
 function memoryCaption() {
-    return memorySource === 'invented'
-        ? 'INVENTED LIVES - NO SUPERMEMORY CONNECTED YET.'
-        : 'EVERY FARMER\'S MEMORIES, LIVE FROM SUPERMEMORY.';
+    // Codex #88 P2 — the caption never claims memory that doesn't exist: a spectator backdrop
+    // writes nothing, and an empty store has remembered nothing YET (future-facing copy only).
+    if (world && world._persistenceDisabled) return 'A PASSING VIEW - NOTHING IS SET DOWN.';
+    if (memorySource !== 'invented') return 'EVERY FARMER\'S MEMORIES, LIVE FROM SUPERMEMORY.';
+    if (localMemoryCount > 0) return `THIS BROWSER REMEMBERS ${localMemoryCount} LIVES FROM YOUR TOWNS.`;
+    return 'YOUR TOWNS WILL SET THEIR LIVES DOWN HERE AS THEY LIVE.';
 }
 const usedMemoryIds = new Set();
 let selected = null;
@@ -7185,7 +7192,7 @@ out.addEventListener('pointerup', (e) => {
     // sound quick-mute (stays on the top bar)
     if (inRect(p, SND_BTN)) { audio.ensure(); audio.toggle(); return; }
     // settings cog: open/close the menu (New Town + volume)
-    if (SETTINGS_BTN.w && inRect(p, SETTINGS_BTN)) { audio.ensure(); settingsOpen = !settingsOpen; if (settingsOpen) { rosterOpen = chronOpen = boardOpen = false; blurChatInput(); } return; }
+    if (SETTINGS_BTN.w && inRect(p, SETTINGS_BTN)) { audio.ensure(); settingsOpen = !settingsOpen; if (settingsOpen) { rosterOpen = chronOpen = boardOpen = false; blurChatInput(); localLifeCount().then(n => { localMemoryCount = n; }).catch(() => {}); } return; }
     // settings menu interactions
     if (settingsOpen && settingsHits) {
         if (inRect(p, settingsHits.close)) { settingsOpen = false; return; }
@@ -8001,7 +8008,7 @@ function frame(now) {
                         text: battle.nemesis
                             ? `${battle.nemesis.name}'s raid - the battle of day ${battle.day}, year ${battle.year} - is set down in ${w.name}'s memory, blow by blow, as it happened.`
                             : `The battle of day ${battle.day}, year ${battle.year} is set down in ${w.name}'s memory, blow by blow, as it happened.`,
-                        why: `supermemory: ry-farms:battle:${w.seed}:${rid}`,
+                        why: `town record: battle:${w.seed}:${rid}`,   // Codex #88 P2: never claim a server write for local success
                     };
                 });
             }
@@ -8727,6 +8734,18 @@ function drawStartScreen() {
     // (no /v3 corpus, e.g. v0.0.3) still founds heirs of PRIOR towns read back via /v4/search. Key off the
     // lineage array itself, not memorySource. Empty when no store answered at all.
     lineagePool = Array.isArray(result.lineage) ? result.lineage : [];
+    // #local-memory — the player's own past towns feed the lineage pool: heirs grow from lives THIS
+    // browser remembers, whether or not any server store answered. Merge dedups by real identity
+    // (townSeed:farmerSeed) and stable-sorts, so heir pairing stays deterministic for a given store.
+    // TIMEOUT-BOUNDED: a pathological IndexedDB open (Safari has locked up before) must not stall
+    // the game's boot — 3s and the pool rides the server result alone (the store catches up next boot).
+    const _bounded = (p, ms) => Promise.race([p, new Promise(res => setTimeout(() => res(null), ms))]);
+    try {
+        const lin = await _bounded(localLineage(), 3000);
+        if (lin) lineagePool = mergeLineage(lineagePool, lin);
+        const n = await _bounded(localLifeCount(), 1000);
+        if (n != null) localMemoryCount = n;
+    } catch { /* IDB refused (private mode) — the pool rides the server result alone */ }
     // #START the menu backdrop is a SPECTATOR town: it lives and animates but never persists — no
     // autosave, no SuperMemory writeback, no world-index entry, no cross-town raid ambush. Browsing
     // the start screen must leave zero trace (no save slots littered, no junk fed to the memory store).
