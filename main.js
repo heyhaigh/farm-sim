@@ -2,6 +2,7 @@
 
 import { fetchMemories, generateCrew, mod, fmtMod, STAT_NAMES, TRAIT_NAMES, TRAIT_LABELS, hashString, mulberry32 } from './dna.js';
 import { localLineage, mergeLineage, localLifeCount } from './memory-store.js';
+import { backfillMemory } from './memory-backfill.js';
 import { audio } from './audio.js';
 import { World, CHUNK, T, GRID, CENTER, DAY_LENGTH, NIGHT_LENGTH, ITEMS, CRAFTABLES, RECIPE_BY_ID, INVENTION_TABLE, RARE_NAME, xpForLevel, obstacleTier, treeVariant, treeIsFruit, SEASONS } from './farm.js';
 import {
@@ -8746,6 +8747,19 @@ function drawStartScreen() {
         const n = await _bounded(localLifeCount(), 1000);
         if (n != null) localMemoryCount = n;
     } catch { /* IDB refused (private mode) — the pool rides the server result alone */ }
+    // #memory-backfill — seed the store from towns that ALREADY exist, once the session is settled
+    // (idle, off the boot path; real playing sessions only — a spectator backdrop stays read-only).
+    // Refreshes the caption count and the lineage pool's source-of-truth for the NEXT founding.
+    setTimeout(async () => {
+        try {
+            if (!world || world._persistenceDisabled) return;
+            const n = await backfillMemory({ activeWorld: world });
+            if (n > 0) {
+                localMemoryCount = await localLifeCount();
+                console.log(`ry-farms: backfilled ${n} existing town(s) into the browser memory store`);
+            }
+        } catch { /* best-effort — next boot self-heals */ }
+    }, 6000);
     // #START the menu backdrop is a SPECTATOR town: it lives and animates but never persists — no
     // autosave, no SuperMemory writeback, no world-index entry, no cross-town raid ambush. Browsing
     // the start screen must leave zero trace (no save slots littered, no junk fed to the memory store).

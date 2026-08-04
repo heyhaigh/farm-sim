@@ -178,6 +178,46 @@ export function mergeLineage(server, local) {
     return out;
 }
 
+// #memory-backfill — which towns already have life docs (the backfill's skip set: presence of ANY
+// life for a townSeed means the store owns that town and the live cadence keeps it fresh).
+export async function townSeedsWithLives() {
+    try {
+        const out = new Set();
+        for (const [k, v] of await backend.all()) if (String(k).startsWith('life:')) out.add(String(v?.townSeed ?? String(k).split(':')[1]));
+        return out;
+    } catch { return new Set(); }
+}
+
+// #memory-backfill — the farmer seeds a town already has life docs for (per-farmer completion checks;
+// unlike localLineage this counts creedless docs too, so a stored life is never re-claimed).
+export async function lifeKeysForTown(townSeed) {
+    try {
+        const ts = String(townSeed), out = new Set();
+        for (const [k] of await backend.all()) {
+            const key = String(k);
+            if (key.startsWith('life:' + ts + ':')) out.add(key.slice(('life:' + ts + ':').length));
+        }
+        return out;
+    } catch { return null; }   // null = store refused (distinct from "none")
+}
+
+// #memory-backfill — the COMPLETION MARKERS (Codex #92 P1): a town is "claimed" only when every
+// required payload landed; the marker is what the sweep skips on. Partial writes (a mid-batch put
+// failure) leave no marker, so the next boot retries the whole town — the missing rows are filled
+// by upsert and the marker lands only at the end. backfillMarkers() returns null on a refused
+// store (distinct from "none"), so a refusal never reads as "nothing claimed yet, claim away".
+export async function setBackfillMarker(townSeed) {
+    try { await backend.put('backfill:' + String(townSeed), { kind: 'backfill', townSeed: String(townSeed), updatedAt: Date.now() }); return true; }
+    catch { return false; }
+}
+export async function backfillMarkers() {
+    try {
+        const out = new Set();
+        for (const [k, v] of await backend.all()) if (String(k).startsWith('backfill:')) out.add(String(v?.townSeed ?? String(k).slice(9)));
+        return out;
+    } catch { return null; }
+}
+
 export async function localLifeCount() {
     try { return (await backend.all()).filter(([k]) => String(k).startsWith('life:')).length; } catch { return 0; }
 }

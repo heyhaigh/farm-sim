@@ -123,6 +123,29 @@ function historySignature(world) {
 // all, so a non-persisting session could still inscribe a battle into the shared store.
 function mayWrite(world) { return !!world && !world._persistenceDisabled; }
 
+// The town's civic record, compiled once for BOTH the live writer and the backfill (#memory-backfill).
+// Returns null when there is nothing worth remembering yet.
+export function townHistoryOf(world) {
+    const r = world.roles;
+    if (!r || (!r.history?.length && r.manager == null && !world.learned && !(world.raidsSuffered > 0) && !world.nemesis)) return null;
+    const nameOf = seed => { const f = world.farmers.find(x => x.sheet.seed === seed); return f ? f.sheet.name : null; };
+    return {
+        manager: nameOf(r.manager), managerTerms: r.managerTerms, watch: nameOf(r.watch), year: world.year,
+        history: (r.history || []).map(h => ({ office: h.office, name: h.name, fromYear: h.fromYear, toYear: h.toYear, endReason: h.endReason, why: h.why })),
+        raidsSuffered: world.raidsSuffered || 0, learned: world.learned || null,   // #134 the town's raid memory + what it learned
+        // #nemesis THE BOOK OF WARS — the named-foe arcs, current + ended (the hackathon loop closing:
+        // a town grown from memories writes its wars back as memories)
+        wars: {
+            current: world.nemesis ? {
+                name: world.nemesis.name, raidCount: world.nemesis.raidCount, ended: !!world.nemesis.ended,
+                lastOutcome: world.nemesis.lastOutcome || null,
+                sworeAgainst: world.nemesis.sworeAgainst != null ? (nameOf(world.nemesis.sworeAgainst) || null) : null,
+            } : null,
+            past: (world.nemesisLog || []).map(x => ({ name: x.name, raidCount: x.raidCount, sworeAgainst: x.sworeAgainst || null, outcome: x.outcome, year: x.year })),
+        },
+    };
+}
+
 export async function persistTownHistory(world, isCurrent = () => true) {
     if (!mayWrite(world)) return false;   // #60 non-persisting session: never touch the shared store
     if (typeof fetch !== 'function' || historyInflight) return false;
@@ -134,23 +157,8 @@ export async function persistTownHistory(world, isCurrent = () => true) {
     if (sig === lastHistorySig) return false;                            // unchanged since last successful write
 
     historyInflight = true;
-    const nameOf = seed => { const f = world.farmers.find(x => x.sheet.seed === seed); return f ? f.sheet.name : null; };
     try {
-        const body = { town: world.name || 'PROPAGATE', townSeed: world.seed, rev: world._rev || world.day || 0, townHistory: {
-                manager: nameOf(r.manager), managerTerms: r.managerTerms, watch: nameOf(r.watch), year: world.year,
-                history: (r.history || []).map(h => ({ office: h.office, name: h.name, fromYear: h.fromYear, toYear: h.toYear, endReason: h.endReason, why: h.why })),
-                raidsSuffered: world.raidsSuffered || 0, learned: world.learned || null,   // #134 the town's raid memory + what it learned
-                // #nemesis THE BOOK OF WARS — the named-foe arcs, current + ended (the hackathon loop closing:
-                // a town grown from memories writes its wars back as memories)
-                wars: {
-                    current: world.nemesis ? {
-                        name: world.nemesis.name, raidCount: world.nemesis.raidCount, ended: !!world.nemesis.ended,
-                        lastOutcome: world.nemesis.lastOutcome || null,
-                        sworeAgainst: world.nemesis.sworeAgainst != null ? (nameOf(world.nemesis.sworeAgainst) || null) : null,
-                    } : null,
-                    past: (world.nemesisLog || []).map(x => ({ name: x.name, raidCount: x.raidCount, sworeAgainst: x.sworeAgainst || null, outcome: x.outcome, year: x.year })),
-                },
-            } };
+        const body = { town: world.name || 'PROPAGATE', townSeed: world.seed, rev: world._rev || world.day || 0, townHistory: townHistoryOf(world) };
         const local = await storePayload(body);          // #local-memory the browser store is the authority
         echoToServer(body);                              // best-effort echo for a self-hosted SuperMemory
         if (!isCurrent()) return false;
@@ -164,7 +172,7 @@ export async function persistTownHistory(world, isCurrent = () => true) {
     } finally { historyInflight = false; }
 }
 
-function lifeOf(f) {
+export function lifeOf(f) {   // #memory-backfill shares this compiler — one life shape, one code path
     const s = f.sheet;
     // episodic memories live on the FARMER instance (`remember()` pushes to f.journal), NOT the sheet —
     // reading s.journal silently dropped every lived memory from the writeback (so the portal had only

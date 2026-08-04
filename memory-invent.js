@@ -41,6 +41,20 @@ export async function enrichInventions(world, isCurrent = () => true) {
 
 let invInflight = false, invSig = null, invFailAt = -Infinity;
 function inventSignature(world) { return `${Object.keys(world.recipes || {}).length}:${Object.keys(world.recipeFlavor || {}).length}`; }
+// The town's book of inventions, compiled once for BOTH the live writer and the backfill
+// (#memory-backfill). Returns null when nothing has been invented yet.
+export function inventionsOf(world) {
+    if (!world || !world.recipes) return null;
+    const recipes = Object.values(world.recipes);
+    if (!recipes.length) return null;
+    const nameOf = seed => { const f = world.farmers.find(x => x.sheet.seed === seed); return f ? f.sheet.name : null; };
+    const flavor = world.recipeFlavor || {};
+    return {
+        recipes: recipes.map(r => ({ id: r.id, name: (flavor[r.id]?.name) || r.name, lore: flavor[r.id]?.lore || null,
+            effect: r.effect, tier: r.tier, ingredients: Object.keys(r.inputs || {}), inventor: nameOf(r.discovererSeed) })),
+    };
+}
+
 export async function persistTownInventions(world, isCurrent = () => true) {
     // Codex #61-2 — same policy guard as memory-writeback.js's three entry points, at this function's own
     // boundary rather than its caller's. This writes to the shared SuperMemory store, which outlives the tab,
@@ -56,12 +70,8 @@ export async function persistTownInventions(world, isCurrent = () => true) {
     const sig = inventSignature(world);
     if (sig === invSig) return false;                                // nothing new since last write
     invInflight = true;
-    const nameOf = seed => { const f = world.farmers.find(x => x.sheet.seed === seed); return f ? f.sheet.name : null; };
     try {
-        const body = { town: world.name || 'PROPAGATE', townSeed: world.seed, townInventions: {
-                recipes: recipes.map(r => ({ id: r.id, name: (world.recipeFlavor[r.id]?.name) || r.name, lore: world.recipeFlavor[r.id]?.lore || null,
-                    effect: r.effect, tier: r.tier, ingredients: Object.keys(r.inputs || {}), inventor: nameOf(r.discovererSeed) })),
-            } };
+        const body = { town: world.name || 'PROPAGATE', townSeed: world.seed, townInventions: inventionsOf(world) };
         const local = await storePayload(body);          // #local-memory the browser store is the authority
         echoToServer(body);                              // best-effort echo for a self-hosted SuperMemory
         if (!isCurrent()) return false;
