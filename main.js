@@ -333,11 +333,17 @@ let resumeCard = null;                             // "PREVIOUSLY ON PROPAGATE" 
 // so it wears the CRT like everything else.
 let memoryIntro = null;                            // { shownAt, video, hits: {view, cont, close} }
 function openMemoryIntro() {
+    // the POSTER is the reliable floor of the video box (owner): a static webp decodes on every
+    // modern Safari/Firefox/Chrome, so even where VP9 video can't play (older Safari, hardware
+    // decode quirks) the card shows the memory graph — never a dark box. The video draws OVER it
+    // only once it is genuinely decoding.
+    const poster = new Image();
+    poster.src = '/assets/memory-web-poster.webp';
     const video = document.createElement('video');
     video.src = '/assets/memory-web.webm';
     video.muted = true; video.loop = true; video.playsInline = true;
-    video.play().catch(() => { /* muted autoplay is allowed; a refusal just shows the first frame */ });
-    memoryIntro = { shownAt: performance.now(), video, hits: {} };
+    video.play().catch(() => { /* muted autoplay refused (Low Power / site setting): the poster stands in */ });
+    memoryIntro = { shownAt: performance.now(), video, poster, hits: {} };
     try { localStorage.setItem('ryfarms-memory-intro', '1'); } catch { /* private mode — it may show again */ }
 }
 function dismissMemoryIntro() {
@@ -6725,10 +6731,11 @@ function drawMemoryIntro() {
     drawText(ctx, 'YOUR WORLD NOW REMEMBERS ITSELF', PX + 6, PY + 6, '#d8b8ee', 1);
     drawText(ctx, 'X', PX + PW - 10, PY + 6, '#c8ccd8');
     mi.hits.close = { x: PX + PW - 14, y: PY + 2, w: 12, h: 11 };
-    // the living memory graph (first frame until the video is ready)
+    // the living memory graph: dark base -> POSTER floor (always, once decoded) -> live video on top
     const vx = PX + 8, vy = PY + 18;
     ctx.fillStyle = '#08060e'; ctx.fillRect(vx, vy, VW, VH);
-    try { if (mi.video && mi.video.readyState >= 2) ctx.drawImage(mi.video, vx, vy, VW, VH); } catch { /* frame not ready */ }
+    try { if (mi.poster && mi.poster.complete && mi.poster.naturalWidth) ctx.drawImage(mi.poster, vx, vy, VW, VH); } catch { /* poster not ready */ }
+    try { if (mi.video && mi.video.readyState >= 2) ctx.drawImage(mi.video, vx, vy, VW, VH); } catch { /* VP9 undecodable — the poster stands */ }
     ctx.strokeStyle = 'rgba(200,160,224,0.5)'; ctx.strokeRect(vx + 0.5, vy + 0.5, VW - 1, VH - 1);
     let ty = vy + VH + 5;
     for (const ln of wrapText('EVERY LIFE IN YOUR TOWNS - NAMES, CREEDS, BONDS, BATTLES - IS NOW SET DOWN IN THIS BROWSER, AND HEIRS OF YOUR FALLEN MAY RETURN IN TOWNS TO COME.', 54)) {
