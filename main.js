@@ -230,6 +230,7 @@ function cursorIsHot(worldTooltip) {
     for (const b of [ROSTER_BTN, CHRON_BTN, SND_BTN, SETTINGS_BTN, FWD_BTN, FF_BTN, SPEED1_BTN]) if (b.w && inRect(m, b)) return true;
     if (!BOARD_BTN.hidden && inRect(m, BOARD_BTN)) return true;
     if (RECAP_CARD.w && inRect(m, RECAP_CARD)) return true;
+    if (memoryIntro) return true;   // #memory-intro the whole reveal is clickable
     if (UPDATE_NUDGE.w && inRect(m, UPDATE_NUDGE)) return true;   // #update-nudge — the pill is a button; the glove says so
     if (activeMoment && MOMENTS_HIT.w) return true;   // #98 a grand Moment is up — the whole screen is "click to continue"
     if (selected) {
@@ -324,6 +325,25 @@ let _whisperNudged = false;                        // #curate one whisper-nudge 
 let _heldToasted = false;                          // #fresh-held one refused-?fresh explanation toast per page load
 let _voteWindowWas = false;                        // #vote-panel edge-detects the gathering opening (replaces the detail card once)
 let resumeCard = null;                             // "PREVIOUSLY ON PROPAGATE" catch-up card (shown once on resume)
+// #memory-intro — the ONE-TIME feature reveal for EXISTING players (owner: introduce the browser
+// memory to people who already have worlds, not to new players — a first-town founder grows up
+// with it naturally). Shown once per browser (localStorage), ABOVE the resume card: dismissing it
+// reveals the "PREVIOUSLY ON" catch-up beneath. The memory-web animation (the portal's living
+// graph, from heyhaigh.ai) plays via a muted looping <video> drawn into the canvas each frame —
+// so it wears the CRT like everything else.
+let memoryIntro = null;                            // { shownAt, video, hits: {view, cont, close} }
+function openMemoryIntro() {
+    const video = document.createElement('video');
+    video.src = '/assets/memory-web.webm';
+    video.muted = true; video.loop = true; video.playsInline = true;
+    video.play().catch(() => { /* muted autoplay is allowed; a refusal just shows the first frame */ });
+    memoryIntro = { shownAt: performance.now(), video, hits: {} };
+    try { localStorage.setItem('ryfarms-memory-intro', '1'); } catch { /* private mode — it may show again */ }
+}
+function dismissMemoryIntro() {
+    if (memoryIntro && memoryIntro.video) { try { memoryIntro.video.pause(); memoryIntro.video.src = ''; } catch {} }
+    memoryIntro = null;
+}
 let faceoff = null;                                // #faceoff the pre-battle VS card raised when the warband lands (render-only)
 let faceoffSeenEvent = null;                       // the raidEvent object we've raised a faceoff for (one card per raid; identity-keyed)
 const BOARD_CLOSE = { x: 0, y: 0, w: 0, h: 0 };
@@ -6690,8 +6710,51 @@ function drawMoments() {
 // "PREVIOUSLY ON PROPAGATE" — the returning player's catch-up card (#88): the last few
 // chronicle beats of the resumed town, held on screen until any click/key. This is also the
 // story-emergence instrument: if this card is ever boring, the sim has told us something.
+function drawMemoryIntro() {
+    if (!memoryIntro || !booted) return;
+    const mi = memoryIntro;
+    const alpha = Math.min(1, (performance.now() - mi.shownAt) / 350);
+    const PW = 232, PX = Math.floor((GW - PW) / 2);
+    const VW = PW - 16, VH = Math.round(VW * 480 / 720);            // the webm's own 3:2
+    const PH = 30 + VH + 58, PY = Math.floor((GH - PH) / 2) - 6;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = 'rgba(6,8,14,0.7)'; ctx.fillRect(0, 0, GW, GH);
+    ctx.fillStyle = 'rgba(14,16,26,0.97)'; ctx.fillRect(PX, PY, PW, PH);
+    ctx.fillStyle = '#c8a0e0'; ctx.fillRect(PX, PY, PW, 1); ctx.fillRect(PX, PY + PH - 1, PW, 1);   // the portal's violet
+    drawText(ctx, 'YOUR WORLD NOW REMEMBERS ITSELF', PX + 6, PY + 6, '#d8b8ee', 1);
+    drawText(ctx, 'X', PX + PW - 10, PY + 6, '#c8ccd8');
+    mi.hits.close = { x: PX + PW - 14, y: PY + 2, w: 12, h: 11 };
+    // the living memory graph (first frame until the video is ready)
+    const vx = PX + 8, vy = PY + 18;
+    ctx.fillStyle = '#08060e'; ctx.fillRect(vx, vy, VW, VH);
+    try { if (mi.video && mi.video.readyState >= 2) ctx.drawImage(mi.video, vx, vy, VW, VH); } catch { /* frame not ready */ }
+    ctx.strokeStyle = 'rgba(200,160,224,0.5)'; ctx.strokeRect(vx + 0.5, vy + 0.5, VW - 1, VH - 1);
+    let ty = vy + VH + 5;
+    for (const ln of wrapText('EVERY LIFE IN YOUR TOWNS - NAMES, CREEDS, BONDS, BATTLES - IS NOW SET DOWN IN THIS BROWSER, AND HEIRS OF YOUR FALLEN MAY RETURN IN TOWNS TO COME.', 54)) {
+        drawText(ctx, ln, PX + 8, ty, '#c8ccd8'); ty += 8;
+    }
+    // buttons: VIEW MEMORIES (portal) + SKIP — both with hover states (owner)
+    const bY = PY + PH - 18;
+    const vLabel = 'VIEW MEMORIES', cLabel = 'SKIP';
+    const vw2 = textWidth(vLabel) + 10, cw2 = textWidth(cLabel) + 10;
+    const vbx = PX + 8, cbx = PX + PW - 8 - cw2;
+    mi.hits.view = { x: vbx, y: bY, w: vw2, h: 13 };
+    mi.hits.cont = { x: cbx, y: bY, w: cw2, h: 13 };
+    const vHov = inRect(mouse, mi.hits.view), cHov = inRect(mouse, mi.hits.cont);
+    ctx.fillStyle = vHov ? '#2c2140' : '#1a1424'; ctx.fillRect(vbx, bY, vw2, 13);
+    ctx.strokeStyle = vHov ? '#e8d0f8' : '#c8a0e0'; ctx.strokeRect(vbx + 0.5, bY + 0.5, vw2 - 1, 12);
+    drawText(ctx, vLabel, vbx + 5, bY + 4, vHov ? '#f0e4fa' : '#d8b8ee');
+    ctx.fillStyle = cHov ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.08)'; ctx.fillRect(cbx, bY, cw2, 13);
+    if (cHov) { ctx.strokeStyle = '#8a8f9c'; ctx.strokeRect(cbx + 0.5, bY + 0.5, cw2 - 1, 12); }
+    drawText(ctx, cLabel, cbx + 5, bY + 4, cHov ? '#f0f2f8' : '#c8ccd8');
+    ctx.restore();
+}
+
 function drawResumeCard() {
     if (!resumeCard || !booted) return;
+    if (memoryIntro) return;   // #memory-intro SEQUENTIAL, not stacked (owner): the recap waits its turn —
+                               // its lazy shownAt keeps the fade unfired, so dismissal TRANSITIONS into it
     const rc = resumeCard;
     if (!rc.shownAt) rc.shownAt = performance.now();
     const alpha = Math.min(1, (performance.now() - rc.shownAt) / 350);
@@ -7084,6 +7147,10 @@ out.addEventListener('pointerdown', (e) => {
     mouse.noCursor = false;   // Codex #69-3 a fresh press re-engages the cursor (next tap may re-pin)
     mouse.downX = p.x; mouse.downY = p.y;
     if (startScreen) { mouse.panStart = null; return; }   // #START the menu owns the canvas — never pan the town behind it
+    // #memory-intro (Codex #94 P2) — the reveal owns the PRESS too: without this, pointerdown reached
+    // the hidden layers (a Moment's click-eater, the update-reload pill, a settings slider grab, the
+    // world-pan arming) and a >4px drag made pointerup return before the reveal's own dismiss.
+    if (memoryIntro) { mouse.panStart = null; mouse.dragging = false; return; }
     // #98 a grand Moment spotlight eats the next click (dismiss it, don't fall through to world/pan)
     if (activeMoment && MOMENTS_HIT.w) { activeMoment = null; mouse.panStart = null; return; }
     // #callout the X on a discovery toast dismisses it (only the X — clicking the bar itself falls through)
@@ -7172,6 +7239,12 @@ out.addEventListener('pointerup', (e) => {
     }
 
     // the "previously on" catch-up card swallows the first click (any click dismisses it)
+    if (memoryIntro) {   // #memory-intro the reveal owns the click; the resume card stays for the NEXT click
+        const mh = memoryIntro.hits || {};
+        if (mh.view && inRect(p, mh.view)) { window.open('/memory-graph.html', '_blank', 'noopener'); dismissMemoryIntro(); return; }
+        if ((mh.cont && inRect(p, mh.cont)) || (mh.close && inRect(p, mh.close))) { dismissMemoryIntro(); return; }
+        dismissMemoryIntro(); return;   // click anywhere dismisses, like the cards
+    }
     if (resumeCard) { resumeCard = null; return; }
     // #faceoff the post-raid VS card swallows a click too (dismiss and return to the aftermath)
     if (faceoff) { faceoff = null; return; }
@@ -7652,6 +7725,7 @@ function mostInterestingFarmer() {
 
 window.addEventListener('keydown', (e) => {
     if (startScreen) return;   // #START the launch menu owns input — no world shortcuts drive the backdrop
+    if (memoryIntro) { dismissMemoryIntro(); return; }   // #memory-intro (Codex #94 P2) any key dismisses — even ahead of a focused whisper box
     if (chatFocused) return;   // #93: typing a whisper — never fire world shortcuts (W/F/T/arrows)
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     if (resumeCard) { resumeCard = null; return; }   // any key dismisses the catch-up card
@@ -8275,6 +8349,7 @@ function frame(now) {
 
     drawFaceoff();      // #faceoff the post-raid VS card sits above the world/panels (resume card + cursor top it)
     drawResumeCard();   // the "previously on" catch-up card sits above every panel (only the cursor tops it)
+    drawMemoryIntro();  // #memory-intro the one-time reveal covers even that — dismissing it uncovers the recap
 
     // #START the launch menu — over the world/panels, under the cursor. Guarded: a menu-draw glitch must never
     // skip crt.render and black out the whole game (the town behind stays visible); log the first failure only.
@@ -8747,6 +8822,13 @@ function drawStartScreen() {
         const n = await _bounded(localLifeCount(), 1000);
         if (n != null) localMemoryCount = n;
     } catch { /* IDB refused (private mode) — the pool rides the server result alone */ }
+    // #memory-intro — decided AT BOOT so the reveal precedes the recap outright (owner: sequential
+    // modals, not an overlay on an overlay). Existing players only (a resumed town past day 1);
+    // memory presence is inevitable by the 6s completion pass, so day>=2 alone gates it.
+    try {
+        if (!startMode && world && !world._persistenceDisabled && world.day >= 2
+            && !localStorage.getItem('ryfarms-memory-intro')) openMemoryIntro();
+    } catch { /* private-mode localStorage — skip the reveal */ }
     // #memory-backfill — seed the store from towns that ALREADY exist, once the session is settled
     // (idle, off the boot path; real playing sessions only — a spectator backdrop stays read-only).
     // Refreshes the caption count and the lineage pool's source-of-truth for the NEXT founding.
@@ -8757,6 +8839,12 @@ function drawStartScreen() {
             if (n > 0) {
                 localMemoryCount = await localLifeCount();
                 console.log(`ry-farms: backfilled ${n} existing town(s) into the browser memory store`);
+            }
+            // #memory-intro — EXISTING players only (a resumed town past day 1; a first-town founder
+            // grows up with the feature), once per browser, and only when there is memory to show.
+            if (!localStorage.getItem('ryfarms-memory-intro') && world && !world._persistenceDisabled
+                && world.day >= 2 && (localMemoryCount > 0 || n > 0) && !startScreen) {
+                openMemoryIntro();
             }
         } catch { /* best-effort — next boot self-heals */ }
     }, 6000);

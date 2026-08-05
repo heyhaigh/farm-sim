@@ -83,7 +83,7 @@ const MIME = {
     '.css': 'text/css', '.json': 'application/json', '.png': 'image/png',
     '.webp': 'image/webp', '.gif': 'image/gif', '.jpg': 'image/jpeg',
     '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.wav': 'audio/wav',
-    '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg',
+    '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.webm': 'video/webm',   // #memory-intro the reveal's memory-web animation
     // NOTE: .md is deliberately absent. This map doubles as the serve allowlist, and markdown is never
     // game media — leaving it in would hand over any internal doc that reached the deploy directory.
 };
