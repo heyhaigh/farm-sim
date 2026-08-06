@@ -168,6 +168,25 @@ http.createServer(async (req, res) => {
             || String(req.headers['x-forwarded-for'] || '').split(',')[0].trim()
             || req.socket.remoteAddress || 'unknown';
         if (!takeLlmToken(ip)) {
+            // #funnel (Codex #98 P1-2, corrected in #99 P1-1) — this rejection never reaches the
+            // conscience handler, so without recording it a locally throttled whisper is missing
+            // from the hit/fallback denominator and the LLM-hit rate reads higher than it is.
+            //
+            // ONLY the conscience route. The limiter guards six LLM routes; counting chat, DM,
+            // congregation, raid-council and invention throttles as whisper failures was the
+            // opposite error — a telemetry channel contaminated by five unrelated endpoints.
+            //
+            // The stage (classify vs reply) is unknowable without parsing a body we deliberately do
+            // not parse on a rejection path, so it lands in 'unattributed' — a legitimate attempt
+            // the player did not get, counted toward the headline rate.
+            //
+            // Through the SHARED recorder, not by touching the counters directly (Codex #100 P1-1).
+            // Railway stdout is the only telemetry sink there is: incrementing a global without
+            // running the throttled emitter meant a burst of throttled whispers followed by quiet —
+            // or a restart — disappeared entirely. Recording and emitting are one operation.
+            if (url.pathname === '/api/ry-farms-conscience') {
+                require('./api/_whisper-telemetry.js').noteWhisper('unattributed', false, 'rate-limited-local');
+            }
             res.writeHead(503, { 'Content-Type': 'application/json', 'Retry-After': '600' });
             res.end(JSON.stringify({ fallback: true, error: 'rate limited - offline fallback' }));
             return;

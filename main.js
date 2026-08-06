@@ -28,6 +28,7 @@ import { persistLives, persistTownHistory, persistBattle } from './memory-writeb
 import { enrichInventions, persistTownInventions } from './memory-invent.js';
 import { whisper } from './conscience.js';
 import { cultureWord } from './culture.js';   // #3.1 orc-vs-human display copy
+import { track, trackOnce, resetFunnel } from './analytics.js';   // #funnel display-side GA4 events
 
 // ---------------------------------------------------------------------------
 // Canvases
@@ -5757,6 +5758,14 @@ async function submitWhisper() {
         // crossing in between would otherwise save the DESTINATION town and lose the whisper on the source.
         const w = world;
         chatScroll = 0;   // a new exchange snaps the transcript to the newest line
+        // #funnel — the whisper is the game's only verb, so "did they ever use it" is the funnel's
+        // hinge step. Fired on SEND, not on reply: a whisper that 429s into the fallback template
+        // is still the player having used the verb, and gating on a successful LLM round-trip would
+        // under-report exactly the sessions where the breaker was tripped.
+        // funnelPlayed(), not bare trackOnce (Codex #97 P1-2): "Watch a Wild Town" leaves an
+        // interactive spectator backdrop, and a whisper to it would spend the durable flag before
+        // the player ever founds a real town — whose genuine first whisper then never records.
+        if (funnelPlayed()) trackOnce('first_whisper');
         await whisper(w, f, text, () => { if (w && !w._retired) saveTown(w); });   // #Codex37 P1-2: a retired (wiped) town stays wiped
     } catch (err) {
         console.warn('ry-farms: whisper failed', err);
@@ -7365,7 +7374,7 @@ out.addEventListener('pointerup', (e) => {
                     // "CLICK A BEAT TO FOLLOW THAT RY": narrow the saga to them AND trail them in the world, so
                     // the camera moves, the FOLLOWING banner shows once the chronicle closes, and ←/→ (which only
                     // move the camera while followMode is on) cycle both the sheet and the camera together.
-                    if (f) { selected = f; followMode = true; followTarget = f; chronTownWide = false; sheetScroll = 0; chronScroll = 0; }
+                    if (f) { selected = f; followMode = true; followTarget = f; chronTownWide = false; sheetScroll = 0; chronScroll = 0; funnelFollow(); }
                     return;
                 }
             }
@@ -7403,7 +7412,7 @@ out.addEventListener('pointerup', (e) => {
             for (const row of rosterRows) {
                 if (p.y >= row.y0 && p.y <= row.y1 && p.x > rv.x && p.x < rv.x + rv.w) {
                     selected = row.farmer; sheetScroll = 0; sheetTab = 0; rosterOpen = false;
-                    followMode = true; followTarget = row.farmer;
+                    followMode = true; followTarget = row.farmer; funnelFollow();
                     return;
                 }
             }
@@ -7415,7 +7424,7 @@ out.addEventListener('pointerup', (e) => {
     // minimap because the full-height card is drawn OVER it (Codex: don't click through).
     if (selected && inRect(p, SHEET_FOLLOW)) {
         if (followMode && followTarget === selected) { followMode = false; followTarget = null; }
-        else { followMode = true; followTarget = selected; }
+        else { followMode = true; followTarget = selected; funnelFollow(); }
         return;
     }
     // closing the card is just dismissing visual noise — it does NOT stop following (only F/Esc/pan do)
@@ -7747,7 +7756,7 @@ window.addEventListener('keydown', (e) => {
         if (followMode) { followMode = false; followTarget = null; if (chronOpen) chronTownWide = true; }   // unfollowing drops the chronicle back to town-wide
         else {
             const target = (selected && world.farmers.includes(selected)) ? selected : mostInterestingFarmer();
-            if (target) { followMode = true; followTarget = target; selected = target; sheetScroll = 0; sheetTab = 0; rosterOpen = false; chronOpen = false; boardOpen = false; }
+            if (target) { followMode = true; followTarget = target; selected = target; sheetScroll = 0; sheetTab = 0; rosterOpen = false; chronOpen = false; boardOpen = false; funnelFollow(); }
         }
     }
     // W — WATCH: jump to follow the current off-screen drama the cue is pointing at
@@ -7770,7 +7779,7 @@ window.addEventListener('keydown', (e) => {
             cam.y = GH / 2 - isoY(CENTER + co * d, CENTER + si * d);
         } else {
             const target = spotlightFarmer();
-            if (target) { followMode = true; followTarget = target; selected = target; sheetScroll = 0; sheetTab = 0; rosterOpen = false; chronOpen = false; boardOpen = false; dramaSpotlight = null; }
+            if (target) { followMode = true; followTarget = target; selected = target; sheetScroll = 0; sheetTab = 0; rosterOpen = false; chronOpen = false; boardOpen = false; dramaSpotlight = null; funnelFollow(); }
         }
     }
     // M — toggle the zoom-out WORLD map (the world of towns)
@@ -7934,6 +7943,47 @@ function restoreFarmerInterp() {
     if (re && re.raiders) for (const r of re.raiders) if (r._trueI !== undefined) { r.i = r._trueI; r.j = r._trueJ; r._trueI = r._trueJ = undefined; }
 }
 
+let _funnelDead = false;   // first funnel-poll failure disables the poll outright (warn once, run never again)
+// #funnel — TWO mid-session steps, detected by POLLING observable UI state (`chronOpen`,
+// `world.day`). Polling cannot miss a path, which is why it is used where it can be.
+//
+// `first_follow` is deliberately NOT here. It was polled, and that credited a passive player with an
+// interaction, because the day-one sentry handoff sets `followMode` automatically (Codex #97 P1-3).
+// It now fires from `funnelFollow()` at the player-initiated call sites only — and that trade is
+// real and permanent: **any future way to follow a farmer MUST call funnelFollow() or it will go
+// uncounted.** Polling's can't-miss-a-path property does not protect that event any more.
+//
+// trackOnce short-circuits on an in-memory Set after the first spend and bails before any storage
+// read on a dark host, so the steady-state cost here is two Set lookups per frame.
+function funnelTick() {
+    // `_startModeBoot`, NOT `startMode`: the latter is a const declared INSIDE boot() and this
+    // function runs at module scope from frame(). Referencing it here is a ReferenceError that
+    // parsing does not catch — it throws before the frame draws, freezing the canvas on the boot
+    // screen forever. The mirror at the top of this file exists for exactly this reason.
+    if (!funnelPlayed()) return;
+    // #funnel first_follow is NOT polled — Codex #97 P1-3. The day-one sentry handoff sets
+    // followMode automatically, so polling the state credited a passive player with an
+    // interaction. It is now fired from the click paths only (see funnelFollow).
+    if (chronOpen) trackOnce('chronicle_opened');
+    if (world.day >= 10) trackOnce('day10_reached', { seed: world.seed });
+}
+
+// #funnel — is this a REAL played session? `_startModeBoot` alone is not enough: "Watch a Wild
+// Town" dismisses the menu while the world stays a non-persisting spectator backdrop, and a
+// spectator who whispers would otherwise burn a durable flag that the player's first real town can
+// then never fire (Codex #97 P1-2). `world._spectator` is the flag the rest of main.js already
+// gates on — eight other call sites use it.
+function funnelPlayed() {
+    return !!(world && !_startModeBoot && !world._spectator);
+}
+
+// #funnel — the player CHOSE to follow someone. Called from the click paths rather than polled, so
+// an automatic camera handoff can never count as engagement. Trade-off accepted knowingly: unlike
+// the poll, this can miss a future follow path, so any new way to follow a farmer must call it.
+function funnelFollow() {
+    if (funnelPlayed()) trackOnce('first_follow');
+}
+
 function frame(now) {
     requestAnimationFrame(frame);
     const dt = Math.min((now - last) / 1000, 0.05);
@@ -7944,6 +7994,18 @@ function frame(now) {
         drawBootScreen(t);
         crt.render(t);
         return;
+    }
+
+    // #funnel — WRAPPED, and not defensively-for-the-sake-of-it: this call sits upstream of every
+    // draw in the frame, so anything it throws freezes the canvas on whatever was last painted and
+    // the game is simply dead. Analytics must never be able to do that. A funnel step lost to a
+    // swallowed error costs a data point; an unwrapped throw here costs the whole game.
+    // Codex #97 P2-5: the first failure DISABLES the poll. Warning once while still calling the
+    // broken function turns a permanent defect into ~60 caught exceptions a second, and makes the
+    // log message ("disabled for this session") a lie.
+    if (!_funnelDead) {
+        try { funnelTick(); }
+        catch (err) { _funnelDead = true; console.warn('ry-farms: funnel poll failed — analytics disabled for this session', err); }
     }
 
     // #Codex36 P1-1: while a crossing is in flight the OUTGOING town has already been snapshotted — ticking
@@ -8836,6 +8898,17 @@ function drawStartScreen() {
         if (!startMode && world && !world._persistenceDisabled && world.day >= 2
             && !localStorage.getItem('ryfarms-memory-intro')) openMemoryIntro();
     } catch { /* private-mode localStorage — skip the reveal */ }
+    // #funnel — the two boot-side steps. Neither is once-only: town_created measures the FOUNDING
+    // RATE and session_return measures RETURNS, so a once-per-browser flag would erase the very
+    // signal each one exists to carry. `startMode` is the title/spectator backdrop, not a played
+    // session — counting it would inflate both. Fired here rather than earlier because this is the
+    // first point at which the world is hydrated and `resumed` is settled.
+    if (!startMode && world) {
+        if (resumed) track('session_return', { day: world.day, seed: world.seed });
+        // world.culture, NOT _bootIsOrc: a resumed orc town carries no ?orc= in its URL, so the
+        // boot flag misreports it (see the correction note at the top of this function).
+        else track('town_created', { seed: world.seed, culture: world.culture || 'human' });
+    }
     // #memory-backfill — seed the store from towns that ALREADY exist, once the session is settled
     // (idle, off the boot path; real playing sessions only — a spectator backdrop stays read-only).
     // Refreshes the caption count and the lineage pool's source-of-truth for the NEXT founding.
@@ -9054,6 +9127,9 @@ function drawStartScreen() {
         //   RYFARMS.crt.get() / .reset() / .mode('classic')
         crt: { toggle: () => crt.toggle(), mode: (m) => crt.setMode(m), set: (k, v) => crt.set(k, v), get: () => crt.get(), reset: () => crt.reset() },
         updateNudge: () => { _updateReady = true; },   // QA: raise the new-build pill without a real deploy
+        // #funnel QA: re-arm every once-only step so the funnel can be walked again on a live
+        // browser. Returns how many ledger keys were cleared.
+        resetFunnel: () => resetFunnel(),
         select: (i) => { selected = world.farmers[i] || null; },
         speed: (mult) => { world._speedMult = mult; },
         // #98 fire a test Moment: RYFARMS.moment() spotlights farmer 0 finding a star-crystal (with its memory why)

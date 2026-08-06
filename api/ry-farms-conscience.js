@@ -197,21 +197,93 @@ async function reply(body) {
     return { line, verdict };
 }
 
+// ---- telemetry ---------------------------------------------------------------
+// #funnel — whisper LLM-hit vs fallback rate (2026-08-01 council Day-2). The client cannot report
+// this honestly: from its side a 503, a rate-limited breaker and a dead network are one `catch`.
+//
+// The recorder lives in _whisper-telemetry.js because failures also occur BEFORE this handler runs
+// — server.mjs's per-IP limiter rejects without loading it. One module means one set of counters
+// AND one emitter; a caller that increments without emitting is not reporting anything, since
+// Railway stdout is the only sink (Codex #100 P1-1).
+const { noteWhisper, bucketReason } = require('./_whisper-telemetry.js');
+
 // ---- handler ----------------------------------------------------------------
 
 module.exports = async function handler(req, res) {
     if (req.method !== 'POST') return send(res, 405, { fallback: true, error: 'POST required' });
 
+    // Codex #97 P2-6: the environment checks below used to run BEFORE the body was read and
+    // attributed every failure to 'classify'. A reply request during an unconfigured deploy then
+    // inflated the classify denominator and left reply permanently at n/a — the telemetry lied
+    // about which half of the whisper was broken. Read the stage first, then judge.
+    //
+    // A body that cannot be parsed has no knowable stage. It is recorded with reason 'bad-body',
+    // which _whisper-telemetry.js routes to the 'invalid' bucket — the shipped client cannot
+    // produce it, so it is protocol noise and must not dilute the product-health headline
+    // (Codex #100 P2-3). Same for 'unknown-stage' below.
+    let body = null;
+    try {
+        body = await parseBody(req);
+    } catch (err) {
+        noteWhisper('unattributed', false, 'bad-body');
+        return send(res, 400, { fallback: true, error: 'unreadable body' });
+    }
+
+    // PARSING IS NOT VALIDATION (Codex #102 P2-1). `JSON.parse('null')` succeeds, as does `'[]'` and
+    // `'"a string"'` — so a body can parse cleanly and still not be an object. Reading `body.stage`
+    // off `null` then threw OUTSIDE the try above: the request 500'd through server.mjs's own
+    // catch, and telemetry recorded nothing at all. A crash that is invisible to the channel built
+    // to watch for crashes.
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+        noteWhisper('unattributed', false, 'bad-body');
+        return send(res, 400, { fallback: true, error: 'unreadable body' });
+    }
+
+    // VALIDATE THE PROTOCOL BEFORE JUDGING OUR OWN HEALTH (Codex #101 P2-1). This check used to sit
+    // below the environment guards, so on an unconfigured deploy a `{stage:"bogus"}` request was
+    // rejected as 'unconfigured' under the 'unattributed' bucket — counted as a genuine whisper
+    // attempt in the OVERALL headline, which is exactly what the invalid-traffic contract exists to
+    // prevent. Malformed input is not evidence about the LLM's health, so it must be answered
+    // before the LLM is consulted at all.
+    if (body.stage !== 'classify' && body.stage !== 'reply') {
+        noteWhisper('unattributed', false, 'unknown-stage');   // routed to `invalid` by INVALID_REASONS
+        return send(res, 400, { fallback: true, error: 'unknown stage' });
+    }
+    const stage = body.stage;
+
+    // A WHISPER WITH NO WORDS IS NOT A WHISPER (Codex #102 P2-2). `String(body.message || '')`
+    // coerced anything into a prompt, so `{stage:'reply'}` with no message reached callLLM: it spent
+    // one of the 26-per-minute shared budget on an empty prompt, returned 200, and was booked as a
+    // SUCCESSFUL genuine reply. That is worse than a wasted call — it manufactures product-health
+    // successes out of traffic the shipped client cannot even produce.
+    //
+    // Validated before the environment checks, for the same reason the stage is: bad input must not
+    // be answered with a verdict about the LLM's health. (conscience.js already refuses to send an
+    // empty whisper, so this can only be reached by something that is not the game.)
+    if (typeof body.message !== 'string' || !body.message.trim()) {
+        noteWhisper(stage, false, 'empty-message');   // routed to `invalid` by INVALID_REASONS
+        return send(res, 400, { fallback: true, error: 'empty message' });
+    }
+
     // an OpenAI key OR a custom OpenAI-compatible base URL (e.g. a local Ollama) counts as configured
-    if (!process.env.OPENAI_API_KEY && !process.env.OPENAI_BASE_URL) return send(res, 503, { fallback: true, error: 'LLM not configured' });
-    if (typeof fetch !== 'function') return send(res, 501, { fallback: true, error: 'fetch unavailable' });
+    if (!process.env.OPENAI_API_KEY && !process.env.OPENAI_BASE_URL) {
+        noteWhisper(stage, false, 'unconfigured');
+        return send(res, 503, { fallback: true, error: 'LLM not configured' });
+    }
+    if (typeof fetch !== 'function') {
+        noteWhisper(stage, false, 'no-fetch');
+        return send(res, 501, { fallback: true, error: 'fetch unavailable' });
+    }
 
     try {
-        const body = await parseBody(req);
-        if (body.stage === 'classify') return send(res, 200, await classify(body));
-        if (body.stage === 'reply') return send(res, 200, await reply(body));
-        return send(res, 400, { fallback: true, error: 'unknown stage' });
+        if (stage === 'classify') { const r = await classify(body); noteWhisper('classify', true); return send(res, 200, r); }
+        const r = await reply(body); noteWhisper('reply', true); return send(res, 200, r);
     } catch (err) {
-        return send(res, 500, { fallback: true, error: err?.message || 'conscience generation failed' });
+        const msg = String(err?.message || '');
+        // Bucketing lives in _whisper-telemetry.js so the server and the handler classify failures
+        // identically, and so a test can exercise the REAL ladder instead of a copy of it.
+        const reason = bucketReason(msg);
+        noteWhisper(stage, false, reason);
+        return send(res, 500, { fallback: true, error: msg || 'conscience generation failed' });
     }
 };
