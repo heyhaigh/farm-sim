@@ -29,6 +29,7 @@ import { enrichInventions, persistTownInventions } from './memory-invent.js';
 import { whisper } from './conscience.js';
 import { cultureWord } from './culture.js';   // #3.1 orc-vs-human display copy
 import { track, trackOnce, resetFunnel } from './analytics.js';   // #funnel display-side GA4 events
+import { revealLine, DEFAULT_VARIANT } from './speech-anim.js';   // #bubble-reveal how a spoken line arrives
 
 // ---------------------------------------------------------------------------
 // Canvases
@@ -3603,10 +3604,22 @@ function drawFarmerBubble(f, sx) {
         ctx.restore();
     }
 
-    // speech bubble — #bubble-typewriter: the saying is shown ONE LINE AT A TIME (advancing every b.lineSec), each
-    // line typing out left-to-right. It pages through EVERY line — a 9-line saying shows all 9, one after the
-    // other (no 4-line cap, and no progress dots that made it read as capped). The plate is pre-sized to the
-    // widest line so it never resizes as lines advance; a caret marks the typing head.
+    // speech bubble — #bubble-reveal: the saying is shown ONE LINE AT A TIME (advancing every
+    // b.lineSec). It pages through EVERY line — a 9-line saying shows all 9, one after the other (no
+    // 4-line cap, and no progress dots that made it read as capped). The plate is pre-sized to the
+    // widest line so it never resizes as lines advance.
+    //
+    // HOW a line arrives lives in speech-anim.js, not here, so `speech_anim_compare.html` judges the
+    // real thing rather than a reimplementation of it. Shipping treatment (owner, 2026-08-06):
+    // per WORD, grown outward from the CENTRE, each new word fading in. Replaced the left-to-right
+    // per-letter typewriter, whose reveal ended at the right edge and made the eye sweep back across
+    // the full plate on every line.
+    //
+    // `lineSec` is passed so the reveal is FITTED to the line's on-screen time — a guarantee for any
+    // caller, NOT a fix for a past defect. say() wraps every line to SAY_LINE_CHARS (18) and a reveal
+    // only overruns the 0.85s budget past ~28 characters, so no production line has ever been cut
+    // off. An earlier revision of this comment claimed otherwise on the strength of synthetic
+    // samples production cannot produce; see the scope note in speech-anim.js.
     if (f.bubble && !f.memoryEcho) {
         const b = f.bubble, lines = b.lines || [b.text];
         const elapsed = (b.t0 || 0) - b.t, lineSec = b.lineSec || 0.85, charSec = b.charSec || 0.03;
@@ -3617,11 +3630,14 @@ function drawFarmerBubble(f, sx) {
         ctx.fillStyle = 'rgba(16,18,26,0.85)';
         ctx.fillRect(bx, by, w, 9);
         const lineElapsed = elapsed - idx * lineSec;
-        const shown = Math.max(1, Math.min(line.length, Math.floor(lineElapsed / charSec)));
-        const typed = line.slice(0, shown);
-        drawText(ctx, typed, bx + 2, by + 2, b.color);
-        if (shown < line.length && (Math.floor(elapsed * 8) % 2)) {   // blinking caret at the typing head
-            ctx.fillStyle = b.color; ctx.fillRect(bx + 2 + textWidth(typed), by + 2, 1, 5);
+        const rv = revealLine(DEFAULT_VARIANT, line, lineElapsed, { plateW: w, charSec, lineSec });
+        for (const seg of rv.segments) {
+            ctx.globalAlpha = seg.alpha;
+            drawText(ctx, seg.text, bx + seg.x, by + 2, b.color);
+        }
+        ctx.globalAlpha = 1;   // MUST reset — every later draw in this frame would inherit the fade
+        if (rv.caretX !== null && (Math.floor(elapsed * 8) % 2)) {   // left-anchored variants only
+            ctx.fillStyle = b.color; ctx.fillRect(bx + rv.caretX, by + 2, 1, 5);
         }
     }
 }

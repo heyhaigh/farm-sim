@@ -801,7 +801,11 @@ function shortName(farmer) {
 
 // #113 word-wrap a saying into lines of <= max chars, so the bubble can animate the FULL sentiment
 // line-by-line instead of truncating it. A single over-long word is hard-split so it never overflows.
-const SAY_LINE_CHARS = 18;   // MAX bubble line width (3px font). Narrower than before → a tighter, faster-read box.
+// MAX bubble line width (3px font). Narrower than before → a tighter, faster-read box.
+// Exported so tests measure the reveal against the REAL wrap width instead of a copied constant:
+// a hand-written sample longer than this cannot occur in the game, and once produced a confident
+// bug report about a defect that did not exist.
+export const SAY_LINE_CHARS = 18;
 const SAY_LINE_SEC = 0.85;   // per-line read pace (used for speechReadTime / turn-taking delays)
 const SAY_CHAR_SEC = 0.03;   // #bubble typewriter rate (~33 cps): the whole saying types across ALL its lines at once
 function wrapGreedy(words, max) {
@@ -815,7 +819,7 @@ function wrapGreedy(words, max) {
     if (cur) lines.push(cur);
     return lines;
 }
-function wrapWords(text, max = SAY_LINE_CHARS) {
+export function wrapWords(text, max = SAY_LINE_CHARS) {   // exported for tests: the reveal must be judged on PRODUCTION lines
     const words = String(text).split(' ').filter(Boolean);
     if (!words.length) return ['...'];
     const base = wrapGreedy(words, max);

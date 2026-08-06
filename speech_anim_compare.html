@@ -1,0 +1,221 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Propagate — Speech reveal: softening the per-word arrival</title>
+<style>
+  /* Codex #100 P2-4: the canvas fit its cell, but the CELL/PAGE ran past the viewport and clipped
+     the long line at the default zoom. Nothing may exceed 100vw, and the grid collapses to one
+     column on narrow viewports so a wide plate is never squeezed into a half-width column. */
+  html, body { max-width:100%; overflow-x:hidden; }
+  body { margin:0; background:#12140f; color:#e6e8ee; font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace; padding:22px 26px 80px; box-sizing:border-box; }
+  *, *::before, *::after { box-sizing:inherit; }
+  @media (max-width: 1400px) { .cell { flex:1 1 100% !important; min-width:0 !important; } }
+  h1 { font-size:18px; letter-spacing:0.05em; color:#7dd069; margin:0 0 4px; }
+  .sub { color:#98a08c; font-size:12.5px; line-height:1.55; margin:0 0 16px; max-width:980px; }
+  .sub b { color:#e0a848; font-weight:normal; }
+  .sub i { color:#e6e8ee; font-style:normal; }
+  .bar { display:flex; gap:18px; align-items:center; flex-wrap:wrap; background:#181b13; border:1px solid #2a2f22;
+         border-radius:10px; padding:11px 15px; margin:0 0 16px; font-size:11.5px; letter-spacing:0.06em; color:#98a08c; }
+  .bar label { display:flex; gap:7px; align-items:center; }
+  .bar select, .bar input[type=range] { background:#12140f; color:#e6e8ee; border:1px solid #2a2f22; border-radius:5px;
+         font-family:inherit; font-size:11.5px; padding:3px 5px; }
+  .bar button { background:#243019; color:#bff0a8; border:1px solid #3d5228; border-radius:5px; font-family:inherit;
+         font-size:11.5px; letter-spacing:0.06em; padding:4px 11px; cursor:pointer; }
+  .bar button:hover { background:#2e3d20; }
+  h3 { font-size:12px; letter-spacing:0.1em; color:#7dd069; margin:22px 0 9px; font-weight:normal; }
+  h3 span { color:#7d8a72; letter-spacing:0.04em; }
+  .grid { display:flex; flex-wrap:wrap; gap:14px; }
+  .cell.wide { flex:1 1 100%; }
+  .cell { border:1px solid #2a2f22; border-radius:10px; background:#181b13; overflow:hidden; flex:1 1 440px; min-width:0; max-width:100%; }
+  .cell.pick { border-color:#7dd069; }
+  .cell h2 { font-size:13px; letter-spacing:0.06em; color:#e0a848; margin:0; padding:11px 15px 3px; }
+  .cell h2 em { font-style:normal; color:#7dd069; font-size:10.5px; letter-spacing:0.1em; }
+  .cell .note { color:#98a08c; font-size:11px; line-height:1.5; padding:0 15px 9px; }
+  canvas.stage { background:#3f5a2c; display:block; image-rendering:pixelated; width:100%; height:auto; }
+  .foot { color:#7d8a72; font-size:11.5px; line-height:1.6; margin:24px 0 0; max-width:980px; border-top:1px solid #2a2f22; padding-top:14px; }
+  .foot b { color:#e0a848; font-weight:normal; }
+</style>
+</head>
+<body>
+<h1>PROPAGATE — SOFTENING THE PER-WORD ARRIVAL</h1>
+<p class="sub">
+<b>PER WORD · CENTRE is the chosen reveal.</b> It read a little staccato, and there are <i>two</i> separate causes —
+only one of them obvious. <b>(1) Alpha pop:</b> each word appears at full opacity in a single frame. <b>(2) The
+centring jump:</b> every new word shifts <i>all</i> the previously-revealed words leftward by half its width, so the
+whole line lurches sideways on every word. The second is likely the bigger culprit and is invisible until you
+look for it. <i>FADE</i> softens the first, <i>GLIDE</i> softens the second, and they are independent so you can
+tell which one actually fixed it. Row 1 attributes the cause; row 2 picks the curve; row 3 is the sanity check.
+</p>
+
+<div class="bar">
+  <label>SAYING <select id="saying"></select></label>
+  <label>SPEED <input type="range" id="speed" min="0.15" max="1.6" step="0.05" value="1"><span id="speedv">1.00x</span></label>
+  <label>ZOOM <input type="range" id="zoom" min="1" max="8" step="1" value="3"><span id="zoomv">3x</span></label>
+  <label>FADE <input type="range" id="fade" min="0.02" max="0.30" step="0.01" value="0.11"><span id="fadev">0.11s</span></label>
+  <button id="replay">REPLAY</button>
+  <button id="pause">PAUSE</button>
+</div>
+
+<h3>1 · WHICH CAUSE? <span>— same curve, same timing; only what is being softened changes</span></h3>
+<div class="grid" id="row1"></div>
+
+<h3>2 · WHICH CURVE? <span>— fade only (the chosen treatment); only the fade easing changes</span></h3>
+<div class="grid" id="row2"></div>
+
+<h3>3 · SANITY CHECK <span>— the chosen treatment against the old baseline, and the one-word stress case</span></h3>
+<div class="grid" id="row3"></div>
+
+<p class="foot" id="foot"></p>
+
+<script type="module">
+const bust = '?t=' + Date.now();
+const P = await import('./pixel.js' + bust);
+const A = await import('./speech-anim.js' + bust);
+const F = await import('./farm.js' + bust);   // the REAL wrapper — samples must match production
+const { drawText, textWidth } = P;
+const { revealLine, CURVES, DEFAULT_CURVE } = A;
+
+// PRODUCTION samples: run through farm.js's real wrapWords, exactly as say() does. An earlier
+// version of this harness used hand-written unwrapped lines up to 80 characters — which production
+// can never produce, AND which the 150px stage silently clipped at both ends. That combination
+// produced a confident bug report about a defect that did not exist (Codex #98 P2-4/P2-5).
+const RAW = [
+  ['Typical saying',   'I set the last stone before dusk. The frost will not take this one.'],
+  ['Short line',       'The barn is cold.'],
+  ['Long thought',     'I have carried water to the far field since the first light and my arms know it.'],
+  ['Many short lines', 'Rain. Again. The seed will keep. It has to.'],
+  ['Name-heavy',       'Grull says the fence line held. Mera disagrees. Loudly.'],
+];
+const SAYINGS = RAW.map(([name, text]) => [name, F.wrapWords(text)]);
+// UNWRAPPED stress case — cannot occur in the game; present only to exercise the fitting guarantee.
+SAYINGS.push(['(synthetic — CANNOT occur in game) unwrapped 80ch', ['I have carried water to the far field since the first light and my arms know it.']]);
+const LINE_SEC = 0.85, CHAR_SEC = 0.03, HOLD_SEC = 1.1;
+const H = 44;
+// Stage width is DERIVED from the widest plate any sample can produce, plus margin. A fixed 150px
+// canvas clipped the long samples at both ends and made the harness unusable as visual evidence
+// for exactly the case it was supposed to settle (Codex #98 P2-5).
+const W = Math.max(150, ...SAYINGS.flatMap(([, ls]) => ls.map(l => textWidth(l))) ) + 24;
+
+const els = {
+  saying: document.getElementById('saying'), speed: document.getElementById('speed'),
+  speedv: document.getElementById('speedv'), zoom: document.getElementById('zoom'),
+  zoomv: document.getElementById('zoomv'), fade: document.getElementById('fade'),
+  fadev: document.getElementById('fadev'),
+};
+SAYINGS.forEach(([n], i) => els.saying.add(new Option(n, String(i))));
+
+// Each cell pins a variant + option set. `dyn` lets a cell read the live fade slider.
+const SPECS = [
+  ['row1', 'word-center', { fade:false, glide:false }, 'NEITHER',    'the raw reveal — the staccato as originally reported'],
+  ['row1', 'word-center', { fade:true,  glide:false }, 'FADE ONLY',  'CHOSEN — alpha softened, centring left crisp', true],
+  ['row1', 'word-center', { fade:false, glide:true  }, 'GLIDE ONLY', 'the centring shift eased, no fade'],
+  ['row1', 'word-center', { fade:true,  glide:true  }, 'FADE + GLIDE', 'both — the owner found the glide read as extra motion'],
+
+  ['row2', 'word-center', { fade:true, glide:false, curve:'linear' }, 'LINEAR',      'null hypothesis — constant rate, no easing'],
+  ['row2', 'word-center', { fade:true, glide:false, curve:'quad'   }, 'EASE-OUT QUAD',   'gentlest settle'],
+  ['row2', 'word-center', { fade:true, glide:false, curve:'cubic'  }, 'EASE-OUT CUBIC',  'the current default — quicker arrival, longer settle', true],
+  ['row2', 'word-center', { fade:true, glide:false, curve:'sine'   }, 'EASE-OUT SINE',   'most linear of the eased curves'],
+
+  ['row3', 'type-left',   { }, 'OLD BASELINE',  'per letter, left to right — what shipped before today'],
+  ['row3', 'word-center', { fade:true, glide:false }, 'CHOSEN + FADE', 'the shipping treatment: per word, centred, fade only', true],
+];
+
+const cells = SPECS.map(([row, variant, opts, tag, note, pick]) => {
+  const cell = document.createElement('div');
+  // the stress row is full-width: a wide plate in a two-column squeeze is how the 80-char case got clipped
+  cell.className = 'cell' + (pick ? ' pick' : '') + (row === 'row3' ? ' wide' : '');
+  cell.innerHTML = `<h2>${tag} ${pick ? '<em>◂ CURRENT PICK</em>' : ''}</h2><div class="note">${note}</div>`;
+  const cv = document.createElement('canvas'); cv.width = W; cv.height = H; cv.className = 'stage';
+  cell.appendChild(cv); document.getElementById(row).appendChild(cell);
+  const ctx = cv.getContext('2d'); ctx.imageSmoothingEnabled = false;
+  return { variant, opts, cv, ctx };
+});
+
+// Zoom is a CEILING, not a fixed size (Codex #99 P2-2). Setting an explicit W*z width pushed the
+// canvas past its overflow:hidden cell and clipped the very stress case the harness exists to
+// settle — at BOTH the default and the minimum zoom. `width:100%` with `max-width` lets the stage
+// shrink to fit whatever cell it lands in, so nothing is ever cut off; the aspect ratio holds
+// because height is auto and the canvas keeps its intrinsic W:H.
+function applyZoom() {
+  const z = +els.zoom.value; els.zoomv.textContent = z + 'x';
+  cells.forEach(c => {
+    c.cv.style.width = '100%';
+    c.cv.style.maxWidth = (W * z) + 'px';
+    c.cv.style.height = 'auto';
+  });
+}
+els.zoom.oninput = applyZoom; applyZoom();
+els.speed.oninput = () => { els.speedv.textContent = (+els.speed.value).toFixed(2) + 'x'; };
+els.fade.oninput = () => { els.fadev.textContent = (+els.fade.value).toFixed(2) + 's'; };
+
+function drawFarmer(ctx, cx, groundY) {
+  ctx.fillStyle = '#2b2118'; ctx.fillRect(cx - 3, groundY - 9, 6, 9);
+  ctx.fillStyle = '#d9a066'; ctx.fillRect(cx - 3, groundY - 14, 6, 5);
+  ctx.fillStyle = '#7a5b3a'; ctx.fillRect(cx - 4, groundY - 15, 8, 2);
+  ctx.fillStyle = 'rgba(0,0,0,0.22)'; ctx.fillRect(cx - 4, groundY, 8, 1);
+}
+
+let t = 0, playing = true, lastNow = 0;
+
+function draw(dt) {
+  const lines = SAYINGS[+els.saying.value][1];
+  t = (t + dt * +els.speed.value) % (lines.length * LINE_SEC + HOLD_SEC);
+  const plateW = Math.max(...lines.map(l => textWidth(l))) + 4;
+  const idx = Math.min(lines.length - 1, Math.floor(t / LINE_SEC));
+  const lineElapsed = t - idx * LINE_SEC;
+  const line = lines[idx] || '';
+
+  for (const c of cells) {
+    const { ctx } = c;
+    ctx.fillStyle = '#3f5a2c'; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#48653180'; for (let x = 0; x < W; x += 7) ctx.fillRect(x, H - 9 + (x % 3), 3, 1);
+    const cx = Math.floor(W / 2), groundY = H - 6;
+    drawFarmer(ctx, cx, groundY);
+    const bx = Math.floor(cx - plateW / 2), by = groundY - 26;
+    ctx.fillStyle = 'rgba(16,18,26,0.85)'; ctx.fillRect(bx, by, plateW, 9);
+
+    const r = revealLine(c.variant, line, lineElapsed, {
+      plateW, charSec: CHAR_SEC, lineSec: LINE_SEC, fadeSec: +els.fade.value,
+      curve: c.opts.curve || DEFAULT_CURVE,
+      fade: c.opts.fade !== undefined ? c.opts.fade : true,
+      glide: c.opts.glide !== undefined ? c.opts.glide : true,
+    });
+    for (const s of r.segments) {
+      ctx.globalAlpha = s.alpha;
+      drawText(ctx, s.text, bx + s.x, by + 2, '#f0d88a');
+    }
+    ctx.globalAlpha = 1;
+    if (r.caretX !== null && (Math.floor(t * 8) % 2)) {
+      ctx.fillStyle = '#f0d88a'; ctx.fillRect(bx + r.caretX, by + 2, 1, 5);
+    }
+  }
+}
+
+function loop(now) {
+  requestAnimationFrame(loop);
+  const dt = Math.min((now - lastNow) / 1000, 0.05); lastNow = now;
+  if (playing) draw(dt);
+}
+requestAnimationFrame(loop);
+
+document.getElementById('replay').onclick = () => { t = 0; playing = true; };
+document.getElementById('pause').onclick = (e) => { playing = !playing; e.target.textContent = playing ? 'PAUSE' : 'PLAY'; };
+els.saying.onchange = () => { t = 0; };
+
+document.getElementById('foot').innerHTML =
+  '<b>How to judge row 1:</b> compare GLIDE ONLY against FADE ONLY. If glide-only already reads smooth, the '
+  + 'staccato was the sideways lurch rather than the opacity, and the fade is decoration. If neither alone works '
+  + 'but both together do, keep both.<br><br>'
+  + '<b>Slow it down.</b> Drop SPEED to ~0.3x on row 1 — at 1x the whole reveal is under a second and the eye '
+  + 'reports a feeling rather than a mechanism.<br><br>'
+  + '<b>The stress case.</b> Load <i style="color:#e6e8ee;font-style:normal">"Many short lines"</i>: a one-word '
+  + 'line has nothing to reveal per-word, so it arrives all at once. The fade softens that but cannot remove it. '
+  + 'If it still reads wrong, the answer is a hybrid — per-letter below N words — and that is worth deciding here '
+  + 'rather than discovering in the game.<br><br>'
+  + '<b>Timing is honest:</b> the word cadence is derived from the letter cadence, so every panel finishes the '
+  + 'same line at the same instant. You are comparing shape, not speed. The fade is stateless and time-pure — '
+  + 'no per-frame accumulation — so it behaves identically at any speed multiplier and under dropped frames.';
+</script>
+</body>
+</html>
