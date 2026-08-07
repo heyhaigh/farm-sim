@@ -255,6 +255,122 @@ await check('an all-dead chain retries everything rather than muting the game fo
 
 delete process.env.RY_FARMS_LLM_MODELS;
 
+// ---- Codex #104 regressions -------------------------------------------------------------------
+
+function stubStatus({ first, log, body = '{}' }) {
+    // `first` decides what the FIRST model in the chain returns; anything else succeeds.
+    let seen = 0;
+    globalThis.fetch = async (_url, opts) => {
+        const b = JSON.parse(opts.body);
+        log.push({ model: b.model });
+        if (seen++ === 0) return { ok: false, status: first, json: async () => ({}), text: async () => body };
+        return { ok: true, status: 200, text: async () => '',
+            json: async () => ({ choices: [{ message: { content: '{"ok":true}' } }] }) };
+    };
+}
+
+await check('P1-3: "no longer supported" prose does NOT retire a healthy model', async () => {
+    // Codex reproduced this exactly: a parameter error retired a working model for the whole
+    // process, because _modelDead is process-lifetime. One bad request demoted a good model.
+    const log = [];
+    stubStatus({ first: 400, log, body: '{"error":{"message":"response_format json_schema is no longer supported","type":"invalid_request_error"}}' });
+    process.env.RY_FARMS_LLM_MODELS = 'healthy-one,should-not-be-reached';
+    const { callLLM } = freshState();
+    await callLLM({ system: 's', user: 'u', schema: SCHEMA, maxTokens: 320 });
+    assert.deepStrictEqual([...new Set(log.map(l => l.model))], ['healthy-one'],
+        'a parameter error retired the model and fell through the chain');
+});
+
+await check('P1-3: a STRUCTURED decommission code does retire it', async () => {
+    const log = [];
+    stubStatus({ first: 400, log, body: '{"error":{"message":"anything at all","code":"model_decommissioned"}}' });
+    process.env.RY_FARMS_LLM_MODELS = 'retired-one,live-two';
+    const { callLLM } = freshState();
+    await callLLM({ system: 's', user: 'u', schema: SCHEMA, maxTokens: 320 });
+    assert.deepStrictEqual(log.map(l => l.model), ['retired-one', 'live-two']);
+});
+
+await check('P1-3: retirement PROSE counts only when it names the model itself', async () => {
+    const log = [];
+    stubStatus({ first: 400, log, body: '{"error":{"message":"The model `retired-one` has been decommissioned"}}' });
+    process.env.RY_FARMS_LLM_MODELS = 'retired-one,live-two';
+    const { callLLM } = freshState();
+    await callLLM({ system: 's', user: 'u', schema: SCHEMA, maxTokens: 320 });
+    assert.deepStrictEqual(log.map(l => l.model), ['retired-one', 'live-two'],
+        'prose naming the model should be trusted');
+});
+
+await check('P1-4: a model-scoped 429 tries the NEXT model instead of muting the chain', async () => {
+    const log = [];
+    stubStatus({ first: 429, log, body: '{"error":{"message":"Rate limit reached for model `busy-one`"}}' });
+    process.env.RY_FARMS_LLM_MODELS = 'busy-one,free-two';
+    const { callLLM } = freshState();
+    const out = await callLLM({ system: 's', user: 'u', schema: SCHEMA, maxTokens: 320 });
+    assert.deepStrictEqual(out, { ok: true }, 'the second model should have answered');
+    assert.deepStrictEqual(log.map(l => l.model), ['busy-one', 'free-two'],
+        'a per-model rate limit opened the global breaker before trying the alternative');
+});
+
+await check('P1-4: a 403 on one model tries the next (per-model permissions)', async () => {
+    const log = [];
+    stubStatus({ first: 403, log, body: '{"error":{"message":"no access to model `blocked-one`"}}' });
+    process.env.RY_FARMS_LLM_MODELS = 'blocked-one,allowed-two';
+    const { callLLM } = freshState();
+    await callLLM({ system: 's', user: 'u', schema: SCHEMA, maxTokens: 320 });
+    assert.deepStrictEqual(log.map(l => l.model), ['blocked-one', 'allowed-two']);
+});
+
+await check('P1-4: a 429 on the LAST model still opens the breaker', async () => {
+    // The chain must not swallow a genuine provider-wide exhaustion. Once there is nothing left to
+    // try, the old fail-fast behaviour has to stand or bursts keep hammering a spent quota.
+    const log = [];
+    globalThis.fetch = async (_url, opts) => {
+        log.push({ model: JSON.parse(opts.body).model });
+        return { ok: false, status: 429, json: async () => ({}), text: async () => '{"error":{"message":"Rate limit reached"}}' };
+    };
+    process.env.RY_FARMS_LLM_MODELS = 'only-one';
+    const { callLLM } = freshState();
+    await assert.rejects(() => callLLM({ system: 's', user: 'u', schema: SCHEMA, maxTokens: 320 }));
+    // the breaker should now be open: a fresh call is refused without touching the network
+    log.length = 0;
+    const mod = require('../api/_llm.js');
+    await assert.rejects(() => mod.callLLM({ system: 's', user: 'u', schema: SCHEMA, maxTokens: 320 }), /breaker/i);
+    assert.strictEqual(log.length, 0, 'the breaker should have refused before any request');
+});
+
+await check('P1-2: the default chain contains no model with a known shutdown date', async () => {
+    // llama-3.3-70b-versatile shuts down 2026-08-16 — the SAME day as llama-3.1-8b-instant — so as a
+    // fallback it offered no resilience against the event the chain exists to survive. A model's
+    // lifecycle is a POLICY fact; the probe proves a model answers today, never that it will exist
+    // next week. This asserts against the real modelChain(), not a copy of the constant.
+    delete process.env.RY_FARMS_LLM_MODELS;
+    delete process.env.RY_FARMS_LLM_MODEL;
+    delete process.env.OPENAI_MODEL;
+    const { modelChain } = freshState();
+    assert.strictEqual(typeof modelChain, 'function', 'modelChain must be exported for this to mean anything');
+    const chain = modelChain();
+    assert.ok(chain.length >= 1, 'the default chain must not be empty');
+    const retiring = chain.filter(m => /^llama-3\.(1|3)-/.test(m));
+    assert.deepStrictEqual(retiring, [],
+        `default chain contains models with a 2026-08-16 shutdown: ${JSON.stringify(retiring)}`);
+});
+
+await check('P1-2: isModelGone is exported and rejects the reproduced false positive', async () => {
+    const { isModelGone } = freshState();
+    assert.strictEqual(
+        isModelGone(400, '{"error":{"message":"response_format json_schema is no longer supported"}}', 'healthy'),
+        false, 'the exact string Codex reproduced must not read as retirement');
+    assert.strictEqual(
+        isModelGone(400, '{"error":{"code":"model_decommissioned"}}', 'anything'),
+        true, 'a structured code must read as retirement');
+    assert.strictEqual(
+        isModelGone(400, '{"error":{"message":"The model `x` has been decommissioned"}}', 'x'),
+        true, 'prose naming the model must read as retirement');
+    assert.strictEqual(
+        isModelGone(400, '{"error":{"message":"The model `other` has been decommissioned"}}', 'x'),
+        false, 'prose naming a DIFFERENT model must not retire this one');
+});
+
 // ---- report ------------------------------------------------------------------------------------
 console.log(`\n${passes} passed, ${failures} failed`);
 if (failures) {

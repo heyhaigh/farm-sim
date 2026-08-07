@@ -111,6 +111,18 @@ module.exports = async function handler(req, res) {
             .map(t => ({ seed: Number(t.seed), tale: cleanTale(t.tale) }))
             .filter(t => wanted.has(t.seed) && t.tale.length >= 200);
         if (!tales.length) return send(res, 502, { fallback: true, error: 'model returned no usable tales' });
+        // Codex #104 P1-1: a PARTIAL response used to be accepted silently. A truncated completion
+        // returns the first few tales and drops the rest, so the caller marked those farmers
+        // enriched-and-done while the missing ones quietly kept their procedural draft forever —
+        // indistinguishable from success. Demand one usable tale per requested seed; anything less
+        // is a fallback, which the client already handles in character.
+        const missing = [...wanted].filter(seed => !tales.some(t => t.seed === seed));
+        if (missing.length) {
+            return send(res, 502, {
+                fallback: true,
+                error: `incomplete: ${tales.length}/${wanted.size} tales (missing seeds ${missing.join(',')})`,
+            });
+        }
         return send(res, 200, { tales });
     } catch (err) {
         return send(res, 500, { fallback: true, error: err?.message || 'tale generation failed' });

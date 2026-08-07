@@ -60,13 +60,24 @@ const _modelDead = _S.modelDead;
 // provider has retired is detected from the error body, remembered for the process, and skipped —
 // the same shape as #stickyformat and #stickycap. The fallback is announced loudly, because a
 // silent fallback is how you end up running on your third-choice model for a month.
-// Ordered best-first, from the 2026-08-07 probe (tools/probe-llm.mjs) against real Groq — not from
-// guesswork. All three passed classify/reply/congregation; the gpt-oss pair additionally accept
-// STRICT json_schema, which both llama models reject (they fall back to json_object, paying a 400
-// and leaving the reply shape unenforced — llama-3.3-70b duly failed the classify shape check, and
-// classify is the one call whose output feeds the sim). 120b before 20b: at reasoning_effort=low it
-// used FEWER tokens than 20b (reply 77 vs 102) and it is the larger model, so better prose.
-const DEFAULT_MODEL_CHAIN = 'openai/gpt-oss-120b,openai/gpt-oss-20b,llama-3.3-70b-versatile';
+// Ordered best-first from the 2026-08-07 probe (tools/probe-llm.mjs) against real Groq. Both accept
+// STRICT json_schema — which both llama models reject, falling back to json_object and leaving the
+// reply SHAPE unenforced (llama-3.3-70b duly failed the classify shape check, and classify is the
+// one call whose output feeds the sim). 120b first: at reasoning_effort=low it used fewer tokens
+// than 20b (reply 77 vs 102) and is the larger model, so better prose.
+//
+// llama-3.3-70b-versatile was REMOVED from this chain (Codex #104 P1-2). It shuts down on
+// **2026-08-16 — the same day as llama-3.1-8b-instant** — so as a fallback it offered no resilience
+// whatsoever against the exact event this chain exists to survive. I had claimed the opposite after
+// asking the deprecation page a yes/no question; it lists that model BOTH as a replacement for older
+// models AND as itself deprecated, and I read the first mention. A model's lifecycle is a POLICY
+// fact: the probe can prove a model answers today, never that it will exist next week. Check the
+// provider's deprecation schedule before adding anything here.
+//
+// Groq's other named replacement, qwen/qwen3.6-27b, is the obvious third link — but it is NOT here
+// yet because it has not been probed, and adding an unmeasured model to a resilience chain is how
+// you discover in production that your fallback never worked.
+const DEFAULT_MODEL_CHAIN = 'openai/gpt-oss-120b,openai/gpt-oss-20b';
 
 // #reasoning — gpt-oss-* charge their thinking against max_tokens. Sending reasoning_effort to a
 // model that does not support it is a hard 400 ("`reasoning_effort` is not supported with this
@@ -86,14 +97,30 @@ function modelChain() {
     return live.length ? live : all;
 }
 
-// Does this failure mean "that model is gone" rather than "that request was wrong"? Providers
-// signal retirement with 404, or with a 400 whose body names the model — and a 400 is ALSO how a
-// format rejection arrives, so the body must be read. Confusing the two would retire a healthy
-// model on the first strict-schema rejection.
-function isModelGone(status, bodyText) {
+// Does this failure mean "that model is gone" rather than "that request was wrong"?
+//
+// NARROW ON PURPOSE (Codex #104 P1-3). The first version matched loose prose — "no longer
+// supported", "does not exist" — and Codex reproduced a HEALTHY model being retired by
+// `400 response_format json_schema is no longer supported`. That is a parameter error, not a
+// lifecycle event, and because `_modelDead` is process-lifetime the false verdict would persist
+// until a redeploy: one bad request permanently demotes a working model.
+//
+// So: trust the STRUCTURED error code, which providers actually define, over prose they do not
+// guarantee. Prose is accepted only when it *also* names the requested model — "the model
+// `foo` has been decommissioned" is unambiguous in a way "no longer supported" never is.
+const MODEL_GONE_CODES = /"code"\s*:\s*"(model_decommissioned|model_not_found|model_terminated|does_not_exist)"/i;
+
+function isModelGone(status, bodyText, model) {
+    const body = String(bodyText || '');
+    // A 404 on the completions path is the provider saying the route/model is not there. Still
+    // require that the body not be a routing error about something else.
     if (status === 404) return true;
-    if (status !== 400) return false;
-    return /model_decommissioned|model_not_found|does not exist|has been (deprecated|decommissioned|removed)|no longer (available|supported)/i.test(String(bodyText || ''));
+    if (status !== 400 && status !== 410) return false;
+    if (MODEL_GONE_CODES.test(body)) return true;
+    // Prose fallback: only when the message names THIS model AND uses retirement wording. Both
+    // halves are required — either alone is what produced the false positive.
+    if (!model || !body.includes(model)) return false;
+    return /\b(decommissioned|deprecated and removed|has been removed|is retired|no longer available)\b/i.test(body);
 }
 
 // #stickycap — a 413 means the model refused the REQUESTED COMPLETION SIZE, not the prompt.
@@ -197,7 +224,8 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
             let askTokens = (typeof known === 'number') ? Math.min(maxTokens, known) : maxTokens;
             let halvings = 0;
             let modelGone = false;
-            let giveUp = false;   // a non-retryable status: stop trying formats too, not just sizes
+            let tryNextModel = false;   // model-scoped 429/403: this model is unusable, others may not be
+            let giveUp = false;         // a non-retryable status: stop trying formats too, not just sizes
 
             for (const response_format of formats) {
                 // Inner loop retries the SAME format with a smaller ask on 413. It must be nested rather
@@ -232,12 +260,22 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
                         }
                         const errText = await r.text().catch(() => '');
                         lastErr = new Error(`LLM request failed (${r.status})`);
-                        // #groq-rpm — a 429 means the upstream minute is BURNED: open the shared breaker at
-                        // once instead of letting two more callers pay failed requests to trip it slowly.
-                        if (r.status === 429) { _breaker.openUntil = Date.now() + BREAKER_COOLDOWN_MS; _breaker.fails = 0; }
-                        // #modelchain retirement — read the BODY, because a 400 is also how a format
-                        // rejection arrives and confusing the two would retire a perfectly healthy model.
-                        if (isModelGone(r.status, errText)) {
+                        const lastModel = model === chain[chain.length - 1];
+                        // #modelchain (Codex #104 P1-4) a 429 or a 403 can be MODEL-SCOPED: Groq publishes
+                        // per-model rate limits and per-model permissions, so an exhausted or blocked first
+                        // model can sit beside a perfectly usable second one. Opening the shared breaker
+                        // here muted the entire chain before the alternatives were ever tried.
+                        //
+                        // So: try the next candidate first, and only fall back to the global breaker once
+                        // there is nothing left to try. A provider-wide outage still trips it — it just
+                        // trips at the END of the chain instead of the start.
+                        if (r.status === 429 || r.status === 403) {
+                            if (!lastModel) { tryNextModel = true; }
+                            else if (r.status === 429) { _breaker.openUntil = Date.now() + BREAKER_COOLDOWN_MS; _breaker.fails = 0; }
+                        }
+                        // #modelchain retirement — read the BODY and require a structured code (or the
+                        // model's own name), because a 400 is also how a format rejection arrives.
+                        else if (isModelGone(r.status, errText, model)) {
                             if (!_modelDead.has(model)) {
                                 _modelDead.add(model);
                                 const next = chain.filter(m => m !== model)[0];
@@ -258,11 +296,12 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
                     } finally { clearTimeout(timer); }
                     if (!retrySmaller) break;   // fall through to the next format (or out, if giveUp)
                 }
-                if (giveUp || modelGone) break;
+                if (giveUp || modelGone || tryNextModel) break;
             }
-            // Only a RETIRED model is worth re-trying on the next model in the chain. Every other
-            // failure (rate limit, upstream 500, bad JSON) would just be paid again for no reason.
-            if (!modelGone) break;
+            // Advance the chain for MODEL-SCOPED failures only — retirement, permission, or a rate
+            // limit that may apply to this model alone. A provider-wide failure (upstream 5xx, bad
+            // JSON, timeout) would just be paid again on the next model for nothing.
+            if (!modelGone && !tryNextModel) break;
         }
         throw lastErr || new Error('LLM request failed');
     } catch (err) {
@@ -272,4 +311,4 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
     }
 }
 
-module.exports = { callLLM, parseJson, resolveLLM, llmStatus, LLMDisabledError };
+module.exports = { callLLM, parseJson, resolveLLM, llmStatus, LLMDisabledError, modelChain, isModelGone };

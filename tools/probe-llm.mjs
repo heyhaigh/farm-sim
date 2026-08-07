@@ -43,21 +43,32 @@ function loadDotEnv() {
 }
 loadDotEnv();
 
-const KEY = process.env.GROQ_API_KEY || process.env.OPENAI_API_KEY;
-// Default to Groq even if .env points at a local base: the whole question is what GROQ serves.
-const BASE = process.env.PROBE_BASE_URL
-    || (/groq\.com/.test(process.env.OPENAI_BASE_URL || '') ? process.env.OPENAI_BASE_URL : 'https://api.groq.com/openai/v1');
+// CREDENTIAL AND PROVIDER MUST NOT DIVERGE (Codex #104 P2-5). The first version defaulted the BASE
+// to Groq while falling back to OPENAI_API_KEY for the credential — so a developer holding only an
+// OpenAI key would have transmitted that secret to Groq. A probe is not worth leaking a key to the
+// wrong provider, so each base has exactly one acceptable key and there is no fallback between them.
 const VERBOSE = process.argv.includes('--verbose');
+const CUSTOM_BASE = process.env.PROBE_BASE_URL || null;
+const BASE = CUSTOM_BASE || 'https://api.groq.com/openai/v1';
+const KEY = CUSTOM_BASE ? process.env.PROBE_API_KEY : process.env.GROQ_API_KEY;
 
 if (!KEY) {
-    console.error(`No key found.
+    if (CUSTOM_BASE) {
+        console.error(`PROBE_BASE_URL is set to ${CUSTOM_BASE}, so PROBE_API_KEY must be set too.
+
+A key for one provider is never sent to another: set the key that belongs to THAT endpoint.`);
+    } else {
+        console.error(`No GROQ_API_KEY found.
 
 Put it in ~/ry-farms/.env (gitignored, never committed) as:
     GROQ_API_KEY=gsk_...
 
 then run:  node tools/probe-llm.mjs
 
-That keeps the key out of your shell history and out of any transcript.`);
+That keeps the key out of your shell history and out of any transcript.
+(OPENAI_API_KEY is deliberately NOT used here — this probe talks to Groq, and a
+credential must never be sent to a provider it does not belong to.)`);
+    }
     process.exit(2);
 }
 
@@ -112,14 +123,58 @@ const CASES = [
         want: o => Array.isArray(o?.beats) && o.beats.length > 0,
     },
     {
-        name: 'dm tales  (6000 tok)', maxTokens: 6000,
-        system: 'You are a town chronicler. Rewrite each character draft as a richer backstory of 6 to 9 sentences. Return JSON only: {"tales":[{"seed":<number>,"tale":"<prose>"}]}',
-        user: JSON.stringify({ characters: [{ seed: 1, short: 'Grull', background: 'hermit', draft: 'Grull came down from the mountain.' }] }),
+        // REAL production payload (Codex #104 P1-1). The previous version sent one hand-written
+        // stub character at 6000 tokens and "passed" — which proved nothing, because production
+        // sent EIGHT generated founders (9,376 chars, truncated at callLLM's 8,000 cap) at a token
+        // budget it could never satisfy. This case is now generated from the actual game: real
+        // sheets, the real prompt, and the batch-of-one shape the endpoint now sends.
+        name: 'dm tale x1 (1500 tok)', maxTokens: 1500,
+        system: 'You are a town chronicler. Rewrite each character draft as a RICHER backstory: 6 to 9 sentences, roughly 120 to 180 words, of evocative fantasy prose. Third person, using the short name at least twice, ALWAYS they/them. Plain ASCII only. Return JSON only: {"tales":[{"seed":<number from the input>,"tale":"<prose>"}]} with one entry per character.',
+        user: null,   // filled in below from a real generated town
         schema: { type: 'object', additionalProperties: false, required: ['tales'], properties: { tales: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['seed', 'tale'], properties: { seed: { type: 'number' }, tale: { type: 'string' } } } } } },
         schemaName: 'probe_dm',
-        want: o => Array.isArray(o?.tales) && o.tales.length > 0,
+        want: o => Array.isArray(o?.tales) && o.tales.length === 1 && String(o.tales[0].tale).length >= 200,
+    },
+    {
+        // The OLD shape, kept as the control that shows why it had to change. Expect this to fail
+        // or truncate — that is the finding, not a defect in the probe.
+        name: 'dm FULL CAST (control)', maxTokens: 1500,
+        system: 'You are a town chronicler. Rewrite each character draft as a RICHER backstory: 6 to 9 sentences, roughly 120 to 180 words each. Return JSON only: {"tales":[{"seed":<number>,"tale":"<prose>"}]} with one entry per character.',
+        user: null,   // filled in below — the whole founding cast
+        schema: { type: 'object', additionalProperties: false, required: ['tales'], properties: { tales: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['seed', 'tale'], properties: { seed: { type: 'number' }, tale: { type: 'string' } } } } } },
+        schemaName: 'probe_dm_full',
+        want: o => Array.isArray(o?.tales) && o.tales.length >= 8,
     },
 ];
+
+// Build the REAL DM payloads from a real generated town, so the probe measures what production
+// actually sends rather than a stub someone imagined. This is the lesson from 2026-08-06/07: a
+// fabricated input produced a fabricated verdict, twice.
+{
+    const { World } = await import('../farm.js');
+    const { generateCrew, hashString } = await import('../dna.js');
+    const m = generateCrew(20260706); const used = new Set();
+    const pick = () => { const un = m.filter(x => !used.has(x.id)); let b = un[0], bh = 0xffffffff;
+        for (const x of un) { const h = hashString((x.id || x.title || '') + ':pick'); if (h < bh) { bh = h; b = x; } }
+        used.add(b.id); return b; };
+    const w = new World(20260706);
+    for (let i = 0; i < 8; i++) w.addFarmer(pick(), 0);
+    w.ensureFounderVariety();
+    const charOf = (f) => { const s = f.sheet, p = s.personality;
+        return { seed: s.seed, name: s.name, shortName: s.name.split(' ')[0], trade: s.archetype,
+            background: s.story.bg, stats: s.stats, personality: { label: p.label, creed: p.creed },
+            ideal: s.story.ideal, bond: s.story.bond, flaw: s.story.flaw,
+            dream: { yearn: s.dream.yearn, rivalName: s.dream.rivalName || null },
+            keepsake: String((s.memory && s.memory.title) || 'a life before the valley').slice(0, 40),
+            draft: s.story.tale }; };
+    const town = { name: w.name, seed: w.seed, day: w.day, season: w.seasonName, culture: w.culture };
+    const one = JSON.stringify({ town, characters: [charOf(w.farmers[0])] });
+    const all = JSON.stringify({ town, characters: w.farmers.map(charOf) });
+    CASES.find(c => c.name.startsWith('dm tale x1')).user = one;
+    CASES.find(c => c.name.startsWith('dm FULL CAST')).user = all;
+    console.log(`  real payloads: 1 farmer = ${one.length} chars, full cast (${w.farmers.length}) = ${all.length} chars`);
+    console.log(`  callLLM truncates user content at 8000 -> full cast is ${all.length > 8000 ? 'CUT MID-JSON' : 'fine'}\n`);
+}
 
 // Mirrors _llm.js: strict schema first, then json_object, then nothing.
 function formatsFor(c) {

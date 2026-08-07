@@ -45,9 +45,23 @@ const EXEMPT_MUST_NOT_SHIP = ['tools', 'tests'];
 const dockerignore = readFileSync(join(ROOT, '.dockerignore'), 'utf8');
 const dockerfile = readFileSync(join(ROOT, 'Dockerfile'), 'utf8');
 const leaked = [];
+// Codex #104 P3-7: the first version only matched `!tools` and `COPY ... tools/`, so valid forms
+// slipped past — `!./tools/**`, `COPY tools ./tools` (no slash), and JSON-form `COPY ["tools", ...]`.
+// The current Dockerfile is safe either way; the point is that the GUARD must be, so a future edit
+// cannot ship an exempt directory through a syntax this check never learned to read.
 for (const dir of EXEMPT_MUST_NOT_SHIP) {
-    if (new RegExp(`^\\s*!${dir}\\b`, 'm').test(dockerignore)) leaked.push(`.dockerignore re-includes ${dir}/`);
-    if (new RegExp(`^\\s*COPY\\b.*\\b${dir}/`, 'm').test(dockerfile)) leaked.push(`Dockerfile COPYs ${dir}/`);
+    // any re-include line naming the dir: !tools, !./tools/**, ! tools/, !/tools
+    if (new RegExp(`^\\s*!\\s*\\.?/?${dir}(/|\\b)`, 'm').test(dockerignore)) {
+        leaked.push(`.dockerignore re-includes ${dir}/`);
+    }
+    // any COPY/ADD mentioning the dir as a source, shell-form or JSON-form, with or without a slash
+    for (const line of dockerfile.split('\n')) {
+        if (!/^\s*(COPY|ADD)\b/i.test(line)) continue;
+        if (/^\s*(COPY|ADD)\b[^#]*--from=/i.test(line)) continue;   // multi-stage copies are not repo paths
+        if (new RegExp(`(^|[\\s"'\\[,=])\\.?/?${dir}(/|["'\\s,\\]]|$)`).test(line)) {
+            leaked.push(`Dockerfile ${line.trim().slice(0, 60)}`);
+        }
+    }
 }
 if (leaked.length) {
     console.error(`CHOKEPOINT EXEMPTION LEAKED INTO THE IMAGE:\n  ${leaked.join('\n  ')}\n`

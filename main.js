@@ -9101,13 +9101,32 @@ function drawStartScreen() {
     // for a finer telling. One try shortly after boot; the slow recheck catches farmers
     // whose stories only reach composer-generation at the next dawn (older saves migrating)
     // and any later arrivals. Display-only, save-carried, fails silent to procedural text.
+    // Returns how many tales landed, so the adaptive schedule below can tell "still working through
+    // the cast" from "nothing left to do". A hidden tab returns 0 and simply retries on the slow
+    // tick — it must not count as finished, or a backgrounded game would stop enriching forever.
     const tryEnrich = async () => {
-        if (document.hidden || (world && world._persistenceDisabled)) return;   // #101 enrichment rides the save
+        if (document.hidden || (world && world._persistenceDisabled)) return 0;   // #101 enrichment rides the save
         const w = world;
-        if (await enrichStories(w, () => world === w)) saveTown(w);
+        const applied = await enrichStories(w, () => world === w);
+        if (applied) saveTown(w);
+        return applied;
     };
-    setTimeout(tryEnrich, 5000);
-    setInterval(tryEnrich, 5 * 60 * 1000);
+    // #dm-batch1 — enrichment now writes ONE tale per pass (see dm.js), so the cadence has to be
+    // fast enough to work through a founding cast without being a burst. Eight farmers on the old
+    // 5-minute timer would take 40 minutes; at 30s it is under five, and one call is ~350 tokens in
+    // / 260 out against a 6k-per-minute ceiling, so it never crowds a whisper.
+    // Once the cast is done, enrichStories returns 0 immediately and we drop back to the slow tick
+    // that catches later arrivals (heirs, newcomers).
+    const ENRICH_BUSY_MS = 30 * 1000, ENRICH_IDLE_MS = 5 * 60 * 1000;
+    let enrichTimer = null;
+    const scheduleEnrich = (ms) => {
+        clearTimeout(enrichTimer);
+        enrichTimer = setTimeout(async () => {
+            const applied = await tryEnrich();
+            scheduleEnrich(applied ? ENRICH_BUSY_MS : ENRICH_IDLE_MS);
+        }, ms);
+    };
+    scheduleEnrich(5000);
 
     // #132b the DAY-1 FOUNDING CONVERSATION: on a fresh town's opening congregation, ask the LLM to write the
     // founders' opening exchange (bespoke, natural, per-founder). Kicked NOW so it can land while they gather;
