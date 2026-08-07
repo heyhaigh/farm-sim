@@ -122,7 +122,12 @@ function isModelGone(status, bodyText, model) {
     // Prose fallback: only when the message names THIS model AND uses retirement wording. Both
     // halves are required — either alone is what produced the false positive.
     if (!model || !body.includes(model)) return false;
-    return /\b(decommissioned|deprecated and removed|has been removed|is retired|no longer available)\b/i.test(body);
+    // Codex #106 P2-4: `does not exist` / `not found` are SAFE here, and were only dangerous before
+    // the model-name gate existed. Without them a provider that returns
+    // `404 The model \`x\` does not exist` and no structured code would never advance the chain —
+    // the failover would be decoration on the one day it matters. The gate above is what makes the
+    // difference: this prose is only trusted when the body names THIS model.
+    return /\b(decommissioned|deprecated and removed|has been removed|is retired|no longer available|does not exist|not found)\b/i.test(body);
 }
 
 // #stickycap — a 413 halves the ask and retries, WITHIN THIS CALL ONLY.

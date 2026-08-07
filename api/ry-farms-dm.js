@@ -48,6 +48,17 @@ function parseBody(req) {
 
 const { callLLM } = require('./_llm.js');
 
+// Codex #106 P2-5: ONE definition. This was a literal in the call AND a separately exported
+// 800, so editing either alone would silently recreate the probe/production mismatch that the
+// shared contract exists to prevent.
+//
+// Groq counts the REQUESTED max_tokens against the per-minute budget, so this is a RESERVATION,
+// not a limit, and the free tier meters 6k/min shared across the whole organization. One tale
+// measured 331 completion tokens against the deployed 1,947-char prompt (re-probed 2026-08-07;
+// earlier figures of 260 and 302 came from probes that were not sending the production request).
+// 800 keeps 2.4x headroom while leaving most of the minute for whispers and congregations.
+const DM_MAX_TOKENS = 800;
+
 const responseSchema = {
     type: 'object',
     additionalProperties: false,
@@ -67,11 +78,6 @@ const responseSchema = {
         },
     },
 };
-
-// Shared with the probe so its measurements are of the deployed request, not an approximation.
-module.exports.buildSystemPrompt = buildSystemPrompt;
-module.exports.responseSchema = responseSchema;
-module.exports.DM_MAX_TOKENS = 800;
 
 // Exported so tools/probe-llm.mjs measures the REAL prompt (Codex #105 P2-6). The probe previously
 // used a shortened substitute and a `number`-typed seed where production sends `integer`, so its
@@ -118,7 +124,7 @@ module.exports = async function handler(req, res) {
             // 302 figure turned out to come from a shortened stand-in prompt; the provider's own guidance is to set the completion limit
             // 10-20% above the expected length, and 1500 was ~5x. 800 leaves room for a longer draft
             // while freeing most of the minute for whispers, congregations and everything else.
-            schema: responseSchema, schemaName: 'ry_farms_dm_tales', maxTokens: 800,
+            schema: responseSchema, schemaName: 'ry_farms_dm_tales', maxTokens: DM_MAX_TOKENS,
         });
         const wanted = new Set(characters.map(c => c.seed));
         const tales = (raw?.tales || [])
@@ -148,4 +154,4 @@ module.exports = async function handler(req, res) {
 // schema is not measuring production, however real its payload looks.
 module.exports.buildSystemPrompt = buildSystemPrompt;
 module.exports.responseSchema = responseSchema;
-module.exports.DM_MAX_TOKENS = 800;
+module.exports.DM_MAX_TOKENS = DM_MAX_TOKENS;

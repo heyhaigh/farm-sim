@@ -89,11 +89,17 @@ export async function enrichStories(world, isCurrent = () => true, preferSeed = 
     // the cast behind it.
     const now = Date.now();
     const ready = waiting.filter(f => (seedFailAt.get(f.sheet.seed) || 0) + SEED_RETRY_MS < now);
-    // Everyone is in cooldown: fall back to the whole list rather than stalling forever, so a bad
-    // minute for the endpoint does not permanently freeze enrichment.
-    const pool = ready.length ? ready : waiting;
-    const chosen = (preferSeed != null && pool.find(f => f.sheet.seed === preferSeed))
-        || pool.slice().sort((a, b) => a.sheet.seed - b.sheet.seed)[0];
+    // Codex #106 P2-3: if NOBODY is ready, wait — do not fall back to the full list. The previous
+    // `ready.length ? ready : waiting` looked like a safety net but silently defeated the cooldown
+    // it advertises: with the rest of the cast enriched, the one permanently-failing farmer became
+    // the only entry in `waiting` and was retried on the scheduler's 5-minute tick instead of its
+    // 15-minute cooldown. Codex reproduced attempts [1,2,1] at minutes 0, 5 and 6.
+    //
+    // Returning 0 is safe because the scheduler always ticks again; nothing is stalled forever, it
+    // just stops burning a request on a farmer we already know is failing.
+    if (!ready.length) return 0;
+    const chosen = (preferSeed != null && ready.find(f => f.sheet.seed === preferSeed))
+        || ready.slice().sort((a, b) => a.sheet.seed - b.sheet.seed)[0];
     const pending = [chosen];
 
     inflight = true;
