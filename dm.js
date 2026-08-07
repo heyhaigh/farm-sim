@@ -61,8 +61,9 @@ function characterOf(f) {
 //      cast is never displayed together. We were generating eight biographies to satisfy a view
 //      that displays one, most of which a player never opens.
 //
-// One farmer per pass: 1,282 characters in (6x under the cap) and 260 completion tokens out,
-// measured against real Groq. It cannot truncate, cannot burst, and "one tale per requested seed"
+// One farmer per pass: 1,282 characters in (6x under the cap) and 331 completion tokens out,
+// measured against real Groq with the DEPLOYED prompt and schema. (Two earlier figures here, 260
+// and 302, came from probes using a shortened stand-in prompt — the real one is 1,947 chars.) It cannot truncate, cannot burst, and "one tale per requested seed"
 // becomes trivially checkable because there is exactly one.
 //
 // The procedural draft is already complete and already on screen, so nobody ever waits — the LLM

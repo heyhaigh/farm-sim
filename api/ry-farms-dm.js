@@ -113,8 +113,9 @@ module.exports = async function handler(req, res) {
             // a RESERVATION, not a limit — and the free tier meters 6k/min shared across the whole
             // organization. 6000 reserved the entire minute for one founding.
             //
-            // 800, not 1500 (Codex #105 P1-2). One tale measured 302 completion tokens against the
-            // real production payload; the provider's own guidance is to set the completion limit
+            // 800, not 1500 (Codex #105 P1-2). One tale measured 331 completion tokens against the
+            // DEPLOYED prompt (1,947 chars) and payload — re-probed 2026-08-07 after an earlier
+            // 302 figure turned out to come from a shortened stand-in prompt; the provider's own guidance is to set the completion limit
             // 10-20% above the expected length, and 1500 was ~5x. 800 leaves room for a longer draft
             // while freeing most of the minute for whispers, congregations and everything else.
             schema: responseSchema, schemaName: 'ry_farms_dm_tales', maxTokens: 800,

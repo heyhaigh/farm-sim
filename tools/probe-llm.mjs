@@ -128,7 +128,7 @@ const CASES = [
         // sent EIGHT generated founders (9,376 chars, truncated at callLLM's 8,000 cap) at a token
         // budget it could never satisfy. This case is now generated from the actual game: real
         // sheets, the real prompt, and the batch-of-one shape the endpoint now sends.
-        name: 'dm tale x1 (1500 tok)', maxTokens: 1500,
+        name: 'dm tale x1 (deployed)', maxTokens: 800,
         system: 'You are a town chronicler. Rewrite each character draft as a RICHER backstory: 6 to 9 sentences, roughly 120 to 180 words, of evocative fantasy prose. Third person, using the short name at least twice, ALWAYS they/them. Plain ASCII only. Return JSON only: {"tales":[{"seed":<number from the input>,"tale":"<prose>"}]} with one entry per character.',
         user: null,   // filled in below from a real generated town
         schema: { type: 'object', additionalProperties: false, required: ['tales'], properties: { tales: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['seed', 'tale'], properties: { seed: { type: 'number' }, tale: { type: 'string' } } } } } },
@@ -138,7 +138,7 @@ const CASES = [
     {
         // The OLD shape, kept as the control that shows why it had to change. Expect this to fail
         // or truncate — that is the finding, not a defect in the probe.
-        name: 'dm FULL CAST (control)', maxTokens: 1500,
+        name: 'dm FULL CAST (control)', maxTokens: 800,
         system: 'You are a town chronicler. Rewrite each character draft as a RICHER backstory: 6 to 9 sentences, roughly 120 to 180 words each. Return JSON only: {"tales":[{"seed":<number>,"tale":"<prose>"}]} with one entry per character.',
         user: null,   // filled in below — the whole founding cast
         schema: { type: 'object', additionalProperties: false, required: ['tales'], properties: { tales: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['seed', 'tale'], properties: { seed: { type: 'number' }, tale: { type: 'string' } } } } } },
