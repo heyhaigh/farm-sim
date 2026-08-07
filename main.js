@@ -9107,7 +9107,12 @@ function drawStartScreen() {
     const tryEnrich = async () => {
         if (document.hidden || (world && world._persistenceDisabled)) return 0;   // #101 enrichment rides the save
         const w = world;
-        const applied = await enrichStories(w, () => world === w);
+        // #dm-batch1 (Codex #105 P1-2) — the farmer whose sheet is OPEN jumps the queue. Without
+        // this, "the budget follows the player's attention" was a claim the code did not implement:
+        // enrichment simply walked the cast in seed order whether anyone was looking or not.
+        const openSeed = (selected && selected.sheet && typeof selected.sheet.seed === 'number')
+            ? selected.sheet.seed : null;
+        const applied = await enrichStories(w, () => world === w, openSeed);
         if (applied) saveTown(w);
         return applied;
     };
@@ -9117,7 +9122,10 @@ function drawStartScreen() {
     // / 260 out against a 6k-per-minute ceiling, so it never crowds a whisper.
     // Once the cast is done, enrichStories returns 0 immediately and we drop back to the slow tick
     // that catches later arrivals (heirs, newcomers).
-    const ENRICH_BUSY_MS = 30 * 1000, ENRICH_IDLE_MS = 5 * 60 * 1000;
+    // 60s, not 30s (Codex #105 P1-2): at 30s this reserved two DM budgets a minute on top of every
+    // other endpoint, and the provider quota is shared across ALL concurrent visitors on one server
+    // key. One 800-token reservation a minute leaves the rest of the 6k for the game.
+    const ENRICH_BUSY_MS = 60 * 1000, ENRICH_IDLE_MS = 5 * 60 * 1000;
     let enrichTimer = null;
     const scheduleEnrich = (ms) => {
         clearTimeout(enrichTimer);

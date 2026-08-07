@@ -38,13 +38,11 @@ const _S = globalThis.__ryFarmsLlmState || (globalThis.__ryFarmsLlmState = {
     budget: { windowStart: 0, count: 0 },
     breaker: { fails: 0, openUntil: 0 },
     formatSkip: new Set(),   // #stickyformat `${model}|${format}` proven unsupported — skip for the PROCESS lifetime, for real this time
-    tokenCap: new Map(),     // #stickycap model -> the largest max_tokens it has actually ACCEPTED (see below)
     modelDead: new Set(),    // #modelchain models the provider has retired — skip for the PROCESS lifetime
 });
 const _budget = _S.budget;
 const _breaker = _S.breaker;
 const _formatSkip = _S.formatSkip;
-const _tokenCap = _S.tokenCap;
 const _modelDead = _S.modelDead;
 
 // #modelchain — a provider retiring a model must not take the whole game's voice with it.
@@ -108,14 +106,18 @@ function modelChain() {
 // So: trust the STRUCTURED error code, which providers actually define, over prose they do not
 // guarantee. Prose is accepted only when it *also* names the requested model — "the model
 // `foo` has been decommissioned" is unambiguous in a way "no longer supported" never is.
-const MODEL_GONE_CODES = /"code"\s*:\s*"(model_decommissioned|model_not_found|model_terminated|does_not_exist)"/i;
+// Only codes that are unambiguously about a MODEL. `does_not_exist` was here and is now gone: Codex
+// #105 P1-4 reproduced a 400 schema error carrying that code retiring a healthy model, because it
+// can equally describe a missing schema, tool or parameter.
+const MODEL_GONE_CODES = /"code"\s*:\s*"(model_decommissioned|model_not_found|model_terminated)"/i;
 
 function isModelGone(status, bodyText, model) {
     const body = String(bodyText || '');
-    // A 404 on the completions path is the provider saying the route/model is not there. Still
-    // require that the body not be a routing error about something else.
-    if (status === 404) return true;
-    if (status !== 400 && status !== 410) return false;
+    // EVERY status needs model evidence, including 404. The previous version accepted any 404 as
+    // retirement, and Codex reproduced `404 route not found` killing a healthy model — providers
+    // define 404 as "requested resource missing", which covers a mistyped path just as well as a
+    // retired model. A structured model code, or the model's own name in the message, or nothing.
+    if (status !== 400 && status !== 404 && status !== 410) return false;
     if (MODEL_GONE_CODES.test(body)) return true;
     // Prose fallback: only when the message names THIS model AND uses retirement wording. Both
     // halves are required — either alone is what produced the false positive.
@@ -123,18 +125,18 @@ function isModelGone(status, bodyText, model) {
     return /\b(decommissioned|deprecated and removed|has been removed|is retired|no longer available)\b/i.test(body);
 }
 
-// #stickycap — a 413 means the model refused the REQUESTED COMPLETION SIZE, not the prompt.
+// #stickycap — a 413 halves the ask and retries, WITHIN THIS CALL ONLY.
 //
-// Found live 2026-08-06: every endpoint asks for 120-900 tokens and works; the DM tale-writer asked
-// for 6000 and got a hard 413 on every single call, so backstory enrichment had been silently dead
-// in production — soft-failing to procedural tales, which is why nobody noticed. The retry loop
-// below only ever retried 400/422 (format rejections), so a 413 broke out immediately with no
-// degradation path at all.
+// The first version also REMEMBERED the accepted ceiling per model, to avoid paying the 413 twice.
+// Codex #105 P1-1 reproduced the harm: a DM request that discovered 750 then throttled an unrelated
+// 900-token congregation call to 750 — permanently, for the process, even after upstream capacity
+// recovered. A cap keyed by model is applied to callers with completely different prompts and output
+// needs, and quietly under-budgeting a reasoning model is exactly what produced empty replies.
 //
-// Rather than hardcode a ceiling for a model we cannot see from here (RY_FARMS_LLM_MODEL is set in
-// the deploy env, and providers change these limits), halve and retry: the first call to a new model
-// DISCOVERS the ceiling and remembers it for the process, exactly as #stickyformat remembers an
-// unsupported response_format. Subsequent calls start at the known-good cap and pay nothing.
+// The deeper problem is that the signal was never trustworthy. Groq documents 413 as a REQUEST-SIZE
+// error and 429 as rate-limit exhaustion, so a 413 seen during a busy minute may say nothing durable
+// about the model at all. Learning a permanent fact from a possibly-transient error is how you get a
+// silent, self-inflicted ceiling. Retry smaller now; remember nothing.
 const CAP_MIN_TOKENS = 256;    // below this a structured reply cannot complete; give up honestly instead
 const CAP_MAX_HALVINGS = 4;    // 6000 -> 3000 -> 1500 -> 750 -> 375, then stop
 
@@ -218,10 +220,9 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
                 : [null]
             ).filter(f => !_formatSkip.has(`${model}|${f ? f.type : 'none'}`));
 
-            // #stickycap start at whatever this model has already proven it will accept. Per-model,
-            // because a ceiling learned from one model says nothing about the next one in the chain.
-            const known = _tokenCap.get(model);
-            let askTokens = (typeof known === 'number') ? Math.min(maxTokens, known) : maxTokens;
+            // #stickycap the halving is per-CALL only — nothing is remembered across calls. See the
+            // note at CAP_MIN_TOKENS for why persisting it was wrong.
+            let askTokens = maxTokens;
             let halvings = 0;
             let modelGone = false;
             let tryNextModel = false;   // model-scoped 429/403: this model is unusable, others may not be
@@ -252,10 +253,6 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
                         if (r.ok) {
                             const out = parseJson(extractContent(await r.json()));
                             _breaker.fails = 0;
-                            // #stickycap remember the ceiling ONLY when we had to find it. Recording every
-                            // success would let a 200-token whisper pin the cap at 200 and then throttle a
-                            // later 900-token congregation call that would have been fine.
-                            if (halvings > 0) _tokenCap.set(model, askTokens);
                             return out;
                         }
                         const errText = await r.text().catch(() => '');
@@ -271,7 +268,15 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
                         // trips at the END of the chain instead of the start.
                         if (r.status === 429 || r.status === 403) {
                             if (!lastModel) { tryNextModel = true; }
-                            else if (r.status === 429) { _breaker.openUntil = Date.now() + BREAKER_COOLDOWN_MS; _breaker.fails = 0; }
+                            else {
+                                // TERMINAL (Codex #105 P2-5): nothing left to try. Opening the breaker
+                                // is not enough — without giveUp the format loop kept going and a
+                                // single logical call fired THREE identical 429s (json_schema,
+                                // json_object, none) before returning. A rate limit is not a format
+                                // problem; stop immediately.
+                                giveUp = true;
+                                if (r.status === 429) { _breaker.openUntil = Date.now() + BREAKER_COOLDOWN_MS; _breaker.fails = 0; }
+                            }
                         }
                         // #modelchain retirement — read the BODY and require a structured code (or the
                         // model's own name), because a 400 is also how a format rejection arrives.

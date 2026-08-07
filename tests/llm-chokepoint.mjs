@@ -54,8 +54,12 @@ for (const dir of EXEMPT_MUST_NOT_SHIP) {
     if (new RegExp(`^\\s*!\\s*\\.?/?${dir}(/|\\b)`, 'm').test(dockerignore)) {
         leaked.push(`.dockerignore re-includes ${dir}/`);
     }
+    // Join continued instructions first (Codex #105 P3-7): a valid `COPY \` with the source on the
+    // NEXT line evades any per-physical-line scan. Docker treats a trailing backslash as a line
+    // continuation, so fold those together before looking at operands.
+    const folded = dockerfile.replace(/\\\s*\n\s*/g, ' ');
     // any COPY/ADD mentioning the dir as a source, shell-form or JSON-form, with or without a slash
-    for (const line of dockerfile.split('\n')) {
+    for (const line of folded.split('\n')) {
         if (!/^\s*(COPY|ADD)\b/i.test(line)) continue;
         if (/^\s*(COPY|ADD)\b[^#]*--from=/i.test(line)) continue;   // multi-stage copies are not repo paths
         if (new RegExp(`(^|[\\s"'\\[,=])\\.?/?${dir}(/|["'\\s,\\]]|$)`).test(line)) {

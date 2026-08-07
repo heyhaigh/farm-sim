@@ -68,6 +68,31 @@ const responseSchema = {
     },
 };
 
+// Shared with the probe so its measurements are of the deployed request, not an approximation.
+module.exports.buildSystemPrompt = buildSystemPrompt;
+module.exports.responseSchema = responseSchema;
+module.exports.DM_MAX_TOKENS = 800;
+
+// Exported so tools/probe-llm.mjs measures the REAL prompt (Codex #105 P2-6). The probe previously
+// used a shortened substitute and a `number`-typed seed where production sends `integer`, so its
+// token measurements were not measurements of the deployed request at all.
+function buildSystemPrompt(town) {
+    return [
+        'You are the town chronicler of PROPAGATE: a Dungeons and Dragons 5th Edition Dungeon Master and a gifted fantasy prose writer.',
+        (town && town.culture === 'orc')
+            ? 'CULTURE VOICE: these are ORCS of a war-hoard - their backstories are blunt, martial, loyal to the band; holds and hoards, war-posts and dens, never towns and villages. Not villains - a people with their own honour.'
+            : 'CULTURE VOICE: these are human settlers of a frontier valley - hopeful, wary, neighbourly.',
+        'You receive the founding cast of a frontier farming valley. Each character carries a 5e-style sheet - ability scores, a BACKGROUND, personality traits, an IDEAL, a BOND, a FLAW, a lifelong DREAM (with a named rival where relevant), a keepsake title (the memory that made them), and a procedural DRAFT of their origin tale.',
+        'Rewrite each draft as a RICHER backstory: 6 to 9 sentences, roughly 120 to 180 words, of evocative fantasy prose. Named places, weather and seasons, omens, small losses, one vivid sensory detail. Third person, using the character\'s short name at least twice, and ALWAYS they/them pronouns - never he or she.',
+        'Stay strictly consistent with the sheet: the background is where they came from, the flaw shows through the telling, the dream is where the tale is pointed. Never contradict or change a name, and never invent mechanical facts (no spells, magic items, ranks or titles).',
+        'Let the ability scores color the telling - a STR 15 hermit and an INT 17 hermit left the mountain for different reasons.',
+        'Weave the keepsake title into the tale VERBATIM exactly once, wrapped in double quotes, treated as a relic or talisman of the old life - the stranger the title reads, the more matter-of-factly the tale should treat it.',
+        'Give each character a distinct voice and homeland so the cast reads as different lives that converged on one valley - not one life told eight ways. End every tale with their arrival in the valley, angled at their dream.',
+        'Plain ASCII prose only: no markdown, no em dashes (write " - "), straight quotes, no emojis, no modern or technological references.',
+        'Return JSON only: { "tales": [ { "seed": <number from the input>, "tale": "<the rewritten backstory>" } ] } with one entry per character.',
+    ].join('\n');
+}
+
 module.exports = async function handler(req, res) {
     if (req.method !== 'POST') return send(res, 405, { fallback: true, error: 'POST required' });
 
@@ -79,32 +104,20 @@ module.exports = async function handler(req, res) {
         const characters = Array.isArray(body.characters) ? body.characters.slice(0, 16) : [];
         if (!characters.length) return send(res, 400, { fallback: true, error: 'no characters' });
 
-        const system = [
-            'You are the town chronicler of PROPAGATE: a Dungeons and Dragons 5th Edition Dungeon Master and a gifted fantasy prose writer.',
-            (body.town && body.town.culture === 'orc')
-                ? 'CULTURE VOICE: these are ORCS of a war-hoard - their backstories are blunt, martial, loyal to the band; holds and hoards, war-posts and dens, never towns and villages. Not villains - a people with their own honour.'
-                : 'CULTURE VOICE: these are human settlers of a frontier valley - hopeful, wary, neighbourly.',
-            'You receive the founding cast of a frontier farming valley. Each character carries a 5e-style sheet - ability scores, a BACKGROUND, personality traits, an IDEAL, a BOND, a FLAW, a lifelong DREAM (with a named rival where relevant), a keepsake title (the memory that made them), and a procedural DRAFT of their origin tale.',
-            'Rewrite each draft as a RICHER backstory: 6 to 9 sentences, roughly 120 to 180 words, of evocative fantasy prose. Named places, weather and seasons, omens, small losses, one vivid sensory detail. Third person, using the character\'s short name at least twice, and ALWAYS they/them pronouns - never he or she.',
-            'Stay strictly consistent with the sheet: the background is where they came from, the flaw shows through the telling, the dream is where the tale is pointed. Never contradict or change a name, and never invent mechanical facts (no spells, magic items, ranks or titles).',
-            'Let the ability scores color the telling - a STR 15 hermit and an INT 17 hermit left the mountain for different reasons.',
-            'Weave the keepsake title into the tale VERBATIM exactly once, wrapped in double quotes, treated as a relic or talisman of the old life - the stranger the title reads, the more matter-of-factly the tale should treat it.',
-            'Give each character a distinct voice and homeland so the cast reads as different lives that converged on one valley - not one life told eight ways. End every tale with their arrival in the valley, angled at their dream.',
-            'Plain ASCII prose only: no markdown, no em dashes (write " - "), straight quotes, no emojis, no modern or technological references.',
-            'Return JSON only: { "tales": [ { "seed": <number from the input>, "tale": "<the rewritten backstory>" } ] } with one entry per character.',
-        ].join('\n');
+        const system = buildSystemPrompt(body.town);
 
         const raw = await callLLM({
             system,
             user: JSON.stringify({ town: body.town || {}, characters }),
-            // 6000 was a reservation, not a need. Groq counts the REQUESTED max_tokens against the
-            // per-minute budget (that is what the 413 was), and the free tier meters 6k/min — so one
-            // founding reserved the entire minute while actually using ~260-330 tokens (measured
-            // 2026-08-07, tools/probe-llm.mjs, gpt-oss-120b/20b at reasoning_effort=low). Any whisper
-            // in the same minute was starved by a request that barely used its allowance.
-            // 1500 keeps ~4x headroom over the largest measured completion and leaves the rest of the
-            // budget for the game. #stickycap still halves from here if a provider refuses even this.
-            schema: responseSchema, schemaName: 'ry_farms_dm_tales', maxTokens: 1500,
+            // Groq counts the REQUESTED max_tokens against the per-minute budget, so this number is
+            // a RESERVATION, not a limit — and the free tier meters 6k/min shared across the whole
+            // organization. 6000 reserved the entire minute for one founding.
+            //
+            // 800, not 1500 (Codex #105 P1-2). One tale measured 302 completion tokens against the
+            // real production payload; the provider's own guidance is to set the completion limit
+            // 10-20% above the expected length, and 1500 was ~5x. 800 leaves room for a longer draft
+            // while freeing most of the minute for whispers, congregations and everything else.
+            schema: responseSchema, schemaName: 'ry_farms_dm_tales', maxTokens: 800,
         });
         const wanted = new Set(characters.map(c => c.seed));
         const tales = (raw?.tales || [])
@@ -128,3 +141,10 @@ module.exports = async function handler(req, res) {
         return send(res, 500, { fallback: true, error: err?.message || 'tale generation failed' });
     }
 };
+
+// Shared with tools/probe-llm.mjs so its measurements are of the DEPLOYED request rather than an
+// approximation of it (Codex #105 P2-6). A probe that sends a different prompt and a different
+// schema is not measuring production, however real its payload looks.
+module.exports.buildSystemPrompt = buildSystemPrompt;
+module.exports.responseSchema = responseSchema;
+module.exports.DM_MAX_TOKENS = 800;

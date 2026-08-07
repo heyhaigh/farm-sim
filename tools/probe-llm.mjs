@@ -153,6 +153,10 @@ const CASES = [
 {
     const { World } = await import('../farm.js');
     const { generateCrew, hashString } = await import('../dna.js');
+    // The DEPLOYED prompt, schema and token budget — not an approximation of them.
+    const { createRequire } = await import('node:module');
+    const requireCjs = createRequire(import.meta.url);
+    const DM = requireCjs('../api/ry-farms-dm.js');
     const m = generateCrew(20260706); const used = new Set();
     const pick = () => { const un = m.filter(x => !used.has(x.id)); let b = un[0], bh = 0xffffffff;
         for (const x of un) { const h = hashString((x.id || x.title || '') + ':pick'); if (h < bh) { bh = h; b = x; } }
@@ -170,8 +174,15 @@ const CASES = [
     const town = { name: w.name, seed: w.seed, day: w.day, season: w.seasonName, culture: w.culture };
     const one = JSON.stringify({ town, characters: [charOf(w.farmers[0])] });
     const all = JSON.stringify({ town, characters: w.farmers.map(charOf) });
+    const sys = DM.buildSystemPrompt(town);
+    for (const c of CASES.filter(x => x.schemaName.startsWith('probe_dm'))) {
+        c.system = sys;                       // the real 1,947-char prompt
+        c.schema = DM.responseSchema;         // seed: integer, not number
+        c.maxTokens = DM.DM_MAX_TOKENS;       // the real reservation
+    }
     CASES.find(c => c.name.startsWith('dm tale x1')).user = one;
     CASES.find(c => c.name.startsWith('dm FULL CAST')).user = all;
+    console.log(`  using the DEPLOYED dm prompt (${sys.length} chars), schema and ${DM.DM_MAX_TOKENS}-token budget`);
     console.log(`  real payloads: 1 farmer = ${one.length} chars, full cast (${w.farmers.length}) = ${all.length} chars`);
     console.log(`  callLLM truncates user content at 8000 -> full cast is ${all.length > 8000 ? 'CUT MID-JSON' : 'fine'}\n`);
 }
@@ -223,8 +234,13 @@ async function call(model, c, format, reasoningEffort) {
             status: 200,
             content, reasoning,
             usage: data?.usage || {},
-            parsed: parseJson(content) ?? parseJson(reasoning),
-            parsedFrom: parseJson(content) ? 'content' : (parseJson(reasoning) ? 'reasoning' : null),
+            // production's extractContent() reads message.content ONLY. Parsing `reasoning` here
+            // would let a reasoning-only model pass this gate and fail every real call (Codex #105
+            // P2-6), so the probe accepts exactly what production accepts — and reports separately
+            // when the answer was sitting in `reasoning`, because that is a finding, not a pass.
+            parsed: parseJson(content),
+            parsedFrom: parseJson(content) ? 'content' : null,
+            reasoningHeldJson: !parseJson(content) && !!parseJson(reasoning),
         };
     } catch (err) {
         return { status: 0, error: String(err?.message || err).slice(0, 120) };
@@ -237,7 +253,8 @@ function verdictFor(c, res) {
     if (res.status === 404) return 'GONE 404 model not available';
     if (res.status !== 200) return `FAIL ${res.status} ${String(res.error).slice(0, 90)}`;
     if (!res.parsed) {
-        const why = !res.content && res.reasoning ? 'content EMPTY, reasoning populated'
+        const why = res.reasoningHeldJson ? 'JSON was in `reasoning`, which production does NOT read'
+            : !res.content && res.reasoning ? 'content EMPTY, reasoning populated'
             : !res.content ? 'content EMPTY'
             : 'unparseable content';
         return `FAIL 200 but no JSON - ${why}`;

@@ -68,6 +68,11 @@ function characterOf(f) {
 // The procedural draft is already complete and already on screen, so nobody ever waits — the LLM
 // upgrade lands later, farmer by farmer, and the budget follows the player's attention instead of
 // being spread evenly over seven strangers. `preferSeed` lets an opened sheet jump the queue.
+// seed -> when this farmer last failed to produce a usable tale. Long enough that a genuinely bad
+// draft stops blocking the cast, short enough that a transient upstream wobble is retried.
+const seedFailAt = new Map();
+const SEED_RETRY_MS = 15 * 60 * 1000;
+
 export async function enrichStories(world, isCurrent = () => true, preferSeed = null) {
     if (typeof fetch !== 'function' || inflight) return 0;
     if (Date.now() - lastFailAt < DM_RETRY_COOLDOWN_MS) return 0;
@@ -75,10 +80,19 @@ export async function enrichStories(world, isCurrent = () => true, preferSeed = 
         f.sheet.story && (f.sheet.story.v || 1) >= 2 && !f.sheet.story.llm && f.sheet.dream);
     if (!waiting.length) return 0;
 
-    // Stable order so repeated passes work down the cast deterministically rather than re-rolling
-    // the same farmer; a sheet the player has open takes priority.
-    const chosen = (preferSeed != null && waiting.find(f => f.sheet.seed === preferSeed))
-        || waiting.slice().sort((a, b) => a.sheet.seed - b.sheet.seed)[0];
+    // Stable order so repeated passes work down the cast deterministically, BUT skip seeds that
+    // have already failed recently (Codex #105 P1-3). Lowest-seed-always was head-of-line blocking:
+    // one farmer whose draft reliably produces a short or malformed tale was picked again after
+    // every cooldown — Codex reproduced the sequence [1,1] — and the other seven were never
+    // attempted at all. A per-seed cooldown rotates past the sticking point instead of starving
+    // the cast behind it.
+    const now = Date.now();
+    const ready = waiting.filter(f => (seedFailAt.get(f.sheet.seed) || 0) + SEED_RETRY_MS < now);
+    // Everyone is in cooldown: fall back to the whole list rather than stalling forever, so a bad
+    // minute for the endpoint does not permanently freeze enrichment.
+    const pool = ready.length ? ready : waiting;
+    const chosen = (preferSeed != null && pool.find(f => f.sheet.seed === preferSeed))
+        || pool.slice().sort((a, b) => a.sheet.seed - b.sheet.seed)[0];
     const pending = [chosen];
 
     inflight = true;
@@ -109,10 +123,14 @@ export async function enrichStories(world, isCurrent = () => true, preferSeed = 
                 applied++;
             }
         }
+        // Nothing applied means THIS farmer is the problem (a short tale, a missing seed, a draft
+        // the model keeps choking on). Mark the seed so the next pass moves on to someone else.
+        if (!applied) seedFailAt.set(chosen.sheet.seed, Date.now());
         if (applied) world.addLog(`The chronicler set down ${chosen.sheet.name.split(' ')[0]}'s history in a finer hand.`, '#c9a45a');
         return applied;
     } catch (err) {
         lastFailAt = Date.now();
+        seedFailAt.set(chosen.sheet.seed, Date.now());   // rotate past this farmer next pass
         console.warn('ry-farms: DM enrichment unavailable (procedural tales stand)', err?.message || err);
         return 0;
     } finally {

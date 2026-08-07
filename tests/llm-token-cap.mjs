@@ -66,15 +66,42 @@ await check('a 413 is retried at half the size instead of thrown', async () => {
         `expected halving 6000->3000->1500, got ${JSON.stringify(log.map(l => l.max_tokens))}`);
 });
 
-await check('the discovered ceiling is REMEMBERED — the next call pays no 413', async () => {
+await check('a discovered cap is NOT remembered across calls (Codex #105 P1-1)', async () => {
+    // This case previously asserted the OPPOSITE — that the ceiling was cached to avoid paying the
+    // 413 twice. Codex reproduced the harm: a cap learned from one caller throttled a different
+    // caller with different needs, permanently, even after upstream capacity recovered. And the
+    // signal was never sound: 413 is documented as a request-SIZE error, so a busy-minute 413 says
+    // nothing durable about the model. Retry smaller now, remember nothing.
     const log = [];
     stubUpstream({ ceiling: 1500, log });
     const { callLLM } = freshState();
-    await callLLM({ system: 's', user: 'u', schema: SCHEMA, maxTokens: 6000 });   // discovers 1500
+    await callLLM({ system: 's', user: 'u', schema: SCHEMA, maxTokens: 6000 });
     log.length = 0;
-    await callLLM({ system: 's', user: 'u', schema: SCHEMA, maxTokens: 6000 });   // should start at 1500
-    assert.deepStrictEqual(log.map(l => l.max_tokens), [1500],
-        `a remembered cap should mean ONE request, got ${JSON.stringify(log.map(l => l.max_tokens))}`);
+    await callLLM({ system: 's', user: 'u', schema: SCHEMA, maxTokens: 6000 });
+    assert.deepStrictEqual(log.map(l => l.max_tokens), [6000, 3000, 1500],
+        'the second call reused a cached ceiling instead of asking for what it needed');
+});
+
+await check('P1-1: a DM 413 does not throttle a later, larger caller', async () => {
+    // Codex's exact reproduction: DM discovers 750, then congregation asks for 900 after upstream
+    // capacity recovered — and got 750. The ceiling moves between the two calls to prove the second
+    // caller is not carrying the first one's scar.
+    const log = [];
+    let ceiling = 750;
+    globalThis.fetch = async (_url, opts) => {
+        const b = JSON.parse(opts.body);
+        log.push(b.max_tokens);
+        if (b.max_tokens > ceiling) return { ok: false, status: 413, json: async () => ({}), text: async () => '{"error":{"message":"Request too large"}}' };
+        return { ok: true, status: 200, text: async () => '',
+            json: async () => ({ choices: [{ message: { content: '{"ok":true}' } }] }) };
+    };
+    const { callLLM } = freshState();
+    await callLLM({ system: 's', user: 'u', schema: SCHEMA, maxTokens: 1500 });   // DM: discovers 750
+    ceiling = 6000;   // the busy minute passes; upstream capacity is back
+    log.length = 0;
+    await callLLM({ system: 's', user: 'u', schema: SCHEMA, maxTokens: 900 });    // congregation
+    assert.strictEqual(log[0], 900,
+        `congregation asked for ${log[0]} instead of 900 — it inherited DM's transient ceiling`);
 });
 
 await check('a small caller is NOT throttled by another caller\'s discovered cap', async () => {
@@ -369,6 +396,51 @@ await check('P1-2: isModelGone is exported and rejects the reproduced false posi
     assert.strictEqual(
         isModelGone(400, '{"error":{"message":"The model `other` has been decommissioned"}}', 'x'),
         false, 'prose naming a DIFFERENT model must not retire this one');
+});
+
+// ---- Codex #105 regressions --------------------------------------------------------------------
+
+await check('P1-4: a generic 404 does NOT retire a model (route errors are not lifecycle events)', async () => {
+    const { isModelGone } = freshState();
+    assert.strictEqual(isModelGone(404, '{"error":{"message":"route not found"}}', 'healthy-one'), false,
+        'Codex reproduced `404 route not found` killing a healthy model');
+    assert.strictEqual(isModelGone(404, '{"error":{"code":"model_not_found"}}', 'gone-one'), true,
+        'a 404 WITH a model code is still retirement');
+    assert.strictEqual(isModelGone(404, '{"error":{"message":"The model `gone-one` is retired"}}', 'gone-one'), true,
+        'a 404 naming the model is still retirement');
+});
+
+await check('P1-4: the over-generic does_not_exist code no longer retires a model', async () => {
+    const { isModelGone } = freshState();
+    assert.strictEqual(
+        isModelGone(400, '{"error":{"message":"schema property missing","code":"does_not_exist"}}', 'healthy-one'),
+        false, 'does_not_exist can describe a schema or parameter, not just a model');
+});
+
+await check('P2-5: a terminal 429 costs ONE upstream call, not one per format', async () => {
+    // Codex counted three identical 429s from a single logical call, because opening the breaker
+    // did not stop the format loop. A rate limit is not a format problem.
+    const log = [];
+    globalThis.fetch = async (_url, opts) => {
+        log.push(JSON.parse(opts.body).response_format?.type ?? 'none');
+        return { ok: false, status: 429, json: async () => ({}), text: async () => '{"error":{"message":"Rate limit reached"}}' };
+    };
+    process.env.RY_FARMS_LLM_MODELS = 'only-one';
+    const { callLLM } = freshState();
+    await assert.rejects(() => callLLM({ system: 's', user: 'u', schema: SCHEMA, maxTokens: 320 }));
+    assert.strictEqual(log.length, 1, `a terminal 429 burned ${log.length} requests: ${JSON.stringify(log)}`);
+});
+
+await check('P2-5: a terminal 403 also stops immediately', async () => {
+    const log = [];
+    globalThis.fetch = async (_url, opts) => {
+        log.push(JSON.parse(opts.body).response_format?.type ?? 'none');
+        return { ok: false, status: 403, json: async () => ({}), text: async () => '{"error":{"message":"no access"}}' };
+    };
+    process.env.RY_FARMS_LLM_MODELS = 'only-one';
+    const { callLLM } = freshState();
+    await assert.rejects(() => callLLM({ system: 's', user: 'u', schema: SCHEMA, maxTokens: 320 }));
+    assert.strictEqual(log.length, 1, `a terminal 403 burned ${log.length} requests`);
 });
 
 // ---- report ------------------------------------------------------------------------------------
