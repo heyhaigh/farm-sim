@@ -97,7 +97,14 @@ module.exports = async function handler(req, res) {
         const raw = await callLLM({
             system,
             user: JSON.stringify({ town: body.town || {}, characters }),
-            schema: responseSchema, schemaName: 'ry_farms_dm_tales', maxTokens: 6000,
+            // 6000 was a reservation, not a need. Groq counts the REQUESTED max_tokens against the
+            // per-minute budget (that is what the 413 was), and the free tier meters 6k/min — so one
+            // founding reserved the entire minute while actually using ~260-330 tokens (measured
+            // 2026-08-07, tools/probe-llm.mjs, gpt-oss-120b/20b at reasoning_effort=low). Any whisper
+            // in the same minute was starved by a request that barely used its allowance.
+            // 1500 keeps ~4x headroom over the largest measured completion and leaves the rest of the
+            // budget for the game. #stickycap still halves from here if a provider refuses even this.
+            schema: responseSchema, schemaName: 'ry_farms_dm_tales', maxTokens: 1500,
         });
         const wanted = new Set(characters.map(c => c.seed));
         const tales = (raw?.tales || [])
