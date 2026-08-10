@@ -97,108 +97,68 @@ function budgetFor(file, schemaName) {
     return c ? c[1] : m[1];
 }
 
-// Bodies mirror what the CLIENT actually sends (Codex #107 P1-2). The first version was thin
-// enough to be misleading: `foe` was an object where the handler does String(body.foe), so the
-// prompt read "[object Object]"; chat omitted the listener, relationship, memories and town state
-// that make up most of its prompt; invent sent only `culture` and none of the mechanical fields.
-// A green matrix built on those would not have proved compatibility with the deployed prompts.
-// Shapes derived from farm.js #chatPayload/#chatProfile and each handler's own reads.
-const profile = (name, other) => ({
-    name, shortName: name, trade: 'builder',
-    personality: { label: 'quiet', creed: 'the valley keeps what it is given' },
-    traits: { teamwork: 0.6, drive: 0.4, honesty: 0.7, workEthic: 0.55 },
-    level: 2, health: 1, energy: 0.72, state: 'walking', thought: 'the fence line needs seeing to',
-    harvests: 6, cropsOnHand: 3, wood: 12, ore: 1, tilesExplored: 240,
-    opinionOfOther: 0.31, trusts: ['Peal'], wary: [],
-    rumorsHeard: [`Mera warned against ${other}`],
-    strongestSharedMemories: [`d3 they hauled water together when the well ran low`],
-    recentMemories: ['d4 a storm took part of the south fence'],
-});
+// Bodies are CAPTURED, not written (Codex #108 P1-1). Fixture fidelity was a P1 finding in four
+// consecutive rounds, and "write a better fixture" never converged — the reply body I hand-wrote
+// last round was 349 characters against production's 1,326. tools/capture-payloads.mjs drives the
+// real client entry points with fetch stubbed to record, so these bodies cannot drift: nobody typed
+// them. Regenerate with `node tools/capture-payloads.mjs` if a client payload changes.
+const CAPTURED = JSON.parse(readFileSync(join(ROOT, 'tools', 'payloads.json'), 'utf8')).requests;
+const grab = (label, pred = () => true) => {
+    const hit = CAPTURED.find(r => r.label === label && pred(r.body));
+    if (!hit) throw new Error(`no captured payload for "${label}" — re-run tools/capture-payloads.mjs`);
+    return hit.body;
+};
 
+// A 200 is NOT proof of a usable answer (Codex #108 P1-2). Handlers NORMALISE malformed output, so a
+// model that returns {} still yields `{kind:'none',target:'',tone:'suggest'}` with status 200 — and
+// the probe would print OK for the unambiguous fixture "go and get some rest". That is precisely the
+// degraded-format failure this tool exists to catch, so every shape asserts on MEANING.
 const SHAPES = [
     { key: 'duel', file: 'ry-farms-raid-council.js', schemaName: 'ry_farms_duel_beat',
-      body: { phase: 'beat', culture: 'human', town: 'BIRCHGROVE',
-              nemesis: { name: 'Skarn', raidCount: 3, sworeAgainst: 'Grull' },
-              foe: 'Skarn and his warband', cast: FOUNDERS.slice(0, 4) } },
+      body: grab('duel'),
+      // Field names come from the handler's own schema (raid-council beatSchema: stunt/by/bark),
+      // NOT from memory. Three validators in a row asserted invented keys — `who` where the schema
+      // says `speaker`, `line` where it says `bark` — and each time the model's answer was perfectly
+      // good while the check was wrong. Read the schema; do not recall it.
+      ok: (r) => r.beat && ['shove', 'taunt'].includes(r.beat.stunt)
+                 && r.beat.by && String(r.beat.bark || '').length > 8 },
 
     { key: 'invent', file: 'ry-farms-invent.js', schemaName: 'ry_farms_invent',
-      // every mechanical field the prompt is built from, not just culture
-      body: { culture: 'human', effect: 'charm', tier: 2, quality: 3, dominant: 'ember',
-              ingredients: ['a river stone', 'dried emberleaf', 'a scrap of hide'],
-              name: 'ROUGH LUCK-KNOT' } },
+      body: grab('invent'),
+      ok: (r) => String(r.name || '').length > 2 && String(r.lore || '').length > 15 },
 
     { key: 'classify', file: 'ry-farms-conscience.js', schemaName: 'ry_farms_conscience_classify',
-      body: { stage: 'classify', message: 'go and get some rest', names: ['Grull', 'Hex'], recent: [] } },
+      body: grab('whisper', b => b.stage === 'classify'),
+      // The captured message is "go and get some rest". `none` is what a degraded model returns
+      // through the handler's normaliser, so accepting it would defeat the whole probe.
+      ok: (r) => r.kind === 'rest' },
 
     { key: 'reply', file: 'ry-farms-conscience.js', schemaName: 'ry_farms_conscience_reply',
-      body: { stage: 'reply', verdict: 'dismiss', kind: 'rest', tone: 'suggest', message: 'go and rest',
-              pressure: 0.4, history: [{ who: 'voice', text: 'you have been at it since dawn' }],
-              character: { name: 'Grull Longfield', short: 'Grull', traits: ['stubborn'], creed: 'the hold stands' },
-              snapshot: { day: 3, season: 'SPRING', doing: 'walking to the well' } } },
+      body: grab('whisper', b => b.stage === 'reply'),
+      ok: (r) => String(r.line || '').length > 10 },
 
-    { key: 'chat', file: 'ry-farms-chat.js', schemaName: 'ry_farms_chat',
-      body: { context: {
-          culture: 'human', day: 4, season: 'SPRING', weather: 'CLOUDY', leader: 'Peal Ashfield',
-          harvestTotal: 21, boardBuilt: true,
-          townProject: { label: 'TOOLSHED', points: 12, needed: 20, builders: ['Grull Longfield'] },
-          recentTownLog: ['A storm took part of the south fence.', 'Peal was named leader.'],
-          relationship: {
-              speakerToListener: 0.31, listenerToSpeaker: -0.12,
-              vividMemory: { day: 3, kind: 'help', text: 'they hauled water together when the well ran low', strength: 0.62 },
-              gossipTarget: { name: 'Mera Stonecroft', regard: -0.4 },
-          },
-          speaker: profile('Grull', 'Hex'),
-          listener: profile('Hex', 'Grull'),
-          fallback: { speakerLine: 'Hex, that fence needs seeing to.', listenerLine: 'It can wait a day.' },
-      } } },
+    { key: 'raidcouncil', file: 'ry-farms-raid-council.js', schemaName: 'ry_farms_raid_council',
+      body: grab('raidcouncil'),
+      ok: (r) => Array.isArray(r.script) && r.script.length >= 3 && r.script.every(t => t.speaker && t.line) },
 
-    { key: 'raidmuster', file: 'ry-farms-raid-council.js', schemaName: 'ry_farms_raid_council',
-      body: { phase: 'muster', culture: 'human', town: 'BIRCHGROVE', dir: 'north',
-              foe: 'a warband out of the northern pines', cast: FOUNDERS.slice(0, 6),
-              nemesis: { name: 'Skarn', raidCount: 2, sworeAgainst: 'Grull' } } },
-
-    // The debrief builds a MATERIALLY DIFFERENT prompt from muster and was missing entirely — by the
-    // same standard that makes founding and election separate rows, these are separate rows.
     { key: 'raiddebrief', file: 'ry-farms-raid-council.js', schemaName: 'ry_farms_raid_council',
-      body: { phase: 'debrief', culture: 'human', town: 'BIRCHGROVE', dir: 'north',
-              foe: 'a warband out of the northern pines', cast: FOUNDERS.slice(0, 6),
-              nemesis: { name: 'Skarn', raidCount: 2, sworeAgainst: 'Grull' },
-              battle: { felled: 3, n: 5, harvestLost: 2, hero: 'Grull', wounded: ['Hex', 'Peal'] } } },
+      body: grab('raiddebrief'),
+      ok: (r) => Array.isArray(r.script) && r.script.length >= 3 && r.script.every(t => t.speaker && t.line) },
 
     { key: 'congregation', file: 'ry-farms-congregation.js', schemaName: 'ry_farms_congregation',
-      body: { scene: 'founding', culture: 'human', founders: FOUNDERS } },
+      body: grab('congregation'),
+      ok: (r) => Array.isArray(r.script) && r.script.length >= 4 && r.script.every(t => t.speaker && t.line) },
 
     { key: 'election', file: 'ry-farms-congregation.js', schemaName: 'ry_farms_congregation',
-      body: { scene: 'election', culture: 'human', founders: FOUNDERS, candidates: FOUNDERS.slice(0, 3) } },
+      body: grab('election'),
+      // its prompt asks candidates to speak to what they stand for, and to supply mutters
+      ok: (r) => Array.isArray(r.script) && r.script.length >= 3
+                 && Array.isArray(r.mutters) && r.mutters.length >= 1 },
 
     { key: 'dm', file: 'ry-farms-dm.js', schemaName: 'ry_farms_dm_tales',
-      body: null },   // built from a real generated town below
+      body: grab('dm'),
+      ok: (r) => Array.isArray(r.tales) && r.tales.length >= 1 && String(r.tales[0].tale || '').length >= 200 },
 ];
-
-// The DM body comes from a real town, because its payload size was the whole dispute.
-{
-    const { World } = await import('../farm.js');
-    const { generateCrew, hashString } = await import('../dna.js');
-    const m = generateCrew(20260706); const used = new Set();
-    const pick = () => { const un = m.filter(x => !used.has(x.id)); let b = un[0], bh = 0xffffffff;
-        for (const x of un) { const h = hashString((x.id || x.title || '') + ':pick'); if (h < bh) { bh = h; b = x; } }
-        used.add(b.id); return b; };
-    const w = new World(20260706);
-    for (let i = 0; i < 8; i++) w.addFarmer(pick(), 0);
-    w.ensureFounderVariety();
-    const f = w.farmers[0], s = f.sheet, p = s.personality;
-    SHAPES.find(x => x.key === 'dm').body = {
-        town: { name: w.name, seed: w.seed, day: w.day, season: w.seasonName, culture: w.culture },
-        characters: [{
-            seed: s.seed, name: s.name, shortName: s.name.split(' ')[0], trade: s.archetype,
-            background: s.story.bg, stats: s.stats, personality: { label: p.label, creed: p.creed },
-            ideal: s.story.ideal, bond: s.story.bond, flaw: s.story.flaw,
-            dream: { yearn: s.dream.yearn, rivalName: s.dream.rivalName || null },
-            keepsake: String((s.memory && s.memory.title) || 'a life before the valley').slice(0, 40),
-            draft: s.story.tale,
-        }],
-    };
-}
 
 // --- drive a real handler ------------------------------------------------------------------------
 function fakeRes() {
@@ -225,8 +185,11 @@ async function runShape(shape) {
     let parsed = null;
     try { parsed = JSON.parse(res.body || '{}'); } catch { /* not json */ }
     if (res.statusCode === 200 && parsed && !parsed.fallback) {
-        const keys = Object.keys(parsed).join(',');
-        return { verdict: `OK     ${keys}`, ms, payload: parsed };
+        // Semantic check, not just a status. A normalised default is a FAILURE dressed as success.
+        let usable = false, why = '';
+        try { usable = !!shape.ok(parsed); } catch (e) { why = String(e.message).slice(0, 40); }
+        if (!usable) return { verdict: `WEAK   200 but not usable ${why || JSON.stringify(parsed).slice(0, 70)}`, ms, payload: parsed };
+        return { verdict: `OK     ${Object.keys(parsed).join(',')}`, ms, payload: parsed };
     }
     const why = parsed?.error ? String(parsed.error).slice(0, 90) : `status ${res.statusCode}`;
     return { verdict: `FAIL   ${why}`, ms, payload: parsed };

@@ -74,7 +74,7 @@ const BREAKER_COOLDOWN_MS = 20_000;   // cardless free tier: recover fast — a 
 // breaker, AND the sticky-format memory: the owner's Groq logs showed 400+200 pairs continuing straight
 // through a session that was supposedly fixed. State that must outlive a reload lives on globalThis.
 const _S = globalThis.__ryFarmsLlmState || (globalThis.__ryFarmsLlmState = {
-    budget: { windowStart: 0, count: 0, spend: [] },   // spend: rolling [{at, cost}] — see #tokenbudget
+    budget: { spend: [] },   // rolling [{at, cost}] — BOTH the request count and the token sum derive from this
     breaker: { fails: 0, openUntil: 0 },
     formatSkip: new Set(),   // #stickyformat `${model}|${format}` proven unsupported — skip for the PROCESS lifetime, for real this time
     modelDead: new Set(),    // #modelchain models the provider has retired — skip for the PROCESS lifetime
@@ -235,9 +235,6 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
     const now = Date.now();
     // circuit breaker
     if (now < _breaker.openUntil) throw new LLMDisabledError('LLM circuit breaker open (recent failures)');
-    if (now - _budget.windowStart >= BUDGET_WINDOW_MS) { _budget.windowStart = now; _budget.count = 0; }
-    if (_budget.count >= BUDGET_MAX) throw new LLMDisabledError(`LLM budget exceeded (${BUDGET_MAX}/${BUDGET_WINDOW_MS / 1000}s)`);
-
     // ROLLING, not a fixed bucket (Codex #107 P1-1). The first version zeroed the whole allowance at
     // a single boundary, so 4,998 tokens at t=59.999s and another 4,998 at t=60.001s both passed —
     // 9,996 reserved inside two milliseconds against a 5,000 ceiling, over the provider's limit and
@@ -249,6 +246,13 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
     while (_budget.spend.length && now - _budget.spend[0].at >= BUDGET_WINDOW_MS) _budget.spend.shift();
     const spent = _budget.spend.reduce((n, e) => n + e.cost, 0);
 
+    // The REQUEST cap rolls off the same ledger (Codex #108 P2-3). It used to reset wholesale at a
+    // boundary while the comment above it promised a rolling limit — 25 calls at t=59.999s and 26 at
+    // t=60.001s were all admitted, 51 inside two milliseconds. One ledger, one window, no edge.
+    if (_budget.spend.length >= BUDGET_MAX) {
+        throw new LLMDisabledError(`LLM budget exceeded (${BUDGET_MAX}/${BUDGET_WINDOW_MS / 1000}s)`);
+    }
+
     const cost = estimateTokens(system, user, maxTokens);
     const ceiling = priority === 'background' ? TOKEN_BUDGET_MAX * BACKGROUND_CEILING : TOKEN_BUDGET_MAX;
     if (spent + cost > ceiling) {
@@ -258,7 +262,6 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
     // Charged BEFORE the call, because Groq reserves against the window at request time too — and
     // because a failed request still consumed the provider's allowance.
     _budget.spend.push({ at: now, cost });
-    _budget.count++;
 
     const headers = { 'Content-Type': 'application/json' };
     if (cfg.mode === 'paid' && process.env.OPENAI_API_KEY) headers.Authorization = `Bearer ${process.env.OPENAI_API_KEY}`;

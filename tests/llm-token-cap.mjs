@@ -624,6 +624,33 @@ await check('P2-4: a malformed budget override does not disable metering', async
     process.env.RY_FARMS_TOKEN_BUDGET = '1000000';
 });
 
+await check('P2-3: the REQUEST cap rolls too — no burst across the boundary', async () => {
+    // Codex reproduced 25 calls at t=59.999s and 26 at t=60.001s: 51 admitted inside two
+    // milliseconds, because the request counter still reset wholesale while its comment promised a
+    // rolling limit. Both caps now derive from one ledger, so there is no edge to sit on.
+    const log = [];
+    stubOk(log);
+    process.env.RY_FARMS_TOKEN_BUDGET = '10000000';   // isolate the REQUEST cap from the token cap
+    process.env.RY_FARMS_LLM_MODELS = 'm';
+    const { callLLM } = freshState();
+    const real = Date.now; const t0 = real();
+    try {
+        Date.now = () => t0 + 59_999;
+        let ok = 0;
+        for (let i = 0; i < 40; i++) {
+            try { await callLLM({ system: '', user: '', schema: SCHEMA, maxTokens: 1 }); ok++; } catch { break; }
+        }
+        assert.strictEqual(ok, 26, `expected the 26-request cap, got ${ok}`);
+        Date.now = () => t0 + 60_001;   // 2ms later: a fixed window would refill entirely
+        await assert.rejects(
+            () => callLLM({ system: '', user: '', schema: SCHEMA, maxTokens: 1 }),
+            /budget exceeded/,
+            'the request cap refilled at the boundary — 52 calls in one rolling minute');
+        Date.now = () => t0 + 121_000;   // genuinely past the window
+        await callLLM({ system: '', user: '', schema: SCHEMA, maxTokens: 1 });
+    } finally { Date.now = real; process.env.RY_FARMS_TOKEN_BUDGET = '1000000'; }
+});
+
 // ---- report ------------------------------------------------------------------------------------
 console.log(`\n${passes} passed, ${failures} failed`);
 if (failures) {
