@@ -125,7 +125,10 @@ module.exports = async function handler(req, res) {
             // safety net silently kills chat is not a safety net — failing over would have traded
             // one dead feature for another, which is the whole failure class this work exists to
             // end. The content itself needs ~100 tokens; the rest is thinking room.
-            schema: responseSchema, schemaName: 'ry_farms_chat', maxTokens: 600,
+            // BACKGROUND (Codex #107 P1-3): nobody is synchronously waiting — cosmetic: the scripted lines are already on screen when this runs.
+            // Only DM was classified, so every other async caller could spend the whole minute and
+            // starve a player waiting on a two-stage whisper.
+            schema: responseSchema, schemaName: 'ry_farms_chat', maxTokens: 600, priority: 'background',
         });
         return send(res, 200, normalizeConversation(raw));
     } catch (err) {

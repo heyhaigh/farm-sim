@@ -37,7 +37,21 @@ const BUDGET_MAX = 26;
 //
 // 5000 sits under BOTH published ceilings, leaving room for clock skew between our window and
 // theirs, and for whatever else the org key is doing.
-const TOKEN_BUDGET_MAX = Number(process.env.RY_FARMS_TOKEN_BUDGET || 5000);
+// Validated, not merely parsed (Codex #107 P2-4). `Number('5_000')` is NaN, and every comparison
+// against NaN is false — so a typo in an env var silently turned the whole guard off and let all 26
+// requests through, reserving 23,400 tokens. A cost control that can be disabled by a typo is not a
+// cost control. Anything not finite and positive falls back to the safe default, loudly.
+const TOKEN_BUDGET_DEFAULT = 5000;
+const TOKEN_BUDGET_MAX = (() => {
+    const raw = process.env.RY_FARMS_TOKEN_BUDGET;
+    if (raw == null || raw === '') return TOKEN_BUDGET_DEFAULT;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) {
+        console.warn(`[llm] RY_FARMS_TOKEN_BUDGET="${raw}" is not a positive number - using ${TOKEN_BUDGET_DEFAULT}`);
+        return TOKEN_BUDGET_DEFAULT;
+    }
+    return n;
+})();
 
 // Interactive work outranks background work when the minute gets tight. A whisper is a player
 // waiting on a reply; DM enrichment is a biography nobody has asked for yet, and it runs on a timer
@@ -60,7 +74,7 @@ const BREAKER_COOLDOWN_MS = 20_000;   // cardless free tier: recover fast — a 
 // breaker, AND the sticky-format memory: the owner's Groq logs showed 400+200 pairs continuing straight
 // through a session that was supposedly fixed. State that must outlive a reload lives on globalThis.
 const _S = globalThis.__ryFarmsLlmState || (globalThis.__ryFarmsLlmState = {
-    budget: { windowStart: 0, count: 0, tokens: 0 },
+    budget: { windowStart: 0, count: 0, spend: [] },   // spend: rolling [{at, cost}] — see #tokenbudget
     breaker: { fails: 0, openUntil: 0 },
     formatSkip: new Set(),   // #stickyformat `${model}|${format}` proven unsupported — skip for the PROCESS lifetime, for real this time
     modelDead: new Set(),    // #modelchain models the provider has retired — skip for the PROCESS lifetime
@@ -221,20 +235,29 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
     const now = Date.now();
     // circuit breaker
     if (now < _breaker.openUntil) throw new LLMDisabledError('LLM circuit breaker open (recent failures)');
-    // wall-clock budget — BOTH units. Requests guard the per-minute request cap; tokens guard the
-    // per-minute token cap, which is the one that actually binds (see #tokenbudget above).
-    if (now - _budget.windowStart >= BUDGET_WINDOW_MS) { _budget.windowStart = now; _budget.count = 0; _budget.tokens = 0; }
+    if (now - _budget.windowStart >= BUDGET_WINDOW_MS) { _budget.windowStart = now; _budget.count = 0; }
     if (_budget.count >= BUDGET_MAX) throw new LLMDisabledError(`LLM budget exceeded (${BUDGET_MAX}/${BUDGET_WINDOW_MS / 1000}s)`);
+
+    // ROLLING, not a fixed bucket (Codex #107 P1-1). The first version zeroed the whole allowance at
+    // a single boundary, so 4,998 tokens at t=59.999s and another 4,998 at t=60.001s both passed —
+    // 9,996 reserved inside two milliseconds against a 5,000 ceiling, over the provider's limit and
+    // exactly the burst the guard exists to stop. A ledger of timestamped reservations, with
+    // anything older than the window evicted, has no boundary to exploit: the last 60 seconds are
+    // always the last 60 seconds.
+    //
+    // Bounded by the request cap above, so this holds at most BUDGET_MAX entries.
+    while (_budget.spend.length && now - _budget.spend[0].at >= BUDGET_WINDOW_MS) _budget.spend.shift();
+    const spent = _budget.spend.reduce((n, e) => n + e.cost, 0);
 
     const cost = estimateTokens(system, user, maxTokens);
     const ceiling = priority === 'background' ? TOKEN_BUDGET_MAX * BACKGROUND_CEILING : TOKEN_BUDGET_MAX;
-    if (_budget.tokens + cost > ceiling) {
+    if (spent + cost > ceiling) {
         throw new LLMDisabledError(
-            `LLM token budget exceeded (${_budget.tokens}+${cost} > ${Math.round(ceiling)} of ${TOKEN_BUDGET_MAX}/min${priority === 'background' ? ', background' : ''})`);
+            `LLM token budget exceeded (${spent}+${cost} > ${Math.round(ceiling)} of ${TOKEN_BUDGET_MAX}/min${priority === 'background' ? ', background' : ''})`);
     }
     // Charged BEFORE the call, because Groq reserves against the window at request time too — and
     // because a failed request still consumed the provider's allowance.
-    _budget.tokens += cost;
+    _budget.spend.push({ at: now, cost });
     _budget.count++;
 
     const headers = { 'Content-Type': 'application/json' };

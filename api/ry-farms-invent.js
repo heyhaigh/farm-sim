@@ -74,7 +74,10 @@ module.exports = async function handler(req, res) {
             ingredients, effect: b.effect, whatItDoes: meaning, tier: b.tier, quality: b.quality,
             dominantEssence: b.dominant, proceduralName: b.name || null,
         });
-        const raw = await callLLM({ system, user, schema, schemaName: 'ry_farms_invent', maxTokens: 160 });
+        // BACKGROUND (Codex #107 P1-3): nobody is synchronously waiting — runs from an enrichment timer; the procedural name already stands.
+        // Only DM was classified, so every other async caller could spend the whole minute and
+        // starve a player waiting on a two-stage whisper.
+        const raw = await callLLM({ system, user, schema, schemaName: 'ry_farms_invent', maxTokens: 160, priority: 'background' });
         const name = clean(raw?.name, NAME_MAX), lore = clean(raw?.lore, LORE_MAX);
         if (!name || !lore || BANNED.test(lore) || BANNED.test(name)) return send(res, 200, { fallback: true, error: 'invalid or over-claiming output' });
         return send(res, 200, { name, lore });

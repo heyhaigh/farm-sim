@@ -563,6 +563,67 @@ await check('an ask LARGER than the whole minute is refused, not attempted', asy
     process.env.RY_FARMS_TOKEN_BUDGET = '1000000';
 });
 
+await check('P1-1: no boundary burst — the window is rolling, not a fixed bucket', async () => {
+    // Codex's exact reproduction: 1 token at t=0, then 4,998 at t=59.999s and another at t=60.001s.
+    // A fixed bucket resets wholesale at the boundary and lets both through — 9,996 tokens reserved
+    // inside two milliseconds against a 5,000 ceiling, over the provider's own limit.
+    const log = [];
+    stubOk(log);
+    process.env.RY_FARMS_TOKEN_BUDGET = '5000';
+    process.env.RY_FARMS_LLM_MODELS = 'm';
+    const { callLLM } = freshState();
+    const real = Date.now; const t0 = real();
+    try {
+        Date.now = () => t0;
+        await callLLM({ system: '', user: '', schema: SCHEMA, maxTokens: 1 });
+        Date.now = () => t0 + 59_999;
+        await callLLM({ system: '', user: '', schema: SCHEMA, maxTokens: 4900 });
+        Date.now = () => t0 + 60_001;
+        await assert.rejects(
+            () => callLLM({ system: '', user: '', schema: SCHEMA, maxTokens: 4900 }),
+            /token budget/,
+            'the boundary let a second near-full reservation through 2ms later');
+    } finally { Date.now = real; }
+});
+
+await check('P1-1: spend genuinely ages out of the rolling window', async () => {
+    // The counterpart — the ledger must not simply accumulate forever, or a busy minute would
+    // permanently mute the game.
+    const log = [];
+    stubOk(log);
+    process.env.RY_FARMS_TOKEN_BUDGET = '5000';
+    process.env.RY_FARMS_LLM_MODELS = 'm';
+    const { callLLM } = freshState();
+    const real = Date.now; const t0 = real();
+    try {
+        Date.now = () => t0;
+        await callLLM({ system: '', user: '', schema: SCHEMA, maxTokens: 4900 });
+        Date.now = () => t0 + 30_000;
+        await assert.rejects(() => callLLM({ system: '', user: '', schema: SCHEMA, maxTokens: 4900 }), /token budget/);
+        Date.now = () => t0 + 61_000;   // the first reservation is now older than the window
+        await callLLM({ system: '', user: '', schema: SCHEMA, maxTokens: 4900 });
+    } finally { Date.now = real; }
+});
+
+await check('P2-4: a malformed budget override does not disable metering', async () => {
+    // `Number('5_000')` is NaN and every comparison against NaN is false, so a typo silently turned
+    // the entire guard off and let all 26 requests through — 23,400 tokens reserved.
+    for (const bad of ['5_000', 'abc', '-1', '0', 'Infinity']) {
+        const log = [];
+        stubOk(log);
+        process.env.RY_FARMS_TOKEN_BUDGET = bad;
+        process.env.RY_FARMS_LLM_MODELS = 'm';
+        const { callLLM } = freshState();
+        let allowed = 0;
+        for (let i = 0; i < 26; i++) {
+            try { await callLLM({ system: 's', user: 'u', schema: SCHEMA, maxTokens: 900 }); allowed++; }
+            catch { break; }
+        }
+        assert.ok(allowed < 26, `RY_FARMS_TOKEN_BUDGET="${bad}" disabled metering — ${allowed} calls got through`);
+    }
+    process.env.RY_FARMS_TOKEN_BUDGET = '1000000';
+});
+
 // ---- report ------------------------------------------------------------------------------------
 console.log(`\n${passes} passed, ${failures} failed`);
 if (failures) {

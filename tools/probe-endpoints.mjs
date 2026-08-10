@@ -97,31 +97,81 @@ function budgetFor(file, schemaName) {
     return c ? c[1] : m[1];
 }
 
+// Bodies mirror what the CLIENT actually sends (Codex #107 P1-2). The first version was thin
+// enough to be misleading: `foe` was an object where the handler does String(body.foe), so the
+// prompt read "[object Object]"; chat omitted the listener, relationship, memories and town state
+// that make up most of its prompt; invent sent only `culture` and none of the mechanical fields.
+// A green matrix built on those would not have proved compatibility with the deployed prompts.
+// Shapes derived from farm.js #chatPayload/#chatProfile and each handler's own reads.
+const profile = (name, other) => ({
+    name, shortName: name, trade: 'builder',
+    personality: { label: 'quiet', creed: 'the valley keeps what it is given' },
+    traits: { teamwork: 0.6, drive: 0.4, honesty: 0.7, workEthic: 0.55 },
+    level: 2, health: 1, energy: 0.72, state: 'walking', thought: 'the fence line needs seeing to',
+    harvests: 6, cropsOnHand: 3, wood: 12, ore: 1, tilesExplored: 240,
+    opinionOfOther: 0.31, trusts: ['Peal'], wary: [],
+    rumorsHeard: [`Mera warned against ${other}`],
+    strongestSharedMemories: [`d3 they hauled water together when the well ran low`],
+    recentMemories: ['d4 a storm took part of the south fence'],
+});
+
 const SHAPES = [
-    { key: 'duel',        schemaName: 'ry_farms_duel_beat', file: 'ry-farms-raid-council.js',
+    { key: 'duel', file: 'ry-farms-raid-council.js', schemaName: 'ry_farms_duel_beat',
       body: { phase: 'beat', culture: 'human', town: 'BIRCHGROVE',
               nemesis: { name: 'Skarn', raidCount: 3, sworeAgainst: 'Grull' },
-              foe: { name: 'Skarn' }, cast: FOUNDERS.slice(0, 4) } },
-    { key: 'invent',      schemaName: 'ry_farms_invent', file: 'ry-farms-invent.js',
-      body: { culture: 'human' } },
-    { key: 'classify',    schemaName: 'ry_farms_conscience_classify', file: 'ry-farms-conscience.js',
+              foe: 'Skarn and his warband', cast: FOUNDERS.slice(0, 4) } },
+
+    { key: 'invent', file: 'ry-farms-invent.js', schemaName: 'ry_farms_invent',
+      // every mechanical field the prompt is built from, not just culture
+      body: { culture: 'human', effect: 'charm', tier: 2, quality: 3, dominant: 'ember',
+              ingredients: ['a river stone', 'dried emberleaf', 'a scrap of hide'],
+              name: 'ROUGH LUCK-KNOT' } },
+
+    { key: 'classify', file: 'ry-farms-conscience.js', schemaName: 'ry_farms_conscience_classify',
       body: { stage: 'classify', message: 'go and get some rest', names: ['Grull', 'Hex'], recent: [] } },
-    { key: 'reply',       schemaName: 'ry_farms_conscience_reply', file: 'ry-farms-conscience.js',
+
+    { key: 'reply', file: 'ry-farms-conscience.js', schemaName: 'ry_farms_conscience_reply',
       body: { stage: 'reply', verdict: 'dismiss', kind: 'rest', tone: 'suggest', message: 'go and rest',
-              pressure: 0, history: [],
+              pressure: 0.4, history: [{ who: 'voice', text: 'you have been at it since dawn' }],
               character: { name: 'Grull Longfield', short: 'Grull', traits: ['stubborn'], creed: 'the hold stands' },
               snapshot: { day: 3, season: 'SPRING', doing: 'walking to the well' } } },
-    { key: 'chat',        schemaName: 'ry_farms_chat', file: 'ry-farms-chat.js',
-      body: { context: { culture: 'human', town: 'BIRCHGROVE', day: 3, season: 'SPRING',
-                         speaker: { name: 'Grull', trade: 'builder' }, others: ['Hex', 'Peal'] } } },
-    { key: 'raidcouncil', schemaName: 'ry_farms_raid_council', file: 'ry-farms-raid-council.js',
+
+    { key: 'chat', file: 'ry-farms-chat.js', schemaName: 'ry_farms_chat',
+      body: { context: {
+          culture: 'human', day: 4, season: 'SPRING', weather: 'CLOUDY', leader: 'Peal Ashfield',
+          harvestTotal: 21, boardBuilt: true,
+          townProject: { label: 'TOOLSHED', points: 12, needed: 20, builders: ['Grull Longfield'] },
+          recentTownLog: ['A storm took part of the south fence.', 'Peal was named leader.'],
+          relationship: {
+              speakerToListener: 0.31, listenerToSpeaker: -0.12,
+              vividMemory: { day: 3, kind: 'help', text: 'they hauled water together when the well ran low', strength: 0.62 },
+              gossipTarget: { name: 'Mera Stonecroft', regard: -0.4 },
+          },
+          speaker: profile('Grull', 'Hex'),
+          listener: profile('Hex', 'Grull'),
+          fallback: { speakerLine: 'Hex, that fence needs seeing to.', listenerLine: 'It can wait a day.' },
+      } } },
+
+    { key: 'raidmuster', file: 'ry-farms-raid-council.js', schemaName: 'ry_farms_raid_council',
       body: { phase: 'muster', culture: 'human', town: 'BIRCHGROVE', dir: 'north',
-              foe: { name: 'Skarn', strength: 3 }, cast: FOUNDERS.slice(0, 6) } },
-    { key: 'congregation',schemaName: 'ry_farms_congregation', file: 'ry-farms-congregation.js',
+              foe: 'a warband out of the northern pines', cast: FOUNDERS.slice(0, 6),
+              nemesis: { name: 'Skarn', raidCount: 2, sworeAgainst: 'Grull' } } },
+
+    // The debrief builds a MATERIALLY DIFFERENT prompt from muster and was missing entirely — by the
+    // same standard that makes founding and election separate rows, these are separate rows.
+    { key: 'raiddebrief', file: 'ry-farms-raid-council.js', schemaName: 'ry_farms_raid_council',
+      body: { phase: 'debrief', culture: 'human', town: 'BIRCHGROVE', dir: 'north',
+              foe: 'a warband out of the northern pines', cast: FOUNDERS.slice(0, 6),
+              nemesis: { name: 'Skarn', raidCount: 2, sworeAgainst: 'Grull' },
+              battle: { felled: 3, n: 5, harvestLost: 2, hero: 'Grull', wounded: ['Hex', 'Peal'] } } },
+
+    { key: 'congregation', file: 'ry-farms-congregation.js', schemaName: 'ry_farms_congregation',
       body: { scene: 'founding', culture: 'human', founders: FOUNDERS } },
-    { key: 'election',    schemaName: 'ry_farms_congregation', file: 'ry-farms-congregation.js',
+
+    { key: 'election', file: 'ry-farms-congregation.js', schemaName: 'ry_farms_congregation',
       body: { scene: 'election', culture: 'human', founders: FOUNDERS, candidates: FOUNDERS.slice(0, 3) } },
-    { key: 'dm',          schemaName: 'ry_farms_dm_tales', file: 'ry-farms-dm.js',
+
+    { key: 'dm', file: 'ry-farms-dm.js', schemaName: 'ry_farms_dm_tales',
       body: null },   // built from a real generated town below
 ];
 

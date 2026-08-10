@@ -95,7 +95,10 @@ async function generate(body) {
     const out = await callLLM({
         system,
         user: JSON.stringify({ culture: orc ? 'orc' : 'human', founders: cast }),
-        schema: scriptSchema, schemaName: 'ry_farms_congregation', maxTokens: 900, temperature: 0.8,
+        // BACKGROUND (Codex #107 P1-3): nobody is synchronously waiting — the authored fallback scene plays immediately; this only enriches it.
+        // Only DM was classified, so every other async caller could spend the whole minute and
+        // starve a player waiting on a two-stage whisper.
+        schema: scriptSchema, schemaName: 'ry_farms_congregation', maxTokens: 900, temperature: 0.8, priority: 'background',
     });
     return normalize(out, names);
 }
@@ -129,7 +132,10 @@ async function generateElection(body) {
     const out = await callLLM({
         system,
         user: JSON.stringify({ culture: orc ? 'orc' : 'human', candidates: cands }),
-        schema: electionSchema, schemaName: 'ry_farms_congregation', maxTokens: 900, temperature: 0.8,
+        // BACKGROUND (Codex #107 P1-3): nobody is synchronously waiting — the authored fallback scene plays immediately; this only enriches it.
+        // Only DM was classified, so every other async caller could spend the whole minute and
+        // starve a player waiting on a two-stage whisper.
+        schema: electionSchema, schemaName: 'ry_farms_congregation', maxTokens: 900, temperature: 0.8, priority: 'background',
     });
     const result = normalize(out, names, 2);
     // crowd mutters ride along, cleaned + deduped (display pool; the client's authored pool is the net)
