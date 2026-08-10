@@ -125,6 +125,10 @@ module.exports = async function handler(req, res) {
             // 10-20% above the expected length, and 1500 was ~5x. 800 leaves room for a longer draft
             // while freeing most of the minute for whispers, congregations and everything else.
             schema: responseSchema, schemaName: 'ry_farms_dm_tales', maxTokens: DM_MAX_TOKENS,
+            // BACKGROUND: nobody is waiting on this. The procedural tale is already complete and
+            // already on screen, and this runs on a timer in every open tab — so when the minute
+            // gets tight it must yield to a player who is actually waiting for a whisper to answer.
+            priority: 'background',
         });
         const wanted = new Set(characters.map(c => c.seed));
         const tales = (raw?.tales || [])

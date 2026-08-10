@@ -27,6 +27,11 @@ async function check(name, fn) {
 process.env.OPENAI_BASE_URL = 'http://127.0.0.1:9/v1';
 process.env.RY_FARMS_LLM_MODEL = 'test-model';
 delete process.env.RY_FARMS_LLM_OFF;
+// Most cases here exercise the 413/format/chain paths with synthetic 6000-token asks. The token
+// budget is a SEPARATE guard, and left at its 5000 default it refuses those before they are ever
+// attempted — so the cases would pass or fail for the wrong reason. The budget's own behaviour is
+// pinned by the #tokenbudget block near the end, which sets its own limits per case.
+process.env.RY_FARMS_TOKEN_BUDGET = '1000000';
 
 console.log('\n#stickycap — a refused completion size degrades instead of dying\n');
 
@@ -441,6 +446,121 @@ await check('P2-5: a terminal 403 also stops immediately', async () => {
     const { callLLM } = freshState();
     await assert.rejects(() => callLLM({ system: 's', user: 'u', schema: SCHEMA, maxTokens: 320 }));
     assert.strictEqual(log.length, 1, `a terminal 403 burned ${log.length} requests`);
+});
+
+// ---- #tokenbudget (Codex #106 P1-2) ------------------------------------------------------------
+// Counting REQUESTS protected nothing: Groq meters tokens per minute and charges the REQUESTED
+// max_tokens, so 26 permitted calls could reserve 20,000+ against an 8k ceiling. And the limit is
+// per ORGANISATION, so every browser's enrichment timer lands on one server key — the guard has to
+// live server-side, where they all meet.
+
+function stubOk(log) {
+    globalThis.fetch = async (_url, opts) => {
+        const b = JSON.parse(opts.body);
+        log.push(b.max_tokens);
+        return { ok: true, status: 200, text: async () => '',
+            json: async () => ({ choices: [{ message: { content: '{"ok":true}' } }] }) };
+    };
+}
+
+await check('the token budget stops a burst that the REQUEST cap would have allowed', async () => {
+    const log = [];
+    stubOk(log);
+    process.env.RY_FARMS_TOKEN_BUDGET = '5000';
+    process.env.RY_FARMS_LLM_MODELS = 'm';
+    const { callLLM } = freshState();
+    // 900-token calls: the request cap (26) would permit 26 of these — 23,400 tokens.
+    let allowed = 0;
+    for (let i = 0; i < 26; i++) {
+        try { await callLLM({ system: 's', user: 'u', schema: SCHEMA, maxTokens: 900 }); allowed++; }
+        catch { break; }
+    }
+    assert.ok(allowed < 26, 'the request cap alone let the whole burst through');
+    assert.ok(allowed >= 4 && allowed <= 6, `expected ~5 calls inside a 5000-token minute, got ${allowed}`);
+});
+
+await check('BACKGROUND work yields before interactive work does', async () => {
+    // The point of the priority split: a player waiting on a whisper must outrank a biography
+    // nobody asked for, which runs on a timer in every open tab and would otherwise win by volume.
+    const log = [];
+    stubOk(log);
+    process.env.RY_FARMS_TOKEN_BUDGET = '5000';
+    process.env.RY_FARMS_LLM_MODELS = 'm';
+    const { callLLM } = freshState();
+    // Spend to ~65% of the minute with interactive traffic.
+    for (let i = 0; i < 4; i++) await callLLM({ system: 's', user: 'u', schema: SCHEMA, maxTokens: 800 });
+    await assert.rejects(
+        () => callLLM({ system: 's', user: 'u', schema: SCHEMA, maxTokens: 800, priority: 'background' }),
+        /background/,
+        'background work should be refused past its lower ceiling');
+    // ...while an interactive call still gets through on the same budget.
+    await callLLM({ system: 's', user: 'u', schema: SCHEMA, maxTokens: 800 });
+});
+
+await check('the window resets, so a quiet minute restores the whole budget', async () => {
+    const log = [];
+    stubOk(log);
+    process.env.RY_FARMS_TOKEN_BUDGET = '2000';
+    process.env.RY_FARMS_LLM_MODELS = 'm';
+    const { callLLM } = freshState();
+    await callLLM({ system: 's', user: 'u', schema: SCHEMA, maxTokens: 900 });
+    await callLLM({ system: 's', user: 'u', schema: SCHEMA, maxTokens: 900 });
+    await assert.rejects(() => callLLM({ system: 's', user: 'u', schema: SCHEMA, maxTokens: 900 }), /token budget/);
+    // move past the window
+    const real = Date.now; const base = real();
+    Date.now = () => base + 61_000;
+    try { await callLLM({ system: 's', user: 'u', schema: SCHEMA, maxTokens: 900 }); }
+    finally { Date.now = real; }
+});
+
+await check('the PROMPT counts too, not just the reservation', async () => {
+    // Groq bills prompt + completion against the window. A budget that only counted max_tokens
+    // would let a 2,000-word prompt sail through as if it were free.
+    stubOk([]);
+    process.env.RY_FARMS_TOKEN_BUDGET = '2000';
+    process.env.RY_FARMS_LLM_MODELS = 'm';
+    const { callLLM } = freshState();
+    const huge = 'x'.repeat(6000);   // ~1500 tokens of prompt on its own
+    await callLLM({ system: huge, user: 'u', schema: SCHEMA, maxTokens: 200 });
+    await assert.rejects(
+        () => callLLM({ system: huge, user: 'u', schema: SCHEMA, maxTokens: 200 }),
+        /token budget/,
+        'two large prompts fitted in a 2000-token minute — the prompt is not being counted');
+});
+
+await check('a FAILED call still spends its allowance', async () => {
+    // The provider reserved it either way. Charging only on success would let a failing burst
+    // hammer the quota for free, which is exactly when a burst is most likely.
+    globalThis.fetch = async () => ({ ok: false, status: 500, json: async () => ({}), text: async () => 'boom' });
+    process.env.RY_FARMS_TOKEN_BUDGET = '1000';
+    process.env.RY_FARMS_LLM_MODELS = 'm';
+    const { callLLM } = freshState();
+    await assert.rejects(() => callLLM({ system: 's', user: 'u', schema: SCHEMA, maxTokens: 900 }));
+    await assert.rejects(
+        () => callLLM({ system: 's', user: 'u', schema: SCHEMA, maxTokens: 900 }),
+        /token budget/,
+        'a failed call was refunded — a failing burst would run unmetered');
+});
+
+process.env.RY_FARMS_TOKEN_BUDGET = '1000000';   // restore headroom for any later case
+
+await check('an ask LARGER than the whole minute is refused, not attempted', async () => {
+    // Deliberate: a request that cannot fit the window can never succeed — Groq would reject it —
+    // so spending the call to find that out is pure waste. This surfaced when the budget landed and
+    // several 6000-token cases stopped reaching the network at all; that is the right behaviour,
+    // and it is now a rule rather than a side effect. Production's largest ask is 900, so no real
+    // caller is affected.
+    const log = [];
+    stubOk(log);
+    process.env.RY_FARMS_TOKEN_BUDGET = '5000';
+    process.env.RY_FARMS_LLM_MODELS = 'm';
+    const { callLLM } = freshState();
+    await assert.rejects(
+        () => callLLM({ system: 's', user: 'u', schema: SCHEMA, maxTokens: 6000 }),
+        /token budget/,
+        'an impossible ask should be refused locally');
+    assert.strictEqual(log.length, 0, 'it must not reach the network at all');
+    process.env.RY_FARMS_TOKEN_BUDGET = '1000000';
 });
 
 // ---- report ------------------------------------------------------------------------------------

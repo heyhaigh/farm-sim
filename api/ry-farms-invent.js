@@ -57,7 +57,12 @@ module.exports = async function handler(req, res) {
         const ingredients = Array.isArray(b.ingredients) ? b.ingredients.join(', ') : String(b.ingredients || 'a few things');
         const system = [
             'You name and tell the lore of an item a farmer just INVENTED in Propagate, a pixel farming sim.',
-            (body.culture === 'orc')
+            // `b`, not `body` — the parsed body is bound to `b` at the top of this try. Reading
+            // `body` here threw ReferenceError on EVERY call, was swallowed by the catch below, and
+            // returned a 500 fallback, so invention naming has never once reached the model. Found
+            // 2026-08-10 by tools/probe-endpoints.mjs on its first dry run, before it spent a cent —
+            // which is the argument for probing real handlers rather than reconstructions of them.
+            (b.culture === 'orc')
                 ? 'CULTURE VOICE: the inventor is an ORC of a war-hoard - the name and lore are blunt, practical, a little rough; bone, hide, ash and iron over blossoms and ribbons.'
                 : 'CULTURE VOICE: the inventor is a human settler - rustic, folk, hand-made.',
             'You are handed the item\'s fixed mechanical EFFECT. Invent ONLY the flavour — an evocative NAME and a one-line LORE of why these ingredients combine into it.',

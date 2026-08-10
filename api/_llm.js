@@ -25,6 +25,31 @@ const BUDGET_WINDOW_MS = 60_000;
 // skew between our clock and theirs; past the cap callers get the in-character fallback, same as a 429 —
 // but without burning Groq's goodwill or the log noise.
 const BUDGET_MAX = 26;
+
+// #tokenbudget — requests are the wrong unit, and counting them protected nothing.
+//
+// Groq meters TOKENS PER MINUTE (6k on the outgoing model, 8k for each gpt-oss candidate) and counts
+// the REQUESTED max_tokens, not the tokens actually produced. So 26 permitted requests could reserve
+// well over 20,000 tokens against an 8k ceiling — the request cap was never the binding constraint
+// (Codex #106 P1-2). Worse, the limit applies at ORGANISATION level: every browser runs its own
+// enrichment cadence against one server-side key, so the protection has to live here, on the server,
+// where all of them meet. A client timer cannot enforce a shared boundary.
+//
+// 5000 sits under BOTH published ceilings, leaving room for clock skew between our window and
+// theirs, and for whatever else the org key is doing.
+const TOKEN_BUDGET_MAX = Number(process.env.RY_FARMS_TOKEN_BUDGET || 5000);
+
+// Interactive work outranks background work when the minute gets tight. A whisper is a player
+// waiting on a reply; DM enrichment is a biography nobody has asked for yet, and it runs on a timer
+// in every open tab. Without this the two compete as equals, and the background job — being far more
+// frequent — wins by volume and starves the thing a human is actually watching.
+const BACKGROUND_CEILING = 0.6;   // background calls are refused past 60% of the minute's tokens
+
+// Rough but honest: ~4 characters per token is the standard estimate, and it only has to be good
+// enough to stop a burst. Under-counting the prompt is safer than over-counting the reservation,
+// because the reservation is the part Groq actually bills against the window.
+const estimateTokens = (system, user, maxTokens) =>
+    maxTokens + Math.ceil((String(system).length + String(user).length) / 4);
 // global circuit breaker — after BREAKER_TRIP consecutive failures, block ALL calls for BREAKER_COOLDOWN_MS
 // (one shared breaker, so N callers failing in parallel can't each keep hammering).
 const BREAKER_TRIP = 4;
@@ -35,7 +60,7 @@ const BREAKER_COOLDOWN_MS = 20_000;   // cardless free tier: recover fast — a 
 // breaker, AND the sticky-format memory: the owner's Groq logs showed 400+200 pairs continuing straight
 // through a session that was supposedly fixed. State that must outlive a reload lives on globalThis.
 const _S = globalThis.__ryFarmsLlmState || (globalThis.__ryFarmsLlmState = {
-    budget: { windowStart: 0, count: 0 },
+    budget: { windowStart: 0, count: 0, tokens: 0 },
     breaker: { fails: 0, openUntil: 0 },
     formatSkip: new Set(),   // #stickyformat `${model}|${format}` proven unsupported — skip for the PROCESS lifetime, for real this time
     modelDead: new Set(),    // #modelchain models the provider has retired — skip for the PROCESS lifetime
@@ -188,7 +213,7 @@ class LLMDisabledError extends Error {}   // typed so callers can suppress perma
 
 // Call the model and return the parsed JSON object. Throws LLMDisabledError when off/blocked/over-budget/tripped
 // (callers fall back to procedural). `schema` requests structured output; we degrade json_schema -> json_object.
-async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxTokens = 400, temperature }) {
+async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxTokens = 400, temperature, priority = 'interactive' }) {
     if (typeof fetch !== 'function') throw new LLMDisabledError('fetch unavailable');
     const cfg = resolveLLM();
     if (cfg.mode === 'off') throw new LLMDisabledError(`LLM off: ${cfg.reason}`);
@@ -196,9 +221,20 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
     const now = Date.now();
     // circuit breaker
     if (now < _breaker.openUntil) throw new LLMDisabledError('LLM circuit breaker open (recent failures)');
-    // wall-clock budget
-    if (now - _budget.windowStart >= BUDGET_WINDOW_MS) { _budget.windowStart = now; _budget.count = 0; }
+    // wall-clock budget — BOTH units. Requests guard the per-minute request cap; tokens guard the
+    // per-minute token cap, which is the one that actually binds (see #tokenbudget above).
+    if (now - _budget.windowStart >= BUDGET_WINDOW_MS) { _budget.windowStart = now; _budget.count = 0; _budget.tokens = 0; }
     if (_budget.count >= BUDGET_MAX) throw new LLMDisabledError(`LLM budget exceeded (${BUDGET_MAX}/${BUDGET_WINDOW_MS / 1000}s)`);
+
+    const cost = estimateTokens(system, user, maxTokens);
+    const ceiling = priority === 'background' ? TOKEN_BUDGET_MAX * BACKGROUND_CEILING : TOKEN_BUDGET_MAX;
+    if (_budget.tokens + cost > ceiling) {
+        throw new LLMDisabledError(
+            `LLM token budget exceeded (${_budget.tokens}+${cost} > ${Math.round(ceiling)} of ${TOKEN_BUDGET_MAX}/min${priority === 'background' ? ', background' : ''})`);
+    }
+    // Charged BEFORE the call, because Groq reserves against the window at request time too — and
+    // because a failed request still consumed the provider's allowance.
+    _budget.tokens += cost;
     _budget.count++;
 
     const headers = { 'Content-Type': 'application/json' };

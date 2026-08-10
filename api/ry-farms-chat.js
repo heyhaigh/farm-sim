@@ -115,7 +115,17 @@ module.exports = async function handler(req, res) {
         const raw = await callLLM({
             system,
             user: JSON.stringify(context),
-            schema: responseSchema, schemaName: 'ry_farms_chat', maxTokens: 320,
+            // 600, not 320 (measured 2026-08-10, tools/probe-endpoints.mjs). This is the richest
+            // schema in the game — seven required fields including two dialogue lines, a memory and
+            // a reason — on the tightest budget relative to its output. gpt-oss-120b managed it;
+            // gpt-oss-20b returned EMPTY LINES, because reasoning tokens are charged against
+            // max_tokens and there was nothing left to speak with.
+            //
+            // That matters more than one model being fussy: 20b is the FALLBACK. A chain whose
+            // safety net silently kills chat is not a safety net — failing over would have traded
+            // one dead feature for another, which is the whole failure class this work exists to
+            // end. The content itself needs ~100 tokens; the rest is thinking room.
+            schema: responseSchema, schemaName: 'ry_farms_chat', maxTokens: 600,
         });
         return send(res, 200, normalizeConversation(raw));
     } catch (err) {
