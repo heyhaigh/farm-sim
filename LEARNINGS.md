@@ -197,6 +197,13 @@ retrospective is worth more than the code:
 captured sample pasted into the test file. If you cannot paste the real message, do not write the
 pattern — handle it generically.** Ship the logging FIRST and read it.
 
+**And its ordering twin, added after violating the lesson above within an hour of writing it: state a
+diagnosis only after running the measurement that could falsify it.** If the measurement costs under a
+minute — one curl, one calibration call, one instrumented replay — it comes BEFORE the claim, not
+after. Prose learnings do not change behaviour at the moment of decision; an ordering constraint is
+checkable at exactly that moment. (The violation: two telemetry data points, a confident "the client
+never sends stage 2", and a one-request calibration that promptly disproved half of it.)
+
 ---
 
 ## Feature / UX patterns
