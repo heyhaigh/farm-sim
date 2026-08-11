@@ -268,18 +268,20 @@ async function runShape(shape) {
     // handler builds a fresh state object with a fresh witness Map while the captured binding still
     // pointed at the first one, never written to again. An offline check missed it: it exercised the
     // require-cache purge and not the state wipe sitting next to it.
-    const witness = require('../api/_llm.js').lastFormatFor(shape.schemaName);
+    const llm = require('../api/_llm.js');
+    const witness = llm.lastFormatFor(shape.schemaName);
+    const refusal = llm.lastRefusalFor(shape.schemaName);
     let parsed = null;
     try { parsed = JSON.parse(res.body || '{}'); } catch { /* not json */ }
     if (res.statusCode === 200 && parsed && !parsed.fallback) {
         // Semantic check, not just a status. A normalised default is a FAILURE dressed as success.
         let usable = false, why = '';
         try { usable = !!shape.ok(parsed); } catch (e) { why = String(e.message).slice(0, 40); }
-        if (!usable) return { verdict: `WEAK   200 but not usable ${why || JSON.stringify(parsed).slice(0, 70)}`, ms, payload: parsed, witness };
-        return { verdict: `OK     ${Object.keys(parsed).join(',')}`, ms, payload: parsed, witness };
+        if (!usable) return { verdict: `WEAK   200 but not usable ${why || JSON.stringify(parsed).slice(0, 70)}`, ms, payload: parsed, witness, refusal };
+        return { verdict: `OK     ${Object.keys(parsed).join(',')}`, ms, payload: parsed, witness, refusal };
     }
     const why = parsed?.error ? String(parsed.error).slice(0, 90) : `status ${res.statusCode}`;
-    return { verdict: `FAIL   ${why}`, ms, payload: parsed, witness };
+    return { verdict: `FAIL   ${why}`, ms, payload: parsed, witness, refusal };
 }
 
 console.log(`\nprobe-endpoints — every production LLM shape, through the real handlers`);
@@ -306,6 +308,11 @@ for (const model of MODELS) {
             verdict = `BROKEN the probe could not observe the format — fix the witness before trusting any verdict`;
         } else if (verdict.startsWith('OK') && fmt !== 'json_schema') {
             verdict = `WEAK   usable, but produced under ${fmt} — the schema was NOT enforced`;
+        }
+        // Print the provider's reason whenever the strict format did not carry the call. Without it
+        // "not enforced" is a symptom with no cause, and the only way to learn more is another run.
+        if (r.refusal) {
+            console.log(`      refused: ${r.refusal.status} ${r.refusal.scope}-scoped — ${r.refusal.message.slice(0, 150)}`);
         }
         results.push({ model, key: shape.key, verdict, format: fmt });
         console.log(`  ${shape.key.padEnd(13)} ${String(budgetFor(shape.file, shape.schemaName)).padStart(4)} tok  ${String(r.ms).padStart(5)}ms  ${String(fmt).padEnd(11)} ${verdict}`);

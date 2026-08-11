@@ -90,6 +90,10 @@ const _formatSkip = _S.formatSkip;
 // enforced. Nothing in the response tells you; only the caller knows, so the caller records it.
 // Read by tools/probe-endpoints.mjs; never read by production code.
 const _lastFormat = _S.lastFormat || (_S.lastFormat = new Map());
+// #formatwitness ...and WHY, when a format was refused. The scope classifier already reads the 400
+// body and then dropped it, so "produced under json_object" arrived with no cause attached and the
+// only way to learn more was another paid run. Keyed by schema, holding the provider's own words.
+const _lastRefusal = _S.lastRefusal || (_S.lastRefusal = new Map());
 const _modelDead = _S.modelDead;
 
 // #modelchain — a provider retiring a model must not take the whole game's voice with it.
@@ -430,9 +434,19 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
                             // PARAMETER is unsupported; otherwise remember just this schema, so one
                             // refused shape cannot mute the other nine.
                             if (response_format) {
-                                _formatSkip.add(isFormatUnsupported(errText)
+                                const wide = isFormatUnsupported(errText);
+                                _formatSkip.add(wide
                                     ? `${model}|${response_format.type}`
                                     : `${model}|${response_format.type}|${schemaName}`);
+                                // Keep the provider's own words. A refusal we cannot explain costs a
+                                // paid probe run to investigate; one that carries its reason costs a
+                                // log line.
+                                _lastRefusal.set(schemaName, {
+                                    model, format: response_format.type, status: r.status,
+                                    scope: wide ? 'format' : 'schema',
+                                    message: String(errText || '').replace(/\s+/g, ' ').trim().slice(0, 300),
+                                });
+                                console.warn(`[llm] ${model} refused ${response_format.type} for "${schemaName}" (${r.status}, ${wide ? 'format' : 'schema'}-scoped): ${String(errText || '').replace(/\s+/g, ' ').trim().slice(0, 200)}`);
                             }
                         }
                     } finally { clearTimeout(timer); }
@@ -457,5 +471,6 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
 // answer for a schema, so a paid run can distinguish an enforced contract from a fallback that
 // merely looked right. Production never calls this.
 const lastFormatFor = (schemaName) => _lastFormat.get(schemaName) || null;
+const lastRefusalFor = (schemaName) => _lastRefusal.get(schemaName) || null;
 
-module.exports = { callLLM, parseJson, resolveLLM, llmStatus, LLMDisabledError, modelChain, isModelGone, lastFormatFor };
+module.exports = { callLLM, parseJson, resolveLLM, llmStatus, LLMDisabledError, modelChain, isModelGone, lastFormatFor, lastRefusalFor };
