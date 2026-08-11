@@ -164,24 +164,34 @@ That migration ran ten review rounds and 23 commits to ship what was, on the cri
 one-line change (`DEFAULT_MODEL_CHAIN`) plus one env var. `api/_llm.js` went 275 -> 713 lines. The
 retrospective is worth more than the code:
 
-- **Execution > adversarial review > reasoning.** Everything verified by RUNNING was right.
-  Everything Codex caught by REPRODUCING was real. Everything concluded by thinking about what a
-  provider "would" say was wrong — `minItems` enforcement, three retirement codes, four prose
-  classifiers, all fluent and all invented. The underscore-vs-space bug was caught by neither
-  reviewer; **production logs caught it in twenty seconds.**
-- **Two models agreeing is not evidence, it is correlated guessing.** Claude and Codex both inferred
-  the `ry_farms_election` rename was inert from the same docs; neither observed it.
+- **For claims about an EXTERNAL CONTRACT, execution outranks reasoning — and review outranks
+  reasoning alone.** Everything verified by RUNNING was right. Everything Codex caught by REPRODUCING
+  was real. Everything concluded by thinking about what a provider "would" say was wrong — `minItems`
+  enforcement, three retirement codes, four prose classifiers, all fluent and all invented. The
+  underscore-vs-space bug was caught by neither reviewer; **production logs caught it in twenty
+  seconds.** This is scoped deliberately (Codex #119): reasoning is still what identifies the
+  invariants and designs the executions — it is unreliable specifically for *what another system
+  actually says or does*.
+- **Two models agreeing is not INDEPENDENT CORROBORATION.** Claude and Codex both inferred the
+  `ry_farms_election` rename was inert from the same docs; neither observed it. Shared sources and
+  shared priors make agreement cheap — it is still worth something, just not what a measurement is.
 - **Review per completed unit, not per fix.** By round three the reviews were mostly finding bugs in
   the previous round's fix. Each round of speculative hardening created surface for the next round.
   Treat "the review found a bug in last round's fix" as a STOP signal: simplify or delete, don't patch.
 - **Separate the deadline path from hardening, explicitly.** Flip the thing with the date on it,
   verify, then harden on your own schedule.
-- **Prefer generic handling to clever handling for unobserved failure modes.** "Advance the chain on
-  any failure" needs no knowledge of what the provider says, which is why it survived where a
-  classifier trained on imagined messages did not.
-- Match the process to observability: the sim, the sprites and the UI are locally executable and
-  visible, so running them IS the ground truth and heavyweight review is mostly friction. A boundary
-  against an unobservable third party is the opposite case.
+- **Prefer generic handling to clever handling for unobserved failure modes** — but describe the rule
+  you actually shipped. The implemented rule is narrower than "advance the chain on any failure"
+  (Codex #119 corrected this): the chain advances on an unrecognised 4xx, an unusable 200, and OUR OWN
+  timeout, while 5xx and ordinary transport failures stay provider-wide because they fail identically
+  for every model behind one base URL. What made it robust is that failover needs no knowledge of the
+  provider's WORDING, not that it fires on everything.
+- Match the process to observability — **without concluding that review is friction where execution is
+  easy.** Running the sim IS the ground truth for the sim, but adversarial review still found the
+  monument tile-stacking bug and the swallowed writer block in exactly that locally-executable code
+  (Codex #119 pushed back on the original, sloppier version of this line). The difference is that an
+  unobservable third-party boundary makes review *necessary*; local executability only makes it
+  cheaper to be sure without it.
 
 **The rule that would have prevented most of it: no branch keyed on provider-specific text without a
 captured sample pasted into the test file. If you cannot paste the real message, do not write the
