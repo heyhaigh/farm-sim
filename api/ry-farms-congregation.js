@@ -167,7 +167,12 @@ async function generateElection(body) {
         // BACKGROUND (Codex #107 P1-3): nobody is synchronously waiting — the authored fallback scene plays immediately; this only enriches it.
         // Only DM was classified, so every other async caller could spend the whole minute and
         // starve a player waiting on a two-stage whisper.
-        schema: ELECTION_SCHEMA, schemaName: 'ry_farms_congregation', maxTokens: 900, temperature: 0.8, priority: 'background',
+        // DISTINCT schema name (Codex #112 P1). The founding conversation and the election are two
+        // different schemas that both answered to 'ry_farms_congregation', and the format skip and
+        // format witness are both keyed by that name — so a refusal of the election's ten required
+        // mutter slots downgraded the founding conversation too, and the witness reported one
+        // scene's format for the other. The name is the cache identity; two shapes cannot share it.
+        schema: ELECTION_SCHEMA, schemaName: 'ry_farms_election', maxTokens: 900, temperature: 0.8, priority: 'background',
     });
     const result = normalize(out, names, 2);
     // crowd mutters ride along, cleaned + deduped (display pool; the client's authored pool is the net)

@@ -145,12 +145,22 @@ await check('duel bark', async () => {
     assertNoCoercion(payload, 'duel bark');
 });
 
-await check('invent name and lore', async () => {
-    stubLLM({ name: { n: 1 }, lore: ['some', 'lore'] });
-    const { payload } = await callHandler('ry-farms-invent.js', bodyFor('ry-farms-invent'));
-    assertNoCoercion(payload, 'invent');
-    assert.ok(payload?.fallback, 'a non-string name/lore must fall back, not render as an object');
-});
+// ONE junk field per case, the sibling VALID (Codex #112 P2). The previous version made `name` and
+// `lore` junk together, and ry-farms-invent falls back when EITHER is empty — so reverting one guard
+// left the other's empty string producing the same fallback, and the assertions passed under both
+// single mutations. Codex reproduced exactly that.
+//
+// This is the fourth distinct instance of the same disease in this file: a case that fails only when
+// TWO fixes are reverted covers neither.
+for (const [field, junk] of [['name', { n: 1 }], ['lore', ['some', 'lore']]]) {
+    await check(`invent ${field} — junk must fall back, not render`, async () => {
+        const valid = { name: 'ROUGH LUCK KNOT', lore: 'A quiet charm tied from riverstone and hide.' };
+        stubLLM({ ...valid, [field]: junk });
+        const { payload } = await callHandler('ry-farms-invent.js', bodyFor('ry-farms-invent'));
+        assertNoCoercion(payload, `invent ${field}`);
+        assert.ok(payload?.fallback, `a non-string ${field} must fall back, not render as an object`);
+    });
+}
 
 await check('chat memory — reached only when the LINES are valid', async () => {
     // ry-farms-chat.js:54 throws on empty lines, so junk dialogue would abort before `memory`.

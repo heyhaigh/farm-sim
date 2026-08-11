@@ -174,7 +174,7 @@ const SHAPES = [
       body: grab('congregation'),
       ok: (r) => Array.isArray(r.script) && r.script.length >= 4 && r.script.every(t => t.speaker && t.line) },
 
-    { key: 'election', file: 'ry-farms-congregation.js', schemaName: 'ry_farms_congregation',
+    { key: 'election', file: 'ry-farms-congregation.js', schemaName: 'ry_farms_election',
       body: grab('election'),
       // its prompt asks candidates to speak to what they stand for, and to supply mutters
       // THIS SHAPE IS THE REASON THE PROBE EXISTS. It came back short on gpt-oss-20b in 1 of 4 runs,

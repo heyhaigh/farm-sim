@@ -76,12 +76,40 @@ const BREAKER_COOLDOWN_MS = 20_000;   // cardless free tier: recover fast — a 
 const _S = globalThis.__ryFarmsLlmState || (globalThis.__ryFarmsLlmState = {
     budget: { spend: [] },   // rolling [{at, cost}] — BOTH the request count and the token sum derive from this
     breaker: { fails: 0, openUntil: 0 },
-    formatSkip: new Set(),   // #stickyformat `${model}|${format}` proven unsupported — skip for the PROCESS lifetime, for real this time
+    // #stickyformat key -> { until, strikes }. NOT a permanent Set any more (Codex #112 P1): a
+    // TRANSIENT validation 400 was being remembered for the life of the process, so a single bad
+    // moment downgraded a schema to json_object until redeploy. Model-wide entries keep until:Infinity.
+    formatSkip: new Map(),
     modelDead: new Set(),    // #modelchain models the provider has retired — skip for the PROCESS lifetime
 });
 const _budget = _S.budget;
 const _breaker = _S.breaker;
 const _formatSkip = _S.formatSkip;
+
+// A refusal that is about the SCHEMA is provisional: providers return transient validation failures,
+// and Groq's own guidance is to retry them. So a schema-scoped skip EXPIRES, backing off if the
+// refusal repeats, and a genuinely unacceptable schema settles at one probe every half hour instead
+// of being retried on every call. A refusal about the FORMAT ITSELF is a property of the model and
+// never expires — that is the llama case #stickyformat was built for.
+//
+// I claimed in review #111 that scoping the key per-schema made chat "self-repair on the next call".
+// It did not, and nothing in the scoping fix ever provided that: the Set was permanent, and the test
+// I wrote asserted the permanent downgrade rather than catching it.
+const SKIP_BACKOFF_MS = [60_000, 5 * 60_000, 30 * 60_000];
+function skipActive(key) {
+    const e = _formatSkip.get(key);
+    if (!e) return false;
+    if (Date.now() < e.until) return true;
+    return false;   // expired — keep the strike count so the next refusal backs off further
+}
+function noteSkip(key, permanent) {
+    const prev = _formatSkip.get(key);
+    const strikes = (prev?.strikes || 0) + 1;
+    const until = permanent
+        ? Infinity
+        : Date.now() + SKIP_BACKOFF_MS[Math.min(strikes - 1, SKIP_BACKOFF_MS.length - 1)];
+    _formatSkip.set(key, { until, strikes });
+}
 // #formatwitness Which response_format actually PRODUCED the answer, per schema name.
 //
 // Codex #111 P1: the probe could not tell a strict-schema success from a json_object fallback that
@@ -161,8 +189,42 @@ function modelChain() {
 // endpoints for the life of the process; a wrong "schema refused" verdict costs one extra 400 per
 // schema, once. So only unambiguous prose about the PARAMETER counts, and everything else — every
 // schema validation complaint, every message we have never seen — is treated as schema-specific.
-const FORMAT_UNSUPPORTED_RE = /response_format[\s\S]{0,60}?\b(?:is\s+)?(?:not|no longer)\s+supported|does not support[\s\S]{0,30}?response_format/i;
+// MODEL-LEVEL WORDING REQUIRED. The earlier version matched any "response_format ... not supported",
+// which would have made `"json_schema response format is not supported with this request"` a
+// process-wide verdict the moment Groq wrote it with an underscore — a request-scoped complaint
+// silently muting structured output for every schema. Only an explicit reference to the MODEL counts.
+const FORMAT_UNSUPPORTED_RE = new RegExp(
+    // "response_format ... is not supported by/for this model"
+    'response_format[\\s\\S]{0,80}?(?:not|no longer)\\s+supported\\s+(?:by|for|on)\\s+(?:this\\s+)?model'
+    // "this model does not support ... response_format"
+    + '|model[\\s\\S]{0,60}?does\\s+not\\s+support[\\s\\S]{0,60}?response_format',
+    'i');
 const isFormatUnsupported = (bodyText) => FORMAT_UNSUPPORTED_RE.test(String(bodyText || ''));
+
+// What may be REMEMBERED and LOGGED from a provider error body — an allow-list, not a truncation.
+//
+// Codex #112 P2: the first version kept 300 raw characters and printed 200 of them. Groq documents
+// 400 bodies that carry `failed_generation` — the model's attempted output — and that output is
+// derived from the prompt, which for a whisper is the player's own typed message. Truncating it does
+// not make it safe; it just makes it shorter. So parse, take the three diagnostic fields providers
+// actually define, and never touch payload-shaped ones.
+const REFUSAL_MESSAGE_MAX = 200;
+function describeRefusal(bodyText) {
+    let err = null;
+    try { err = JSON.parse(String(bodyText || ''))?.error; } catch { /* not JSON */ }
+    if (!err || typeof err !== 'object') {
+        // Unparseable: say so rather than quoting bytes of unknown provenance.
+        return { type: null, code: null, message: '(unparseable error body — not logged)' };
+    }
+    const pick = (v) => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim() : null);
+    return {
+        type: pick(err.type),
+        code: pick(err.code),
+        // `message` is the provider's human-readable diagnostic. `failed_generation`, `content`, and
+        // anything else on the object are deliberately dropped.
+        message: (pick(err.message) || '(no message)').slice(0, REFUSAL_MESSAGE_MAX),
+    };
+}
 
 // Does this failure mean "that model is gone" rather than "that request was wrong"?
 //
@@ -317,8 +379,8 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
             ).filter(f => {
                 const type = f ? f.type : 'none';
                 // two scopes: the format refused outright, or refused for THIS schema only
-                return !_formatSkip.has(`${model}|${type}`)
-                    && !_formatSkip.has(`${model}|${type}|${schemaName}`);
+                return !skipActive(`${model}|${type}`)
+                    && !skipActive(`${model}|${type}|${schemaName}`);
             });
 
             // #stickycap the halving is per-CALL only — nothing is remembered across calls. See the
@@ -435,18 +497,15 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
                             // refused shape cannot mute the other nine.
                             if (response_format) {
                                 const wide = isFormatUnsupported(errText);
-                                _formatSkip.add(wide
+                                noteSkip(wide
                                     ? `${model}|${response_format.type}`
-                                    : `${model}|${response_format.type}|${schemaName}`);
-                                // Keep the provider's own words. A refusal we cannot explain costs a
-                                // paid probe run to investigate; one that carries its reason costs a
-                                // log line.
+                                    : `${model}|${response_format.type}|${schemaName}`, wide);
+                                const why = describeRefusal(errText);
                                 _lastRefusal.set(schemaName, {
                                     model, format: response_format.type, status: r.status,
-                                    scope: wide ? 'format' : 'schema',
-                                    message: String(errText || '').replace(/\s+/g, ' ').trim().slice(0, 300),
+                                    scope: wide ? 'format' : 'schema', ...why,
                                 });
-                                console.warn(`[llm] ${model} refused ${response_format.type} for "${schemaName}" (${r.status}, ${wide ? 'format' : 'schema'}-scoped): ${String(errText || '').replace(/\s+/g, ' ').trim().slice(0, 200)}`);
+                                console.warn(`[llm] ${model} refused ${response_format.type} for "${schemaName}" (${r.status}, ${wide ? 'format' : 'schema'}-scoped): ${why.type || '?'}/${why.code || '?'} ${why.message}`);
                             }
                         }
                     } finally { clearTimeout(timer); }

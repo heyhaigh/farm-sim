@@ -91,25 +91,75 @@ await check('a schema-specific 400 does NOT disable json_schema for a different 
         `the second call went straight to ${secondRound[0].format}: a 400 on schema "big" muted structured output for schema "small" too`);
 });
 
-await check('the refused schema IS remembered, so its 400 is paid once per process', async () => {
-    // The original purpose of #stickyformat, which must survive the fix: llama models rejected
-    // json_schema on EVERY call, and re-paying that 400 per call doubled request spend on a free tier
-    // metered per minute.
-    const { callLLM } = freshLlm();
-    const sent = stubFetch(({ format, schemaName }) => {
-        if (format === 'json_schema' && schemaName === 'big') {
-            return { status: 400, body: JSON.stringify({ error: { code: 'invalid_request', message: 'Invalid schema for response_format' } }) };
-        }
-        return completion({ ok: true });
-    });
+// The skip is time-based now, so the clock is injectable. Real waits would make this file take
+// thirty-one minutes.
+const realNow = Date.now;
+const atSecond = (sec) => { const base = realNow(); Date.now = () => base + sec * 1000; };
+const restoreClock = () => { Date.now = realNow; };
 
+const refuse = (matchSchema) => ({ format, schemaName }) => (
+    format === 'json_schema' && (!matchSchema || schemaName === matchSchema)
+        ? { status: 400, body: JSON.stringify({ error: { code: 'invalid_request', message: 'Invalid schema for response_format' } }) }
+        : completion({ ok: true }));
+
+await check('a schema refusal is remembered WITHIN its backoff window', async () => {
+    // The original purpose of #stickyformat, which must survive: re-paying the same 400 on every
+    // call doubled request spend on a free tier metered per minute.
+    const { callLLM } = freshLlm();
+    const sent = stubFetch(refuse('big'));
+    atSecond(0);
     await callLLM({ system: 's', user: 'u', schema: { type: 'object' }, schemaName: 'big', maxTokens: 50 });
     const firstRound = sent.length;
+    atSecond(30);   // inside the 60s window
     await callLLM({ system: 's', user: 'u', schema: { type: 'object' }, schemaName: 'big', maxTokens: 50 });
+    restoreClock();
+    assert.ok(!sent.slice(firstRound).some(x => x.format === 'json_schema'),
+        'the same refused schema was retried immediately — the 400 is being paid on every call');
+});
+
+await check('...and RETRIED once the window expires', async () => {
+    // Codex #112 P1. A schema-scoped refusal was cached for the PROCESS LIFETIME, so one transient
+    // validation 400 downgraded that schema to json_object until redeploy. Codex reproduced
+    // json_schema, json_object, json_object against a provider that was ready to accept strict output
+    // on the second call.
+    //
+    // Worse, the test that used to live here ASSERTED that permanence — "paid once per process" — so
+    // it would have failed the fix rather than caught the bug. A test can enshrine a defect as a
+    // contract, and this one did, which is why the property under test is now stated as recovery.
+    const { callLLM } = freshLlm();
+    let refuseNow = true;
+    const sent = stubFetch(({ format }) => (
+        format === 'json_schema' && refuseNow
+            ? { status: 400, body: JSON.stringify({ error: { message: 'Invalid schema for response_format' } }) }
+            : completion({ ok: true })));
+
+    atSecond(0);
+    await callLLM({ system: 's', user: 'u', schema: { type: 'object' }, schemaName: 'transient', maxTokens: 50 });
+    refuseNow = false;                       // the provider is healthy again
+    const firstRound = sent.length;
+    atSecond(61);                            // past the first 60s backoff
+    await callLLM({ system: 's', user: 'u', schema: { type: 'object' }, schemaName: 'transient', maxTokens: 50 });
+    restoreClock();
 
     const secondRound = sent.slice(firstRound);
-    assert.ok(!secondRound.some(x => x.format === 'json_schema'),
-        'the same refused schema was retried with json_schema — the 400 is being paid on every call');
+    assert.strictEqual(secondRound[0]?.format, 'json_schema',
+        `a transient refusal was made permanent: second call went out as ${secondRound[0]?.format}`);
+});
+
+await check('a repeat refusal backs off further instead of retrying every minute', async () => {
+    // A schema the provider genuinely will not accept must not cost a 400 every 60 seconds forever.
+    const { callLLM } = freshLlm();
+    const sent = stubFetch(refuse(null));
+    atSecond(0);
+    await callLLM({ system: 's', user: 'u', schema: { type: 'object' }, schemaName: 'bad', maxTokens: 50 });
+    atSecond(61);   // window 1 expired -> retried, refused again -> now on the 5 minute step
+    await callLLM({ system: 's', user: 'u', schema: { type: 'object' }, schemaName: 'bad', maxTokens: 50 });
+    const afterTwo = sent.length;
+    atSecond(150);  // inside the 5 minute window
+    await callLLM({ system: 's', user: 'u', schema: { type: 'object' }, schemaName: 'bad', maxTokens: 50 });
+    restoreClock();
+    assert.ok(!sent.slice(afterTwo).some(x => x.format === 'json_schema'),
+        'the backoff did not lengthen after a second refusal');
 });
 
 await check('a FORMAT-level rejection still disables json_schema model-wide', async () => {
@@ -123,13 +173,17 @@ await check('a FORMAT-level rejection still disables json_schema model-wide', as
         return completion({ ok: true });
     });
 
+    atSecond(0);
     await callLLM({ system: 's', user: 'u', schema: { type: 'object' }, schemaName: 'first', maxTokens: 50 });
     const firstRound = sent.length;
+    // an hour later, and under a DIFFERENT schema name: still must not be asked
+    atSecond(3600);
     await callLLM({ system: 's', user: 'u', schema: { type: 'object' }, schemaName: 'second', maxTokens: 50 });
+    restoreClock();
 
     const secondRound = sent.slice(firstRound);
     assert.ok(!secondRound.some(x => x.format === 'json_schema'),
-        'a model that rejects the PARAMETER should not be asked again under a different schema name');
+        'a model that rejects the PARAMETER should not be asked again — not under another schema, not later');
 });
 
 await check('the format witness records which format actually produced the answer', async () => {
@@ -152,6 +206,50 @@ await check('the format witness records which format actually produced the answe
     await call2({ system: 's', user: 'u', schema: { type: 'object' }, schemaName: 'accepted', maxTokens: 50 });
     assert.strictEqual(read2('accepted')?.format, 'json_schema');
     assert.strictEqual(read2('never-called'), null, 'an unasked schema must read as null, not as a format');
+});
+
+await check('request-scoped wording does NOT become a model-wide verdict', async () => {
+    // Codex #112: the classifier must require explicit MODEL wording. This message complains about
+    // the REQUEST, and treating it as model-wide would mute structured output for every schema.
+    //
+    // It uses the UNDERSCORE form deliberately. The first version of this case wrote "response
+    // format" with a space, which the loosened regex would not have matched either — so the case
+    // passed under a mutation that removed the model-wording requirement, proving nothing. The whole
+    // risk is a request-scoped complaint that happens to spell the parameter the way the pattern
+    // expects.
+    const { callLLM } = freshLlm();
+    const sent = stubFetch(({ format }) => (
+        format === 'json_schema'
+            ? { status: 400, body: JSON.stringify({ error: { message: 'response_format json_schema is not supported with this request' } }) }
+            : completion({ ok: true })));
+    atSecond(0);
+    await callLLM({ system: 's', user: 'u', schema: { type: 'object' }, schemaName: 'shape_a', maxTokens: 50 });
+    const firstRound = sent.length;
+    await callLLM({ system: 's', user: 'u', schema: { type: 'object' }, schemaName: 'shape_b', maxTokens: 50 });
+    restoreClock();
+    assert.strictEqual(sent.slice(firstRound)[0]?.format, 'json_schema',
+        'a request-scoped complaint was treated as model-wide and muted a different schema');
+});
+
+await check('a refusal keeps diagnostics and DISCARDS generated content', async () => {
+    // Codex #112 P2: Groq documents 400 bodies carrying `failed_generation` — the model's attempted
+    // output, which is derived from the prompt, which for a whisper is the player's own words.
+    const { callLLM, lastRefusalFor } = freshLlm();
+    stubFetch(({ format }) => (
+        format === 'json_schema'
+            ? { status: 400, body: JSON.stringify({ error: {
+                  type: 'invalid_request_error', code: 'json_validate_failed',
+                  message: 'Generated JSON did not match the schema',
+                  failed_generation: 'PLAYER SAID: my secret diary entry about my landlord',
+              } }) }
+            : completion({ ok: true })));
+    atSecond(0);
+    await callLLM({ system: 's', user: 'u', schema: { type: 'object' }, schemaName: 'leaky', maxTokens: 50 });
+    restoreClock();
+    const kept = JSON.stringify(lastRefusalFor('leaky'));
+    assert.ok(!/secret diary|PLAYER SAID/.test(kept), `generated content was retained: ${kept}`);
+    assert.ok(/json_validate_failed/.test(kept), 'the diagnostic code should be kept');
+    assert.ok(/did not match the schema/.test(kept), 'the provider message should be kept');
 });
 
 console.log(`\n${passes} passed, ${failures} failed`);
