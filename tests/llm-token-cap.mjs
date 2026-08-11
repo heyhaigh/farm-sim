@@ -680,18 +680,14 @@ await check('P2-3: the ledger counts UPSTREAM attempts, not logical calls', asyn
     process.env.RY_FARMS_TOKEN_BUDGET = '1000000';
 });
 
-await check('a FORMAT rejection is refunded; a metered rejection is not', async () => {
-    // Found in a live run: the first congregation on any fresh process failed because json_schema
-    // was refused, json_object retried, and two ~1530-token charges cleared the 3000 background
-    // ceiling before a single token existed. A 400 is rejected at VALIDATION and meters nothing; a
-    // 413 IS metered — that is why it was rejected. The ledger has to tell them apart.
-    //
-    // Asserted on the LEDGER rather than on a follow-up call: two successful large calls genuinely
-    // do not fit a small budget, so "the next call succeeds" cannot separate the refund from the
-    // budget simply being tight. (My first version of this case made exactly that mistake.)
+await check('a format rejection costs no TOKENS but is still a REQUEST', async () => {
+    // Two separate invariants, and conflating them was the bug (Codex #110 P1-1). The first fix
+    // spliced the whole entry, refunding the request count as well — so alternating a refused format
+    // with a success issued 54 upstream requests while the ledger held 26, and each success reset the
+    // breaker. RPM counts requests the provider REJECTS too.
     const ledger = () => globalThis.__ryFarmsLlmState.budget.spend;
+    const tokens = () => ledger().reduce((n, e) => n + e.cost, 0);
 
-    // (a) format rejection then success -> ONE entry, not two
     globalThis.fetch = async (_url, opts) => {
         const b = JSON.parse(opts.body);
         if (b.response_format?.type === 'json_schema') {
@@ -704,10 +700,28 @@ await check('a FORMAT rejection is refunded; a metered rejection is not', async 
     process.env.RY_FARMS_LLM_MODELS = 'm';
     let { callLLM } = freshState();
     await callLLM({ system: 'x'.repeat(4000), user: '', schema: SCHEMA, maxTokens: 900 });
-    assert.strictEqual(ledger().length, 1,
-        `a refused format was charged: ledger holds ${ledger().length} entries, expected 1`);
+    assert.strictEqual(ledger().length, 2,
+        `the refused request vanished from the RPM ledger (${ledger().length} entries, expected 2)`);
+    assert.strictEqual(ledger().filter(e => e.cost === 0).length, 1,
+        'the refused attempt should carry zero token cost');
+    assert.ok(tokens() > 0 && tokens() < 3000, `token cost looks wrong: ${tokens()}`);
 
-    // (b) a 413 IS metered -> every attempt stays on the ledger
+    // A 422 is NOT zeroed: Groq documents it as possibly involving model hallucinations, so tokens
+    // may have been produced. Assuming otherwise is the convenient guess, not the safe one.
+    globalThis.fetch = async (_url, opts) => {
+        const b = JSON.parse(opts.body);
+        if (b.response_format?.type === 'json_schema') {
+            return { ok: false, status: 422, json: async () => ({}), text: async () => '{"error":{"message":"unprocessable"}}' };
+        }
+        return { ok: true, status: 200, text: async () => '',
+            json: async () => ({ choices: [{ message: { content: '{"ok":true}' } }] }) };
+    };
+    ({ callLLM } = freshState());
+    await callLLM({ system: 'x'.repeat(4000), user: '', schema: SCHEMA, maxTokens: 900 });
+    assert.strictEqual(ledger().filter(e => e.cost === 0).length, 0,
+        'a 422 was zeroed — it is not proven to be token-free');
+
+    // And a 413 keeps every attempt at full cost.
     globalThis.fetch = async (_url, opts) => {
         const b = JSON.parse(opts.body);
         if (b.max_tokens > 300) return { ok: false, status: 413, json: async () => ({}), text: async () => '{"error":{"message":"too large"}}' };
@@ -715,9 +729,31 @@ await check('a FORMAT rejection is refunded; a metered rejection is not', async 
             json: async () => ({ choices: [{ message: { content: '{"ok":true}' } }] }) };
     };
     ({ callLLM } = freshState());
-    await callLLM({ system: '', user: '', schema: SCHEMA, maxTokens: 1200 });   // 1200 -> 600 -> 300
-    assert.strictEqual(ledger().length, 3,
-        `metered 413 attempts were refunded: ledger holds ${ledger().length}, expected 3`);
+    await callLLM({ system: '', user: '', schema: SCHEMA, maxTokens: 1200 });
+    assert.strictEqual(ledger().length, 3, `expected 3 metered attempts, got ${ledger().length}`);
+    assert.strictEqual(ledger().filter(e => e.cost === 0).length, 0, 'a metered 413 was zeroed');
+});
+
+await check('P1-1: refused formats cannot inflate the upstream request count', async () => {
+    // Codex's reproduction: alternate a refused format with a success and count real fetches against
+    // the ledger. They must not diverge.
+    let fetches = 0;
+    globalThis.fetch = async (_url, opts) => {
+        fetches++;
+        const b = JSON.parse(opts.body);
+        if (b.response_format?.type === 'json_schema') {
+            return { ok: false, status: 400, json: async () => ({}), text: async () => '{"error":{"message":"nope"}}' };
+        }
+        return { ok: true, status: 200, text: async () => '',
+            json: async () => ({ choices: [{ message: { content: '{"ok":true}' } }] }) };
+    };
+    process.env.RY_FARMS_TOKEN_BUDGET = '1000000';
+    process.env.RY_FARMS_LLM_MODELS = 'm';
+    const { callLLM } = freshState();
+    for (let i = 0; i < 40; i++) {
+        try { await callLLM({ system: '', user: '', schema: SCHEMA, maxTokens: 100 }); } catch { break; }
+    }
+    assert.ok(fetches <= 26, `${fetches} upstream requests against a 26/minute ceiling`);
 });
 
 // ---- report ------------------------------------------------------------------------------------

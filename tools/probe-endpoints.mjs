@@ -102,7 +102,32 @@ function budgetFor(file, schemaName) {
 // last round was 349 characters against production's 1,326. tools/capture-payloads.mjs drives the
 // real client entry points with fetch stubbed to record, so these bodies cannot drift: nobody typed
 // them. Regenerate with `node tools/capture-payloads.mjs` if a client payload changes.
+// FRESHNESS IS ENFORCED, not offered (Codex #110 P2-4). `--check` existed but nothing invoked it, so
+// a client payload could change and this paid probe would keep measuring stale bytes and reporting
+// green — which is the exact failure mode the capture work was meant to end. Re-capture and compare
+// BEFORE spending a single request; `--stale-ok` exists only for deliberately probing an old artifact.
+if (!process.argv.includes('--stale-ok')) {
+    const { execFileSync } = await import('node:child_process');
+    try {
+        execFileSync(process.execPath, [join(ROOT, 'tools', 'capture-payloads.mjs'), '--check'],
+            { stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (err) {
+        console.error('\npayloads.json is STALE — a client payload changed since it was captured.');
+        console.error('Run: node tools/capture-payloads.mjs   (then re-run this probe)');
+        console.error('Refusing to spend model requests measuring the wrong bodies. --stale-ok overrides.');
+        process.exit(2);
+    }
+}
+
 const CAPTURED = JSON.parse(readFileSync(join(ROOT, 'tools', 'payloads.json'), 'utf8')).requests;
+// Chat is captured twice — once organically during the tick loop, once triggered afterwards. Take
+// the LARGEST: a token budget should be validated against the biggest realistic prompt, not the
+// smallest. (Both are production-shaped; only the amount of accumulated social history differs.)
+const grabLargest = (endpointPart) => {
+    const hits = CAPTURED.filter(r => r.endpoint.includes(endpointPart));
+    if (!hits.length) throw new Error(`no captured payload for "${endpointPart}" — re-run tools/capture-payloads.mjs`);
+    return hits.sort((a, b) => JSON.stringify(b.body).length - JSON.stringify(a.body).length)[0].body;
+};
 const grab = (label, pred = () => true) => {
     const hit = CAPTURED.find(r => r.label === label && pred(r.body));
     if (!hit) throw new Error(`no captured payload for "${label}" — re-run tools/capture-payloads.mjs`);
@@ -168,7 +193,7 @@ const SHAPES = [
                  && r.mutters.filter(m => String(m || '').trim().length > 0).length >= 4 },
 
     { key: 'chat', file: 'ry-farms-chat.js', schemaName: 'ry_farms_chat',
-      body: grab('chat'),
+      body: grabLargest('ry-farms-chat'),
       // all seven required fields, and the two lines must actually say something
       ok: (r) => ['speakerLine', 'listenerLine', 'speakerTone', 'listenerTone', 'memory',
                   'relationshipReason'].every(k => String(r[k] || '').length > 0)

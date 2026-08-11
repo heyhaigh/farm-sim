@@ -127,8 +127,24 @@ async function generateElection(body) {
         'ALSO return "mutters": 10 distinct one-line inner murmurs of the CROWD weighing their vote (each under 9 words, varied sentiments - resolve, doubt, loyalty, private calculation; no two share a shape; candidate names optional).',
         'Return JSON only: { "script": [ { "speaker": "<name>", "line": "<their speech>" }, ... ], "mutters": [ "<line>", ... ] }.',
     ].join('\n');
-    const electionSchema = { ...scriptSchema, properties: { ...scriptSchema.properties,
-        mutters: { type: 'array', items: { type: 'string', maxLength: LINE_SCHEMA_MAX } } } };
+    // `mutters` was added to `properties` but inherited `required: ['script']` from scriptSchema and
+    // carried no minItems — so a reply with two mutters, or none, was SCHEMA-VALID (Codex #110 P2-2).
+    // The client then discards anything under four and falls back to the canned pool, which is how a
+    // fallback model came up short in 1 of 4 measured runs. The invariant belongs here, in the
+    // contract, not in a comment describing how often it is missed: a structured-output model that is
+    // TOLD it must produce ten will produce them, where one merely asked will sometimes not.
+    const electionSchema = {
+        ...scriptSchema,
+        required: [...(scriptSchema.required || ['script']), 'mutters'],
+        properties: {
+            ...scriptSchema.properties,
+            mutters: {
+                type: 'array',
+                minItems: 10,   // the prompt asks for ten; the client needs at least four
+                items: { type: 'string', minLength: 1, maxLength: LINE_SCHEMA_MAX },
+            },
+        },
+    };
     const out = await callLLM({
         system,
         user: JSON.stringify({ culture: orc ? 'orc' : 'human', candidates: cands }),

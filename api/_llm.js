@@ -381,16 +381,18 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
                         } else if (r.status !== 400 && r.status !== 422) {
                             giveUp = true;   // only a format-rejection is worth trying another format for
                         } else {
-                            // REFUND a format rejection. 400/422 is rejected at VALIDATION: the provider
-                            // generates nothing and meters nothing, unlike a 413/429 which are metered
-                            // (that is why they were rejected). Charging it broke the first congregation
-                            // on any fresh process — json_schema is refused, json_object retries, and two
-                            // ~1530-token charges cleared the 3000 background ceiling before a single
-                            // token had been produced. #stickyformat means this discovery happens once per
-                            // model, so charging it also penalised precisely the call that pays for the
-                            // knowledge every later call reuses.
-                            const i = _budget.spend.indexOf(attemptEntry);
-                            if (i >= 0) _budget.spend.splice(i, 1);
+                            // A format rejection costs no TOKENS but is still a REQUEST (Codex #110 P1-1).
+                            //
+                            // The first version spliced the whole entry, which refunded the request count
+                            // as well — so alternating a refused format with a success issued 54 upstream
+                            // requests while the ledger held 26, and every success reset the breaker. RPM
+                            // is requests per minute; the provider counts the ones it rejects.
+                            //
+                            // So: zero the cost, KEEP the entry. And only for a 400 — Groq documents 422
+                            // as potentially involving model hallucinations, so tokens may well have been
+                            // produced, and assuming otherwise is the kind of convenient guess that put
+                            // this ledger wrong twice already.
+                            if (r.status === 400) attemptEntry.cost = 0;
                             if (response_format) _formatSkip.add(`${model}|${response_format.type}`);   // #stickyformat
                         }
                     } finally { clearTimeout(timer); }

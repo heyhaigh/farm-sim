@@ -123,9 +123,15 @@ async function capture(label, fn) {
 }
 
 const w = boot();
-// A few ticks so farmers have journals, opinions and state — a day-zero cast serializes thinner
-// than a played one, and thinner fixtures are the whole problem this file exists to end.
-for (let i = 0; i < 600; i++) w.tick(1 / 30);
+// Tick to a PLAYED town, not a founding one (Codex #110 P2-3). 600 ticks is twenty sim-seconds: the
+// cast is still in `assemble`, so the captured chat context had zero opinions, no journal, no
+// trusts, no rumours and a null vivid memory — structurally real, socially empty, and the rich
+// payload was the entire reason for capturing rather than writing it.
+//
+// A day is DAY_LENGTH + NIGHT_LENGTH; four days at the suite's own dt gives farmers work, meals,
+// arguments and memories of each other. Slower to run, and the only way the serialiser has anything
+// to serialise.
+const DT = 1 / 30;
 
 const { whisper } = await import('../conscience.js');
 const { requestCongregation, requestElectionScene } = await import('../congregation.js');
@@ -135,10 +141,18 @@ const { enrichInventions } = await import('../memory-invent.js');
 
 console.log('\ncapture-payloads — driving the real client entry points\n');
 
-// NATURAL state first: congregating() reports differently once roles.foundingPhase is imposed
-// below, so these must run before the setup or the founding scene never fires.
-await capture('whisper', () => whisper(w, w.farmers[0], 'go and get some rest', () => {}));
+// FOUNDING-ONLY shapes first: the gathering is a day-one event, and ticking to a played town (which
+// chat needs) moves past it — capturing congregation after the ticks silently lost it entirely.
 await capture('congregation', () => requestCongregation(w));
+
+// Then play the town. Organic traffic during these ticks is labelled, because a chat the SIM
+// decided to have is more faithful than one this harness triggers: real participants, real reason.
+currentLabel = 'chat-natural';
+const targetDay = w.day + 4;
+while (w.day < targetDay) w.tick(DT);
+currentLabel = null;
+
+await capture('whisper', () => whisper(w, w.farmers[0], 'go and get some rest', () => {}));
 await capture('dm', () => enrichStories(w, () => true));
 
 // Four paths guard on state a 600-tick day-one town does not have yet. Rather than hand-write
@@ -208,6 +222,30 @@ await capture('invent', () => enrichInventions(w, () => true));
 // Without this, "the fixtures cannot drift" is a claim rather than a guarantee — a client payload
 // could change and payloads.json would quietly go stale while the probe kept reporting green.
 const CHECK = process.argv.includes('--check');
+
+// A capture that is structurally complete but socially empty is the failure this file exists to
+// prevent, and it is invisible in a request count. Assert the richness, so a thin capture cannot
+// pass quietly the way the first chat capture did.
+{
+    // Both an organic chat (the sim chose it) and a triggered one are captured. Use the RICHEST:
+    // the organic one fires early in the tick loop and so carries less history, and for validating
+    // a token budget the largest realistic payload is the conservative choice.
+    const chats = captured.filter(c => c.endpoint.includes('chat'));
+    const chat = chats.sort((a, b) => JSON.stringify(b.body).length - JSON.stringify(a.body).length)[0];
+    if (chat) {
+        const sp = chat.body?.context?.speaker || {};
+        const social = (sp.strongestSharedMemories?.length || 0) + (sp.recentMemories?.length || 0)
+            + (sp.trusts?.length || 0) + (sp.wary?.length || 0) + Math.abs(sp.opinionOfOther || 0);
+        console.log(`\n  chat social state: memories ${(sp.recentMemories || []).length}, `
+            + `trusts ${(sp.trusts || []).length}, opinion ${sp.opinionOfOther}, state "${sp.state}"`);
+        if (!social) {
+            console.error('\n  chat context is SOCIALLY EMPTY — the town has not been played long enough.');
+            console.error('  Increase the tick target; a payload with no memories or opinions measures the');
+            console.error('  serialiser, not the prompt production actually sends.');
+            process.exit(1);
+        }
+    }
+}
 
 const out = join(ROOT, 'tools', 'payloads.json');
 const built = JSON.stringify({
