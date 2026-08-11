@@ -296,6 +296,36 @@ await check('a proven strict success resets the schema\'s strike history', async
         'the strike count survived a proven success, so the backoff was longer than a first failure');
 });
 
+await check('THE REAL llama refusal is model-wide — read from a production log, not imagined', async () => {
+    // Verbatim from Railway, 2026-08-11 00:54:21, twenty seconds after the deploy that added this
+    // logging. The classifier called it schema-scoped and it is unmistakably about the MODEL; the
+    // pattern required `response_format` with an underscore where Groq writes a space.
+    //
+    // Both of us reasoned about this string rather than reading one: Codex asked for a negative test
+    // on the underscore form, and the case I deleted to make room for it used the space form that
+    // production actually sends. This case exists so the next change to that pattern is measured
+    // against the provider's real words.
+    const REAL = 'This model does not support response format `json_schema`. '
+        + 'See supported models at https://console.groq.com/docs/structured-outputs#supported-models';
+    const { callLLM } = freshLlm();
+    const sent = stubFetch(({ format }) => (
+        format === 'json_schema'
+            ? { status: 400, body: JSON.stringify({ error: { type: 'invalid_request_error', message: REAL } }) }
+            : completion({ ok: true })));
+
+    atSecond(0);
+    await callLLM({ system: 's', user: 'u', schema: { type: 'object' }, schemaName: 'shape_one', maxTokens: 50 });
+    const firstRound = sent.length;
+    // a DIFFERENT schema, and an hour later: a model that cannot do json_schema at all must not be
+    // asked again. Before the fix each of the nine schemas paid its own 400, then re-probed forever.
+    atSecond(3600);
+    await callLLM({ system: 's', user: 'u', schema: { type: 'object' }, schemaName: 'shape_two', maxTokens: 50 });
+    restoreClock();
+
+    assert.ok(!sent.slice(firstRound).some(x => x.format === 'json_schema'),
+        'the real llama refusal was treated as schema-scoped, so every schema re-discovers it and re-probes forever');
+});
+
 console.log(`\n${passes} passed, ${failures} failed`);
 if (failures) { console.log('One refused schema can silently mute structured output for every other endpoint.'); process.exit(1); }
 console.log('Format skip: scoped to the schema that was refused, model-wide only when the format itself is refused.');

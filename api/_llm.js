@@ -189,16 +189,37 @@ function modelChain() {
 // endpoints for the life of the process; a wrong "schema refused" verdict costs one extra 400 per
 // schema, once. So only unambiguous prose about the PARAMETER counts, and everything else — every
 // schema validation complaint, every message we have never seen — is treated as schema-specific.
-// MODEL-LEVEL WORDING REQUIRED. The earlier version matched any "response_format ... not supported",
-// which would have made `"json_schema response format is not supported with this request"` a
-// process-wide verdict the moment Groq wrote it with an underscore — a request-scoped complaint
-// silently muting structured output for every schema. Only an explicit reference to the MODEL counts.
-const FORMAT_UNSUPPORTED_RE = new RegExp(
-    // "response_format ... is not supported by/for this model"
-    'response_format[\\s\\S]{0,80}?(?:not|no longer)\\s+supported\\s+(?:by|for|on)\\s+(?:this\\s+)?model'
-    // "this model does not support ... response_format"
-    + '|model[\\s\\S]{0,60}?does\\s+not\\s+support[\\s\\S]{0,60}?response_format',
-    'i');
+// MODEL-LEVEL WORDING REQUIRED, and the parameter is spelled BOTH ways.
+//
+// Corrected 2026-08-11 from a real production log line rather than from reasoning about what a
+// provider might say. Groq's llama-3.1-8b answers:
+//
+//     "This model does not support response format `json_schema`."
+//
+// That is unambiguous model-level wording, and the previous pattern missed it for exactly one
+// reason: it required an UNDERSCORE where Groq writes a SPACE. So a refusal that should have been a
+// single permanent model-wide skip was classified schema-scoped, and every schema rediscovered it
+// separately — visible in Railway as separate refusals for ry_farms_conscience_classify and
+// ry_farms_invent within twenty seconds of the deploy.
+//
+// Codex #112 asked for a negative test on the underscore form and I wrote one, replacing a case that
+// had used the space form. Both of us were reasoning about the string instead of reading one, and
+// the string we discarded was the one production actually sends.
+//
+// The bias is unchanged: a wrong "format" verdict mutes structured output for a model for the
+// process lifetime, a wrong "schema" verdict costs one extra 400. Only an explicit reference to the
+// MODEL counts — wording about the request or the schema does not.
+const FORMAT_UNSUPPORTED_RE = (() => {
+    // BOTH spellings occur in the wild. Groq's llama-3.1-8b writes "response format" with a SPACE;
+    // the message quoted further up this file writes "response_format" with an UNDERSCORE.
+    const RF = 'response[ _-]?format';
+    return new RegExp(
+        // "...response format json_schema is not supported by/for/on this model"
+        `${RF}[\\s\\S]{0,80}?(?:not|no longer)\\s+supported\\s+(?:by|for|on)\\s+(?:this\\s+)?model`
+        // "this model does not support response format json_schema"
+        + `|model[\\s\\S]{0,60}?does\\s+not\\s+support[\\s\\S]{0,60}?${RF}`,
+        'i');
+})();
 const isFormatUnsupported = (bodyText) => FORMAT_UNSUPPORTED_RE.test(String(bodyText || ''));
 
 // What may be REMEMBERED and LOGGED from a provider error body — an allow-list, not a truncation.
