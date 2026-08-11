@@ -15,20 +15,15 @@
 // gpt-4.1-mini) · RY_FARMS_LLM_OFF · RY_FARMS_ALLOW_PAID_LLM.
 
 const LOCAL_HOST_RE = /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:\d+)?(\/|$)/i;
-// Overridable so the timeout-failover path can be tested without an eight-second wait per case, and
-// so a deployment on a slower link can raise it. Validated like RY_FARMS_TOKEN_BUDGET: a junk value
-// falls back to the default with a warning rather than silently disabling the timeout.
-const REQUEST_TIMEOUT_DEFAULT = 8000;
-const REQUEST_TIMEOUT_MS = (() => {
-    const raw = process.env.RY_FARMS_REQUEST_TIMEOUT_MS;
-    if (raw == null || raw === '') return REQUEST_TIMEOUT_DEFAULT;
-    const n = Number(raw);
-    if (!Number.isFinite(n) || n <= 0) {
-        console.warn(`[llm] ignoring RY_FARMS_REQUEST_TIMEOUT_MS=${raw} (not a positive number) - using ${REQUEST_TIMEOUT_DEFAULT}ms`);
-        return REQUEST_TIMEOUT_DEFAULT;
-    }
-    return n;
-})();
+// NOT configurable. It briefly was, and the honest reason was making one test fast — I justified it
+// afterwards as "a slow deployment could raise it", which is the shape of a rationalisation rather
+// than a requirement. Codex #118 then showed the validation was not safe for a TIMER: `1` aborted a
+// whole two-model chain in 2ms, and `2147483648` passed a positive-and-finite check while Node
+// overflowed it to 1ms. Positive and finite is not the same as sane.
+//
+// A production knob should not exist to save eight seconds in a test. The test pays the eight
+// seconds instead.
+const REQUEST_TIMEOUT_MS = 8000;
 // server-side wall-clock budget — the ONLY cost control that survives tabs/reloads/fast-forward (sim-time
 // cooldowns don't): at most BUDGET_MAX model requests per rolling BUDGET_WINDOW_MS across the whole process.
 const BUDGET_WINDOW_MS = 60_000;
@@ -268,11 +263,12 @@ const FORMAT_UNSUPPORTED_RE = /\bthis\s+model\s+does\s+not\s+support\s+response\
 //
 // This is the fourth prose classifier in this file and the fourth to be wrong, always in the same
 // way: a term broad enough to match the thing I meant also matches things I did not think of.
-const FORMAT_COMPLAINT_RE = /response[ _-]?format|json[_ ]?schema|structured output/i;
-const looksFormatComplaint = (err) => FORMAT_COMPLAINT_RE.test(String(err?.message || ''))
-    // `json_validate_failed` is the CAPTURED code from a real Groq schema rejection; `response_format`
-    // covers a provider naming the parameter in its code. Bare `schema` is deliberately absent here too.
-    || /json_validate|response_format/i.test(String(err?.code || ''));
+const FORMAT_COMPLAINT_CODES = new Set(['json_validate_failed']);
+const looksFormatComplaint = (err) =>
+    // EXACT code match — `upstream_response_format_invalid` must not pass on a substring.
+    FORMAT_COMPLAINT_CODES.has(String(err?.code || '').trim().toLowerCase())
+    // ...or the captured refusal sentence, which is the same evidence isFormatUnsupported works from.
+    || isFormatUnsupported(err);
 
 const isFormatUnsupported = (err) => FORMAT_UNSUPPORTED_RE.test(String(err?.message || ''));
 
@@ -538,7 +534,14 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
                     _budget.spend.push(attemptEntry);
 
                     const controller = new AbortController();
-                    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+                    // OWNERSHIP, recorded rather than inferred (Codex #118). `controller.signal.aborted`
+                    // means "this signal aborted", which today can only be our timer because the
+                    // controller is private — but the moment a caller's cancellation signal is combined
+                    // with it, that flag would start meaning "any abort", and a user cancelling would
+                    // silently spend a second model's request. A flag set by the timer itself cannot
+                    // drift that way.
+                    let timedOut = false;
+                    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, REQUEST_TIMEOUT_MS);
                     let retrySmaller = false;
                     try {
                         const r = await fetch(`${cfg.base}/chat/completions`, {
@@ -667,7 +670,7 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
                         // Everything else stays provider-wide on purpose: DNS, TLS and a wrong base
                         // URL fail identically for every model behind the same host, and retrying a
                         // connection reset is a provider retry policy, not a failover.
-                        if (controller.signal.aborted && !lastModel) {
+                        if (timedOut && !lastModel) {
                             lastErr = netErr;
                             tryNextModel = true;
                             clearTimeout(timer);

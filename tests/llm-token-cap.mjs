@@ -250,11 +250,42 @@ await check('a FORMAT rejection does not retire a healthy model (the 400 trap)',
         return { ok: true, status: 200, text: async () => '',
             json: async () => ({ choices: [{ message: { content: '{"ok":true}' } }] }) };
     };
-    process.env.RY_FARMS_LLM_MODELS = 'picky-one,never-reached';
+    process.env.RY_FARMS_LLM_MODELS = 'picky-one,second-one';
+    const { callLLM } = freshState();
+    const out = await callLLM({ system: 's', user: 'u', schema: SCHEMA, maxTokens: 320 });
+
+    // WHAT THIS CASE IS ACTUALLY FOR: the model must not be RETIRED. It used to also assert the call
+    // never left the first model, and that stopped being true by design (Codex #118): this wording is
+    // not captured evidence of a format complaint, so an unrecognised 400 now fails over rather than
+    // spending two more requests proving the same model is still unhappy. The last model in the chain
+    // still degrades, which is why the call below succeeds either way.
+    assert.deepStrictEqual(out, { ok: true }, 'the call did not survive a format rejection');
+    const before = log.length;
+    await callLLM({ system: 's', user: 'u', schema: SCHEMA, maxTokens: 320 });
+    assert.ok(log.slice(before).some(l => l.model === 'picky-one'),
+        'a format rejection retired the model — it was skipped entirely on the next call');
+});
+
+await check('the CAPTURED llama refusal degrades in place instead of failing over', async () => {
+    // The counterpart to the case above, and the reason the gate accepts the captured sentence at
+    // all: llama refuses json_schema on every single call, and failing over on each of them would
+    // spend the fallback's request every time rather than simply using json_object.
+    const log = [];
+    globalThis.fetch = async (_url, opts) => {
+        const body = JSON.parse(opts.body);
+        log.push({ model: body.model, format: body.response_format?.type ?? 'none' });
+        if (body.response_format?.type === 'json_schema') {
+            return { ok: false, status: 400, json: async () => ({}),
+                text: async () => '{"error":{"message":"This model does not support response format `json_schema`."}}' };
+        }
+        return { ok: true, status: 200, text: async () => '',
+            json: async () => ({ choices: [{ message: { content: '{"ok":true}' } }] }) };
+    };
+    process.env.RY_FARMS_LLM_MODELS = 'llama-like,should-not-be-reached';
     const { callLLM } = freshState();
     await callLLM({ system: 's', user: 'u', schema: SCHEMA, maxTokens: 320 });
-    assert.deepStrictEqual([...new Set(log.map(l => l.model))], ['picky-one'],
-        'a format rejection wrongly retired the model and fell through the chain');
+    assert.deepStrictEqual([...new Set(log.map(l => l.model))], ['llama-like'],
+        'the captured refusal should degrade on the same model, not spend the fallback');
 });
 
 await check('reasoning_effort is sent ONLY to gpt-oss models', async () => {
@@ -306,11 +337,17 @@ await check('P1-3: "no longer supported" prose does NOT retire a healthy model',
     // process, because _modelDead is process-lifetime. One bad request demoted a good model.
     const log = [];
     stubStatus({ first: 400, log, body: '{"error":{"message":"response_format json_schema is no longer supported","type":"invalid_request_error"}}' });
-    process.env.RY_FARMS_LLM_MODELS = 'healthy-one,should-not-be-reached';
+    process.env.RY_FARMS_LLM_MODELS = 'healthy-one,second-one';
     const { callLLM } = freshState();
     await callLLM({ system: 's', user: 'u', schema: SCHEMA, maxTokens: 320 });
-    assert.deepStrictEqual([...new Set(log.map(l => l.model))], ['healthy-one'],
-        'a parameter error retired the model and fell through the chain');
+
+    // The finding this guards is RETIREMENT, not routing: a parameter error must not demote a working
+    // model for the process. Advancing the chain on an unrecognised 400 is now deliberate, so the
+    // proof is that the model is still tried on the NEXT call rather than skipped as dead.
+    const before = log.length;
+    await callLLM({ system: 's', user: 'u', schema: SCHEMA, maxTokens: 320 });
+    assert.ok(log.slice(before).some(l => l.model === 'healthy-one'),
+        'a parameter error retired the model — it was skipped entirely on the next call');
 });
 
 await check('P1-3: a STRUCTURED decommission code does retire it', async () => {

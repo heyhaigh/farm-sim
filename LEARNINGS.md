@@ -83,6 +83,17 @@ three** of:
   class of bug you most need to catch.
 - **Heal state between staged events** in probes: churning raids to a cap stalled because battered
   defenders fell no raiders; the probe had to restore hp between raids to actually produce stones.
+- **Mutation testing is not optional and should not be a ritual you remember.** Fifteen tests across
+  the 2026-08 LLM migration passed while asserting nothing, and every one was caught mechanically by
+  reverting the fix and checking the test fails. Recurring shapes, all of which look green:
+  a case masked by a DIFFERENT guard (a coverage floor, a length filter, a sibling field's required
+  check); a case that only covers ONE branch of a two-branch decision; a case that calls a helper
+  directly and so cannot see a mistake at the call site; a case whose fixture is not
+  production-shaped (a failover test with no `schema`, when every real caller passes one); and a
+  detector that greps for a signature the sanitiser has already mangled (`[object Object]` reaches
+  the client as `OBJECT OBJECT`).
+- **A mutation that fails `node --check` is not a caught mutation**, and a mutation that does not
+  apply is not either — assert the replacement count, then syntax-check, then run.
 - **Assert the parts you INHERITED, not just the parts you wrote.** A mutation deleting
   `...scriptSchema` from `ELECTION_SCHEMA` escaped a fresh 9-case test, because `required` and
   `properties` were both rebuilt explicitly below it — the spread's only real contribution was the
@@ -146,6 +157,35 @@ three** of:
   backfilled towns (marker atomicity), tx-commit acknowledgement, monument tile-stacking on
   exhaustion, the swallowed writer block. Treat a NO-SHIP as the system working.
 - Re-pin the directive's expected HEAD after every `--amend`; a stale sha wastes a round.
+
+### ...but it is a GATE, not a LOOP (the 2026-08 LLM migration, learned expensively)
+
+That migration ran ten review rounds and 23 commits to ship what was, on the critical path, a
+one-line change (`DEFAULT_MODEL_CHAIN`) plus one env var. `api/_llm.js` went 275 -> 713 lines. The
+retrospective is worth more than the code:
+
+- **Execution > adversarial review > reasoning.** Everything verified by RUNNING was right.
+  Everything Codex caught by REPRODUCING was real. Everything concluded by thinking about what a
+  provider "would" say was wrong — `minItems` enforcement, three retirement codes, four prose
+  classifiers, all fluent and all invented. The underscore-vs-space bug was caught by neither
+  reviewer; **production logs caught it in twenty seconds.**
+- **Two models agreeing is not evidence, it is correlated guessing.** Claude and Codex both inferred
+  the `ry_farms_election` rename was inert from the same docs; neither observed it.
+- **Review per completed unit, not per fix.** By round three the reviews were mostly finding bugs in
+  the previous round's fix. Each round of speculative hardening created surface for the next round.
+  Treat "the review found a bug in last round's fix" as a STOP signal: simplify or delete, don't patch.
+- **Separate the deadline path from hardening, explicitly.** Flip the thing with the date on it,
+  verify, then harden on your own schedule.
+- **Prefer generic handling to clever handling for unobserved failure modes.** "Advance the chain on
+  any failure" needs no knowledge of what the provider says, which is why it survived where a
+  classifier trained on imagined messages did not.
+- Match the process to observability: the sim, the sprites and the UI are locally executable and
+  visible, so running them IS the ground truth and heavyweight review is mostly friction. A boundary
+  against an unobservable third party is the opposite case.
+
+**The rule that would have prevented most of it: no branch keyed on provider-specific text without a
+captured sample pasted into the test file. If you cannot paste the real message, do not write the
+pattern — handle it generically.** Ship the logging FIRST and read it.
 
 ---
 

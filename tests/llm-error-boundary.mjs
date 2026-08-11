@@ -49,8 +49,6 @@ const completion = (obj) => ({ status: 200, body: { choices: [{ message: { conte
 process.env.OPENAI_BASE_URL = 'http://127.0.0.1:9/v1';
 process.env.OPENAI_API_KEY = 'test-key-not-used';
 process.env.RY_FARMS_LLM_MODELS = 'primary/model,fallback/model';
-// keeps the timeout-failover case fast; the real default is 8s
-process.env.RY_FARMS_REQUEST_TIMEOUT_MS = '120';
 
 console.log('\n#llm-error-boundary — generated content must not steer permanent state\n');
 
@@ -367,8 +365,13 @@ await check('OUR OWN timeout fails over to the next model', async () => {
     //
     // Driven by the REAL timer rather than by throwing a lookalike error: the discriminator is
     // `controller.signal.aborted`, so a stub that merely throws an AbortError without aborting the
-    // controller would pass against code that does not work. RY_FARMS_REQUEST_TIMEOUT_MS keeps it
-    // quick; an earlier version of this case took eight seconds and proved the same thing.
+    // controller would pass against code that does not work.
+    //
+    // This case takes the full REQUEST_TIMEOUT_MS — eight seconds — on purpose. It was briefly quick,
+    // via an env override added to api/_llm.js for exactly that reason, and Codex #118 pointed out
+    // both that the knob was test-driven production surface and that its validation was unsafe for a
+    // timer (`1` aborted the whole chain in 2ms; `2147483648` overflowed to 1ms). Eight seconds in
+    // one test is a better trade than a configurable timeout nobody asked for.
     const { callLLM } = freshLlm();
     const sent = [];
     globalThis.fetch = async (_url, opts) => {
@@ -424,6 +427,58 @@ await check('a NON-timeout transport failure stays provider-wide', async () => {
         /ECONNRESET/, 'a connection reset should end the call rather than being retried per model');
     assert.strictEqual(sent.length, 1,
         `a connection reset was retried across ${sent.length} models; it fails the same way for each`);
+});
+
+await check('a gateway diagnostic containing "response format" does not walk the ladder', async () => {
+    // Codex #118 P1, and the branch the 19-case suite was missing: every rejection case tested a term
+    // the gate REJECTS, and none tested an unrelated failure containing a term it ACCEPTS. This
+    // sentence is about the upstream payload, not the request's response_format parameter.
+    //
+    // The gate now matches captured evidence only — the exact json_validate_failed code and the
+    // captured refusal sentence — because a false positive costs the whole minute's requests and
+    // denies failover, while a false negative costs one attempt on an intermediate model.
+    const { callLLM } = freshLlm();
+    const sent = stubFetch(({ model }) => (
+        model === 'primary/model'
+            ? { status: 400, body: JSON.stringify({ error: {
+                  message: 'The upstream deployment returned a response format the gateway could not decode.' } }) }
+            : completion({ ok: true })));
+
+    let ok = 0;
+    for (let i = 1; i <= 7; i++) {
+        const out = await callLLM({ system: 's', user: 'u', schema: { type: 'object' }, schemaName: `gw_${i}`, maxTokens: 50 });
+        if (out?.ok) ok++;
+    }
+    assert.strictEqual(ok, 7, `only ${ok} of 7 reached the fallback — an accepted phrase is matching unrelated prose`);
+    assert.ok(sent.length <= 14, `${sent.length} requests for 7 schemas; the ladder is being walked on a model-level failure`);
+});
+
+await check('a code that merely CONTAINS the captured code does not count', async () => {
+    // `upstream_response_format_invalid` and `json_validate_failed_upstream` are the substring traps.
+    // BOTH substring directions. The first version only tried `upstream_response_format_invalid`,
+    // which shares no prefix with the captured code — so a mutation matching on a prefix of
+    // `json_validate_failed` escaped, because nothing exercised a code that CONTAINS it.
+    for (const code of ['upstream_response_format_invalid', 'json_validate_failed_upstream', 'not_json_validate_failed']) {
+        const { callLLM } = freshLlm();
+        const sent = stubFetch(({ model }) => (
+            model === 'primary/model'
+                ? { status: 400, body: JSON.stringify({ error: { code, message: 'Service unavailable.' } }) }
+                : completion({ ok: true })));
+        await callLLM({ system: 's', user: 'u', schema: { type: 'object' }, schemaName: `sub_${code}`, maxTokens: 50 });
+        assert.strictEqual(sent.filter(x => x.model === 'primary/model').length, 1,
+            `code "${code}" was treated as the captured one and walked the ladder`);
+    }
+    // ...and the exact code must still degrade, or this passes by never degrading at all.
+    {
+        const { callLLM } = freshLlm();
+        const sent = stubFetch(({ format }) => (
+            format === 'json_schema'
+                ? { status: 400, body: JSON.stringify({ error: { code: 'json_validate_failed', message: 'nope' } }) }
+                : completion({ ok: true })));
+        await callLLM({ system: 's', user: 'u', schema: { type: 'object' }, schemaName: 'exact', maxTokens: 50 });
+        assert.deepStrictEqual(sent.map(x => x.format), ['json_schema', 'json_object'],
+            'the exact captured code should degrade on the same model');
+    }
 });
 
 console.log(`\n${passes} passed, ${failures} failed`);
