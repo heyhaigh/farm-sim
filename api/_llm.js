@@ -437,6 +437,20 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
                             _breaker.fails = 0;
                             // #formatwitness record the format that WORKED, not the one we hoped for
                             _lastFormat.set(schemaName, { format: response_format ? response_format.type : 'none', model });
+                            // A PROVEN strict success clears this schema's history (Codex #113 P2).
+                            // The backoff kept `strikes` across expiry so a repeat offender would not
+                            // be probed every minute — but nothing ever cleared it, so a schema that
+                            // failed three times in January sat permanently on the 30-minute step and
+                            // every later blip cost half an hour of fallback, however many healthy
+                            // months lay between. Evidence that the schema WORKS should outweigh
+                            // stale evidence that it once did not. A genuinely invalid schema never
+                            // takes this branch, so it still reaches the cap on its own.
+                            //
+                            // Only the schema-scoped key: a model-wide entry never expires, so it
+                            // would have prevented this attempt entirely and cannot be stale here.
+                            if (response_format?.type === 'json_schema') {
+                                _formatSkip.delete(`${model}|json_schema|${schemaName}`);
+                            }
                             return out;
                         }
                         const errText = await r.text().catch(() => '');

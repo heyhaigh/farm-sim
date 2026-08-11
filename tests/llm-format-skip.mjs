@@ -243,13 +243,57 @@ await check('a refusal keeps diagnostics and DISCARDS generated content', async 
                   failed_generation: 'PLAYER SAID: my secret diary entry about my landlord',
               } }) }
             : completion({ ok: true })));
+    const logged = [];
+    const realWarn = console.warn;
+    console.warn = (...a) => { logged.push(a.map(String).join(' ')); };
     atSecond(0);
-    await callLLM({ system: 's', user: 'u', schema: { type: 'object' }, schemaName: 'leaky', maxTokens: 50 });
-    restoreClock();
+    try {
+        await callLLM({ system: 's', user: 'u', schema: { type: 'object' }, schemaName: 'leaky', maxTokens: 50 });
+    } finally { console.warn = realWarn; restoreClock(); }
+    assert.ok(logged.length, 'the refusal should have been logged at all');
     const kept = JSON.stringify(lastRefusalFor('leaky'));
     assert.ok(!/secret diary|PLAYER SAID/.test(kept), `generated content was retained: ${kept}`);
     assert.ok(/json_validate_failed/.test(kept), 'the diagnostic code should be kept');
     assert.ok(/did not match the schema/.test(kept), 'the provider message should be kept');
+    // THE LOG SINK, not only the retained object (Codex #113 P2). This case asserted lastRefusalFor()
+    // alone, so restoring `console.warn` to print raw errText would have leaked failed_generation
+    // into Railway while the test stayed green — a privacy test blind to the thing that publishes.
+    // Codex predicted this was the tenth hollow case before finding it, from the shape alone.
+    assert.ok(!/secret diary|PLAYER SAID/.test(logged.join('\n')),
+        `generated content was LOGGED: ${logged.join(' | ').slice(0, 200)}`);
+    assert.ok(/json_validate_failed/.test(logged.join('\n')), 'the log should still carry the diagnostic');
+});
+
+await check('a proven strict success resets the schema\'s strike history', async () => {
+    // Codex #113 P2. `strikes` was kept across expiry so a repeat offender would not be re-probed
+    // every minute, but nothing ever cleared it: a schema that failed in January stayed on the
+    // 30-minute step forever, so any later blip cost half an hour of fallback no matter how many
+    // healthy months lay between. Reproduced as refusal -> strict success -> refusal landing on the
+    // FIVE minute step instead of sixty seconds.
+    const { callLLM } = freshLlm();
+    let refuseNow = true;
+    const sent = stubFetch(({ format }) => (
+        format === 'json_schema' && refuseNow
+            ? { status: 400, body: JSON.stringify({ error: { message: 'Invalid schema for response_format' } }) }
+            : completion({ ok: true })));
+
+    atSecond(0);
+    await callLLM({ system: 's', user: 'u', schema: { type: 'object' }, schemaName: 'flaky', maxTokens: 50 });  // strike 1
+    refuseNow = false;
+    atSecond(61);
+    await callLLM({ system: 's', user: 'u', schema: { type: 'object' }, schemaName: 'flaky', maxTokens: 50 });  // strict SUCCESS
+    refuseNow = true;
+    atSecond(120);
+    await callLLM({ system: 's', user: 'u', schema: { type: 'object' }, schemaName: 'flaky', maxTokens: 50 });  // refused again
+    refuseNow = false;
+
+    // If the history reset, this refusal is strike 1 again -> a 60s window -> retried at +61s.
+    const before = sent.length;
+    atSecond(182);
+    await callLLM({ system: 's', user: 'u', schema: { type: 'object' }, schemaName: 'flaky', maxTokens: 50 });
+    restoreClock();
+    assert.strictEqual(sent.slice(before)[0]?.format, 'json_schema',
+        'the strike count survived a proven success, so the backoff was longer than a first failure');
 });
 
 console.log(`\n${passes} passed, ${failures} failed`);
