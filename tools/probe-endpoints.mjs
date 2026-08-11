@@ -177,20 +177,27 @@ const SHAPES = [
     { key: 'election', file: 'ry-farms-congregation.js', schemaName: 'ry_farms_congregation',
       body: grab('election'),
       // its prompt asks candidates to speak to what they stand for, and to supply mutters
-      // KNOWN INTERMITTENT (measured 2026-08-10, 4 runs on gpt-oss-20b: 3 OK, 1 WEAK). The FALLBACK
-      // model occasionally returns fewer than four mutters; gpt-oss-120b produced them every time.
-      // This degrades gracefully — congregation.js discards a short array and the authored
-      // deliberation pool plays instead, so the election scene is unaffected. Do NOT read a WEAK
-      // here as a regression, and do not read a clean run as proof it is fixed: it is a coin that
-      // lands short sometimes. Latency does not predict it (a 1,322ms run passed, a 1,415ms run
-      // did not).
+      // THIS SHAPE IS THE REASON THE PROBE EXISTS. It came back short on gpt-oss-20b in 1 of 4 runs,
+      // was "fixed" with `minItems: 10`, and came back short AGAIN on the next run from complete
+      // valid JSON — because Groq's structured outputs honour only a subset of JSON Schema and the
+      // count keywords are not in it. The count is now carried by ten named REQUIRED properties,
+      // which that subset does include. Two consecutive clean runs are not proof; a short run here
+      // means the object form is not being enforced either, and the next move would be server-side
+      // validation rather than a third schema rewrite.
       //
       // FOUR mutters, not one (Codex #109 P2-4): congregation.js:76 discards the array below four,
       // so a run with three would report OK while the enrichment was thrown away — the probe would
       // be certifying output the client never uses.
-      ok: (r) => Array.isArray(r.script) && r.script.length >= 3
-                 && Array.isArray(r.mutters)
-                 && r.mutters.filter(m => String(m || '').trim().length > 0).length >= 4 },
+      ok: (r) => {
+          const mutters = Array.isArray(r.mutters) ? r.mutters.filter(m => String(m || '').trim().length > 0) : null;
+          // Throwing here is how a validator reports WHY: runShape catches it into the verdict line.
+          // The previous version returned a bare false and printed 70 characters of the SCRIPT, which
+          // is the half that was working — two runs were spent re-reading speeches to infer a count.
+          if (!Array.isArray(r.script) || r.script.length < 3) throw new Error(`script had ${r.script?.length ?? 'no'} turns, needs 3`);
+          if (mutters === null) throw new Error('mutters absent or not an array after normalisation');
+          if (mutters.length < 4) throw new Error(`only ${mutters.length} usable mutters of 10 asked, client needs 4`);
+          return true;
+      } },
 
     { key: 'chat', file: 'ry-farms-chat.js', schemaName: 'ry_farms_chat',
       body: grabLargest('ry-farms-chat'),
@@ -265,6 +272,11 @@ if (failed.length) {
     console.log(`\nA model that passes some shapes and fails others is the 2026-08-06 outage exactly:`);
     console.log(`classification kept working while replies and congregations went silent, so the game`);
     console.log(`looked half-alive rather than broken.`);
+} else if (ONLY) {
+    // A filtered run measures what was asked for and NOTHING else. Saying "can carry the whole game"
+    // here would be the probe telling the same comfortable lie it was built to catch.
+    console.log(`Shapes matching "${ONLY}" returned usable output — ${results.length} of ${SHAPES.length * MODELS.length} checks run.`);
+    console.log('This is a partial run: it says nothing about the shapes it skipped.');
 } else {
     console.log('Every production shape returned usable output. This model can carry the whole game.');
 }
