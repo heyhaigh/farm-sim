@@ -152,6 +152,14 @@ const SHAPES = [
     { key: 'election', file: 'ry-farms-congregation.js', schemaName: 'ry_farms_congregation',
       body: grab('election'),
       // its prompt asks candidates to speak to what they stand for, and to supply mutters
+      // KNOWN INTERMITTENT (measured 2026-08-10, 4 runs on gpt-oss-20b: 3 OK, 1 WEAK). The FALLBACK
+      // model occasionally returns fewer than four mutters; gpt-oss-120b produced them every time.
+      // This degrades gracefully — congregation.js discards a short array and the authored
+      // deliberation pool plays instead, so the election scene is unaffected. Do NOT read a WEAK
+      // here as a regression, and do not read a clean run as proof it is fixed: it is a coin that
+      // lands short sometimes. Latency does not predict it (a 1,322ms run passed, a 1,415ms run
+      // did not).
+      //
       // FOUR mutters, not one (Codex #109 P2-4): congregation.js:76 discards the array below four,
       // so a run with three would report OK while the enrichment was thrown away — the probe would
       // be certifying output the client never uses.
