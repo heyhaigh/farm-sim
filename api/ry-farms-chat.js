@@ -44,21 +44,22 @@ function parseBody(req) {
 }
 
 const { callLLM } = require('./_llm.js');
+const { asText } = require('./_text.js');   // #111 P2 type boundary: coercion is not a type check
 
 function normalizeConversation(raw) {
     const first = Array.isArray(raw?.lines) ? raw.lines[0] : null;
     const second = Array.isArray(raw?.lines) ? raw.lines[1] : null;
-    const speakerLine = cleanText(raw?.speakerLine || raw?.speaker_line || first?.text, LINE_MAX);
-    const listenerLine = cleanText(raw?.listenerLine || raw?.listener_line || second?.text, LINE_MAX);
+    const speakerLine = cleanText(asText(raw?.speakerLine) || asText(raw?.speaker_line) || asText(first?.text), LINE_MAX);
+    const listenerLine = cleanText(asText(raw?.listenerLine) || asText(raw?.listener_line) || asText(second?.text), LINE_MAX);
     if (!speakerLine || !listenerLine) throw new Error('model returned empty lines');
     return {
         speakerLine,
         listenerLine,
-        speakerTone: cleanText(raw?.speakerTone || first?.tone || 'reflective', 18).toLowerCase(),
-        listenerTone: cleanText(raw?.listenerTone || second?.tone || 'reflective', 18).toLowerCase(),
-        memory: cleanText(raw?.memory || raw?.summary || `${speakerLine} / ${listenerLine}`, MEMORY_MAX),
+        speakerTone: cleanText(asText(raw?.speakerTone) || asText(first?.tone) || 'reflective', 18).toLowerCase(),
+        listenerTone: cleanText(asText(raw?.listenerTone) || asText(second?.tone) || 'reflective', 18).toLowerCase(),
+        memory: cleanText(asText(raw?.memory) || asText(raw?.summary) || `${speakerLine} / ${listenerLine}`, MEMORY_MAX),
         relationshipDelta: clamp(Number(raw?.relationshipDelta ?? raw?.relationship_delta ?? 0) || 0, -0.05, 0.05),
-        relationshipReason: cleanText(raw?.relationshipReason || raw?.relationship_reason || 'opened up in conversation', 70),
+        relationshipReason: cleanText(asText(raw?.relationshipReason) || asText(raw?.relationship_reason) || 'opened up in conversation', 70),
     };
 }
 

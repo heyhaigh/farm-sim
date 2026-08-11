@@ -82,6 +82,14 @@ const _S = globalThis.__ryFarmsLlmState || (globalThis.__ryFarmsLlmState = {
 const _budget = _S.budget;
 const _breaker = _S.breaker;
 const _formatSkip = _S.formatSkip;
+// #formatwitness Which response_format actually PRODUCED the answer, per schema name.
+//
+// Codex #111 P1: the probe could not tell a strict-schema success from a json_object fallback that
+// happened to look right, because Groq's response documents no "applied format" field. So a 400 on
+// json_schema followed by a usable fallback printed OK and certified a contract that was never
+// enforced. Nothing in the response tells you; only the caller knows, so the caller records it.
+// Read by tools/probe-endpoints.mjs; never read by production code.
+const _lastFormat = _S.lastFormat || (_S.lastFormat = new Map());
 const _modelDead = _S.modelDead;
 
 // #modelchain — a provider retiring a model must not take the whole game's voice with it.
@@ -133,6 +141,24 @@ function modelChain() {
     // looked like a retirement should not permanently mute the game until someone redeploys.
     return live.length ? live : all;
 }
+
+// Does a 400 mean "this model cannot do structured output AT ALL", or only "that particular schema
+// was unacceptable"? The distinction decides the blast radius of #stickyformat.
+//
+// It went unasked until 2026-08-10, when the skip key named only the model and the format. One
+// endpoint's schema being refused therefore downgraded EVERY LATER CALL for that model to
+// json_object — which enforces nothing — and since every handler normalises missing fields to
+// defaults, the endpoints kept returning 200 with hollow content. Two probe runs on identical
+// captured input produced real output and then handler fallbacks, from the same model, because a
+// schema earlier in the run had been refused. In production `_S` lives on globalThis in a
+// long-lived server, so that state is permanent until redeploy.
+//
+// NARROW, and biased the safe way. A wrong "format unsupported" verdict silently mutes ten
+// endpoints for the life of the process; a wrong "schema refused" verdict costs one extra 400 per
+// schema, once. So only unambiguous prose about the PARAMETER counts, and everything else — every
+// schema validation complaint, every message we have never seen — is treated as schema-specific.
+const FORMAT_UNSUPPORTED_RE = /response_format[\s\S]{0,60}?\b(?:is\s+)?(?:not|no longer)\s+supported|does not support[\s\S]{0,30}?response_format/i;
+const isFormatUnsupported = (bodyText) => FORMAT_UNSUPPORTED_RE.test(String(bodyText || ''));
 
 // Does this failure mean "that model is gone" rather than "that request was wrong"?
 //
@@ -284,7 +310,12 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
             const formats = (schema
                 ? [{ type: 'json_schema', json_schema: { name: schemaName, strict: true, schema } }, { type: 'json_object' }, null]
                 : [null]
-            ).filter(f => !_formatSkip.has(`${model}|${f ? f.type : 'none'}`));
+            ).filter(f => {
+                const type = f ? f.type : 'none';
+                // two scopes: the format refused outright, or refused for THIS schema only
+                return !_formatSkip.has(`${model}|${type}`)
+                    && !_formatSkip.has(`${model}|${type}|${schemaName}`);
+            });
 
             // #stickycap the halving is per-CALL only — nothing is remembered across calls. See the
             // note at CAP_MIN_TOKENS for why persisting it was wrong.
@@ -338,6 +369,8 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
                         if (r.ok) {
                             const out = parseJson(extractContent(await r.json()));
                             _breaker.fails = 0;
+                            // #formatwitness record the format that WORKED, not the one we hoped for
+                            _lastFormat.set(schemaName, { format: response_format ? response_format.type : 'none', model });
                             return out;
                         }
                         const errText = await r.text().catch(() => '');
@@ -393,7 +426,14 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
                             // produced, and assuming otherwise is the kind of convenient guess that put
                             // this ledger wrong twice already.
                             if (r.status === 400) attemptEntry.cost = 0;
-                            if (response_format) _formatSkip.add(`${model}|${response_format.type}`);   // #stickyformat
+                            // #stickyformat SCOPE: model-wide only when the provider says the
+                            // PARAMETER is unsupported; otherwise remember just this schema, so one
+                            // refused shape cannot mute the other nine.
+                            if (response_format) {
+                                _formatSkip.add(isFormatUnsupported(errText)
+                                    ? `${model}|${response_format.type}`
+                                    : `${model}|${response_format.type}|${schemaName}`);
+                            }
                         }
                     } finally { clearTimeout(timer); }
                     if (!retrySmaller) break;   // fall through to the next format (or out, if giveUp)
@@ -413,4 +453,9 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
     }
 }
 
-module.exports = { callLLM, parseJson, resolveLLM, llmStatus, LLMDisabledError, modelChain, isModelGone };
+// #formatwitness DIAGNOSTIC ONLY — tools/probe-endpoints.mjs asks which format produced the last
+// answer for a schema, so a paid run can distinguish an enforced contract from a fallback that
+// merely looked right. Production never calls this.
+const lastFormatFor = (schemaName) => _lastFormat.get(schemaName) || null;
+
+module.exports = { callLLM, parseJson, resolveLLM, llmStatus, LLMDisabledError, modelChain, isModelGone, lastFormatFor };

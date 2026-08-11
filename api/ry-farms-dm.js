@@ -47,6 +47,7 @@ function parseBody(req) {
 }
 
 const { callLLM } = require('./_llm.js');
+const { asText } = require('./_text.js');   // #111 P2 type boundary: coercion is not a type check
 
 // Codex #106 P2-5: ONE definition. This was a literal in the call AND a separately exported
 // 800, so editing either alone would silently recreate the probe/production mismatch that the
@@ -132,7 +133,7 @@ module.exports = async function handler(req, res) {
         });
         const wanted = new Set(characters.map(c => c.seed));
         const tales = (raw?.tales || [])
-            .map(t => ({ seed: Number(t.seed), tale: cleanTale(t.tale) }))
+            .map(t => ({ seed: Number(t?.seed), tale: cleanTale(asText(t?.tale)) }))
             .filter(t => wanted.has(t.seed) && t.tale.length >= 200);
         if (!tales.length) return send(res, 502, { fallback: true, error: 'model returned no usable tales' });
         // Codex #104 P1-1: a PARTIAL response used to be accepted silently. A truncated completion

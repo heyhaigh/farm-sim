@@ -65,6 +65,11 @@ if (process.env.RY_FARMS_LLM_OFF) {
     process.exit(2);
 }
 
+// #formatwitness Codex #111 P1: Groq's response carries no "applied format" field, so a strict-schema
+// 400 followed by a usable json_object answer was indistinguishable from an enforced contract — and
+// printed OK. _llm.js records which format actually produced each answer; the probe reports it.
+const { lastFormatFor } = require('../api/_llm.js');
+
 const argOf = (f) => {
     const i = process.argv.indexOf(f);
     return i > -1 && process.argv[i + 1] && !process.argv[i + 1].startsWith('--') ? process.argv[i + 1] : null;
@@ -195,7 +200,12 @@ const SHAPES = [
           // is the half that was working — two runs were spent re-reading speeches to infer a count.
           if (!Array.isArray(r.script) || r.script.length < 3) throw new Error(`script had ${r.script?.length ?? 'no'} turns, needs 3`);
           if (mutters === null) throw new Error('mutters absent or not an array after normalisation');
-          if (mutters.length < 4) throw new Error(`only ${mutters.length} usable mutters of 10 asked, client needs 4`);
+          // TWO different questions, kept apart (Codex #111 P1). The CONTRACT asks for ten and the
+          // format column above says whether it was enforced; the PRODUCT needs four, below which
+          // the client discards the pool entirely. Accepting four here while the schema demands ten
+          // is how a json_object fallback passed for an enforced contract.
+          if (mutters.length < 4) throw new Error(`only ${mutters.length} usable mutters — under the client's minimum of 4`);
+          if (mutters.length < 10) throw new Error(`${mutters.length} mutters: usable, but the contract requires 10`);
           return true;
       } },
 
@@ -270,7 +280,8 @@ async function runShape(shape) {
 }
 
 console.log(`\nprobe-endpoints — every production LLM shape, through the real handlers`);
-console.log(`models: ${MODELS.join(', ')}\n`);
+console.log(`models: ${MODELS.join(', ')}`);
+console.log('columns: shape / token budget / latency / FORMAT THAT PRODUCED IT / verdict\n');
 
 const results = [];
 for (const model of MODELS) {
@@ -280,8 +291,17 @@ for (const model of MODELS) {
         if (ONLY && !shape.key.includes(ONLY)) continue;
         await sleep(DELAY_MS);
         const r = await runShape(shape);
-        results.push({ model, key: shape.key, verdict: r.verdict });
-        console.log(`  ${shape.key.padEnd(13)} ${String(budgetFor(shape.file, shape.schemaName)).padStart(4)} tok  ${String(r.ms).padStart(5)}ms  ${r.verdict}`);
+        // Which format actually produced it — the difference between a contract that was ENFORCED
+        // and one the model merely happened to satisfy. A shape that asks for a schema and answers
+        // under json_object has not verified the schema at all, however good the output looks.
+        const witness = lastFormatFor(shape.schemaName);
+        const fmt = witness ? witness.format : 'unknown';
+        let verdict = r.verdict;
+        if (verdict.startsWith('OK') && fmt !== 'json_schema') {
+            verdict = `WEAK   usable, but produced under ${fmt} — the schema was NOT enforced`;
+        }
+        results.push({ model, key: shape.key, verdict, format: fmt });
+        console.log(`  ${shape.key.padEnd(13)} ${String(budgetFor(shape.file, shape.schemaName)).padStart(4)} tok  ${String(r.ms).padStart(5)}ms  ${String(fmt).padEnd(11)} ${verdict}`);
         if (VERBOSE && r.payload) console.log(`      ${JSON.stringify(r.payload).slice(0, 240)}`);
     }
     console.log('');

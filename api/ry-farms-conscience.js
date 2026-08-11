@@ -76,6 +76,7 @@ function parseBody(req) {
 }
 
 const { callLLM } = require('./_llm.js');
+const { asText } = require('./_text.js');   // #111 P2 type boundary: coercion is not a type check
 
 // ---- stage 1: CLASSIFY ------------------------------------------------------
 
@@ -121,7 +122,7 @@ async function classify(body) {
 
 function classify_normalize(raw, names) {
     let kind = URGE_KINDS.includes(raw?.kind) ? raw.kind : 'none';
-    let target = String(raw?.target || '').trim();
+    let target = asText(raw?.target).trim();
     const tone = TONES.includes(raw?.tone) ? raw.tone : 'suggest';
     if (kind === 'visit') {
         const match = names.find(n => n.toLowerCase() === target.toLowerCase());
@@ -192,7 +193,7 @@ async function reply(body) {
         snapshot: body.snapshot || {},
     });
     const raw = await callLLM({ system, user, schema: replySchema, schemaName: 'ry_farms_conscience_reply', maxTokens: 320 });
-    const line = cleanReply(raw?.line);
+    const line = cleanReply(asText(raw?.line));
     if (!line || line.length < 2) throw new Error('empty reply');
     return { line, verdict };
 }

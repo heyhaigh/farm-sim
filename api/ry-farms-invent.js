@@ -7,6 +7,7 @@
 // and the procedural name stands if the LLM is unavailable — so determinism is untouched either way.
 
 const { callLLM } = require('./_llm.js');
+const { asText } = require('./_text.js');   // #111 P2 type boundary: coercion is not a type check
 
 const NAME_MAX = 30, LORE_MAX = 120;
 // what each mechanical effect actually DOES — the LLM must stay within this, so the lore can't imply a
@@ -78,7 +79,7 @@ module.exports = async function handler(req, res) {
         // Only DM was classified, so every other async caller could spend the whole minute and
         // starve a player waiting on a two-stage whisper.
         const raw = await callLLM({ system, user, schema, schemaName: 'ry_farms_invent', maxTokens: 160, priority: 'background' });
-        const name = clean(raw?.name, NAME_MAX), lore = clean(raw?.lore, LORE_MAX);
+        const name = clean(asText(raw?.name), NAME_MAX), lore = clean(asText(raw?.lore), LORE_MAX);
         if (!name || !lore || BANNED.test(lore) || BANNED.test(name)) return send(res, 200, { fallback: true, error: 'invalid or over-claiming output' });
         return send(res, 200, { name, lore });
     } catch (err) {

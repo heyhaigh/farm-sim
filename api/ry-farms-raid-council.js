@@ -45,6 +45,7 @@ function parseBody(req) {
 }
 
 const { callLLM } = require('./_llm.js');
+const { asText } = require('./_text.js');   // #111 P2 type boundary: coercion is not a type check
 
 const scriptSchema = {
     type: 'object',
@@ -111,7 +112,7 @@ async function generateBeat(body) {
     });
     const b = out && out.beat;
     if (!b || (b.stunt !== 'shove' && b.stunt !== 'taunt') || (b.by !== 'foe' && b.by !== 'defender')) throw new Error('bad beat');
-    const bark = cleanLine(b.bark);
+    const bark = cleanLine(asText(b?.bark));
     if (!bark || bark.length < 2) throw new Error('empty bark');
     return { beat: { stunt: b.stunt, by: b.by, bark } };
 }
@@ -183,8 +184,8 @@ function normalize(raw, names) {
     const lower = new Map(names.map(n => [n.toLowerCase(), n]));
     const script = [];
     for (const t of (raw && Array.isArray(raw.script) ? raw.script : [])) {
-        const speaker = lower.get(String(t?.speaker || '').trim().toLowerCase());
-        const line = cleanLine(t?.line);
+        const speaker = lower.get(asText(t?.speaker).trim().toLowerCase());
+        const line = cleanLine(asText(t?.line));
         if (speaker && line && line.length > 1) script.push({ speaker, line });
         if (script.length >= 12) break;
     }
