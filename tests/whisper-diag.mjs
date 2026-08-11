@@ -124,11 +124,12 @@ await check('a client-side THROW between the stages is recorded, with the throwi
     await whisper(w, w.farmers[0], 'go get some rest', null);
     const reply = diag().find(e => e.stage === 'reply');
     assert.strictEqual(reply?.ok, false);
-    // EXACT canonical form, not a substring — a mutation that kept the engine's whole message also
-    // contained "allRegard" and escaped a /allRegard/ match. The extraction contract is "the
-    // identifier and nothing else", so the assertion must be equality.
-    assert.strictEqual(reply?.detail, 'client-throw: TypeError: allRegard is not a function',
-        `the record should be the canonical extracted form, got: ${reply?.detail}`);
+    // EXACT form, and it is the CLASS ALONE now. Identifier extraction was deleted in #120 r3 —
+    // its third redaction hole in three rounds (new TypeError('MARKER is not a function') carried
+    // the marker verbatim, because an identifier pattern applied to free text IS free text). The
+    // class still answers the diagnostic question: code bug, not transport.
+    assert.strictEqual(reply?.detail, 'client-throw: TypeError',
+        `the record should be the bare allow-listed class, got: ${reply?.detail}`);
 });
 
 await check('the buffer caps rather than growing without bound', async () => {
@@ -267,6 +268,37 @@ await check('"model generated empty reply" is bad-output, not throttled (Codex #
     const w2 = world();
     await whisper(w2, w2.farmers[0], 'go get some rest', null);
     assert.strictEqual(diag().find(e => e.stage === 'reply')?.detail, 'fallback: throttled');
+});
+
+await check('a marker INSIDE an engine-class message cannot ride the export (Codex #120 r3)', async () => {
+    // The third door: Error.name was allow-listed, but the identifier patterns read err.message —
+    // free text — so a crafted TypeError message carried its marker through the extraction.
+    whisperLog.clear();
+    globalThis.fetch = async (_u, opts) => {
+        const stage = JSON.parse(opts.body).stage;
+        if (stage === 'classify') return { ok: true, status: 200, json: async () => ({ kind: 'rest', target: '', tone: 'suggest' }) };
+        throw new TypeError('PLAYER_PRIVATE_WHISPER is not a function');
+    };
+    const w = world();
+    await whisper(w, w.farmers[0], 'go get some rest', null);
+    const dump = JSON.stringify(diag());
+    assert.ok(!/PLAYER_PRIVATE/.test(dump), `message content reached the export: ${dump}`);
+    assert.strictEqual(diag().find(e => e.stage === 'reply')?.detail, 'client-throw: TypeError');
+});
+
+await check('{kind} alone is NOT an LLM success — all three protocol fields required (Codex #120 r3)', async () => {
+    // The != null guards accepted a missing target/tone and defaulted them downstream. The real
+    // producer always returns all three, so requiring them rejects nothing the server sends.
+    whisperLog.clear();
+    globalThis.fetch = async (_u, opts) => {
+        const stage = JSON.parse(opts.body).stage;
+        if (stage === 'classify') return { ok: true, status: 200, json: async () => ({ kind: 'rest' }) };
+        return { ok: true, status: 200, json: async () => ({ line: 'Aye.', verdict: 'DISMISS' }) };
+    };
+    const w = world();
+    await whisper(w, w.farmers[0], 'go get some rest', null);
+    const cls = diag().find(e => e.stage === 'classify');
+    assert.strictEqual(cls?.ok, false, `a partial protocol object was recorded llm: ${JSON.stringify(cls)}`);
 });
 
 console.log(`\n${passes} passed, ${failures} failed`);

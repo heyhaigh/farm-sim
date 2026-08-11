@@ -214,15 +214,16 @@ function diagReason(err) {
     if (/disabled|unconfigured|no OPENAI|not configured/i.test(m)) return 'fallback: disabled';
     if (/did not return JSON|model returned|empty/i.test(m)) return 'fallback: bad-output';
     if (/model unavailable|request failed/i.test(m)) return 'fallback: upstream';
-    // client-side throws — the error class plus CODE IDENTIFIERS only. The class itself is
-    // allow-listed too (Codex #120): Error.name is a mutable property, so an error named
-    // PLAYER_PRIVATE_WHISPER was riding the interpolation straight past the redaction. Only engine
-    // classes pass; anything else collapses to 'unknown'.
-    const cls_ = ['TypeError', 'RangeError', 'ReferenceError', 'SyntaxError', 'AbortError', 'DOMException', 'EvalError', 'URIError']
-        .includes(err?.name) ? err.name : 'unknown';
-    if ((x = m.match(/([$\w]+) is not a function/))) return `client-throw: ${cls_}: ${x[1]} is not a function`;
-    if ((x = m.match(/reading '([$\w]+)'/))) return `client-throw: ${cls_}: reading ${x[1]}`;
-    if (cls_ !== 'unknown') return `client-throw: ${cls_}`;
+    // client-side throws — the ALLOW-LISTED ERROR CLASS and nothing else. This branch has now had
+    // three doors: the raw message (#120 r1), a mutable Error.name (#120 r2), and identifiers
+    // extracted from err.message — where new TypeError('PLAYER_PRIVATE_WHISPER is not a function')
+    // carried the marker verbatim, because an "identifier" pattern applied to free text IS free
+    // text (#120 r3). Per the loop rule in LEARNINGS.md, a third finding in the same mechanism
+    // means simplify rather than patch: no extraction at all. The class alone still separates a
+    // code bug from a transport failure, which is the diagnostic question; naming the exact symbol
+    // is what local DevTools is for once the buffer says a client-throw exists.
+    if (['TypeError', 'RangeError', 'ReferenceError', 'SyntaxError', 'AbortError', 'DOMException', 'EvalError', 'URIError']
+        .includes(err?.name)) return `client-throw: ${err.name}`;
     return 'fallback: other';
 }
 function diagRecord(stage, ok, detail, ms) {
@@ -288,9 +289,12 @@ export async function whisper(world, farmer, message, save) {
         // SHAPE AND PROTOCOL before success (Codex #120, both rounds): an HTTP 200 `{}` used to read
         // as an LLM "none", and {kind:'bogus-kind', target:{}} passed a strings-only check and rode
         // into conscienceCheck. The enums are the contract; anything outside them is a failed stage.
-        if (!cls || !KINDS.includes(cls.kind)) throw new Error('malformed classify response');
-        if (cls.tone != null && !TONES.includes(cls.tone)) throw new Error('malformed classify response');
-        if (cls.target != null && typeof cls.target !== 'string') throw new Error('malformed classify response');
+        // ALL THREE fields, unconditionally (Codex #120 r3): the != null guards accepted
+        // {kind:'rest'} alone as an LLM success with target/tone silently defaulted downstream.
+        // The real producer always returns all three — classify_normalize ends
+        // `return { kind, target, tone }` — so requiring them rejects nothing the server sends.
+        if (!cls || !KINDS.includes(cls.kind) || !TONES.includes(cls.tone)
+            || typeof cls.target !== 'string') throw new Error('malformed classify response');
         diagRecord('classify', true, `kind=${cls.kind || 'none'}`, Date.now() - t0);
     } catch (err) {
         diagRecord('classify', false, diagReason(err), Date.now() - t0);
