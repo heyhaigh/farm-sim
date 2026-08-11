@@ -80,7 +80,10 @@ const _S = globalThis.__ryFarmsLlmState || (globalThis.__ryFarmsLlmState = {
     // TRANSIENT validation 400 was being remembered for the life of the process, so a single bad
     // moment downgraded a schema to json_object until redeploy. Model-wide entries keep until:Infinity.
     formatSkip: new Map(),
-    modelDead: new Set(),    // #modelchain models the provider has retired — skip for the PROCESS lifetime
+    // #modelchain model -> { until, strikes }. NOT permanent (Codex #115): every signal that sets
+    // this is unverified — synthetic codes and prose patterns, no captured retirement response — and
+    // a permanent verdict on unverified evidence demotes a working primary model until redeploy.
+    modelDead: new Map(),
 });
 const _budget = _S.budget;
 const _breaker = _S.breaker;
@@ -123,6 +126,16 @@ const _lastFormat = _S.lastFormat || (_S.lastFormat = new Map());
 // only way to learn more was another paid run. Keyed by schema, holding the provider's own words.
 const _lastRefusal = _S.lastRefusal || (_S.lastRefusal = new Map());
 const _modelDead = _S.modelDead;
+// Same ladder as the format skip, and for the same reason: a wrong verdict must heal itself. A model
+// that really is decommissioned settles at one probe per half hour; one wrongly demoted comes back.
+const deadActive = (model) => { const e = _modelDead.get(model); return !!e && Date.now() < e.until; };
+function noteDead(model) {
+    const strikes = (_modelDead.get(model)?.strikes || 0) + 1;
+    _modelDead.set(model, {
+        until: Date.now() + SKIP_BACKOFF_MS[Math.min(strikes - 1, SKIP_BACKOFF_MS.length - 1)],
+        strikes,
+    });
+}
 
 // #modelchain — a provider retiring a model must not take the whole game's voice with it.
 //
@@ -168,7 +181,7 @@ function modelChain() {
         || process.env.OPENAI_MODEL
         || DEFAULT_MODEL_CHAIN;
     const all = String(raw).split(',').map(s => s.trim()).filter(Boolean);
-    const live = all.filter(m => !_modelDead.has(m));
+    const live = all.filter(m => !deadActive(m));
     // If EVERY model is dead, do not silently give up — retry the whole chain. A provider blip that
     // looked like a retirement should not permanently mute the game until someone redeploys.
     return live.length ? live : all;
@@ -219,7 +232,9 @@ function modelChain() {
 // classified schema-scoped, which costs one extra 400 per schema on a backoff — the safe direction.
 // Widen only when another real refusal is captured, and add it here verbatim when it is.
 const FORMAT_UNSUPPORTED_RE = /\bthis\s+model\s+does\s+not\s+support\s+response\s+format\b/i;
-const isFormatUnsupported = (bodyText) => FORMAT_UNSUPPORTED_RE.test(String(bodyText || ''));
+// Only the provider's own diagnostic. Passing the raw body here let generated content decide whether
+// structured output was disabled for the whole process (Codex #115 P1).
+const isFormatUnsupported = (err) => FORMAT_UNSUPPORTED_RE.test(String(err?.message || ''));
 
 // What may be REMEMBERED and LOGGED from a provider error body — an allow-list, not a truncation.
 //
@@ -229,7 +244,19 @@ const isFormatUnsupported = (bodyText) => FORMAT_UNSUPPORTED_RE.test(String(body
 // not make it safe; it just makes it shorter. So parse, take the three diagnostic fields providers
 // actually define, and never touch payload-shaped ones.
 const REFUSAL_MESSAGE_MAX = 200;
-function describeRefusal(bodyText) {
+// THE SINGLE PARSE. Every classifier consumes this and none of them sees the raw body again.
+//
+// Codex #115 P1 reproduced both halves of why that matters. `failed_generation` carries the model's
+// ATTEMPTED OUTPUT, which is derived from the prompt, which for a whisper is the player's own words —
+// so a body whose diagnostic was a plain schema-validation failure, but whose generated content
+// happened to contain "This model does not support response format json_schema", was recorded
+// format-scoped and downgraded the next schema. The same trick retires a model: a
+// `failed_generation` of "The model openai/gpt-oss-120b is retired", or a NESTED `code` of
+// `model_not_found`, both passed classifiers that searched the whole body as a string.
+//
+// Player-influenced text was steering permanent, process-wide state. Parse first, classify only the
+// fields the provider defines as its own diagnostic.
+function parseProviderError(bodyText) {
     let err = null;
     try { err = JSON.parse(String(bodyText || ''))?.error; } catch { /* not JSON */ }
     if (!err || typeof err !== 'object') {
@@ -245,6 +272,8 @@ function describeRefusal(bodyText) {
         message: (pick(err.message) || '(no message)').slice(0, REFUSAL_MESSAGE_MAX),
     };
 }
+// The logger wants the same allow-listed view; there is deliberately only one way to read a body.
+const describeRefusal = parseProviderError;
 
 // Does this failure mean "that model is gone" rather than "that request was wrong"?
 //
@@ -260,26 +289,44 @@ function describeRefusal(bodyText) {
 // Only codes that are unambiguously about a MODEL. `does_not_exist` was here and is now gone: Codex
 // #105 P1-4 reproduced a 400 schema error carrying that code retiring a healthy model, because it
 // can equally describe a missing schema, tool or parameter.
-const MODEL_GONE_CODES = /"code"\s*:\s*"(model_decommissioned|model_not_found|model_terminated)"/i;
+// Retirement codes. NONE of these is a captured Groq response — the provenance audit Codex ran in
+// #115 traces `model_decommissioned` and `model_not_found` to b86f82d and `model_terminated` to
+// 497055e, all three synthetic fixtures I wrote, and Groq's error documentation defines `error.type`
+// and `error.message` rather than these codes. They are kept because a structured code is cheap to
+// check and low-risk to match, NOT because anything here is evidence.
+//
+// The consequence of that admission is below: a retirement verdict is no longer permanent, and the
+// chain no longer depends on recognising one.
+const MODEL_GONE_CODES = /^(model_decommissioned|model_not_found|model_terminated)$/i;
 
-function isModelGone(status, bodyText, model) {
-    const body = String(bodyText || '');
-    // EVERY status needs model evidence, including 404. The previous version accepted any 404 as
-    // retirement, and Codex reproduced `404 route not found` killing a healthy model — providers
-    // define 404 as "requested resource missing", which covers a mistyped path just as well as a
-    // retired model. A structured model code, or the model's own name in the message, or nothing.
+// Does this failure mean "that model is gone" rather than "that request was wrong"?
+//
+// Takes the PARSED error. The previous version searched the whole body as a string, so Codex #115
+// reproduced a nested `failed_generation.code` of `model_not_found` retiring a healthy primary model,
+// and a `failed_generation` reading "The model openai/gpt-oss-120b is retired" doing the same.
+// Model-generated text could retire the model that generated it.
+function isModelGone(status, err, model) {
     if (status !== 400 && status !== 404 && status !== 410) return false;
-    if (MODEL_GONE_CODES.test(body)) return true;
-    // Prose fallback: only when the message names THIS model AND uses retirement wording. Both
-    // halves are required — either alone is what produced the false positive.
-    if (!model || !body.includes(model)) return false;
-    // Codex #106 P2-4: `does not exist` / `not found` are SAFE here, and were only dangerous before
-    // the model-name gate existed. Without them a provider that returns
-    // `404 The model \`x\` does not exist` and no structured code would never advance the chain —
-    // the failover would be decoration on the one day it matters. The gate above is what makes the
-    // difference: this prose is only trusted when the body names THIS model.
-    return /\b(decommissioned|deprecated and removed|has been removed|is retired|no longer available|does not exist|not found)\b/i.test(body);
+    // TOP-LEVEL code only, matched whole rather than as a substring of the body.
+    if (MODEL_GONE_CODES.test(String(err?.code || ''))) return true;
+    const message = String(err?.message || '');
+    if (!model || !message.includes(model)) return false;
+    // The model must be the SUBJECT of the retirement, not merely mentioned in it. Codex #115
+    // reproduced "The response schema for model openai/gpt-oss-120b was not found" returning true —
+    // the subject there is the schema, and the model name sits in a prepositional phrase.
+    //
+    // `not found` and `does not exist` are gone from this list entirely. They were the ambiguous
+    // pair: they describe a missing route, schema or parameter as readily as a retired model, and
+    // they were what made that sentence match. Losing them costs nothing now, because failover no
+    // longer depends on this function recognising anything (see the chain loop).
+    const name = model.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(
+        `(?:^|[.;]\\s*|\\bthe\\s+)model\\s+\`?${name}\`?\\s+`
+        + `(?:has\\s+been\\s+|was\\s+|is\\s+|been\\s+)?`
+        + `(?:decommissioned|retired|terminated|discontinued|removed|no\\s+longer\\s+available)`,
+        'i').test(message);
 }
+
 
 // #stickycap — a 413 halves the ask and retries, WITHIN THIS CALL ONLY.
 //
@@ -474,6 +521,8 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
                             return out;
                         }
                         const errText = await r.text().catch(() => '');
+                        // Parse ONCE. Every classifier below reads this, never errText (Codex #115 P1).
+                        const providerErr = parseProviderError(errText);
                         lastErr = new Error(`LLM request failed (${r.status})`);
                         const lastModel = model === chain[chain.length - 1];
                         // #modelchain (Codex #104 P1-4) a 429 or a 403 can be MODEL-SCOPED: Groq publishes
@@ -496,14 +545,13 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
                                 if (r.status === 429) { _breaker.openUntil = Date.now() + BREAKER_COOLDOWN_MS; _breaker.fails = 0; }
                             }
                         }
-                        // #modelchain retirement — read the BODY and require a structured code (or the
-                        // model's own name), because a 400 is also how a format rejection arrives.
-                        else if (isModelGone(r.status, errText, model)) {
-                            if (!_modelDead.has(model)) {
-                                _modelDead.add(model);
+                        // #modelchain retirement — the PARSED diagnostic only, never the raw body.
+                        else if (isModelGone(r.status, providerErr, model)) {
+                            if (!deadActive(model)) {
                                 const next = chain.filter(m => m !== model)[0];
-                                console.warn(`[llm] model "${model}" is gone (${r.status}) - falling back to "${next || 'nothing'}". Update RY_FARMS_LLM_MODELS.`);
+                                console.warn(`[llm] model "${model}" looks gone (${r.status}) - falling back to "${next || 'nothing'}". Update RY_FARMS_LLM_MODELS.`);
                             }
+                            noteDead(model);
                             lastErr = new Error(`LLM model unavailable (${model})`);
                             modelGone = true;
                         } else if (r.status === 413 && halvings < CAP_MAX_HALVINGS && askTokens > CAP_MIN_TOKENS) {
@@ -530,11 +578,11 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
                             // PARAMETER is unsupported; otherwise remember just this schema, so one
                             // refused shape cannot mute the other nine.
                             if (response_format) {
-                                const wide = isFormatUnsupported(errText);
+                                const wide = isFormatUnsupported(providerErr);
                                 noteSkip(wide
                                     ? `${model}|${response_format.type}`
                                     : `${model}|${response_format.type}|${schemaName}`, wide);
-                                const why = describeRefusal(errText);
+                                const why = providerErr;
                                 _lastRefusal.set(schemaName, {
                                     model, format: response_format.type, status: r.status,
                                     scope: wide ? 'format' : 'schema', ...why,
@@ -550,7 +598,16 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
             // Advance the chain for MODEL-SCOPED failures only — retirement, permission, or a rate
             // limit that may apply to this model alone. A provider-wide failure (upstream 5xx, bad
             // JSON, timeout) would just be paid again on the next model for nothing.
-            if (!modelGone && !tryNextModel) break;
+            // ADVANCE WHILE ALTERNATIVES REMAIN. This used to break out of the chain unless a
+            // retirement message had been RECOGNISED — which made failover depend on the invented
+            // codes above. On 2026-08-16 Groq decommissions llama-3.1-8b-instant, and if its refusal
+            // does not match a pattern I fabricated, the chain would never reach gpt-oss on the one
+            // day the chain exists for. Recognition is an optimisation; having somewhere else to go
+            // is the actual failover.
+            //
+            // Cost: one extra request per genuinely failing call, bounded by the chain length, and
+            // only on a path that was about to return nothing anyway.
+            if (model === chain[chain.length - 1]) break;
         }
         throw lastErr || new Error('LLM request failed');
     } catch (err) {
@@ -566,4 +623,4 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
 const lastFormatFor = (schemaName) => _lastFormat.get(schemaName) || null;
 const lastRefusalFor = (schemaName) => _lastRefusal.get(schemaName) || null;
 
-module.exports = { callLLM, parseJson, resolveLLM, llmStatus, LLMDisabledError, modelChain, isModelGone, lastFormatFor, lastRefusalFor };
+module.exports = { callLLM, parseJson, resolveLLM, llmStatus, LLMDisabledError, modelChain, isModelGone, parseProviderError, lastFormatFor, lastRefusalFor };

@@ -388,37 +388,42 @@ await check('P1-2: the default chain contains no model with a known shutdown dat
 });
 
 await check('P1-2: isModelGone is exported and rejects the reproduced false positive', async () => {
-    const { isModelGone } = freshState();
+    // SIGNATURE CHANGED (Codex #115 P1): isModelGone takes the PARSED provider error, never a raw
+    // body — scanning the body as a string let `failed_generation` retire the model that generated
+    // it. These historical cases still hold; they go through the same parse production uses, which
+    // is the point. The two that failed when the signature changed were passing raw JSON and
+    // silently getting `undefined` for every field.
+    const { isModelGone, parseProviderError: parse } = freshState();
     assert.strictEqual(
-        isModelGone(400, '{"error":{"message":"response_format json_schema is no longer supported"}}', 'healthy'),
+        isModelGone(400, parse('{"error":{"message":"response_format json_schema is no longer supported"}}'), 'healthy'),
         false, 'the exact string Codex reproduced must not read as retirement');
     assert.strictEqual(
-        isModelGone(400, '{"error":{"code":"model_decommissioned"}}', 'anything'),
+        isModelGone(400, parse('{"error":{"code":"model_decommissioned"}}'), 'anything'),
         true, 'a structured code must read as retirement');
     assert.strictEqual(
-        isModelGone(400, '{"error":{"message":"The model `x` has been decommissioned"}}', 'x'),
+        isModelGone(400, parse('{"error":{"message":"The model `x` has been decommissioned"}}'), 'x'),
         true, 'prose naming the model must read as retirement');
     assert.strictEqual(
-        isModelGone(400, '{"error":{"message":"The model `other` has been decommissioned"}}', 'x'),
+        isModelGone(400, parse('{"error":{"message":"The model `other` has been decommissioned"}}'), 'x'),
         false, 'prose naming a DIFFERENT model must not retire this one');
 });
 
 // ---- Codex #105 regressions --------------------------------------------------------------------
 
 await check('P1-4: a generic 404 does NOT retire a model (route errors are not lifecycle events)', async () => {
-    const { isModelGone } = freshState();
-    assert.strictEqual(isModelGone(404, '{"error":{"message":"route not found"}}', 'healthy-one'), false,
+    const { isModelGone, parseProviderError: parse } = freshState();
+    assert.strictEqual(isModelGone(404, parse('{"error":{"message":"route not found"}}'), 'healthy-one'), false,
         'Codex reproduced `404 route not found` killing a healthy model');
-    assert.strictEqual(isModelGone(404, '{"error":{"code":"model_not_found"}}', 'gone-one'), true,
+    assert.strictEqual(isModelGone(404, parse('{"error":{"code":"model_not_found"}}'), 'gone-one'), true,
         'a 404 WITH a model code is still retirement');
-    assert.strictEqual(isModelGone(404, '{"error":{"message":"The model `gone-one` is retired"}}', 'gone-one'), true,
+    assert.strictEqual(isModelGone(404, parse('{"error":{"message":"The model `gone-one` is retired"}}'), 'gone-one'), true,
         'a 404 naming the model is still retirement');
 });
 
 await check('P1-4: the over-generic does_not_exist code no longer retires a model', async () => {
-    const { isModelGone } = freshState();
+    const { isModelGone, parseProviderError: parse } = freshState();
     assert.strictEqual(
-        isModelGone(400, '{"error":{"message":"schema property missing","code":"does_not_exist"}}', 'healthy-one'),
+        isModelGone(400, parse('{"error":{"message":"schema property missing","code":"does_not_exist"}}'), 'healthy-one'),
         false, 'does_not_exist can describe a schema or parameter, not just a model');
 });
 
