@@ -590,3 +590,167 @@ export async function undoWipe() {
         return null;
     }
 }
+
+// ---------------------------------------------------------------------------
+// #saveport — town export/import (a file the player holds).
+//
+// The snapshot is structured-clone data: Maps, Sets and typed arrays ride IndexedDB fine and are
+// DESTROYED by JSON — a Map silently becomes `{}` and fromSave throws "d.chunks is not iterable"
+// (the exact trap serialize()'s own comment documents). So the file format is tagged JSON: every
+// clone-only type is wrapped as { $: tag, v } and reversed on import. Plain objects that happen to
+// own a `$` key are escaped too, so the tagging cannot be spoofed by data.
+// ---------------------------------------------------------------------------
+
+const TYPED = { Int8Array, Uint8Array, Uint8ClampedArray, Int16Array, Uint16Array,
+    Int32Array, Uint32Array, Float32Array, Float64Array, BigInt64Array, BigUint64Array };
+
+function b64FromBytes(bytes) {
+    let s = ''; for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+    return btoa(s);
+}
+function bytesFromB64(b64) {
+    const s = atob(b64), out = new Uint8Array(s.length);
+    for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+    return out;
+}
+
+export function encodeSnapshot(v) {
+    if (v === undefined) return { $: 'U' };
+    if (typeof v === 'number' && !Number.isFinite(v)) return { $: 'N', v: String(v) };   // JSON turns NaN/Infinity into null SILENTLY
+    if (v === null || typeof v !== 'object') return v;
+    if (v instanceof Map) return { $: 'M', v: [...v].map(([k, x]) => [encodeSnapshot(k), encodeSnapshot(x)]) };
+    if (v instanceof Set) return { $: 'S', v: [...v].map(encodeSnapshot) };
+    if (v instanceof Date) return { $: 'D', v: v.toISOString() };
+    if (v instanceof ArrayBuffer) return { $: 'B', v: b64FromBytes(new Uint8Array(v)) };
+    if (ArrayBuffer.isView(v)) {
+        const t = v.constructor.name;
+        if (!TYPED[t]) throw new Error(`unencodable view ${t}`);
+        return { $: 'T', t, v: b64FromBytes(new Uint8Array(v.buffer, v.byteOffset, v.byteLength)) };
+    }
+    if (Array.isArray(v)) return v.map(encodeSnapshot);
+    const out = {};
+    for (const k of Object.keys(v)) out[k] = encodeSnapshot(v[k]);
+    // escape a plain object that owns `$`, or decode would misread it as a tag
+    return Object.prototype.hasOwnProperty.call(v, '$') ? { $: 'O', v: out } : out;
+}
+
+export function decodeSnapshot(v) {
+    if (v === null || typeof v !== 'object') return v;
+    if (Array.isArray(v)) return v.map(decodeSnapshot);
+    if (typeof v.$ === 'string') {
+        switch (v.$) {
+            case 'U': return undefined;
+            case 'N': return Number(v.v);
+            case 'M': return new Map(v.v.map(([k, x]) => [decodeSnapshot(k), decodeSnapshot(x)]));
+            case 'S': return new Set(v.v.map(decodeSnapshot));
+            case 'D': return new Date(v.v);
+            case 'B': return bytesFromB64(v.v).buffer;
+            case 'T': {
+                const Ctor = TYPED[v.t];
+                if (!Ctor) throw new Error(`unknown typed array ${v.t}`);
+                const bytes = bytesFromB64(v.v);
+                return new Ctor(bytes.buffer, 0, bytes.byteLength / Ctor.BYTES_PER_ELEMENT);
+            }
+            case 'O': {
+                // per-KEY, not whole: the wrapped object owns a '$' of its own — that is the entire
+                // reason it was escaped — and decoding it whole re-read that '$' as a tag and threw
+                // "unknown tag <data>". Found by the direct-shape test, not by the matured snapshot,
+                // which happens to contain no $-keyed objects at all.
+                const o = {};
+                for (const k of Object.keys(v.v)) o[k] = decodeSnapshot(v.v[k]);
+                return o;
+            }
+            default: throw new Error(`unknown tag ${v.$}`);
+        }
+    }
+    const out = {};
+    for (const k of Object.keys(v)) out[k] = decodeSnapshot(v[k]);
+    return out;
+}
+
+// The file the player downloads. Metadata first so a human (or a future build) can identify it
+// without decoding; the snapshot itself stays exactly what serialize() produced.
+export function buildTownExport(world) {
+    // A non-persisting session is running a SCRATCH world founded over a slot that could not be
+    // read. Exporting it would hand the player a file they will treat as their real town's backup —
+    // worse than no file. The check lives in saveTown for saves; export needs its own, because
+    // serialize() itself always answers.
+    if (world._persistenceDisabled) return null;
+    const snap = world.serialize();
+    if (!snap) return null;
+    return {
+        format: 'propagate-town',
+        formatV: 1,
+        exported: new Date().toISOString(),
+        seed: world.seed,
+        town: world.name || null,
+        day: world.day,
+        v: snap.v,
+        snap: encodeSnapshot(snap),
+    };
+}
+
+// Import: validate EVERYTHING before touching storage, then write like the other occupancy-change
+// paths (COMPATIBILITY.md): one readwrite transaction, generation bump, coherent 'backup:wipe' of
+// whatever the slot held — so RYFARMS.undoWipe() restores the pre-import town, same as after a wipe.
+//
+// `hydrate` is the real consumer (World.fromSave), passed in because save.js deliberately does not
+// import farm.js. Validation IS hydration: if the real boot path accepts a deep copy, boot will
+// accept the stored one; anything less re-opens the reasoned-about-instead-of-executed hole.
+// The pure half of import: decode + validate, no storage. Split out (Codex-discipline: a mutation
+// making validation run on the STORED object escaped every test, because the difference is invisible
+// without IndexedDB — as a pure function the copy property is directly assertable).
+export function parseTownFile(parsed, hydrate) {
+    if (!parsed || parsed.format !== 'propagate-town') return { ok: false, error: 'not a Propagate town file' };
+    let snap;
+    try { snap = decodeSnapshot(parsed.snap); } catch (err) { return { ok: false, error: `unreadable file: ${err.message}` }; }
+    if (!snap || typeof snap !== 'object' || !Number.isFinite(snap.seed)) return { ok: false, error: 'file has no usable town' };
+    try {
+        hydrate(structuredClone(snap));   // migrate() mutates in place — validate a copy, store the original
+    } catch (err) {
+        return { ok: false, error: String(err && err.message || 'town failed to load') };
+    }
+    return { ok: true, snap };
+}
+
+export async function importTownFile(parsed, hydrate) {
+    const p = parseTownFile(parsed, hydrate);
+    if (!p.ok) return p;
+    const snap = p.snap;
+    const seed = snap.seed;
+    let replacedFlag = false;
+    try {
+        const db = await openDb();
+        await new Promise((resolve, reject) => {
+            const tx = db.transaction(STORE, 'readwrite');
+            const store = tx.objectStore(STORE);
+            let gen = 0, existing, latest;
+            replacedFlag = false;
+            const rGen = store.get(genKey(seed)); rGen.onsuccess = () => { gen = rGen.result || 0; };
+            const rSnap = store.get('town:' + seed); rSnap.onsuccess = () => { existing = rSnap.result; };
+            const rLatest = store.get('latest'); rLatest.onsuccess = () => { latest = rLatest.result; };
+            const rWorld = store.get(WORLD_KEY);
+            rWorld.onsuccess = () => {
+                const index = rWorld.result || { towns: {}, encounters: [] };
+                // preserve what the slot held, exactly as wipeTown does — one coherent undoable object
+                if (existing) {
+                    replacedFlag = true;
+                    store.put({ seed, snap: existing, latest, slice: sliceKeyed(index, seed) }, 'backup:wipe');
+                }
+                // the imported town's index summary is unknown until its first save — a stale slice is
+                // the danger COMPATIBILITY.md documents, so prune rather than carry it
+                pruneKeyed(index, seed);
+                store.put(index, WORLD_KEY);
+                store.put(snap, 'town:' + seed);
+                store.put(gen + 1, genKey(seed));                  // occupancy changed: supersede every live tab
+                store.put({ seed, day: snap.day || 1, season: snap.season, year: snap.year, savedAt: Date.now() }, 'latest');
+            };
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+            tx.onabort = () => reject(tx.error || new Error('import txn aborted'));
+        });
+        return { ok: true, seed, replaced: replacedFlag };
+    } catch (err) {
+        return { ok: false, error: `storage write failed: ${err && err.message}` };
+    }
+}

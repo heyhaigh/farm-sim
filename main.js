@@ -19,7 +19,7 @@ import { tileHash as hash2, tileRand as rand2, smooth,
          pickIndex, grassPatch, tileJitter } from './tilehash.js';
 import { CRT } from './crt.js';
 import { TITLE_SHEET, drawTitleArt as drawTitleSheet, isTitleSettled } from './title-anim.js';
-import { saveTown, loadTownState, wipeTown, undoWipe, loadWorldIndex, updateWorldIndex, quarantineTown, peekQuarantined, restoreQuarantined, requestPersistentStorage } from './save.js';
+import { saveTown, loadTownState, wipeTown, undoWipe, loadWorldIndex, updateWorldIndex, quarantineTown, peekQuarantined, restoreQuarantined, requestPersistentStorage, buildTownExport, importTownFile } from './save.js';
 import { computeLayout, detectEncounters, encounterLine, townPos, townReach, townTint } from './worldmap.js';
 import { enrichStories } from './dm.js';
 import { requestCongregation, requestElectionScene } from './congregation.js';
@@ -317,7 +317,11 @@ const WORLD_BTN = { x: 0, y: 3, w: 0, h: 12 };     // top-bar toggle, positioned
 // never registered and the click handlers' `settingsHits.admX &&` guards go inert. The RYFARMS console API
 // keeps its rehearsal hooks; dev tools are already past any UI gate.
 const ADMIN_BOOTH = new URLSearchParams(location.search).has('admin');
-let settingsHits = null;                           // { music, sfx, musicSlider, sfxSlider, portalBtn, admRaid, admVote, close } rects (game px)
+let settingsHits = null;
+// #saveport — the import flow's one-beat confirm: a parsed file waits here for a second click, so a
+// mis-tap cannot replace a town. { parsed, town, day, seed } while confirming; null otherwise.
+let pendingImport = null;
+let saveportNote = null;   // { text, until } — result/error line under the town-file row                           // { music, sfx, musicSlider, sfxSlider, portalBtn, admRaid, admVote, close } rects (game px)
 let adminNote = null;                               // #Codex38 P2-5 transient booth feedback { text, until } (ms)
 let settingsDrag = null;                           // 'music' | 'sfx' while dragging a volume slider
 // (the settings NEW TOWN reset hatch is gone — founding lives on the world map; RYFARMS.wipeSave remains for QA)
@@ -4563,7 +4567,7 @@ function foundNewTown(culture) {
 // Settings menu — New Town + music/SFX volume. Opened by the top-bar gear cog.
 // ---------------------------------------------------------------------------
 function drawSettings() {
-    const PW = Math.min(GW - 24, 240), PH = ADMIN_BOOTH ? 198 : 114;   // the booth rows only exist under ?admin=1; coach line removed
+    const PW = Math.min(GW - 24, 240), PH = ADMIN_BOOTH ? 224 : 140;   // +26 for the town-file row   // the booth rows only exist under ?admin=1; coach line removed
     const PX = Math.floor((GW - PW) / 2), PY = Math.floor((GH - PH) / 2) - 6;
     ctx.fillStyle = 'rgba(6,7,11,0.72)'; ctx.fillRect(0, 18, GW, GH - 18);
     uiPanel(PX, PY, PW, PH);
@@ -4608,17 +4612,40 @@ function drawSettings() {
     ctx.fillStyle = '#20242f'; ctx.fillRect(PX + 4, PY + 92, PW - 8, 1);
     // (NEW TOWN removed — founding lives on the world map's CREATE TOWN now; the wipe hatch stays as RYFARMS.wipeSave)
 
+    // #saveport — TOWN FILE: export the current town to a file / import one back. Import shows the
+    // file's own name+day and takes a second click, and the replaced town lands in the same
+    // 'backup:wipe' object a wipe uses, so RYFARMS.undoWipe() reverses a mistaken import too.
+    {
+        const half = Math.floor((PW - 20) / 2);
+        const eb = { x: IX, y: PY + 100, w: half, h: 14 };
+        const ib = { x: IX + half + 4, y: PY + 100, w: half, h: 14 };
+        ctx.fillStyle = '#141e18'; ctx.fillRect(eb.x, eb.y, eb.w, eb.h);
+        ctx.strokeStyle = '#69b077'; ctx.strokeRect(eb.x + 0.5, eb.y + 0.5, eb.w - 1, eb.h - 1);
+        const el = 'EXPORT TOWN';
+        drawText(ctx, el, eb.x + Math.floor((eb.w - textWidth(el)) / 2), eb.y + 4, '#8fd09b');
+        const confirming = !!pendingImport;
+        ctx.fillStyle = confirming ? '#2e2410' : '#141824'; ctx.fillRect(ib.x, ib.y, ib.w, ib.h);
+        ctx.strokeStyle = confirming ? '#e0b040' : '#5a6f9c'; ctx.strokeRect(ib.x + 0.5, ib.y + 0.5, ib.w - 1, ib.h - 1);
+        const il = confirming ? 'CLICK TO CONFIRM' : 'IMPORT TOWN...';
+        drawText(ctx, il, ib.x + Math.floor((ib.w - textWidth(il)) / 2), ib.y + 4, confirming ? '#f0c860' : '#9ab8e8');
+        settingsHits.exportBtn = eb; settingsHits.importBtn = ib;
+        const note = pendingImport
+            ? `REPLACES YOUR SAVE: ${String(pendingImport.town || 'TOWN').slice(0, 14)} DAY ${pendingImport.day || '?'}`
+            : (saveportNote && performance.now() < saveportNote.until ? saveportNote.text : 'A TOWN FILE MOVES YOUR SAVE BETWEEN BROWSERS');
+        drawText(ctx, note, IX, PY + 118, pendingImport ? '#e0a850' : '#5a5f6c');
+    }
+
     // #credits — CraftPix character sprites (licence: deployed-game use OK). Click opens their pack page.
     {
         // owner: only the "CRAFTPIX.NET" tail is the link — the prefix is plain caption text
         const cPrefix = 'CERTAIN SPRITES ARE CREATED BY ';
         const cLink = 'CRAFTPIX.NET';
         const pw2 = textWidth(cPrefix), lw = textWidth(cLink);
-        const cb = { x: IX + pw2, y: PY + 97, w: lw + 2, h: 9 };
+        const cb = { x: IX + pw2, y: PY + 123, w: lw + 2, h: 9 };
         const chov = inRect(mouse, cb);
-        drawText(ctx, cPrefix, IX, PY + 99, '#5a5f6c');
-        drawText(ctx, cLink, IX + pw2, PY + 99, chov ? '#9ad0e0' : '#8a8f9c');
-        ctx.fillStyle = chov ? '#9ad0e0' : '#3a3f4c'; ctx.fillRect(IX + pw2, PY + 105, lw, 1);   // underline: only the link
+        drawText(ctx, cPrefix, IX, PY + 125, '#5a5f6c');
+        drawText(ctx, cLink, IX + pw2, PY + 125, chov ? '#9ad0e0' : '#8a8f9c');
+        ctx.fillStyle = chov ? '#9ad0e0' : '#3a3f4c'; ctx.fillRect(IX + pw2, PY + 131, lw, 1);   // underline: only the link
         settingsHits.craftpix = cb;
     }
 
@@ -4627,7 +4654,7 @@ function drawSettings() {
     // #adminbooth ?admin=1 only — see the flag's comment at module scope.
     if (ADMIN_BOOTH) {
         const rh = world.rehearsal;
-        drawText(ctx, 'ADMIN - REHEARSALS (GHOST RUNS, NOTHING RECORDED)', IX, PY + 112, '#8a6fae');
+        drawText(ctx, 'ADMIN - REHEARSALS (GHOST RUNS, NOTHING RECORDED)', IX, PY + 138, '#8a6fae');
         const admRow = (y, key, live, liveLabel, idleLabel) => {
             const b = { x: IX, y, w: PW - 16, h: 14 };
             ctx.fillStyle = live ? '#2e2410' : '#141824'; ctx.fillRect(b.x, b.y, b.w, b.h);
@@ -4636,12 +4663,12 @@ function drawSettings() {
             drawText(ctx, label, b.x + Math.floor((b.w - textWidth(label)) / 2), b.y + 4, live ? '#f0c860' : '#9ab8e8');
             settingsHits[key] = b;
         };
-        admRow(PY + 122, 'admRaid', rh && rh.kind === 'raid', 'RAID REHEARSAL LIVE - CANCEL', 'STAGE A RAID');
-        admRow(PY + 140, 'admVote', rh && rh.kind === 'election', 'VOTE REHEARSAL LIVE - CANCEL', 'STAGE THE VOTE');
-        admRow(PY + 158, 'admSortie', rh && rh.kind === 'sortie', 'WAR PARTY LIVE - CANCEL', 'STAGE A WAR PARTY');   // #counteroffensive
+        admRow(PY + 148, 'admRaid', rh && rh.kind === 'raid', 'RAID REHEARSAL LIVE - CANCEL', 'STAGE A RAID');
+        admRow(PY + 166, 'admVote', rh && rh.kind === 'election', 'VOTE REHEARSAL LIVE - CANCEL', 'STAGE THE VOTE');
+        admRow(PY + 184, 'admSortie', rh && rh.kind === 'sortie', 'WAR PARTY LIVE - CANCEL', 'STAGE A WAR PARTY');   // #counteroffensive
 
         // #Codex38 P2-5: the booth REFUSES to stage over a real raid — say so, instead of silently closing
-        if (adminNote && performance.now() < adminNote.until) drawText(ctx, adminNote.text, IX, PY + 174, '#e0a850');
+        if (adminNote && performance.now() < adminNote.until) drawText(ctx, adminNote.text, IX, PY + 200, '#e0a850');
     }
     // (the "ESC OR CLICK OUTSIDE TO CLOSE" coach line is gone — owner call, the affordance is universal)
     settingsHits.panel = { x: PX, y: PY, w: PW, h: PH };
@@ -7301,12 +7328,58 @@ out.addEventListener('pointerup', (e) => {
     if (SETTINGS_BTN.w && inRect(p, SETTINGS_BTN)) { audio.ensure(); settingsOpen = !settingsOpen; if (settingsOpen) { rosterOpen = chronOpen = boardOpen = false; blurChatInput(); localLifeCount().then(n => { localMemoryCount = n; }).catch(() => {}); } return; }
     // settings menu interactions
     if (settingsOpen && settingsHits) {
-        if (inRect(p, settingsHits.close)) { settingsOpen = false; return; }
+        if (inRect(p, settingsHits.close)) { settingsOpen = false; pendingImport = null; return; }
         if (inRect(p, settingsHits.music)) { audio.ensure(); audio.toggleMusic(); return; }
         if (inRect(p, settingsHits.sfx)) { audio.ensure(); audio.toggleSfx(); return; }
         if (inRect(p, settingsHits.musicSlider)) { audio.setMusicVolume((p.x - settingsHits.musicSlider.x) / settingsHits.musicSlider.w); return; }
         if (inRect(p, settingsHits.sfxSlider)) { audio.setSfxVolume((p.x - settingsHits.sfxSlider.x) / settingsHits.sfxSlider.w); return; }
         if (inRect(p, settingsHits.portalBtn)) { window.open('/memory-graph.html', '_blank', 'noopener'); return; }
+        // #saveport — EXPORT: the current world, as a downloadable tagged-JSON file
+        if (settingsHits.exportBtn && inRect(p, settingsHits.exportBtn)) {
+            const file = buildTownExport(world);
+            if (!file) { saveportNote = { text: 'THIS SESSION IS NOT SAVING - NOTHING TO EXPORT', until: performance.now() + 4000 }; return; }
+            const stamp = `${String(file.town || 'town').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'town'}-day${file.day}`;
+            const blob = new Blob([JSON.stringify(file)], { type: 'application/json' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = `propagate-${stamp}.json`;
+            a.click();
+            setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+            saveportNote = { text: 'TOWN FILE DOWNLOADED', until: performance.now() + 4000 };
+            return;
+        }
+        // #saveport — IMPORT: pick a file, then a SECOND click confirms. The confirm beat is armed by
+        // the file parse below; this branch is both the picker and the confirm depending on state.
+        if (settingsHits.importBtn && inRect(p, settingsHits.importBtn)) {
+            if (pendingImport) {
+                const parsed = pendingImport.parsed;
+                pendingImport = null;
+                saveportNote = { text: 'IMPORTING...', until: performance.now() + 60000 };
+                importTownFile(parsed, (snap) => World.fromSave(snap)).then((r) => {
+                    if (!r.ok) { saveportNote = { text: `IMPORT REFUSED: ${String(r.error || '').toUpperCase().slice(0, 34)}`, until: performance.now() + 8000 }; return; }
+                    // this tab's world is superseded (the import bumped the generation, so its own
+                    // saves now fail the CAS by design) — reboot into the imported town
+                    saveportNote = { text: 'IMPORTED - RELOADING...', until: performance.now() + 60000 };
+                    setTimeout(() => location.reload(), 400);
+                }).catch(() => { saveportNote = { text: 'IMPORT FAILED', until: performance.now() + 6000 }; });
+                return;
+            }
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.json,application/json';
+            input.onchange = () => {
+                const f = input.files && input.files[0];
+                if (!f) return;
+                f.text().then((txt) => {
+                    let parsed;
+                    try { parsed = JSON.parse(txt); } catch { saveportNote = { text: 'NOT A TOWN FILE (BAD JSON)', until: performance.now() + 6000 }; return; }
+                    if (!parsed || parsed.format !== 'propagate-town') { saveportNote = { text: 'NOT A PROPAGATE TOWN FILE', until: performance.now() + 6000 }; return; }
+                    pendingImport = { parsed, town: parsed.town, day: parsed.day, seed: parsed.seed };
+                }).catch(() => { saveportNote = { text: 'COULD NOT READ THE FILE', until: performance.now() + 6000 }; });
+            };
+            input.click();
+            return;
+        }
         // #credits — the CraftPix attribution link
         if (settingsHits.craftpix && inRect(p, settingsHits.craftpix)) {
             window.open('https://craftpix.net/freebies/free-swordsman-1-3-level-pixel-top-down-sprite-character-pack/', '_blank', 'noopener');
@@ -7333,7 +7406,7 @@ out.addEventListener('pointerup', (e) => {
             else adminNote = { text: 'A REAL RAID IS UNDER WAY - WAR PARTY HELD', until: performance.now() + 3000 };
             return;
         }
-        if (!inRect(p, settingsHits.panel)) { settingsOpen = false; return; }   // click outside closes
+        if (!inRect(p, settingsHits.panel)) { settingsOpen = false; pendingImport = null; return; }   // click outside closes
         return;   // click inside the panel, no-op
     }
     if (inRect(p, ROSTER_BTN)) { rosterOpen = !rosterOpen; if (rosterOpen) { boardOpen = false; chronOpen = false; closeWorldMap(); } else { chatDropdownOpen = false; blurChatInput(); } return; }
@@ -7806,7 +7879,7 @@ window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && world && booted) {
         followMode = false; followTarget = null;
         selected = null; selectedSlotKey = null;
-        rosterOpen = false; chronOpen = false; boardOpen = false; settingsOpen = false; closeWorldMap();
+        rosterOpen = false; chronOpen = false; boardOpen = false; settingsOpen = false; pendingImport = null; closeWorldMap();
         chatDropdownOpen = false; blurChatInput();
     }
     // ← / → — cycle through the whole cast: moves the open card and/or the follow target together
@@ -9253,7 +9326,7 @@ function drawStartScreen() {
         rehearsalDebug: () => ({ had: _hadRehearsal, reh: !!(world && world.rehearsal), snap: !!(world && world._rehearsalSnapshot), speed: world && world._speedMult }),   // #Codex67-1 watcher visibility
         FIXED_DT,
         // QA: open the town chronicle straight to a tab (0 NEWS / 1 RECIPES / 2 TALES)
-        openChron: (tab = 0) => { rosterOpen = boardOpen = worldMapOpen = settingsOpen = false; chronOpen = true; chronTab = tab; chronScroll = 0; },
+        openChron: (tab = 0) => { rosterOpen = boardOpen = worldMapOpen = settingsOpen = false; pendingImport = null; chronOpen = true; chronTab = tab; chronScroll = 0; },
         // QA: open the Roster straight to a tab (0 PLAYER STATS / 1 ROLES)
         openRoster: (tab = 0) => { chronOpen = boardOpen = worldMapOpen = settingsOpen = false; rosterOpen = true; rosterTab = tab; rosterScroll = 0; },
         // center the camera on a tile (uses the REAL internal resolution — external camera
