@@ -301,6 +301,32 @@ await check('{kind} alone is NOT an LLM success — all three protocol fields re
     assert.strictEqual(cls?.ok, false, `a partial protocol object was recorded llm: ${JSON.stringify(cls)}`);
 });
 
+await check('target semantics are the contract — not just its type (Codex #120 r4)', async () => {
+    // The producer can only return a cast name on visit and '' otherwise; anything else is a
+    // response the server cannot produce. Both directions, plus the valid visit — or the fix could
+    // pass by rejecting every visit outright.
+    const cases = [
+        [{ kind: 'visit', target: 'PLAYER_PRIVATE_WHISPER', tone: 'suggest' }, false, 'unknown visit target'],
+        [{ kind: 'rest', target: 'Cricket', tone: 'suggest' }, false, 'target on a non-visit'],
+        [{ kind: 'visit', target: 'Cricket', tone: 'suggest' }, true, 'a REAL cast member'],
+    ];
+    for (const [resp, wantOk, label] of cases) {
+        whisperLog.clear();
+        globalThis.fetch = async (_u, opts) => {
+            const stage = JSON.parse(opts.body).stage;
+            if (stage === 'classify') return { ok: true, status: 200, json: async () => resp };
+            return { ok: true, status: 200, json: async () => ({ line: 'Aye.', verdict: 'DISMISS' }) };
+        };
+        const w = world();
+        const other = farmer(w); other.sheet.name = 'Cricket Kettle'; w.farmers.push(other);
+        const out = await whisper(w, w.farmers[0], 'go see cricket', null);
+        const cls = diag().find(e => e.stage === 'classify');
+        assert.strictEqual(cls?.ok, wantOk, `${label}: recorded ${cls?.ok}, wanted ${wantOk}`);
+        if (!wantOk) assert.ok(!/PLAYER_PRIVATE/.test(JSON.stringify(out)),
+            `an invalid target escaped whisper(): ${JSON.stringify(out).slice(0, 120)}`);
+    }
+});
+
 console.log(`\n${passes} passed, ${failures} failed`);
 if (failures) { console.log('The whisper diagnostic cannot be trusted to explain a fallback.'); process.exit(1); }
 console.log('Whisper diag: both stages recorded, reasons kept, ring capped, never load-bearing.');

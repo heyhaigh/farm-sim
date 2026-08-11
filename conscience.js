@@ -295,6 +295,14 @@ export async function whisper(world, farmer, message, save) {
         // `return { kind, target, tone }` — so requiring them rejects nothing the server sends.
         if (!cls || !KINDS.includes(cls.kind) || !TONES.includes(cls.tone)
             || typeof cls.target !== 'string') throw new Error('malformed classify response');
+        // ...and target SEMANTICS, not just its type (Codex #120 r4). The producer's own
+        // classify_normalize only ever returns a target that is a canonical current-townsperson
+        // name on a visit, and '' on everything else — a match failure collapses the kind to
+        // 'none'. So any other combination is not a defensive edge case, it is a response the
+        // server cannot produce: {kind:'visit', target:'<anything>'} rode through as an LLM
+        // success and out of whisper() unchanged.
+        if (cls.kind === 'visit' ? !names.includes(cls.target) : cls.target !== '')
+            throw new Error('malformed classify response');
         diagRecord('classify', true, `kind=${cls.kind || 'none'}`, Date.now() - t0);
     } catch (err) {
         diagRecord('classify', false, diagReason(err), Date.now() - t0);
