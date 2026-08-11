@@ -15,7 +15,20 @@
 // gpt-4.1-mini) · RY_FARMS_LLM_OFF · RY_FARMS_ALLOW_PAID_LLM.
 
 const LOCAL_HOST_RE = /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:\d+)?(\/|$)/i;
-const REQUEST_TIMEOUT_MS = 8000;
+// Overridable so the timeout-failover path can be tested without an eight-second wait per case, and
+// so a deployment on a slower link can raise it. Validated like RY_FARMS_TOKEN_BUDGET: a junk value
+// falls back to the default with a warning rather than silently disabling the timeout.
+const REQUEST_TIMEOUT_DEFAULT = 8000;
+const REQUEST_TIMEOUT_MS = (() => {
+    const raw = process.env.RY_FARMS_REQUEST_TIMEOUT_MS;
+    if (raw == null || raw === '') return REQUEST_TIMEOUT_DEFAULT;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) {
+        console.warn(`[llm] ignoring RY_FARMS_REQUEST_TIMEOUT_MS=${raw} (not a positive number) - using ${REQUEST_TIMEOUT_DEFAULT}ms`);
+        return REQUEST_TIMEOUT_DEFAULT;
+    }
+    return n;
+})();
 // server-side wall-clock budget — the ONLY cost control that survives tabs/reloads/fast-forward (sim-time
 // cooldowns don't): at most BUDGET_MAX model requests per rolling BUDGET_WINDOW_MS across the whole process.
 const BUDGET_WINDOW_MS = 60_000;
@@ -247,9 +260,19 @@ const FORMAT_UNSUPPORTED_RE = /\bthis\s+model\s+does\s+not\s+support\s+response\
 // treated as a model-level failure and moves to the next model immediately, while alternatives
 // remain. On the LAST model the ladder is still walked in full, because by then degrading is the
 // only thing left to try.
-const FORMAT_COMPLAINT_RE = /response[ _-]?format|json[_ ]?schema|structured output|schema/i;
+// EXPLICIT signals only. The first version of this ended with a bare `|schema`, which recreated the
+// very bug it was written to fix (Codex #117 P1): "deployment does not match the provider API schema"
+// is a model-level 400 that happens to contain the word, so the ladder was walked again, and seven
+// production-shaped schemas once more exhausted the request ceiling before the healthy fallback was
+// reached. `schema` appears in plenty of sentences that are not about structured output.
+//
+// This is the fourth prose classifier in this file and the fourth to be wrong, always in the same
+// way: a term broad enough to match the thing I meant also matches things I did not think of.
+const FORMAT_COMPLAINT_RE = /response[ _-]?format|json[_ ]?schema|structured output/i;
 const looksFormatComplaint = (err) => FORMAT_COMPLAINT_RE.test(String(err?.message || ''))
-    || /json_validate|response_format|schema/i.test(String(err?.code || ''));
+    // `json_validate_failed` is the CAPTURED code from a real Groq schema rejection; `response_format`
+    // covers a provider naming the parameter in its code. Bare `schema` is deliberately absent here too.
+    || /json_validate|response_format/i.test(String(err?.code || ''));
 
 const isFormatUnsupported = (err) => FORMAT_UNSUPPORTED_RE.test(String(err?.message || ''));
 
@@ -634,6 +657,23 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
                                 console.warn(`[llm] ${model} refused ${response_format.type} for "${schemaName}" (${r.status}, ${wide ? 'format' : 'schema'}-scoped): ${why.type || '?'}/${why.code || '?'} ${why.message}`);
                             }
                         }
+                    } catch (netErr) {
+                        // OUR OWN TIMEOUT is a property of THIS MODEL (Codex #117 P1). Inference
+                        // latency differs per model and the default chain deliberately puts the
+                        // larger, slower one first — so an abort on gpt-oss-120b is exactly the case
+                        // a fallback to gpt-oss-20b exists to rescue, and it was escaping to the
+                        // shared breaker with the healthy model never asked.
+                        //
+                        // Everything else stays provider-wide on purpose: DNS, TLS and a wrong base
+                        // URL fail identically for every model behind the same host, and retrying a
+                        // connection reset is a provider retry policy, not a failover.
+                        if (controller.signal.aborted && !lastModel) {
+                            lastErr = netErr;
+                            tryNextModel = true;
+                            clearTimeout(timer);
+                            break;
+                        }
+                        throw netErr;
                     } finally { clearTimeout(timer); }
                     if (!retrySmaller) break;   // fall through to the next format (or out, if giveUp)
                 }

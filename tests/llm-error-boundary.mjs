@@ -49,6 +49,8 @@ const completion = (obj) => ({ status: 200, body: { choices: [{ message: { conte
 process.env.OPENAI_BASE_URL = 'http://127.0.0.1:9/v1';
 process.env.OPENAI_API_KEY = 'test-key-not-used';
 process.env.RY_FARMS_LLM_MODELS = 'primary/model,fallback/model';
+// keeps the timeout-failover case fast; the real default is 8s
+process.env.RY_FARMS_REQUEST_TIMEOUT_MS = '120';
 
 console.log('\n#llm-error-boundary — generated content must not steer permanent state\n');
 
@@ -336,6 +338,92 @@ await check('one model\'s success does not clear ANOTHER model\'s strikes', asyn
 
     assert.ok(!sent.slice(before).some(x => x.model === 'primary/model'),
         'the fallback succeeding cleared the primary\'s strike, so a dead model was retried immediately');
+});
+
+await check('an ambiguous "schema" diagnostic does not walk the ladder', async () => {
+    // Codex #117 P1. The gate's first version ended with a bare `|schema`, which recreated the bug it
+    // was written to fix: this message is a MODEL-level failure that merely contains the word, so the
+    // ladder was walked per schema and seven of them exhausted the request ceiling again.
+    const { callLLM } = freshLlm();
+    const sent = stubFetch(({ model }) => (
+        model === 'primary/model'
+            ? { status: 400, body: JSON.stringify({ error: {
+                  message: 'Service temporarily unavailable: deployment does not match the provider API schema.' } }) }
+            : completion({ ok: true })));
+
+    let ok = 0;
+    for (let i = 1; i <= 7; i++) {
+        const out = await callLLM({ system: 's', user: 'u', schema: { type: 'object' }, schemaName: `amb_${i}`, maxTokens: 50 });
+        if (out?.ok) ok++;
+    }
+    assert.strictEqual(ok, 7, `only ${ok} of 7 reached the fallback — "schema" in unrelated prose is walking the ladder`);
+    assert.ok(sent.length <= 14, `${sent.length} requests for 7 schemas; the ladder is being walked on a model-level failure`);
+});
+
+await check('OUR OWN timeout fails over to the next model', async () => {
+    // Codex #117 P1. An abort from this controller escaped to the shared breaker, so a slow primary
+    // ended the call and the healthy fallback was never asked — and the default chain deliberately
+    // puts the larger, slower model first, which is precisely the case a fallback exists to rescue.
+    //
+    // Driven by the REAL timer rather than by throwing a lookalike error: the discriminator is
+    // `controller.signal.aborted`, so a stub that merely throws an AbortError without aborting the
+    // controller would pass against code that does not work. RY_FARMS_REQUEST_TIMEOUT_MS keeps it
+    // quick; an earlier version of this case took eight seconds and proved the same thing.
+    const { callLLM } = freshLlm();
+    const sent = [];
+    globalThis.fetch = async (_url, opts) => {
+        const body = JSON.parse(opts.body);
+        sent.push({ model: body.model, format: body.response_format?.type || 'none' });
+        if (body.model === 'primary/model') {
+            return await new Promise((_res, rej) => {
+                opts.signal.addEventListener('abort', () => {
+                    const e = new Error('The operation was aborted'); e.name = 'AbortError'; rej(e);
+                });
+            });
+        }
+        return { ok: true, status: 200, text: async () => '', json: async () => ({ choices: [{ message: { content: '{"ok":true}' } }] }) };
+    };
+
+    const out = await callLLM({ system: 's', user: 'u', schema: { type: 'object' }, schemaName: 'slow', maxTokens: 50 });
+    assert.deepStrictEqual(out, { ok: true }, 'a timeout on the primary ended the call');
+    assert.ok(sent.some(x => x.model === 'fallback/model'), 'the healthy fallback was never asked');
+});
+
+await check('an ambiguous "schema" in the CODE does not walk the ladder either', async () => {
+    // The message regex and the code regex are separate, and the ambiguous case above carries no
+    // code — so restoring the bare `|schema` to the CODE pattern escaped it. Providers put terse
+    // identifiers in `code`, and "schema" appears in plenty that are not about structured output.
+    const { callLLM } = freshLlm();
+    const sent = stubFetch(({ model }) => (
+        model === 'primary/model'
+            ? { status: 400, body: JSON.stringify({ error: {
+                  code: 'deployment_schema_mismatch', message: 'Service temporarily unavailable.' } }) }
+            : completion({ ok: true })));
+
+    await callLLM({ system: 's', user: 'u', schema: { type: 'object' }, schemaName: 'code_amb', maxTokens: 50 });
+    assert.strictEqual(sent.filter(x => x.model === 'primary/model').length, 1,
+        'a code merely containing "schema" walked the format ladder on a model-level failure');
+});
+
+await check('a NON-timeout transport failure stays provider-wide', async () => {
+    // The counterpart to the timeout case, and the reason it matters: a mutation making ALL transport
+    // errors fail over escaped, because nothing exercised a transport failure that is NOT our abort.
+    //
+    // Both models sit behind one OPENAI_BASE_URL, so a connection reset fails identically for each —
+    // retrying it is a provider retry policy, not a failover, and spending the fallback's attempt on
+    // it buys nothing while the whole call is already lost.
+    const { callLLM } = freshLlm();
+    const sent = [];
+    globalThis.fetch = async (_url, opts) => {
+        sent.push({ model: JSON.parse(opts.body).model });
+        const e = new Error('read ECONNRESET'); e.code = 'ECONNRESET';
+        throw e;                            // NOT an abort: the controller never fired
+    };
+    await assert.rejects(
+        () => callLLM({ system: 's', user: 'u', schema: { type: 'object' }, schemaName: 'reset', maxTokens: 50 }),
+        /ECONNRESET/, 'a connection reset should end the call rather than being retried per model');
+    assert.strictEqual(sent.length, 1,
+        `a connection reset was retried across ${sent.length} models; it fails the same way for each`);
 });
 
 console.log(`\n${passes} passed, ${failures} failed`);
