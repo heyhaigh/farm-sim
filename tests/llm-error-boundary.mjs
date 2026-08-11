@@ -140,9 +140,10 @@ await check('a retirement code MENTIONED in prose is not a retirement code', asy
 });
 
 await check('FAILOVER does not depend on recognising a retirement message', async () => {
-    // The reason the invented codes were dangerous: the chain only advanced when a retirement was
-    // RECOGNISED, so an unrecognised decommission message on 2026-08-16 would never reach the
-    // fallback model. Recognition is an optimisation; having somewhere else to go is the failover.
+    // WITH A SCHEMA, because every production caller supplies one and the first version of this case
+    // did not (Codex #116 P1). Without a schema there is only one format to fail, so the case passed
+    // while the real path — walk json_schema, json_object, none on a dead model before advancing —
+    // went untested.
     const { callLLM } = freshLlm();
     const sent = stubFetch(({ model }) => (
         model === 'primary/model'
@@ -150,10 +151,93 @@ await check('FAILOVER does not depend on recognising a retirement message', asyn
             ? { status: 400, body: JSON.stringify({ error: { message: 'Service temporarily unavailable for this deployment.' } }) }
             : completion({ ok: true })));
 
-    const out = await callLLM({ system: 's', user: 'u', schemaName: 'shape_a', maxTokens: 50 });
+    const out = await callLLM({ system: 's', user: 'u', schema: { type: 'object' }, schemaName: 'shape_a', maxTokens: 50 });
     assert.deepStrictEqual(out, { ok: true }, 'the call did not reach the fallback model');
     assert.ok(sent.some(x => x.model === 'fallback/model'),
         'the chain never tried the fallback because the failure was not recognised as retirement');
+    // and it must not have walked the whole ladder to get there
+    assert.strictEqual(sent.filter(x => x.model === 'primary/model').length, 1,
+        `spent ${sent.filter(x => x.model === 'primary/model').length} requests on a dead model before failing over`);
+});
+
+await check('a dead primary cannot eat the request budget before the fallback is tried', async () => {
+    // Codex #116 P1, reproduced verbatim: seven distinct schemas against a dead primary and a healthy
+    // fallback. Walking json_schema -> json_object -> none on the primary for EACH schema spent three
+    // requests apiece, so the seventh hit the 26-request ceiling and the healthy fallback was never
+    // reached. Recognition was not an optimisation after all — under model-outer/format-inner
+    // ordering it was the thing keeping a dead model from eating the failover budget. I asserted the
+    // opposite twice.
+    const { callLLM } = freshLlm();
+    const sent = stubFetch(({ model }) => (
+        model === 'primary/model'
+            ? { status: 400, body: JSON.stringify({ error: { message: 'Service temporarily unavailable for this deployment.' } }) }
+            : completion({ ok: true })));
+
+    let ok = 0;
+    for (let i = 1; i <= 7; i++) {
+        const out = await callLLM({ system: 's', user: 'u', schema: { type: 'object' }, schemaName: `shape_${i}`, maxTokens: 50 });
+        if (out?.ok) ok++;
+    }
+    assert.strictEqual(ok, 7, `only ${ok} of 7 schemas reached the healthy fallback`);
+    assert.ok(sent.length <= 14,
+        `${sent.length} upstream requests for 7 schemas — the format ladder is being walked on a model-level failure`);
+});
+
+await check('a genuine FORMAT complaint still walks the ladder', async () => {
+    // The counterpart, or the fix above would pass by never degrading at all — and json_object is
+    // what carries every call on a model that refuses strict output.
+    const { callLLM } = freshLlm();
+    const sent = stubFetch(({ format }) => (
+        format === 'json_schema'
+            ? { status: 400, body: JSON.stringify({ error: { code: 'json_validate_failed', message: 'Generated JSON did not match the schema' } }) }
+            : completion({ ok: true })));
+
+    const out = await callLLM({ system: 's', user: 'u', schema: { type: 'object' }, schemaName: 'shape_a', maxTokens: 50 });
+    assert.deepStrictEqual(out, { ok: true });
+    assert.deepStrictEqual(sent.map(x => x.format), ['json_schema', 'json_object'],
+        'a schema complaint should degrade on the SAME model rather than failing over');
+});
+
+await check('an unusable 200 fails over instead of abandoning the chain', async () => {
+    // Codex #116 P1: parseJson/extractContent failures escaped to the outer catch, so a primary
+    // returning HTTP 200 with empty content rejected the whole call and the fallback was never asked.
+    // Reasoning models returning empty content has already happened once in this migration.
+    const { callLLM } = freshLlm();
+    const sent = stubFetch(({ model }) => (
+        model === 'primary/model'
+            ? { status: 200, body: { choices: [{ message: { content: '' } }] } }
+            : completion({ ok: true })));
+
+    const out = await callLLM({ system: 's', user: 'u', schema: { type: 'object' }, schemaName: 'shape_a', maxTokens: 50 });
+    assert.deepStrictEqual(out, { ok: true }, 'an empty 200 on the primary killed the call');
+    assert.ok(sent.some(x => x.model === 'fallback/model'), 'the fallback was never asked');
+});
+
+await check('a proven success clears the model\'s retirement strikes', async () => {
+    // Codex #116 P2. The expiring verdict inherited the stale-history problem fixed for schema skips
+    // in #113: a model that answered correctly a moment ago is not a repeat offender, but its old
+    // strike stood, so the next blip skipped it for five minutes instead of sixty seconds.
+    const realNow = Date.now;
+    const { callLLM } = freshLlm();
+    let retired = true;
+    const sent = stubFetch(({ model }) => (
+        model === 'primary/model' && retired
+            ? { status: 400, body: JSON.stringify({ error: { code: 'model_decommissioned', message: 'gone' } }) }
+            : completion({ ok: true })));
+    const base = realNow();
+
+    Date.now = () => base;               await callLLM({ system: 's', user: 'u', schemaName: 'a', maxTokens: 50 });  // strike 1
+    retired = false;
+    Date.now = () => base + 61_000;      await callLLM({ system: 's', user: 'u', schemaName: 'a', maxTokens: 50 });  // primary proves healthy
+    retired = true;
+    Date.now = () => base + 62_000;      await callLLM({ system: 's', user: 'u', schemaName: 'a', maxTokens: 50 });  // strike 1 again, not 2
+    retired = false;
+    const before = sent.length;
+    Date.now = () => base + 124_000;     await callLLM({ system: 's', user: 'u', schemaName: 'a', maxTokens: 50 });
+    Date.now = realNow;
+
+    assert.ok(sent.slice(before).some(x => x.model === 'primary/model'),
+        'stale strikes survived a proven success, so the healthy primary stayed skipped');
 });
 
 await check('a retirement verdict EXPIRES rather than sticking for the process', async () => {
@@ -227,6 +311,31 @@ await check('END TO END: the retained refusal never carries generated content', 
     const kept = JSON.stringify(lastRefusalFor('leaky'));
     assert.ok(!/PLAYER SAID|private note/.test(kept), `generated content was retained: ${kept}`);
     assert.ok(!/failed_generation/.test(kept), `the field itself was retained: ${kept}`);
+});
+
+await check('one model\'s success does not clear ANOTHER model\'s strikes', async () => {
+    // A mutation replacing `_modelDead.delete(model)` with `_modelDead.clear()` escaped every case in
+    // this file, because none of them ever had two models flagged at once. Clearing the whole map on
+    // any success would resurrect a genuinely dead model the moment its replacement answered — and
+    // the replacement answering is the NORMAL state after a failover, so it would fire constantly.
+    const realNow = Date.now;
+    const { callLLM } = freshLlm();
+    const sent = stubFetch(({ model }) => (
+        model === 'primary/model'
+            ? { status: 400, body: JSON.stringify({ error: { code: 'model_decommissioned', message: 'gone' } }) }
+            : completion({ ok: true })));
+    const base = realNow();
+
+    Date.now = () => base;
+    // primary is flagged, and the SAME call then succeeds on the fallback
+    await callLLM({ system: 's', user: 'u', schemaName: 'a', maxTokens: 50 });
+    const before = sent.length;
+    Date.now = () => base + 30_000;   // still inside primary's 60s window
+    await callLLM({ system: 's', user: 'u', schemaName: 'a', maxTokens: 50 });
+    Date.now = realNow;
+
+    assert.ok(!sent.slice(before).some(x => x.model === 'primary/model'),
+        'the fallback succeeding cleared the primary\'s strike, so a dead model was retried immediately');
 });
 
 console.log(`\n${passes} passed, ${failures} failed`);

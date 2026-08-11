@@ -234,6 +234,23 @@ function modelChain() {
 const FORMAT_UNSUPPORTED_RE = /\bthis\s+model\s+does\s+not\s+support\s+response\s+format\b/i;
 // Only the provider's own diagnostic. Passing the raw body here let generated content decide whether
 // structured output was disabled for the whole process (Codex #115 P1).
+// Is this 400 plausibly a complaint about the FORMAT, or just a failure that happens to be a 400?
+//
+// Codex #116 P1: the format ladder (json_schema -> json_object -> none) is walked on every 400, so a
+// dead primary answering with an unrecognised 400 burned THREE requests per schema before the chain
+// advanced. With seven distinct schemas that reached the 26-request ceiling and the healthy fallback
+// was never tried at all — which is how "recognition is only an optimisation", a thing I asserted
+// twice, turned out to be false: under model-outer/format-inner ordering, recognition is what stops
+// a dead model eating the failover budget.
+//
+// So the ladder now requires evidence that the format is what upset the provider. Anything else is
+// treated as a model-level failure and moves to the next model immediately, while alternatives
+// remain. On the LAST model the ladder is still walked in full, because by then degrading is the
+// only thing left to try.
+const FORMAT_COMPLAINT_RE = /response[ _-]?format|json[_ ]?schema|structured output|schema/i;
+const looksFormatComplaint = (err) => FORMAT_COMPLAINT_RE.test(String(err?.message || ''))
+    || /json_validate|response_format|schema/i.test(String(err?.code || ''));
+
 const isFormatUnsupported = (err) => FORMAT_UNSUPPORTED_RE.test(String(err?.message || ''));
 
 // What may be REMEMBERED and LOGGED from a provider error body — an allow-list, not a truncation.
@@ -458,6 +475,11 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
             let tryNextModel = false;   // model-scoped 429/403: this model is unusable, others may not be
             let giveUp = false;         // a non-retryable status: stop trying formats too, not just sizes
 
+            // Hoisted above the request: the r.ok path now reads it too, and as a `const` declared
+            // further down it sat in the temporal dead zone — a ReferenceError on the first
+            // unparseable 200. This project has shipped that exact shape before (a const inside
+            // boot() read at module scope, which froze the game while every test stayed green).
+            const lastModel = model === chain[chain.length - 1];
             for (const response_format of formats) {
                 // Inner loop retries the SAME format with a smaller ask on 413. It must be nested rather
                 // than folded into the format loop: a size rejection says nothing about the format, and
@@ -500,7 +522,19 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
                             method: 'POST', headers, body: JSON.stringify(body), signal: controller.signal,
                         });
                         if (r.ok) {
-                            const out = parseJson(extractContent(await r.json()));
+                            // A 200 whose body is not usable JSON is a failure of THIS MODEL, and it
+                            // used to escape to the outer catch — so the chain never advanced and the
+                            // fallback was never asked (Codex #116 P1). Reasoning models returning
+                            // empty content has already happened once in this migration, which is
+                            // exactly the shape this now survives.
+                            let out;
+                            try {
+                                out = parseJson(extractContent(await r.json()));
+                            } catch (parseErr) {
+                                lastErr = parseErr;
+                                if (!lastModel) { tryNextModel = true; break; }
+                                throw parseErr;
+                            }
                             _breaker.fails = 0;
                             // #formatwitness record the format that WORKED, not the one we hoped for
                             _lastFormat.set(schemaName, { format: response_format ? response_format.type : 'none', model });
@@ -518,13 +552,18 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
                             if (response_format?.type === 'json_schema') {
                                 _formatSkip.delete(`${model}|json_schema|${schemaName}`);
                             }
+                            // ...and this model's retirement history, for the same reason (Codex
+                            // #116 P2). The expiring verdict inherited the stale-strike problem fixed
+                            // for schemas in #113: a model that answered correctly a moment ago is
+                            // not a repeat offender, and letting old strikes stand meant the next
+                            // blip skipped it for five minutes instead of sixty seconds.
+                            _modelDead.delete(model);
                             return out;
                         }
                         const errText = await r.text().catch(() => '');
                         // Parse ONCE. Every classifier below reads this, never errText (Codex #115 P1).
                         const providerErr = parseProviderError(errText);
                         lastErr = new Error(`LLM request failed (${r.status})`);
-                        const lastModel = model === chain[chain.length - 1];
                         // #modelchain (Codex #104 P1-4) a 429 or a 403 can be MODEL-SCOPED: Groq publishes
                         // per-model rate limits and per-model permissions, so an exhausted or blocked first
                         // model can sit beside a perfectly usable second one. Opening the shared breaker
@@ -561,6 +600,11 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
                             retrySmaller = true;
                         } else if (r.status !== 400 && r.status !== 422) {
                             giveUp = true;   // only a format-rejection is worth trying another format for
+                        } else if (!looksFormatComplaint(providerErr) && !lastModel) {
+                            // A 400 that says nothing about the format is not worth degrading for.
+                            // Try the next MODEL instead of spending two more requests proving that
+                            // this one is still broken (Codex #116 P1).
+                            tryNextModel = true;
                         } else {
                             // A format rejection costs no TOKENS but is still a REQUEST (Codex #110 P1-1).
                             //
