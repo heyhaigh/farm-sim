@@ -189,37 +189,36 @@ function modelChain() {
 // endpoints for the life of the process; a wrong "schema refused" verdict costs one extra 400 per
 // schema, once. So only unambiguous prose about the PARAMETER counts, and everything else — every
 // schema validation complaint, every message we have never seen — is treated as schema-specific.
-// MODEL-LEVEL WORDING REQUIRED, and the parameter is spelled BOTH ways.
+// ONLY THE SENTENCE PRODUCTION ACTUALLY SENT.
 //
-// Corrected 2026-08-11 from a real production log line rather than from reasoning about what a
-// provider might say. Groq's llama-3.1-8b answers:
+// Captured from Railway on 2026-08-11, twenty seconds after the deploy that added refusal logging:
 //
 //     "This model does not support response format `json_schema`."
 //
-// That is unambiguous model-level wording, and the previous pattern missed it for exactly one
-// reason: it required an UNDERSCORE where Groq writes a SPACE. So a refusal that should have been a
-// single permanent model-wide skip was classified schema-scoped, and every schema rediscovered it
-// separately — visible in Railway as separate refusals for ry_farms_conscience_classify and
-// ry_farms_invent within twenty seconds of the deploy.
+// Two earlier versions of this pattern were wrong in opposite directions, and both were written by
+// reasoning about what a provider might say:
 //
-// Codex #112 asked for a negative test on the underscore form and I wrote one, replacing a case that
-// had used the space form. Both of us were reasoning about the string instead of reading one, and
-// the string we discarded was the one production actually sends.
+//   #112  too loose  — any "response_format ... not supported" became a process-wide verdict.
+//   #114  too strict — required an UNDERSCORE where Groq writes a SPACE, so the real refusal was
+//                      classified schema-scoped and every schema rediscovered it separately.
 //
-// The bias is unchanged: a wrong "format" verdict mutes structured output for a model for the
-// process lifetime, a wrong "schema" verdict costs one extra 400. Only an explicit reference to the
-// MODEL counts — wording about the request or the schema does not.
-const FORMAT_UNSUPPORTED_RE = (() => {
-    // BOTH spellings occur in the wild. Groq's llama-3.1-8b writes "response format" with a SPACE;
-    // the message quoted further up this file writes "response_format" with an UNDERSCORE.
-    const RF = 'response[ _-]?format';
-    return new RegExp(
-        // "...response format json_schema is not supported by/for/on this model"
-        `${RF}[\\s\\S]{0,80}?(?:not|no longer)\\s+supported\\s+(?:by|for|on)\\s+(?:this\\s+)?model`
-        // "this model does not support response format json_schema"
-        + `|model[\\s\\S]{0,60}?does\\s+not\\s+support[\\s\\S]{0,60}?${RF}`,
-        'i');
-})();
+// The third attempt was too loose again in a subtler way: `model ... does not support ... response
+// format` inside a 60-character window does not check that "model" is the SUBJECT. Codex #114
+// reproduced two sentences it promoted to a permanent process-wide skip —
+// "This model request does not support response format json_schema" and "The model-generated schema
+// does not support nested objects in this response format" — neither of which says the model cannot
+// do structured output.
+//
+// The underscore branch is deleted rather than kept "just in case". Its justification was
+// `response_format json_schema is no longer supported`, quoted in this file as though it were a
+// provider message; `git log -S` shows that string entering the repository exactly once, in 497055e,
+// as a SYNTHETIC fixture I wrote for the retirement classifier. A pattern branch cannot rest on a
+// precedent I invented, and I cited it in the #114 directive as if it were evidence.
+//
+// So: match the captured template and nothing else. A future provider wording that this misses is
+// classified schema-scoped, which costs one extra 400 per schema on a backoff — the safe direction.
+// Widen only when another real refusal is captured, and add it here verbatim when it is.
+const FORMAT_UNSUPPORTED_RE = /\bthis\s+model\s+does\s+not\s+support\s+response\s+format\b/i;
 const isFormatUnsupported = (bodyText) => FORMAT_UNSUPPORTED_RE.test(String(bodyText || ''));
 
 // What may be REMEMBERED and LOGGED from a provider error body — an allow-list, not a truncation.

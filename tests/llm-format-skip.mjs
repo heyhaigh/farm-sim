@@ -168,7 +168,11 @@ await check('a FORMAT-level rejection still disables json_schema model-wide', as
     const { callLLM } = freshLlm();
     const sent = stubFetch(({ format }) => {
         if (format === 'json_schema') {
-            return { status: 400, body: JSON.stringify({ error: { code: 'invalid_request', message: 'response_format json_schema is not supported by this model' } }) };
+            // The CAPTURED sentence, not the synthetic one this case used to carry. Its previous
+            // fixture — "response_format json_schema is not supported by this model" — entered the
+            // repository in 497055e as a reproduction I wrote, never as provider output, and the
+            // pattern branch that matched it has been deleted (Codex #114 P1).
+            return { status: 400, body: JSON.stringify({ error: { code: 'invalid_request', message: 'This model does not support response format `json_schema`.' } }) };
         }
         return completion({ ok: true });
     });
@@ -324,6 +328,58 @@ await check('THE REAL llama refusal is model-wide — read from a production log
 
     assert.ok(!sent.slice(firstRound).some(x => x.format === 'json_schema'),
         'the real llama refusal was treated as schema-scoped, so every schema re-discovers it and re-probes forever');
+});
+
+// Sentences that MENTION a model but do not say the model lacks the capability. Codex #114 P1
+// reproduced both being promoted to a permanent process-wide skip by a pattern that looked for
+// `model ... does not support ... response format` inside a 60-character window without checking
+// that "model" was the grammatical subject.
+for (const [label, message] of [
+    ['"this model REQUEST does not support..."', 'This model request does not support response format json_schema.'],
+    ['"the MODEL-GENERATED SCHEMA does not support..."', 'The model-generated schema does not support nested objects in this response format.'],
+]) {
+    await check(`${label} is schema-scoped, not model-wide`, async () => {
+        const { callLLM } = freshLlm();
+        const sent = stubFetch(({ format }) => (
+            format === 'json_schema'
+                ? { status: 400, body: JSON.stringify({ error: { message } }) }
+                : completion({ ok: true })));
+        atSecond(0);
+        await callLLM({ system: 's', user: 'u', schema: { type: 'object' }, schemaName: 'shape_a', maxTokens: 50 });
+        const firstRound = sent.length;
+        // A DIFFERENT schema, immediately. A model-wide verdict would send it straight to
+        // json_object; a schema-scoped one leaves this schema free to try strict output.
+        await callLLM({ system: 's', user: 'u', schema: { type: 'object' }, schemaName: 'shape_b', maxTokens: 50 });
+        restoreClock();
+        assert.strictEqual(sent.slice(firstRound)[0]?.format, 'json_schema',
+            'a sentence that merely mentions a model disabled structured output for every schema');
+    });
+}
+
+await check('"THE model does not support..." is currently schema-scoped — a deliberate strictness', async () => {
+    // Not a bug report: a record of a CHOICE, so that widening the pattern later is a decision rather
+    // than a drift. Dropping the `this` from the pattern is behaviourally invisible to every other
+    // case in this file — it survived a mutation sweep — and the difference it does make is here.
+    //
+    // Groq sends "This model does not support...". A provider writing "The model does not support..."
+    // is plausible and would be classified SCHEMA-scoped by the current pattern: that schema pays a
+    // 400 and re-probes on backoff, instead of one permanent skip. Wasteful, not harmful, and it is
+    // the direction the bias deliberately errs in — the opposite mistake mutes structured output
+    // process-wide on a sentence that never said the model was incapable.
+    //
+    // If such a refusal is ever captured, widen the pattern AND move this case to the positive list.
+    const { callLLM } = freshLlm();
+    const sent = stubFetch(({ format }) => (
+        format === 'json_schema'
+            ? { status: 400, body: JSON.stringify({ error: { message: 'The model does not support response format `json_schema`.' } }) }
+            : completion({ ok: true })));
+    atSecond(0);
+    await callLLM({ system: 's', user: 'u', schema: { type: 'object' }, schemaName: 'shape_a', maxTokens: 50 });
+    const firstRound = sent.length;
+    await callLLM({ system: 's', user: 'u', schema: { type: 'object' }, schemaName: 'shape_b', maxTokens: 50 });
+    restoreClock();
+    assert.strictEqual(sent.slice(firstRound)[0]?.format, 'json_schema',
+        'the pattern was widened past the captured sentence without updating this case');
 });
 
 console.log(`\n${passes} passed, ${failures} failed`);
