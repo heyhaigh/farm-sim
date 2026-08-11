@@ -185,6 +185,31 @@ function diagLoad() {
     try { const v = JSON.parse(localStorage.getItem(DIAG_KEY)); return Array.isArray(v) ? v : []; }
     catch { return []; }
 }
+// The reason survives; the raw string does not (Codex #120 P2). `detail` used to keep any exception
+// message verbatim, and .copy() is explicitly an EXPORT — the documented workflow ends with the
+// player pasting the buffer. Codex reproduced a fallback:true error carrying player-like text being
+// retained whole, and server parse errors can quote fragments of model output, which is
+// prompt-derived. Truncation is not redaction, so: match categories and code identifiers, quote
+// nothing. The only free text that survives is a bare error CLASS name and code symbols (property /
+// function names from TypeError messages), which are identifiers from our own source, not content.
+function diagReason(err) {
+    if (err?.name === 'AbortError') return `timeout ${TIMEOUT_MS}ms`;
+    const m = String(err?.message || '');
+    let x;
+    if ((x = m.match(/^conscience endpoint (\d{3})$/))) return `http ${x[1]}`;
+    if (/^malformed (classify|reply) response$/.test(m)) return m;   // our own validation strings
+    // server fallback categories — matched, not quoted
+    if (/budget|token/i.test(m)) return 'fallback: budget';
+    if (/breaker|cooldown|rate|429/i.test(m)) return 'fallback: throttled';
+    if (/disabled|unconfigured|no OPENAI|not configured/i.test(m)) return 'fallback: disabled';
+    if (/did not return JSON|model returned|empty/i.test(m)) return 'fallback: bad-output';
+    if (/model unavailable|request failed/i.test(m)) return 'fallback: upstream';
+    // client-side throws — the error class plus CODE IDENTIFIERS only
+    if ((x = m.match(/([$\w]+) is not a function/))) return `client-throw: ${err?.name || 'Error'}: ${x[1]} is not a function`;
+    if ((x = m.match(/reading '([$\w]+)'/))) return `client-throw: ${err?.name || 'Error'}: reading ${x[1]}`;
+    if (err?.name && err.name !== 'Error') return `client-throw: ${err.name}`;
+    return 'fallback: other';
+}
 function diagRecord(stage, ok, detail, ms) {
     try {
         const log = diagLoad();
@@ -245,9 +270,12 @@ export async function whisper(world, farmer, message, save) {
     const t0 = Date.now();
     try {
         cls = await postJson({ stage: 'classify', message: text, names, recent: c.log.slice(-4).map(e => ({ who: e.who, text: String(e.text).slice(0, 90) })) });
+        // SHAPE before success (Codex #120 P2): an HTTP 200 `{}` used to read as an LLM "none" and
+        // be recorded llm — the instrument affirming the exact broken boundary it exists to expose.
+        if (!cls || typeof cls.kind !== 'string') throw new Error('malformed classify response');
         diagRecord('classify', true, `kind=${cls.kind || 'none'}`, Date.now() - t0);
     } catch (err) {
-        diagRecord('classify', false, err?.name === 'AbortError' ? `timeout ${TIMEOUT_MS}ms` : (err?.message || 'unknown'), Date.now() - t0);
+        diagRecord('classify', false, diagReason(err), Date.now() - t0);
         cls = offlineClassify(text, names);
     }
     // #classify-backstop — the 8B sometimes whiffs plainly actionable thoughts to "none" ("go chop some
@@ -282,10 +310,11 @@ export async function whisper(world, farmer, message, save) {
             history: c.log.slice(-6).map(e => ({ who: e.who, text: String(e.text).slice(0, 120) })),
             snapshot: snapshotOf(farmer),
         });
+        if (typeof r.line !== 'string' || !r.line.trim()) throw new Error('malformed reply response');
         line = r.line;
         diagRecord('reply', true, `verdict=${verdict}`, Date.now() - t1);
     } catch (err) {
-        diagRecord('reply', false, err?.name === 'AbortError' ? `timeout ${TIMEOUT_MS}ms` : (err?.message || 'unknown'), Date.now() - t1);
+        diagRecord('reply', false, diagReason(err), Date.now() - t1);
         line = offlineReply(verdict, farmer);
     }
 

@@ -78,9 +78,12 @@ await check('a healthy round records llm for BOTH stages', async () => {
         `got ${JSON.stringify(diag())}`);
 });
 
-await check('a fallback:true body is recorded as OFFLINE with the server reason', async () => {
+await check('a fallback:true body is recorded as OFFLINE with the reason CATEGORY', async () => {
     // postJson treats fallback:true as a throw — indistinguishable from a network error to the
-    // player, which is exactly why the reason must be kept.
+    // player, which is exactly why the reason must be kept. As a CATEGORY, not the raw string: the
+    // first version of this case asserted the server's literal words survived, which is the exact
+    // behaviour Codex #120 P2 required removing — the buffer is exportable, so free text is matched
+    // into an allow-listed bucket and never quoted.
     whisperLog.clear();
     globalThis.fetch = async (_u, opts) => {
         const stage = JSON.parse(opts.body).stage;
@@ -91,8 +94,9 @@ await check('a fallback:true body is recorded as OFFLINE with the server reason'
     await whisper(w, w.farmers[0], 'go get some rest', null);
     const entries = diag();
     assert.strictEqual(entries.find(e => e.stage === 'reply')?.ok, false);
-    assert.match(entries.find(e => e.stage === 'reply')?.detail || '', /budget exceeded/,
-        'the server-provided reason should survive into the record');
+    assert.strictEqual(entries.find(e => e.stage === 'reply')?.detail, 'fallback: budget',
+        `the reason category should survive, got: ${entries.find(e => e.stage === 'reply')?.detail}`);
+    assert.ok(!/exceeded/.test(JSON.stringify(entries)), 'the raw server string must not be quoted');
 });
 
 await check('a transport failure on classify does not mask a healthy reply', async () => {
@@ -120,7 +124,11 @@ await check('a client-side THROW between the stages is recorded, with the throwi
     await whisper(w, w.farmers[0], 'go get some rest', null);
     const reply = diag().find(e => e.stage === 'reply');
     assert.strictEqual(reply?.ok, false);
-    assert.match(reply?.detail || '', /allRegard/, `the record should name the throw: ${reply?.detail}`);
+    // EXACT canonical form, not a substring — a mutation that kept the engine's whole message also
+    // contained "allRegard" and escaped a /allRegard/ match. The extraction contract is "the
+    // identifier and nothing else", so the assertion must be equality.
+    assert.strictEqual(reply?.detail, 'client-throw: TypeError: allRegard is not a function',
+        `the record should be the canonical extracted form, got: ${reply?.detail}`);
 });
 
 await check('the buffer caps rather than growing without bound', async () => {
@@ -138,6 +146,68 @@ await check('diagnostics failing never breaks the whisper itself', async () => {
     const out = await whisper(w, w.farmers[0], 'go get some rest', null);
     assert.ok(out?.reply, 'the whisper must still answer when localStorage is unavailable');
     globalThis.localStorage.setItem = (k, v) => { store[k] = String(v); };
+});
+
+await check('an HTTP 200 with the WRONG SHAPE is recorded OFFLINE, not llm (Codex #120)', async () => {
+    // The instrument affirming the boundary it exists to expose: reply returned 200 `{}`, whisper
+    // produced no LLM line, and the diagnostic said `reply 1/1 llm`. Shape is validated before
+    // success now, on both stages.
+    whisperLog.clear();
+    globalThis.fetch = async (_u, opts) => ({ ok: true, status: 200, json: async () => ({}) });
+    const w = world();
+    const out = await whisper(w, w.farmers[0], 'go get some rest', null);
+    assert.ok(out?.reply, 'the whisper must still answer via the offline path');
+    assert.deepStrictEqual(diag().map(e => `${e.stage}:${e.ok}`), ['classify:false', 'reply:false'],
+        `a malformed 200 was recorded as llm: ${JSON.stringify(diag())}`);
+    assert.ok(diag().every(e => /malformed (classify|reply) response/.test(e.detail)),
+        `the record should say WHY: ${JSON.stringify(diag().map(e => e.detail))}`);
+});
+
+await check('player-adjacent text in an error NEVER reaches the exportable buffer (Codex #120)', async () => {
+    // .copy() is an export by design — the documented workflow ends with the player pasting the
+    // buffer. So the reason is categorised, never quoted: Codex reproduced a fallback error carrying
+    // player-like text being retained verbatim, and server parse errors can quote model output,
+    // which is prompt-derived.
+    whisperLog.clear();
+    globalThis.fetch = async (_u, opts) => {
+        const stage = JSON.parse(opts.body).stage;
+        if (stage === 'classify') return { ok: true, status: 200, json: async () => ({ kind: 'rest', target: '', tone: 'suggest' }) };
+        return { ok: true, status: 200, json: async () => ({ fallback: true, error: 'PLAYER PRIVATE WHISPER: visit my neighbour' }) };
+    };
+    const w = world();
+    await whisper(w, w.farmers[0], 'go get some rest', null);
+    const dump = JSON.stringify(diag());
+    assert.ok(!/PLAYER PRIVATE|neighbour/.test(dump), `free text survived into the export: ${dump}`);
+    const reply = diag().find(e => e.stage === 'reply');
+    assert.strictEqual(reply?.ok, false);
+    assert.match(reply?.detail || '', /^(fallback: |client-throw: |http |timeout )/,
+        `the reason must be a category, got: ${reply?.detail}`);
+});
+
+await check('a BRANCH-RICH farmer still classifies as llm on both stages (producer drift guard)', async () => {
+    // Codex #120: the base fixture leaves plot null and traits/creeds/journal/regards empty, so the
+    // branchy halves of characterView never run and drift there would silently re-vacate the throw
+    // case. One populated farmer exercises every conditional read.
+    whisperLog.clear();
+    globalThis.fetch = async (_u, opts) => {
+        const stage = JSON.parse(opts.body).stage;
+        return { ok: true, status: 200, json: async () => (stage === 'classify'
+            ? { kind: 'rest', target: '', tone: 'suggest' }
+            : { line: 'Aye, when the row is done.', verdict: 'DISMISS' }) };
+    };
+    const w = world();
+    const f = w.farmers[0];
+    const other = farmer(w); other.sheet.name = 'Cricket Kettle'; w.farmers.push(other);
+    f.plot = { built: { fence: true } };
+    f.specialty = () => 'root vegetables';
+    f.p = { collaboration: 0.8, competitiveness: 0.2, honesty: 0.9, diligence: 0.7, volatility: 0.1, curiosity: 0.6 };
+    f.creeds = [{ quote: 'the valley keeps those who keep it', overwritten: false }];
+    f.journal = [{ strength: 0.9, text: 'the storm took the north fence' }];
+    f.allRegard = (sign) => (sign > 0 ? [{ who: other }] : []);
+    f.goal = 'a bigger barn';
+    await whisper(w, f, 'go get some rest', null);
+    assert.deepStrictEqual(diag().map(e => `${e.stage}:${e.ok}`), ['classify:true', 'reply:true'],
+        `a populated farmer broke a producer read: ${JSON.stringify(diag())}`);
 });
 
 console.log(`\n${passes} passed, ${failures} failed`);
