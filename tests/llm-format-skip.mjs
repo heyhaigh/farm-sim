@@ -132,6 +132,28 @@ await check('a FORMAT-level rejection still disables json_schema model-wide', as
         'a model that rejects the PARAMETER should not be asked again under a different schema name');
 });
 
+await check('the format witness records which format actually produced the answer', async () => {
+    // Codex #111 P1: nothing in a provider response names the format that was applied, so the caller
+    // records it. Without this the probe cannot tell an enforced schema from a fallback that happened
+    // to look right — and a green matrix means only "the text was fine", never "the contract held".
+    const { callLLM, lastFormatFor } = freshLlm();
+    stubFetch(({ format }) => {
+        if (format === 'json_schema') {
+            return { status: 400, body: JSON.stringify({ error: { message: 'Invalid schema for response_format' } }) };
+        }
+        return completion({ ok: true });
+    });
+    await callLLM({ system: 's', user: 'u', schema: { type: 'object' }, schemaName: 'refused', maxTokens: 50 });
+    assert.strictEqual(lastFormatFor('refused')?.format, 'json_object',
+        'a schema that was refused and answered under json_object must not read as enforced');
+
+    const { callLLM: call2, lastFormatFor: read2 } = freshLlm();
+    stubFetch(() => completion({ ok: true }));
+    await call2({ system: 's', user: 'u', schema: { type: 'object' }, schemaName: 'accepted', maxTokens: 50 });
+    assert.strictEqual(read2('accepted')?.format, 'json_schema');
+    assert.strictEqual(read2('never-called'), null, 'an unasked schema must read as null, not as a format');
+});
+
 console.log(`\n${passes} passed, ${failures} failed`);
 if (failures) { console.log('One refused schema can silently mute structured output for every other endpoint.'); process.exit(1); }
 console.log('Format skip: scoped to the schema that was refused, model-wide only when the format itself is refused.');

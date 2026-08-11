@@ -65,11 +65,6 @@ if (process.env.RY_FARMS_LLM_OFF) {
     process.exit(2);
 }
 
-// #formatwitness Codex #111 P1: Groq's response carries no "applied format" field, so a strict-schema
-// 400 followed by a usable json_object answer was indistinguishable from an enforced contract — and
-// printed OK. _llm.js records which format actually produced each answer; the probe reports it.
-const { lastFormatFor } = require('../api/_llm.js');
-
 const argOf = (f) => {
     const i = process.argv.indexOf(f);
     return i > -1 && process.argv[i + 1] && !process.argv[i + 1].startsWith('--') ? process.argv[i + 1] : null;
@@ -266,17 +261,25 @@ async function runShape(shape) {
         return { verdict: `THREW  ${String(err?.message || err).slice(0, 80)}`, ms: Date.now() - started };
     }
     const ms = Date.now() - started;
+    // #formatwitness Read from the module instance the HANDLER used, not from one captured earlier.
+    //
+    // The first version destructured lastFormatFor at the top of this file, and every shape reported
+    // "unknown" — because runShape deletes globalThis.__ryFarmsLlmState three lines above, so each
+    // handler builds a fresh state object with a fresh witness Map while the captured binding still
+    // pointed at the first one, never written to again. An offline check missed it: it exercised the
+    // require-cache purge and not the state wipe sitting next to it.
+    const witness = require('../api/_llm.js').lastFormatFor(shape.schemaName);
     let parsed = null;
     try { parsed = JSON.parse(res.body || '{}'); } catch { /* not json */ }
     if (res.statusCode === 200 && parsed && !parsed.fallback) {
         // Semantic check, not just a status. A normalised default is a FAILURE dressed as success.
         let usable = false, why = '';
         try { usable = !!shape.ok(parsed); } catch (e) { why = String(e.message).slice(0, 40); }
-        if (!usable) return { verdict: `WEAK   200 but not usable ${why || JSON.stringify(parsed).slice(0, 70)}`, ms, payload: parsed };
-        return { verdict: `OK     ${Object.keys(parsed).join(',')}`, ms, payload: parsed };
+        if (!usable) return { verdict: `WEAK   200 but not usable ${why || JSON.stringify(parsed).slice(0, 70)}`, ms, payload: parsed, witness };
+        return { verdict: `OK     ${Object.keys(parsed).join(',')}`, ms, payload: parsed, witness };
     }
     const why = parsed?.error ? String(parsed.error).slice(0, 90) : `status ${res.statusCode}`;
-    return { verdict: `FAIL   ${why}`, ms, payload: parsed };
+    return { verdict: `FAIL   ${why}`, ms, payload: parsed, witness };
 }
 
 console.log(`\nprobe-endpoints — every production LLM shape, through the real handlers`);
@@ -294,10 +297,14 @@ for (const model of MODELS) {
         // Which format actually produced it — the difference between a contract that was ENFORCED
         // and one the model merely happened to satisfy. A shape that asks for a schema and answers
         // under json_object has not verified the schema at all, however good the output looks.
-        const witness = lastFormatFor(shape.schemaName);
-        const fmt = witness ? witness.format : 'unknown';
+        const fmt = r.witness ? r.witness.format : 'unknown';
         let verdict = r.verdict;
-        if (verdict.startsWith('OK') && fmt !== 'json_schema') {
+        // THREE outcomes, not two. "I could not tell" is not "it was not enforced" — the first run of
+        // this column reported all twenty shapes as unenforced when the witness was simply unwired,
+        // which is the same conflation of absence with evidence that this column exists to end.
+        if (fmt === 'unknown') {
+            verdict = `BROKEN the probe could not observe the format — fix the witness before trusting any verdict`;
+        } else if (verdict.startsWith('OK') && fmt !== 'json_schema') {
             verdict = `WEAK   usable, but produced under ${fmt} — the schema was NOT enforced`;
         }
         results.push({ model, key: shape.key, verdict, format: fmt });
