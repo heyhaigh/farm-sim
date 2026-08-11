@@ -201,11 +201,33 @@ const SHAPES = [
 
     { key: 'chat', file: 'ry-farms-chat.js', schemaName: 'ry_farms_chat',
       body: grabLargest('ry-farms-chat'),
-      // all seven required fields, and the two lines must actually say something
-      ok: (r) => ['speakerLine', 'listenerLine', 'speakerTone', 'listenerTone', 'memory',
-                  'relationshipReason'].every(k => String(r[k] || '').length > 0)
-                 && typeof r.relationshipDelta === 'number'
-                 && String(r.speakerLine).length > 8 && String(r.listenerLine).length > 8 },
+      // FIVE of these seven fields have a handler-side default (ry-farms-chat.js:57-61), so asserting
+      // they are PRESENT asserts nothing: normalizeChat() guarantees presence. The first version of
+      // this validator did exactly that and reported OK on a gpt-oss-20b run whose `memory` was the
+      // literal fallback `${speakerLine} / ${listenerLine}` and whose tones were both the literal
+      // default 'reflective'. Two real fields out of seven, certified green — which is the sentence
+      // at the top of runShape ("a normalised default is a FAILURE dressed as success") coming true
+      // in the validator written to enforce it.
+      //
+      // So each defaulted field is checked against the DEFAULT ITSELF. Presence proves the handler
+      // ran; difference from the default proves the MODEL did.
+      ok: (r) => {
+          if (!(String(r.speakerLine || '').length > 8 && String(r.listenerLine || '').length > 8)) {
+              throw new Error('dialogue lines missing or too short to be speech');
+          }
+          if (typeof r.relationshipDelta !== 'number') throw new Error('relationshipDelta is not a number');
+          const defaulted = [];
+          // memory falls back to the transcript. cleanText may truncate it, so compare on a prefix.
+          const transcript = `${r.speakerLine} / ${r.listenerLine}`;
+          const norm = (x) => String(x || '').replace(/\.\.$/, '').trim();
+          if (norm(r.memory).length < 2 || transcript.startsWith(norm(r.memory))) defaulted.push('memory=transcript');
+          if (String(r.relationshipReason || '') === 'opened up in conversation') defaulted.push('relationshipReason=default');
+          // Both tones landing on the default is not PROOF the model omitted them, but it is the
+          // signature of it, and it has never yet been a coincidence in a measured run.
+          if (r.speakerTone === 'reflective' && r.listenerTone === 'reflective') defaulted.push('both tones=default');
+          if (defaulted.length) throw new Error(`${defaulted.length}/7 fields are handler defaults, not model output: ${defaulted.join(', ')}`);
+          return true;
+      } },
 
     { key: 'dm', file: 'ry-farms-dm.js', schemaName: 'ry_farms_dm_tales',
       body: grab('dm'),
