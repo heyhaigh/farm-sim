@@ -210,6 +210,65 @@ await check('a BRANCH-RICH farmer still classifies as llm on both stages (produc
         `a populated farmer broke a producer read: ${JSON.stringify(diag())}`);
 });
 
+await check('a kind OUTSIDE the protocol is a failed stage, not an LLM success (Codex #120 r2)', async () => {
+    // {kind:'bogus-kind'} passed the strings-only check, was recorded llm, rode into
+    // conscienceCheck, and came back out of whisper(). The enums are the contract.
+    whisperLog.clear();
+    globalThis.fetch = async (_u, opts) => {
+        const stage = JSON.parse(opts.body).stage;
+        if (stage === 'classify') return { ok: true, status: 200, json: async () => ({ kind: 'bogus-kind', target: {}, tone: 'bogus-tone' }) };
+        return { ok: true, status: 200, json: async () => ({ line: 'Aye.', verdict: 'DISMISS' }) };
+    };
+    const w = world();
+    const out = await whisper(w, w.farmers[0], 'go get some rest', null);
+    assert.notStrictEqual(out?.kind, 'bogus-kind', 'an out-of-protocol kind escaped whisper()');
+    const cls = diag().find(e => e.stage === 'classify');
+    assert.strictEqual(cls?.ok, false, `recorded llm for an out-of-protocol kind: ${JSON.stringify(cls)}`);
+    assert.strictEqual(cls?.detail, 'malformed classify response');
+});
+
+await check('a custom Error.name cannot ride into the export (Codex #120 r2)', async () => {
+    // Error.name is mutable free text. An error named PLAYER_PRIVATE_WHISPER interpolated straight
+    // past the redaction; only engine classes pass now, everything else collapses to unknown.
+    whisperLog.clear();
+    globalThis.fetch = async (_u, opts) => {
+        const stage = JSON.parse(opts.body).stage;
+        if (stage === 'classify') return { ok: true, status: 200, json: async () => ({ kind: 'rest', target: '', tone: 'suggest' }) };
+        const e = new Error('boom'); e.name = 'PLAYER_PRIVATE_WHISPER: visit my neighbour';
+        throw e;
+    };
+    const w = world();
+    await whisper(w, w.farmers[0], 'go get some rest', null);
+    const dump = JSON.stringify(diag());
+    assert.ok(!/PLAYER_PRIVATE|neighbour/.test(dump), `a custom error name reached the export: ${dump}`);
+});
+
+await check('"model generated empty reply" is bad-output, not throttled (Codex #120 r2)', async () => {
+    // 'rate' as a bare substring matched 'geneRATEd' — the same substring disease as the
+    // server-side 'schema' gate, found by the same reviewer on the same day.
+    whisperLog.clear();
+    globalThis.fetch = async (_u, opts) => {
+        const stage = JSON.parse(opts.body).stage;
+        if (stage === 'classify') return { ok: true, status: 200, json: async () => ({ kind: 'rest', target: '', tone: 'suggest' }) };
+        return { ok: true, status: 200, json: async () => ({ fallback: true, error: 'model generated empty reply' }) };
+    };
+    const w = world();
+    await whisper(w, w.farmers[0], 'go get some rest', null);
+    const reply = diag().find(e => e.stage === 'reply');
+    assert.strictEqual(reply?.detail, 'fallback: bad-output',
+        `misfiled: ${reply?.detail}`);
+    // and a REAL throttle must still file as throttled, or the fix is "never say throttled"
+    whisperLog.clear();
+    globalThis.fetch = async (_u, opts) => {
+        const stage = JSON.parse(opts.body).stage;
+        if (stage === 'classify') return { ok: true, status: 200, json: async () => ({ kind: 'rest', target: '', tone: 'suggest' }) };
+        return { ok: true, status: 200, json: async () => ({ fallback: true, error: 'rate limit reached, retry shortly' }) };
+    };
+    const w2 = world();
+    await whisper(w2, w2.farmers[0], 'go get some rest', null);
+    assert.strictEqual(diag().find(e => e.stage === 'reply')?.detail, 'fallback: throttled');
+});
+
 console.log(`\n${passes} passed, ${failures} failed`);
 if (failures) { console.log('The whisper diagnostic cannot be trusted to explain a fallback.'); process.exit(1); }
 console.log('Whisper diag: both stages recorded, reasons kept, ring capped, never load-bearing.');

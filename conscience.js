@@ -50,6 +50,13 @@ const STRICT_KW = [
     ['build',  /\b(build|expand|upgrade|raise|add)\b[^.!?]*\b(house|home|room|fence|homestead|it bigger)\b|\b(house|home)\b[^.!?]*\b(could use|needs)\b/i],
 ];
 
+// The bounded protocol (mirrors URGE_KINDS/TONES in api/ry-farms-conscience.js and farm.js). The
+// classify validation checks against THESE, not just "is a string" — Codex #120 reproduced
+// {kind:'bogus-kind'} being recorded as an LLM success, passed into conscienceCheck, and returned
+// from whisper(). The instrument was still affirming semantically malformed output.
+const KINDS = ['chop', 'plant', 'water', 'rest', 'explore', 'build', 'visit', 'trade', 'hunt', 'none', 'watch'];
+const TONES = ['suggest', 'observe', 'press', 'praise', 'meta'];
+
 function offlineClassify(message, names, strict = false) {
     // Codex #72 — phones type typographic apostrophes: "Don’t" sailed past every don'?t pattern (and
     // would past the KW rows too). Normalize BEFORE any matching so the whole table sees ASCII.
@@ -200,14 +207,22 @@ function diagReason(err) {
     if (/^malformed (classify|reply) response$/.test(m)) return m;   // our own validation strings
     // server fallback categories — matched, not quoted
     if (/budget|token/i.test(m)) return 'fallback: budget';
-    if (/breaker|cooldown|rate|429/i.test(m)) return 'fallback: throttled';
+    // 'rate' as a bare substring matched 'geneRATEd', so 'model generated empty reply' was filed
+    // as throttled instead of bad-output (Codex #120) — the same substring class as the server-side
+    // 'schema' gate, on the same day. Specific phrases only.
+    if (/breaker|cooldown|rate.?limit|too many requests|429/i.test(m)) return 'fallback: throttled';
     if (/disabled|unconfigured|no OPENAI|not configured/i.test(m)) return 'fallback: disabled';
     if (/did not return JSON|model returned|empty/i.test(m)) return 'fallback: bad-output';
     if (/model unavailable|request failed/i.test(m)) return 'fallback: upstream';
-    // client-side throws — the error class plus CODE IDENTIFIERS only
-    if ((x = m.match(/([$\w]+) is not a function/))) return `client-throw: ${err?.name || 'Error'}: ${x[1]} is not a function`;
-    if ((x = m.match(/reading '([$\w]+)'/))) return `client-throw: ${err?.name || 'Error'}: reading ${x[1]}`;
-    if (err?.name && err.name !== 'Error') return `client-throw: ${err.name}`;
+    // client-side throws — the error class plus CODE IDENTIFIERS only. The class itself is
+    // allow-listed too (Codex #120): Error.name is a mutable property, so an error named
+    // PLAYER_PRIVATE_WHISPER was riding the interpolation straight past the redaction. Only engine
+    // classes pass; anything else collapses to 'unknown'.
+    const cls_ = ['TypeError', 'RangeError', 'ReferenceError', 'SyntaxError', 'AbortError', 'DOMException', 'EvalError', 'URIError']
+        .includes(err?.name) ? err.name : 'unknown';
+    if ((x = m.match(/([$\w]+) is not a function/))) return `client-throw: ${cls_}: ${x[1]} is not a function`;
+    if ((x = m.match(/reading '([$\w]+)'/))) return `client-throw: ${cls_}: reading ${x[1]}`;
+    if (cls_ !== 'unknown') return `client-throw: ${cls_}`;
     return 'fallback: other';
 }
 function diagRecord(stage, ok, detail, ms) {
@@ -270,9 +285,12 @@ export async function whisper(world, farmer, message, save) {
     const t0 = Date.now();
     try {
         cls = await postJson({ stage: 'classify', message: text, names, recent: c.log.slice(-4).map(e => ({ who: e.who, text: String(e.text).slice(0, 90) })) });
-        // SHAPE before success (Codex #120 P2): an HTTP 200 `{}` used to read as an LLM "none" and
-        // be recorded llm — the instrument affirming the exact broken boundary it exists to expose.
-        if (!cls || typeof cls.kind !== 'string') throw new Error('malformed classify response');
+        // SHAPE AND PROTOCOL before success (Codex #120, both rounds): an HTTP 200 `{}` used to read
+        // as an LLM "none", and {kind:'bogus-kind', target:{}} passed a strings-only check and rode
+        // into conscienceCheck. The enums are the contract; anything outside them is a failed stage.
+        if (!cls || !KINDS.includes(cls.kind)) throw new Error('malformed classify response');
+        if (cls.tone != null && !TONES.includes(cls.tone)) throw new Error('malformed classify response');
+        if (cls.target != null && typeof cls.target !== 'string') throw new Error('malformed classify response');
         diagRecord('classify', true, `kind=${cls.kind || 'none'}`, Date.now() - t0);
     } catch (err) {
         diagRecord('classify', false, diagReason(err), Date.now() - t0);
