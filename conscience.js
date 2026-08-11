@@ -168,6 +168,46 @@ function snapshotOf(f) {
     };   // year: the temporal-truth anchor (day-1 towns kept inventing 'last autumn')
 }
 
+// ---- whisper diagnostics (#whisperdiag) --------------------------------------------------------
+//
+// Server telemetry showed classify and reply each recording attempts the other did not, and the
+// cause was invisible: postJson throws on a timeout, an abort, a non-200 AND a fallback:true body,
+// and whisper()'s catch swallows all four identically into offline text. Which one actually fired,
+// and at which stage, could not be answered from the server side — a client-side failure never
+// reaches it. This buffer records what the server cannot see. Diagnosis then reads accumulated
+// evidence from normal play instead of asking anyone to babysit DevTools.
+//
+// Display/diagnostic side-channel only: localStorage, never the save, never the sim. The sim's
+// digest cannot see it.
+const DIAG_KEY = 'ryfarms-whisper-diag';
+const DIAG_MAX = 120;
+function diagLoad() {
+    try { const v = JSON.parse(localStorage.getItem(DIAG_KEY)); return Array.isArray(v) ? v : []; }
+    catch { return []; }
+}
+function diagRecord(stage, ok, detail, ms) {
+    try {
+        const log = diagLoad();
+        log.push({ at: new Date().toISOString().slice(0, 19), stage, ok, detail: String(detail || '').slice(0, 120), ms });
+        while (log.length > DIAG_MAX) log.shift();
+        localStorage.setItem(DIAG_KEY, JSON.stringify(log));
+    } catch { /* quota or private mode — diagnostics must never break the feature */ }
+}
+// Console API: RYFARMS.whisperLog() to read, RYFARMS.whisperLog.copy() for a pasteable dump,
+// RYFARMS.whisperLog.clear() to reset between experiments.
+export function whisperLog() {
+    const log = diagLoad();
+    const rows = log.map(e => `${e.at}  ${e.stage.padEnd(8)} ${e.ok ? 'llm     ' : 'OFFLINE '} ${e.ms != null ? String(e.ms).padStart(5) + 'ms  ' : '       '}${e.detail}`);
+    const summary = ['classify', 'reply'].map(st => {
+        const n = log.filter(e => e.stage === st), ok = n.filter(e => e.ok).length;
+        return `${st} ${ok}/${n.length} llm`;
+    }).join(' · ');
+    console.log(`[whisper-diag] ${summary}\n` + (rows.join('\n') || '(empty)'));
+    return log;
+}
+whisperLog.copy = () => { const t = JSON.stringify(diagLoad(), null, 1); try { navigator.clipboard.writeText(t); } catch { } return t; };
+whisperLog.clear = () => { try { localStorage.removeItem(DIAG_KEY); } catch { } };
+
 async function postJson(payload) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -202,8 +242,14 @@ export async function whisper(world, farmer, message, save) {
 
     // stage 1: classify (LLM, else keyword)
     let cls;
-    try { cls = await postJson({ stage: 'classify', message: text, names, recent: c.log.slice(-4).map(e => ({ who: e.who, text: String(e.text).slice(0, 90) })) }); }
-    catch { cls = offlineClassify(text, names); }
+    const t0 = Date.now();
+    try {
+        cls = await postJson({ stage: 'classify', message: text, names, recent: c.log.slice(-4).map(e => ({ who: e.who, text: String(e.text).slice(0, 90) })) });
+        diagRecord('classify', true, `kind=${cls.kind || 'none'}`, Date.now() - t0);
+    } catch (err) {
+        diagRecord('classify', false, err?.name === 'AbortError' ? `timeout ${TIMEOUT_MS}ms` : (err?.message || 'unknown'), Date.now() - t0);
+        cls = offlineClassify(text, names);
+    }
     // #classify-backstop — the 8B sometimes whiffs plainly actionable thoughts to "none" ("go chop some
     // wood"). The keyword map is high-precision on action verbs, so when it finds a kind and the model
     // found none, trust the keywords. STRICT mode: the bare-name→visit last resort stays off here, so a
@@ -222,6 +268,7 @@ export async function whisper(world, farmer, message, save) {
 
     // stage 3: reply (LLM, else template)
     let line;
+    const t1 = Date.now();
     try {
         const r = await postJson({
             stage: 'reply', verdict, kind, tone,
@@ -236,7 +283,9 @@ export async function whisper(world, farmer, message, save) {
             snapshot: snapshotOf(farmer),
         });
         line = r.line;
-    } catch {
+        diagRecord('reply', true, `verdict=${verdict}`, Date.now() - t1);
+    } catch (err) {
+        diagRecord('reply', false, err?.name === 'AbortError' ? `timeout ${TIMEOUT_MS}ms` : (err?.message || 'unknown'), Date.now() - t1);
         line = offlineReply(verdict, farmer);
     }
 

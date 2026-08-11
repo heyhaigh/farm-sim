@@ -26,7 +26,7 @@ import { requestCongregation, requestElectionScene } from './congregation.js';
 import { requestRaidCouncil, requestRaidDebrief, requestDuelBeat } from './raidcouncil.js';
 import { persistLives, persistTownHistory, persistBattle } from './memory-writeback.js';
 import { enrichInventions, persistTownInventions } from './memory-invent.js';
-import { whisper } from './conscience.js';
+import { whisper, whisperLog } from './conscience.js';
 import { cultureWord } from './culture.js';   // #3.1 orc-vs-human display copy
 import { track, trackOnce, resetFunnel } from './analytics.js';   // #funnel display-side GA4 events
 import { revealLine, DEFAULT_VARIANT } from './speech-anim.js';   // #bubble-reveal how a spoken line arrives
@@ -9174,6 +9174,11 @@ function drawStartScreen() {
         // browser. Returns how many ledger keys were cleared.
         resetFunnel: () => resetFunnel(),
         select: (i) => { selected = world.farmers[i] || null; },
+        // #whisperdiag — client-side record of every whisper stage (llm vs offline, and WHY it fell
+        // back). RYFARMS.whisperLog() to read · .copy() for a pasteable dump · .clear() to reset.
+        // Exists because the server telemetry cannot see a client-side failure: a timeout, an abort
+        // and a fallback:true body all died in the same silent catch.
+        whisperLog,
         speed: (mult) => { world._speedMult = mult; },
         // #98 fire a test Moment: RYFARMS.moment() spotlights farmer 0 finding a star-crystal (with its memory why)
         momentMs: (ms) => { MOMENT_MS = ms; },   // hold a Moment open for QA/screenshots
