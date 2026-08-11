@@ -382,13 +382,20 @@
         "phase": "debrief",
         "culture": "human",
         "town": "Elmhaven",
-        "foe": "a warband",
+        "foe": "the Ashmark band",
         "dir": "the dark",
-        "nemesis": null,
+        "nemesis": {
+          "name": "Skarn the Unbroken",
+          "raidCount": 2,
+          "sworeAgainst": "Warden"
+        },
         "battle": {
-          "hero": "Grull",
+          "felled": 3,
+          "n": 5,
+          "harvestLost": 2,
+          "hero": "Warden",
           "wounded": [
-            "Hex"
+            "Cricket"
           ]
         },
         "cast": [
@@ -480,6 +487,98 @@
           "name": "Skarn the Unbroken",
           "raidCount": 2,
           "sworeAgainst": "Warden"
+        }
+      }
+    },
+    {
+      "label": "chat",
+      "endpoint": "/api/ry-farms-chat",
+      "body": {
+        "context": {
+          "culture": "human",
+          "day": 1,
+          "season": "SPRING",
+          "weather": "CLOUDY",
+          "leader": null,
+          "harvestTotal": 0,
+          "boardBuilt": false,
+          "townProject": null,
+          "recentTownLog": [
+            "Nomad, a lone spirit, struck out for the far wilds to farm alone.",
+            "The first spring dawned over the valley — and the work began.",
+            "Weather: CLOUDY",
+            "The chronicler set down Cricket's history in a finer hand."
+          ],
+          "relationship": {
+            "speakerToListener": 0,
+            "listenerToSpeaker": 0,
+            "vividMemory": null,
+            "gossipTarget": null
+          },
+          "speaker": {
+            "name": "Warden Threshold",
+            "archetype": "Steady Hand",
+            "creed": "Reliable, even-keeled, kind enough.",
+            "goal": "finding their way",
+            "mood": "even",
+            "temper": "steady",
+            "traits": {
+              "teamwork": 0.468745642947033,
+              "drive": 0.39779884209856387,
+              "honesty": 0.49440675002988427,
+              "workEthic": 0.6531586556136608
+            },
+            "level": 1,
+            "health": "healthy",
+            "energy": 1,
+            "state": "assemble",
+            "thought": "THE CHAIR GETS ITS NAME TODAY",
+            "harvests": 0,
+            "cropsOnHand": 0,
+            "wood": 4,
+            "ore": 0,
+            "tilesExplored": 0,
+            "opinionOfOther": 0,
+            "trusts": [],
+            "wary": [],
+            "rumorsHeard": [],
+            "strongestSharedMemories": [],
+            "recentMemories": []
+          },
+          "listener": {
+            "name": "Cricket Kettle",
+            "archetype": "Team Player",
+            "creed": "Happiest lending a hand.",
+            "goal": "finding their way",
+            "mood": "even",
+            "temper": "steady",
+            "traits": {
+              "teamwork": 0.6512962077977136,
+              "drive": 0.42212109916377805,
+              "honesty": 0.5295446789590641,
+              "workEthic": 0.5289868242945522
+            },
+            "level": 1,
+            "health": "healthy",
+            "energy": 1,
+            "state": "assemble",
+            "thought": "CHOOSING DAY IS HERE",
+            "harvests": 0,
+            "cropsOnHand": 0,
+            "wood": 4,
+            "ore": 0,
+            "tilesExplored": 0,
+            "opinionOfOther": 0,
+            "trusts": [],
+            "wary": [],
+            "rumorsHeard": [],
+            "strongestSharedMemories": [],
+            "recentMemories": []
+          },
+          "fallback": {
+            "speakerLine": "That fence needs seeing to.",
+            "listenerLine": "It can wait a day."
+          }
         }
       }
     },

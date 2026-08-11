@@ -152,8 +152,20 @@ const SHAPES = [
     { key: 'election', file: 'ry-farms-congregation.js', schemaName: 'ry_farms_congregation',
       body: grab('election'),
       // its prompt asks candidates to speak to what they stand for, and to supply mutters
+      // FOUR mutters, not one (Codex #109 P2-4): congregation.js:76 discards the array below four,
+      // so a run with three would report OK while the enrichment was thrown away — the probe would
+      // be certifying output the client never uses.
       ok: (r) => Array.isArray(r.script) && r.script.length >= 3
-                 && Array.isArray(r.mutters) && r.mutters.length >= 1 },
+                 && Array.isArray(r.mutters)
+                 && r.mutters.filter(m => String(m || '').trim().length > 0).length >= 4 },
+
+    { key: 'chat', file: 'ry-farms-chat.js', schemaName: 'ry_farms_chat',
+      body: grab('chat'),
+      // all seven required fields, and the two lines must actually say something
+      ok: (r) => ['speakerLine', 'listenerLine', 'speakerTone', 'listenerTone', 'memory',
+                  'relationshipReason'].every(k => String(r[k] || '').length > 0)
+                 && typeof r.relationshipDelta === 'number'
+                 && String(r.speakerLine).length > 8 && String(r.listenerLine).length > 8 },
 
     { key: 'dm', file: 'ry-farms-dm.js', schemaName: 'ry_farms_dm_tales',
       body: grab('dm'),

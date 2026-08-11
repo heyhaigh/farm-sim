@@ -253,15 +253,14 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
         throw new LLMDisabledError(`LLM budget exceeded (${BUDGET_MAX}/${BUDGET_WINDOW_MS / 1000}s)`);
     }
 
+    // ADMISSION control only — the actual charge happens per upstream attempt below. This refuses
+    // work that could never fit the window before any request is made.
     const cost = estimateTokens(system, user, maxTokens);
     const ceiling = priority === 'background' ? TOKEN_BUDGET_MAX * BACKGROUND_CEILING : TOKEN_BUDGET_MAX;
     if (spent + cost > ceiling) {
         throw new LLMDisabledError(
             `LLM token budget exceeded (${spent}+${cost} > ${Math.round(ceiling)} of ${TOKEN_BUDGET_MAX}/min${priority === 'background' ? ', background' : ''})`);
     }
-    // Charged BEFORE the call, because Groq reserves against the window at request time too — and
-    // because a failed request still consumed the provider's allowance.
-    _budget.spend.push({ at: now, cost });
 
     const headers = { 'Content-Type': 'application/json' };
     if (cfg.mode === 'paid' && process.env.OPENAI_API_KEY) headers.Authorization = `Bearer ${process.env.OPENAI_API_KEY}`;
@@ -309,6 +308,25 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
                     // broke production on 2026-08-06. Measured 2026-08-07: 'low' roughly halves spend
                     // (reply 252 -> 102 tokens on 20b, 191 -> 77 on 120b) and every case passed.
                     if (REASONING_MODEL_RE.test(model)) body.reasoning_effort = REASONING_EFFORT;
+
+                    // Charge the ledger PER UPSTREAM ATTEMPT (Codex #109 P2-3). It used to be charged
+                    // once per logical callLLM, outside these loops — so a 413-halving path or a model
+                    // failover made two, three or more provider requests against a single reservation.
+                    // Codex reproduced 26 logical calls issuing 52 upstream fetches while the stated
+                    // ceiling was 26. The provider counts attempts, so we must too; askTokens is the
+                    // size of THIS attempt, which is what the halving path changes.
+                    const attemptAt = Date.now();
+                    while (_budget.spend.length && attemptAt - _budget.spend[0].at >= BUDGET_WINDOW_MS) _budget.spend.shift();
+                    const spentNow = _budget.spend.reduce((n, e) => n + e.cost, 0);
+                    const attemptCost = estimateTokens(system, user, askTokens);
+                    if (_budget.spend.length >= BUDGET_MAX || spentNow + attemptCost > ceiling) {
+                        lastErr = new LLMDisabledError(
+                            `LLM budget exceeded mid-call (${_budget.spend.length} reqs, ${spentNow}+${attemptCost} tokens)`);
+                        giveUp = true;
+                        break;
+                    }
+                    const attemptEntry = { at: attemptAt, cost: attemptCost };
+                    _budget.spend.push(attemptEntry);
 
                     const controller = new AbortController();
                     const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -362,8 +380,18 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
                             retrySmaller = true;
                         } else if (r.status !== 400 && r.status !== 422) {
                             giveUp = true;   // only a format-rejection is worth trying another format for
-                        } else if (response_format) {
-                            _formatSkip.add(`${model}|${response_format.type}`);   // #stickyformat
+                        } else {
+                            // REFUND a format rejection. 400/422 is rejected at VALIDATION: the provider
+                            // generates nothing and meters nothing, unlike a 413/429 which are metered
+                            // (that is why they were rejected). Charging it broke the first congregation
+                            // on any fresh process — json_schema is refused, json_object retries, and two
+                            // ~1530-token charges cleared the 3000 background ceiling before a single
+                            // token had been produced. #stickyformat means this discovery happens once per
+                            // model, so charging it also penalised precisely the call that pays for the
+                            // knowledge every later call reuses.
+                            const i = _budget.spend.indexOf(attemptEntry);
+                            if (i >= 0) _budget.spend.splice(i, 1);
+                            if (response_format) _formatSkip.add(`${model}|${response_format.type}`);   // #stickyformat
                         }
                     } finally { clearTimeout(timer); }
                     if (!retrySmaller) break;   // fall through to the next format (or out, if giveUp)

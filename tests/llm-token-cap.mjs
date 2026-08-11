@@ -651,6 +651,75 @@ await check('P2-3: the REQUEST cap rolls too — no burst across the boundary', 
     } finally { Date.now = real; process.env.RY_FARMS_TOKEN_BUDGET = '1000000'; }
 });
 
+await check('P2-3: the ledger counts UPSTREAM attempts, not logical calls', async () => {
+    // Codex reproduced 26 logical calls issuing 52 upstream fetches against a stated 26-request
+    // ceiling, because the charge sat outside the retry loops. A 413-halving path makes several
+    // provider requests per call; the provider counts every one of them.
+    const fetches = [];
+    let ceiling = 300;
+    globalThis.fetch = async (_url, opts) => {
+        const b = JSON.parse(opts.body);
+        fetches.push(b.max_tokens);
+        if (b.max_tokens > ceiling) return { ok: false, status: 413, json: async () => ({}), text: async () => '{"error":{"message":"too large"}}' };
+        return { ok: true, status: 200, text: async () => '',
+            json: async () => ({ choices: [{ message: { content: '{"ok":true}' } }] }) };
+    };
+    process.env.RY_FARMS_TOKEN_BUDGET = '1000000';   // isolate the REQUEST cap
+    process.env.RY_FARMS_LLM_MODELS = 'm';
+    const { callLLM } = freshState();
+    // Each logical call halves 1200 -> 600 -> 300: three upstream attempts apiece.
+    let logical = 0;
+    for (let i = 0; i < 30; i++) {
+        try { await callLLM({ system: '', user: '', schema: SCHEMA, maxTokens: 1200 }); logical++; }
+        catch { break; }
+    }
+    assert.ok(fetches.length <= 26,
+        `${fetches.length} upstream requests issued against a 26-request ceiling`);
+    assert.ok(logical < 26,
+        `${logical} logical calls were admitted — the ledger is still counting calls, not attempts`);
+    process.env.RY_FARMS_TOKEN_BUDGET = '1000000';
+});
+
+await check('a FORMAT rejection is refunded; a metered rejection is not', async () => {
+    // Found in a live run: the first congregation on any fresh process failed because json_schema
+    // was refused, json_object retried, and two ~1530-token charges cleared the 3000 background
+    // ceiling before a single token existed. A 400 is rejected at VALIDATION and meters nothing; a
+    // 413 IS metered — that is why it was rejected. The ledger has to tell them apart.
+    //
+    // Asserted on the LEDGER rather than on a follow-up call: two successful large calls genuinely
+    // do not fit a small budget, so "the next call succeeds" cannot separate the refund from the
+    // budget simply being tight. (My first version of this case made exactly that mistake.)
+    const ledger = () => globalThis.__ryFarmsLlmState.budget.spend;
+
+    // (a) format rejection then success -> ONE entry, not two
+    globalThis.fetch = async (_url, opts) => {
+        const b = JSON.parse(opts.body);
+        if (b.response_format?.type === 'json_schema') {
+            return { ok: false, status: 400, json: async () => ({}), text: async () => '{"error":{"message":"response_format not supported"}}' };
+        }
+        return { ok: true, status: 200, text: async () => '',
+            json: async () => ({ choices: [{ message: { content: '{"ok":true}' } }] }) };
+    };
+    process.env.RY_FARMS_TOKEN_BUDGET = '1000000';
+    process.env.RY_FARMS_LLM_MODELS = 'm';
+    let { callLLM } = freshState();
+    await callLLM({ system: 'x'.repeat(4000), user: '', schema: SCHEMA, maxTokens: 900 });
+    assert.strictEqual(ledger().length, 1,
+        `a refused format was charged: ledger holds ${ledger().length} entries, expected 1`);
+
+    // (b) a 413 IS metered -> every attempt stays on the ledger
+    globalThis.fetch = async (_url, opts) => {
+        const b = JSON.parse(opts.body);
+        if (b.max_tokens > 300) return { ok: false, status: 413, json: async () => ({}), text: async () => '{"error":{"message":"too large"}}' };
+        return { ok: true, status: 200, text: async () => '',
+            json: async () => ({ choices: [{ message: { content: '{"ok":true}' } }] }) };
+    };
+    ({ callLLM } = freshState());
+    await callLLM({ system: '', user: '', schema: SCHEMA, maxTokens: 1200 });   // 1200 -> 600 -> 300
+    assert.strictEqual(ledger().length, 3,
+        `metered 413 attempts were refunded: ledger holds ${ledger().length}, expected 3`);
+});
+
 // ---- report ------------------------------------------------------------------------------------
 console.log(`\n${passes} passed, ${failures} failed`);
 if (failures) {
