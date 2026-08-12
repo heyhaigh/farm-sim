@@ -9216,6 +9216,11 @@ export function germChance(w, curiosity, fit) {
     return Math.max(0.01, Math.min(0.5, 0.04 + 0.20 * (w / SEED_MAX) + 0.55 * (curiosity - 0.5) + fit * 0.6));
 }
 
+// slice 3, the white-bear echo: how often a DEFY that tore out a REAL investment leaves a voiced
+// contradiction the next dawn. Narrative only — no seed, no deposit, no mechanical residue.
+const WHITEBEAR_MIN_W = 1.0;   // only a substantial thought echoes (a faint seed torn out is just gone)
+const WHITEBEAR_PCT = 25;      // keyed percent — rare enough to stay an event
+
 // fallback germination lines when a seed carries no phrase (sim-planted seeds have none)
 const GERM_LINE = {
     chop: 'THAT THOUGHT ABOUT THE TIMBER... TODAY I SEE ABOUT IT.', rest: 'THAT THOUGHT ABOUT RESTING... TODAY I LISTEN.',
@@ -9690,8 +9695,19 @@ export class Farmer {
             // #inspiration C1 — DEFY ZEROES the seed. Every DEFY gate is player-manufacturable, so
             // "defied ideas lodge deepest" would make provoking spite the highest-yield deposit
             // route; zeroing instead makes nagging a GAMBLE — pressure raises DEFY odds, and DEFY
-            // wipes the investment. (The voiced white-bear beat is banked for slice 3.)
-            if (c.seeds && c.seeds[kind]) delete c.seeds[kind];
+            // wipes the investment.
+            if (c.seeds && c.seeds[kind]) {
+                // slice 3, the WHITE-BEAR — rare, keyed, and PURELY NARRATIVE (the mechanics stay
+                // C1-clean: no seed survives, nothing re-deposits). When a SUBSTANTIAL thought is
+                // torn out, some minds hear its echo the next dawn and say so aloud — the
+                // contradiction is only rich when the farmer acknowledges it (adjudication).
+                const sd = c.seeds[kind];
+                if (sd.w >= WHITEBEAR_MIN_W
+                    && (hashString('whitebear:' + w.seed + ':' + s.seed + ':' + kind + ':' + w.day) % 100) < WHITEBEAR_PCT) {
+                    c.whitebear = { kind, day: w.day, ...(sd.phrase ? { phrase: sd.phrase } : {}) };
+                }
+                delete c.seeds[kind];
+            }
             record('DEFY'); return { verdict: 'DEFY', kind, reason: 'bristles at being pushed' };
         }
 
@@ -11465,6 +11481,14 @@ export class Farmer {
                 // act at dawn. Keyed salted stream, pressure hard-gated, own town budget, keyed
                 // arbitration (never farmer-array order). Whisper-gated like everything above.
                 this.#maybeGerminate();
+            }
+            // slice 3 — the white-bear echoes ONCE, the dawn after the tearing-out, then is done.
+            // Voiced + journaled, no state beyond the beat itself (the seed stays gone).
+            if (c.whitebear && this.world.day > c.whitebear.day) {
+                const wb = c.whitebear; delete c.whitebear;
+                const ph = wb.phrase ? `"${String(wb.phrase).toUpperCase().slice(0, 38)}"... ` : '';
+                this.say(`${ph}I SAID NO. WHY CAN I STILL HEAR IT?`, '#c8a0e0');
+                this.remember('lesson', `I refused that thought${wb.phrase ? ` - "${wb.phrase}"` : ''} and tore it out. It has not entirely left.`, null, 0.6);
             }
         }
 

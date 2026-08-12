@@ -370,4 +370,57 @@ function walkDawns(w, farmers, days, each) {
     ok('item 11: self-sown urges never consume the whisper town cap');
 }
 
+// ================================ SLICE 3 · THE WHITE-BEAR ====================================
+// DEFY still zeroes (C1 untouched) — but a SUBSTANTIAL thought torn out sometimes echoes the
+// next dawn, voiced once, purely narrative. Keyed percent, so deterministic per (town, day).
+
+// walk manufactured DEFYs until one lands with the wanted whitebear outcome
+function findDefy(w, f, kind, { seedW, wantBear, maxDays = 900 }) {
+    const c = f.conscience;
+    f.sheet.personality.collaboration = 0.1;
+    for (let d = 0; d < maxDays; d++, w.day += 1) {
+        c.verdictDay = -1; c.verdicts = {}; c.asks = {}; c.urge = null; delete c.whitebear;
+        c.pressure[kind] = 3;
+        c.seeds = { [kind]: { w: seedW, firstDay: w.day - 2, day: w.day, target: null, phrase: 'chop the old oak' } };
+        const r = f.conscienceCheck(kind, null, 'press');
+        if (r.verdict === 'DEFY') {
+            assert.ok(!c.seeds[kind], 'C1 intact: the seed is gone regardless of the echo');
+            if (!!c.whitebear === wantBear) return true;
+        }
+    }
+    return false;
+}
+{
+    const w = boot(919191);
+    const f = w.farmers[0];
+    assert.ok(findDefy(w, f, 'chop', { seedW: 2.5, wantBear: true }), 'a substantial torn-out thought sometimes echoes');
+    const wb = f.conscience.whitebear;
+    assert.equal(wb.kind, 'chop');
+    assert.equal(wb.phrase, 'chop the old oak', 'the echo keeps the words');
+    // the echo: once, the NEXT dawn, voiced + journaled, then done
+    w.day += 1; f.reflect();
+    assert.ok((f.bubble?.lines || []).join(' ').includes('WHY CAN I STILL HEAR IT'), 'the contradiction is spoken aloud');
+    assert.ok((f.bubble?.lines || []).join(' ').includes('CHOP THE OLD OAK'), '...in the thought\'s own words');
+    assert.ok(!f.conscience.whitebear, 'the echo fires once and is done');
+    assert.ok(f.journal.some(e => e.text.includes('has not entirely left')), 'and it is journaled');
+    ok('white-bear: a substantial DEFY echoes once at dawn, voiced, then rests');
+}
+{
+    const w = boot(929292);
+    const f = w.farmers[1];
+    // a FAINT seed torn out never echoes — walk many DEFYs and require zero bears
+    let bears = 0, defys = 0;
+    const c = f.conscience;
+    f.sheet.personality.collaboration = 0.1;
+    for (let d = 0; d < 600 && defys < 12; d++, w.day += 1) {
+        c.verdictDay = -1; c.verdicts = {}; c.asks = {}; c.urge = null; delete c.whitebear;
+        c.pressure.hunt = 3;
+        c.seeds = { hunt: { w: 0.5, firstDay: w.day - 2, day: w.day, target: null } };
+        if (f.conscienceCheck('hunt', null, 'press').verdict === 'DEFY') { defys++; if (c.whitebear) bears++; }
+    }
+    assert.ok(defys >= 5, `the probe is live (${defys} DEFYs found)`);
+    assert.equal(bears, 0, 'a faint thought torn out is just gone - no echo');
+    ok('white-bear: only substantial thoughts echo (min-weight gate)');
+}
+
 console.log(`inspiration: ${passed} checks passed`);
