@@ -11,6 +11,8 @@
 // the first pointerdown. Nothing here touches the sim — audio reads world
 // state via update() and is deliberately non-deterministic (Math.random).
 
+import { keyPop as fxKeyPop, speakWord as fxSpeakWord } from './whisper-fx.js';   // #whisper-fx shared with the compare harness
+
 // One song per season. Each chord row: bass note, pad voicing, melody pool.
 const SEASON_SONGS = [
     {   // SPRING — the original easy stroll (F major I-V-vi-IV)
@@ -718,6 +720,20 @@ class FarmAudio {
             ns.connect(nbp); nbp.connect(ng); ng.connect(this.sfxBus);
             ns.start(t); ns.stop(t + nlen + 0.02);
         }
+    }
+
+    // ---- #whisper-fx: the whisper box's sounds (synthesis lives in whisper-fx.js) --------------
+    // keyPop fires inside a keystroke (a user gesture), so ensure() is safe here; speakWord fires
+    // from the render loop, where there may be no gesture — it only plays if the context already
+    // runs. Both ride the SFX bus, so the slider and mute govern them like every other effect.
+    keyPop(kind, variant) {
+        this.ensure();
+        if (!this.ctx || !this.sfxOn) return;
+        fxKeyPop(this.ctx, this.sfxBus, variant, kind);
+    }
+    speakWord(voice, word, variant) {
+        if (!this.ctx || this.ctx.state !== 'running' || !this.sfxOn) return;
+        fxSpeakWord(this.ctx, this.sfxBus, voice, word, variant);
     }
 }
 

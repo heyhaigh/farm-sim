@@ -108,6 +108,10 @@ const MIME = {
 // request that is about to 304 anyway.
 // ---------------------------------------------------------------------------
 const PROD = process.env.NODE_ENV === 'production';
+// #postcard — lazy so farm.js (the town-name tables ride in it) parses on the first shared-link
+// hit, not at boot. Dev note: like any non-/api module, editing postcard.js needs a server restart.
+let _postcard;
+const postcardModule = () => (_postcard ??= import('./postcard.js'));
 const COMPRESSIBLE = new Set(['.html', '.js', '.mjs', '.css', '.json', '.svg']);
 const gzipCache = new Map();   // file -> { key, buf }. Text only, so this stays under ~1MB.
 
@@ -199,6 +203,30 @@ http.createServer(async (req, res) => {
             res.end(JSON.stringify({ fallback: true, error: err?.message || 'handler crashed' }));
         }
         return;
+    }
+
+    // #postcard — a shared town link (/?seed=N[&orc=1]) gets its town's NAME injected into the
+    // share-card tags, so the iMessage/Slack/X preview reads "Stonestead — Propagate" instead of the
+    // generic card. Deterministic: the name comes from the seed alone (postcard.js → farm.js), no sim
+    // run. Served without a validator on purpose — the variant differs per query and the plain page's
+    // size+mtime ETag would collide across seeds; these are scraper/click-through hits, a full 200 is
+    // fine. Any failure falls through to the untouched static page.
+    if (url.searchParams.has('seed') && (url.pathname === '/' || url.pathname === '/index.html')) {
+        try {
+            const { postcardMeta, injectOgTags } = await postcardModule();
+            const meta = postcardMeta(url.searchParams);
+            if (meta) {
+                const html = injectOgTags(fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8'), meta);
+                const headers = { 'Content-Type': MIME['.html'], 'Cache-Control': cacheControl('/index.html'), 'Vary': 'Accept-Encoding' };
+                let body = Buffer.from(html);
+                if (PROD && /\bgzip\b/.test(req.headers['accept-encoding'] || '')) {
+                    body = zlib.gzipSync(body, { level: 6 });   // inline, NOT gzipFor — its per-file cache would serve one seed's page for every seed
+                    headers['Content-Encoding'] = 'gzip';
+                }
+                res.writeHead(200, headers); res.end(body);
+                return;
+            }
+        } catch (err) { console.warn('ry-farms: postcard tag injection failed - serving the plain page', err?.message || err); }
     }
 
     // STATIC. This started as a localhost dev server and is now what faces the internet on a hosted

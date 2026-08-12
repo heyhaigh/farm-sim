@@ -29,6 +29,8 @@ import { enrichInventions, persistTownInventions } from './memory-invent.js';
 import { whisper, whisperLog } from './conscience.js';
 import { cultureWord } from './culture.js';   // #3.1 orc-vs-human display copy
 import { track, trackOnce, resetFunnel } from './analytics.js';   // #funnel display-side GA4 events
+import { buildPostcard } from './postcard.js';   // #postcard the share link + copy line (off-sim)
+import { voiceOf, wordDelay, KEY_VARIANTS, VOICE_VARIANTS, DEFAULT_KEY_VARIANT, DEFAULT_VOICE_VARIANT } from './whisper-fx.js';   // #whisper-fx key pops + animalese
 import { revealLine, DEFAULT_VARIANT } from './speech-anim.js';   // #bubble-reveal how a spoken line arrives
 
 // ---------------------------------------------------------------------------
@@ -104,6 +106,12 @@ let rosterScroll = 0;
 let chatFarmer = null;            // the farmer currently being whispered to
 let chatScroll = 0;               // history scroll (px), independent of the roster list scroll
 let chatThinking = false;         // awaiting the classify+reply round-trip (shows a "..." shimmer)
+// #whisper-fx — which key-pop / animalese variant plays (owner-picked via the compare harness or
+// RYFARMS.keySound()/.voiceSound(); persisted per browser; 'off' silences that half).
+const storedFx = (k, list, dflt) => { try { const v = localStorage.getItem('ryf.' + k); return v === 'off' || list.some(x => x.id === v) ? v : dflt; } catch { return dflt; } };
+let whisperKeyFx = storedFx('keyfx', KEY_VARIANTS, DEFAULT_KEY_VARIANT);
+let whisperVoiceFx = storedFx('voicefx', VOICE_VARIANTS, DEFAULT_VOICE_VARIANT);
+let chatReveal = null;            // #whisper-voice { c, text, progress, spoken, voice, last } — the newest reply writing itself out
 let chatDropdownOpen = false;     // the "switch farmer" picker is expanded over the list
 let chatDropRows = [];            // { farmer, y0, y1 } hit regions for the open dropdown
 let chatEntryRect = null;         // screen-px rect of the entry row (for click-to-focus + input overlay)
@@ -249,7 +257,7 @@ function cursorIsHot(worldTooltip) {
     if (!selected && inRect(m, MINIMAP)) return true;
     if (rosterOpen) { for (const r of rosterRows) if (m.y >= r.y0 && m.y < r.y1) return true; }
     // #credits — the settings panel's CraftPix link (and its other buttons) wear the gold glove
-    if (settingsOpen && settingsHits) { for (const k of ['close', 'music', 'sfx', 'portalBtn', 'craftpix']) if (settingsHits[k] && inRect(m, settingsHits[k])) return true; }
+    if (settingsOpen && settingsHits) { for (const k of ['close', 'music', 'sfx', 'portalBtn', 'shareBtn', 'craftpix']) if (settingsHits[k] && inRect(m, settingsHits[k])) return true; }
     if (chronOpen) { for (const r of chronRows) if (m.y >= r.y0 && m.y < r.y1) return true; }
     return !!worldTooltip;   // hovering a building/farmer/merchant that shows a tooltip
 }
@@ -413,6 +421,8 @@ let lastSavedDay = 0;                              // last world.day autosaved (
 let saveFlashAt = -1e9;                            // brief "SAVED" tick in the top bar
 let _whisperNudged = false;                        // #curate one whisper-nudge toast per page load (localStorage gates per browser)
 let _heldToasted = false;                          // #fresh-held one refused-?fresh explanation toast per page load
+let _postcardArrival = false;                      // #postcard this boot FOUNDED a town from a shared ?pc=1 link (set once resume is settled)
+let _postcardToasted = false;                      // ...and greeted the recipient (once per page load)
 let _voteWindowWas = false;                        // #vote-panel edge-detects the gathering opening (replaces the detail card once)
 let resumeCard = null;                             // "PREVIOUSLY ON PROPAGATE" catch-up card (shown once on resume)
 // #memory-intro — the ONE-TIME feature reveal for EXISTING players (owner: introduce the browser
@@ -4651,7 +4661,7 @@ function foundNewTown(culture) {
 // Settings menu — New Town + music/SFX volume. Opened by the top-bar gear cog.
 // ---------------------------------------------------------------------------
 function drawSettings() {
-    const PW = Math.min(GW - 24, 240), PH = ADMIN_BOOTH ? 224 : 140;   // +26 for the town-file row   // the booth rows only exist under ?admin=1; coach line removed
+    const PW = Math.min(GW - 24, 240), PH = ADMIN_BOOTH ? 242 : 158;   // +26 town-file row, +18 share row   // the booth rows only exist under ?admin=1; coach line removed
     const PX = Math.floor((GW - PW) / 2), PY = Math.floor((GH - PH) / 2) - 6;
     ctx.fillStyle = 'rgba(6,7,11,0.72)'; ctx.fillRect(0, 18, GW, GH - 18);
     uiPanel(PX, PY, PW, PH);
@@ -4713,16 +4723,27 @@ function drawSettings() {
         const il = confirming ? 'CLICK TO CONFIRM' : 'IMPORT TOWN...';
         drawText(ctx, il, ib.x + Math.floor((ib.w - textWidth(il)) / 2), ib.y + 4, confirming ? '#f0c860' : '#9ab8e8');
         settingsHits.exportBtn = eb; settingsHits.importBtn = ib;
+
+        // #postcard — SHARE: mints a ?seed link + copy line onto the clipboard. Determinism is the
+        // product here: the recipient's browser grows this very town from the seed alone.
+        const sb = { x: IX, y: PY + 118, w: PW - 16, h: 14 };
+        ctx.fillStyle = '#0f2026'; ctx.fillRect(sb.x, sb.y, sb.w, sb.h);
+        ctx.strokeStyle = '#5aa8c0'; ctx.strokeRect(sb.x + 0.5, sb.y + 0.5, sb.w - 1, sb.h - 1);
+        const sl = 'SHARE THIS TOWN';
+        drawText(ctx, sl, sb.x + Math.floor((sb.w - textWidth(sl)) / 2), sb.y + 4, '#9ad8ec');
+        settingsHits.shareBtn = sb;
+
         // The battle-tale loss is disclosed HERE, before the confirming click (Codex #121 r4 P1):
         // the export-time notice appeared on the SENDING browser, and this one may never have seen
         // it. Import clears the target seed's rows and battle tales are irreconstructible — that is
         // the destructive fact, and it must precede the click that commits it.
+        // (One note line under all three rows — share results land here too.)
         const note = pendingImport
             ? (pendingImport.occupied
                 ? `GETS ${String(pendingImport.town || 'TOWN').slice(0, 12)} D${pendingImport.day || '?'} - OLD BATTLE TALES LOST FOREVER`
                 : `GETS ${String(pendingImport.town || 'TOWN').slice(0, 12)} DAY ${pendingImport.day || '?'} - CLICK TO CONFIRM`)
             : (saveportNote && performance.now() < saveportNote.until ? saveportNote.text : 'A TOWN FILE MOVES YOUR SAVE BETWEEN BROWSERS');
-        drawText(ctx, note, IX, PY + 118, pendingImport ? '#e0a850' : '#5a5f6c');
+        drawText(ctx, note, IX, PY + 136, pendingImport ? '#e0a850' : '#5a5f6c');
     }
 
     // #credits — CraftPix character sprites (licence: deployed-game use OK). Click opens their pack page.
@@ -4731,11 +4752,11 @@ function drawSettings() {
         const cPrefix = 'CERTAIN SPRITES ARE CREATED BY ';
         const cLink = 'CRAFTPIX.NET';
         const pw2 = textWidth(cPrefix), lw = textWidth(cLink);
-        const cb = { x: IX + pw2, y: PY + 123, w: lw + 2, h: 9 };
+        const cb = { x: IX + pw2, y: PY + 141, w: lw + 2, h: 9 };
         const chov = inRect(mouse, cb);
-        drawText(ctx, cPrefix, IX, PY + 125, '#5a5f6c');
-        drawText(ctx, cLink, IX + pw2, PY + 125, chov ? '#9ad0e0' : '#8a8f9c');
-        ctx.fillStyle = chov ? '#9ad0e0' : '#3a3f4c'; ctx.fillRect(IX + pw2, PY + 131, lw, 1);   // underline: only the link
+        drawText(ctx, cPrefix, IX, PY + 143, '#5a5f6c');
+        drawText(ctx, cLink, IX + pw2, PY + 143, chov ? '#9ad0e0' : '#8a8f9c');
+        ctx.fillStyle = chov ? '#9ad0e0' : '#3a3f4c'; ctx.fillRect(IX + pw2, PY + 149, lw, 1);   // underline: only the link
         settingsHits.craftpix = cb;
     }
 
@@ -4744,7 +4765,7 @@ function drawSettings() {
     // #adminbooth ?admin=1 only — see the flag's comment at module scope.
     if (ADMIN_BOOTH) {
         const rh = world.rehearsal;
-        drawText(ctx, 'ADMIN - REHEARSALS (GHOST RUNS, NOTHING RECORDED)', IX, PY + 138, '#8a6fae');
+        drawText(ctx, 'ADMIN - REHEARSALS (GHOST RUNS, NOTHING RECORDED)', IX, PY + 156, '#8a6fae');
         const admRow = (y, key, live, liveLabel, idleLabel) => {
             const b = { x: IX, y, w: PW - 16, h: 14 };
             ctx.fillStyle = live ? '#2e2410' : '#141824'; ctx.fillRect(b.x, b.y, b.w, b.h);
@@ -4753,12 +4774,12 @@ function drawSettings() {
             drawText(ctx, label, b.x + Math.floor((b.w - textWidth(label)) / 2), b.y + 4, live ? '#f0c860' : '#9ab8e8');
             settingsHits[key] = b;
         };
-        admRow(PY + 148, 'admRaid', rh && rh.kind === 'raid', 'RAID REHEARSAL LIVE - CANCEL', 'STAGE A RAID');
-        admRow(PY + 166, 'admVote', rh && rh.kind === 'election', 'VOTE REHEARSAL LIVE - CANCEL', 'STAGE THE VOTE');
-        admRow(PY + 184, 'admSortie', rh && rh.kind === 'sortie', 'WAR PARTY LIVE - CANCEL', 'STAGE A WAR PARTY');   // #counteroffensive
+        admRow(PY + 166, 'admRaid', rh && rh.kind === 'raid', 'RAID REHEARSAL LIVE - CANCEL', 'STAGE A RAID');
+        admRow(PY + 184, 'admVote', rh && rh.kind === 'election', 'VOTE REHEARSAL LIVE - CANCEL', 'STAGE THE VOTE');
+        admRow(PY + 202, 'admSortie', rh && rh.kind === 'sortie', 'WAR PARTY LIVE - CANCEL', 'STAGE A WAR PARTY');   // #counteroffensive
 
         // #Codex38 P2-5: the booth REFUSES to stage over a real raid — say so, instead of silently closing
-        if (adminNote && performance.now() < adminNote.until) drawText(ctx, adminNote.text, IX, PY + 200, '#e0a850');
+        if (adminNote && performance.now() < adminNote.until) drawText(ctx, adminNote.text, IX, PY + 218, '#e0a850');
     }
     // (the "ESC OR CLICK OUTSIDE TO CLOSE" coach line is gone — owner call, the affordance is universal)
     settingsHits.panel = { x: PX, y: PY, w: PW, h: PH };
@@ -5768,6 +5789,28 @@ function drawConscienceChat(x, y, w, h) {
         lines.push({ text: 'a stray thought drifts into their', col: '#5a5f6c' });
         lines.push({ text: 'head... whisper something.', col: '#5a5f6c' });
     }
+    // #whisper-voice — the NEWEST reply writes itself out word by word, each word chirped in the
+    // farmer's animalese as it lands. Progress advances only while the panel is drawn (dt-capped),
+    // so a minimized widget holds the line rather than letting it silently catch up; the first word
+    // lands with the reply so there is never an empty beat after the "..." shimmer.
+    let revealEntry = null, revealText = '';
+    if (chatReveal && chatReveal.c === c) {
+        const last = c.log[c.log.length - 1];
+        if (last && last.who !== 'voice' && last.text === chatReveal.text) {
+            const now = performance.now();
+            const dt = chatReveal.last ? Math.min(0.1, (now - chatReveal.last) / 1000) : 0;
+            chatReveal.last = now; chatReveal.progress += dt;
+            const wordsAll = String(last.text).split(' ');
+            let tAcc = 0, count = 1;   // word 0 is free
+            for (let i = 1; i < wordsAll.length; i++) {
+                tAcc += wordDelay(wordsAll[i], chatReveal.voice);
+                if (chatReveal.progress >= tAcc) count = i + 1; else break;
+            }
+            while (chatReveal.spoken < count) { if (whisperVoiceFx !== 'off') audio.speakWord(chatReveal.voice, wordsAll[chatReveal.spoken], whisperVoiceFx); chatReveal.spoken++; }
+            if (count >= wordsAll.length) chatReveal = null;   // fully out — render plain from here on
+            else { revealEntry = last; revealText = wordsAll.slice(0, count).join(' '); }
+        } else if (!last || last.who !== 'voice') chatReveal = null;   // log moved on (day fade, cap) — stand down
+    }
     for (const e of c.log) {
         // thoughts FADE: yesterday's dim, older than that leave the panel entirely (the stored log keeps
         // its 40-entry cap for the LLM's memory — this is display hygiene, not amnesia)
@@ -5776,7 +5819,7 @@ function drawConscienceChat(x, y, w, h) {
         const isVoice = e.who === 'voice';
         const col = age >= 1 ? '#6a6f7c' : (isVoice ? '#c8b060' : '#c8ccd8');   // gold = your thought, white = their reply, grey = yesterday
         const prefix = isVoice ? '> ' : '  ';
-        const wrapped = wrapLine(prefix + e.text, maxChars);
+        const wrapped = wrapLine(prefix + (e === revealEntry ? revealText : e.text), maxChars);
         wrapped.forEach((ln, i) => lines.push({ text: (i === 0 ? ln : '  ' + ln), col }));
     }
     if (chatThinking) lines.push({ text: '  ' + '.'.repeat(1 + (Math.floor(Date.now() / 300) % 3)), col: '#7dd069' });
@@ -5869,6 +5912,15 @@ function ensureChatInput() {
         if (e.key === 'Enter') { e.preventDefault(); submitWhisper(); }
         else if (e.key === 'Escape') { e.preventDefault(); el.blur(); }
     });
+    // #whisper-fx — a pop per typed character. The 'input' event (not keydown) so modifiers and
+    // dead keys stay silent, IME/paste count once, and backspace/space get their own lower voices.
+    el.addEventListener('input', (e) => {
+        if (whisperKeyFx === 'off') return;
+        const it = e.inputType || '';
+        if (it.startsWith('delete')) audio.keyPop('delete', whisperKeyFx);
+        else if (it === 'insertText' && e.data === ' ') audio.keyPop('space', whisperKeyFx);
+        else if (it.startsWith('insert')) audio.keyPop('insert', whisperKeyFx);
+    });
     document.body.appendChild(el);
     chatInputEl = el;
     return el;
@@ -5899,7 +5951,15 @@ async function submitWhisper() {
         // interactive spectator backdrop, and a whisper to it would spend the durable flag before
         // the player ever founds a real town — whose genuine first whisper then never records.
         if (funnelPlayed()) trackOnce('first_whisper');
-        await whisper(w, f, text, () => { if (w && !w._retired) saveTown(w); });   // #Codex37 P1-2: a retired (wiped) town stays wiped
+        const r = await whisper(w, f, text, () => { if (w && !w._retired) saveTown(w); });   // #Codex37 P1-2: a retired (wiped) town stays wiped
+        // #whisper-voice — arm the write-out: the reply arrives word by word, each word voiced in
+        // the farmer's own animalese pitch (stable per farmer; orcs low and slow). Display-only.
+        if (r && r.reply) {
+            chatReveal = {
+                c: f.conscience, text: r.reply, progress: 0, spoken: 0, last: 0,
+                voice: voiceOf(f.sheet.seed, w.culture, f.sheet.personality?.competitiveness ?? 0.5),
+            };
+        }
     } catch (err) {
         console.warn('ry-farms: whisper failed', err);
     } finally {
@@ -7455,6 +7515,30 @@ out.addEventListener('pointerup', (e) => {
             saveportOpenChooser();
             return;
         }
+        // #postcard — SHARE: copy the postcard line + link. world.culture, not _bootIsOrc (a resumed
+        // orc town's URL drops ?orc, and the LINK must carry it or the recipient founds a human town
+        // on the same seed). Clipboard API first; the execCommand textarea is the no-permission
+        // fallback (we are inside the user gesture here, which is all execCommand needs).
+        if (settingsHits.shareBtn && inRect(p, settingsHits.shareBtn)) {
+            const card = buildPostcard({ seed: world.seed, name: world.name, day: world.day, year: world.year, culture: world.culture, origin: location.origin });
+            const copied = () => {
+                saveportNote = { text: 'POSTCARD COPIED - PASTE IT TO A FRIEND', until: performance.now() + 6000 };
+                track('postcard_copied', { seed: world.seed });
+            };
+            const legacyCopy = () => {
+                try {
+                    const ta = document.createElement('textarea');
+                    ta.value = card.text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+                    document.body.appendChild(ta); ta.select();
+                    const ok = document.execCommand('copy');
+                    ta.remove();
+                    if (ok) copied(); else throw new Error('execCommand refused');
+                } catch { saveportNote = { text: 'COULD NOT COPY THE LINK IN THIS BROWSER', until: performance.now() + 6000 }; }
+            };
+            if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(card.text).then(copied).catch(legacyCopy);
+            else legacyCopy();
+            return;
+        }
         // #credits — the CraftPix attribution link
         if (settingsHits.craftpix && inRect(p, settingsHits.craftpix)) {
             window.open('https://craftpix.net/freebies/free-swordsman-1-3-level-pixel-top-down-sprite-character-pack/', '_blank', 'noopener');
@@ -8202,6 +8286,12 @@ function frame(now) {
     if (!_heldToasted && !startScreen && world && new URLSearchParams(location.search).has('held')) {
         _heldToasted = true;
         calloutQueue.push({ text: 'This ground already holds a living town - resumed it. Start a new town from the menu to begin again', tone: 'neutral' });
+    }
+    // #postcard — greet the recipient of a shared link, once, on the founding boot (flag set beside
+    // town_created, where `resumed` is settled).
+    if (_postcardArrival && !_postcardToasted && !startScreen && world) {
+        _postcardToasted = true;
+        calloutQueue.push({ text: 'A postcard town - someone shared this very land with you, and from here it grows as your own', tone: 'neutral' });
     }
     // #vote-panel edge (owner) — when the vote window OPENS it replaces the farmer detail card (and
     // only that: settings/chronicle/roster/board live above and are untouched); while it holds,
@@ -9105,7 +9195,15 @@ function drawStartScreen() {
         if (resumed) track('session_return', { day: world.day, seed: world.seed });
         // world.culture, NOT _bootIsOrc: a resumed orc town carries no ?orc= in its URL, so the
         // boot flag misreports it (see the correction note at the top of this function).
-        else track('town_created', { seed: world.seed, culture: world.culture || 'human' });
+        else {
+            track('town_created', { seed: world.seed, culture: world.culture || 'human' });
+            // #postcard — an arrival through a shared link, at the FOUNDING moment only: a later
+            // reload of the same ?pc=1 URL resumes and stays quiet (no flag, no repeat toast).
+            if (bootParams.get('pc') != null) {
+                _postcardArrival = true;
+                track('postcard_arrival', { seed: world.seed, culture: world.culture || 'human' });
+            }
+        }
     }
     // #memory-backfill — seed the store from towns that ALREADY exist, once the session is settled
     // (idle, off the boot path; real playing sessions only — a spectator backdrop stays read-only).
@@ -9362,6 +9460,10 @@ function drawStartScreen() {
         // and a fallback:true body all died in the same silent catch.
         whisperLog,
         watchIcon: (n) => { START_WATCH_ICON = n; },   // #start-icons side-by-side picker
+        // #whisper-fx live pickers — RYFARMS.keySound('bubble'|'thock'|'terminal'|'soft'|'off'),
+        // RYFARMS.voiceSound('classic'|'babble'|'hum'|'off'). No arg reads the current pick. Persisted.
+        keySound: (id) => { if (id === 'off' || KEY_VARIANTS.some(v => v.id === id)) { whisperKeyFx = id; try { localStorage.setItem('ryf.keyfx', id); } catch { /* private mode */ } } return whisperKeyFx; },
+        voiceSound: (id) => { if (id === 'off' || VOICE_VARIANTS.some(v => v.id === id)) { whisperVoiceFx = id; try { localStorage.setItem('ryf.voicefx', id); } catch { /* private mode */ } } return whisperVoiceFx; },
         speed: (mult) => { world._speedMult = mult; },
         // #98 fire a test Moment: RYFARMS.moment() spotlights farmer 0 finding a star-crystal (with its memory why)
         momentMs: (ms) => { MOMENT_MS = ms; },   // hold a Moment open for QA/screenshots

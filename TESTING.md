@@ -35,6 +35,7 @@ Run them all before pushing. Several protect properties that no amount of care a
 | `raid-adversarial.mjs` | raid resolution under adversarial inputs | slow |
 | `gate-loop.mjs` | the mobile gate never forks a second render loop — a throw leaves a backoff pending, and a context loss+restore before it fires used to start a duplicate that ran forever (61 vs 122 renders/sec) | fast |
 | `gate-layout.mjs` | the **mobile gate's** geometry across real device sizes — the one screen most first-time visitors see, and otherwise unreachable by the suite (it needs a canvas and a matching media query) | fast |
+| `postcard.mjs` | the **share link is the town**: minted URL shape (incl. the `&orc=1` an orc link must carry), seed coercion mirroring the boot, and OG injection against the real `index.html` | fast |
 
 ## Reading a failure
 

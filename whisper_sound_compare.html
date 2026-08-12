@@ -1,0 +1,228 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Propagate — Whisper sounds: key pops + animalese</title>
+<style>
+  html, body { max-width:100%; overflow-x:hidden; }
+  body { margin:0; background:#12140f; color:#e6e8ee; font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace; padding:22px 26px 80px; box-sizing:border-box; }
+  *, *::before, *::after { box-sizing:inherit; }
+  h1 { font-size:18px; letter-spacing:0.05em; color:#7dd069; margin:0 0 4px; }
+  .sub { color:#98a08c; font-size:12.5px; line-height:1.55; margin:0 0 16px; max-width:980px; }
+  .sub b { color:#e0a848; font-weight:normal; }
+  .sub i { color:#e6e8ee; font-style:normal; }
+  .bar { display:flex; gap:18px; align-items:center; flex-wrap:wrap; background:#181b13; border:1px solid #2a2f22;
+         border-radius:10px; padding:11px 15px; margin:0 0 16px; font-size:11.5px; letter-spacing:0.06em; color:#98a08c; }
+  .bar label { display:flex; gap:7px; align-items:center; }
+  .bar input[type=range] { accent-color:#7dd069; }
+  h3 { font-size:12px; letter-spacing:0.1em; color:#7dd069; margin:22px 0 9px; font-weight:normal; }
+  h3 span { color:#7d8a72; letter-spacing:0.04em; }
+  .grid { display:flex; flex-wrap:wrap; gap:14px; }
+  .cell { border:1px solid #2a2f22; border-radius:10px; background:#181b13; overflow:hidden; flex:1 1 220px; min-width:0; max-width:100%;
+          cursor:pointer; transition:border-color 0.12s; }
+  .cell:hover { border-color:#4a5a3a; }
+  .cell.pick { border-color:#7dd069; }
+  .cell h2 { font-size:13px; letter-spacing:0.06em; color:#e0a848; margin:0; padding:11px 15px 3px; }
+  .cell h2 em { font-style:normal; color:#7dd069; font-size:10.5px; letter-spacing:0.1em; }
+  .cell .note { color:#98a08c; font-size:11px; line-height:1.5; padding:0 15px 12px; }
+  .typebox { width:100%; background:#0c0e14; color:#e8ecf5; border:1px solid #3a3f4c; border-radius:8px;
+             font-family:inherit; font-size:14px; letter-spacing:0.05em; padding:10px 12px; outline:none; }
+  .typebox:focus { border-color:#7dd069; }
+  .chips { display:flex; gap:8px; flex-wrap:wrap; margin:8px 0 0; }
+  .chip { background:#12140f; border:1px solid #2a2f22; border-radius:6px; color:#c8ccd8; font-family:inherit;
+          font-size:11.5px; letter-spacing:0.06em; padding:5px 10px; cursor:pointer; }
+  .chip:hover { border-color:#4a5a3a; }
+  .chip.pick { border-color:#7dd069; color:#bff0a8; }
+  .chip.orc { color:#e0a0a0; }
+  .chip.orc.pick { border-color:#d06a5a; color:#f0b0a0; }
+  button.play { background:#243019; color:#bff0a8; border:1px solid #3d5228; border-radius:6px; font-family:inherit;
+          font-size:11.5px; letter-spacing:0.06em; padding:6px 14px; cursor:pointer; }
+  button.play:hover { background:#2e3d20; }
+  .chatline { min-height:44px; background:#0c0e14; border:1px solid #3a3f4c; border-radius:8px; padding:10px 12px;
+              font-size:13px; letter-spacing:0.04em; line-height:1.6; margin-top:10px; }
+  .chatline .you { color:#c8b060; }
+  .chatline .them { color:#e6e8ee; }
+  .panelbox { background:#181b13; border:1px solid #2a2f22; border-radius:10px; padding:14px 15px; }
+  .foot { color:#7d8a72; font-size:11.5px; line-height:1.6; margin:24px 0 0; max-width:980px; border-top:1px solid #2a2f22; padding-top:14px; }
+  .foot b { color:#e0a848; font-weight:normal; }
+  code { color:#9ad8ec; }
+</style>
+</head>
+<body>
+<h1>PROPAGATE — WHISPER SOUNDS</h1>
+<p class="sub">
+Two sounds, judged separately then together. <b>1 · KEY POP</b> — a tiny pop per typed character (every keystroke
+jitters its own pitch and length, so hold a key down and listen for the variance). <b>2 · FARMER VOICE</b> — the
+reply writes out word by word, each word chirped in the farmer's own animalese; every farmer's pitch is stable
+(hashed off their seed), orcs sit low and slow. <b>3 · THE FULL EXCHANGE</b> plays both against each other:
+type, hit enter, the farmer answers. <i>Click a card to select it — your picks drive sections 1–3 live.</i>
+</p>
+
+<div class="bar">
+  <label>VOLUME <input type="range" id="vol" min="0" max="1" step="0.05" value="0.7"><span id="volv">70%</span></label>
+  <span>the game routes both through its SFX slider — this stands in for it</span>
+</div>
+
+<h3>1 · KEY POP <span>— click a card to hear a burst and select it; then type below</span></h3>
+<div class="grid" id="keyCards"></div>
+<div class="panelbox" style="margin-top:12px">
+  <input class="typebox" id="keyType" placeholder="type here — backspace and space have their own voices" autocomplete="off" spellcheck="false">
+</div>
+
+<h3>2 · FARMER VOICE <span>— pick a variant, pick a speaker, play a reply</span></h3>
+<div class="grid" id="voiceCards"></div>
+<div class="panelbox" style="margin-top:12px">
+  <div class="chips" id="speakerChips"></div>
+  <div class="chips" id="sayChips" style="margin-top:6px"></div>
+  <div style="margin-top:10px"><button class="play" id="playReply">PLAY THE REPLY</button></div>
+  <div class="chatline" id="voiceLine"><span class="them"></span></div>
+</div>
+
+<h3>3 · THE FULL EXCHANGE <span>— your two picks together: whisper something and press enter</span></h3>
+<div class="panelbox">
+  <input class="typebox" id="fullType" placeholder="whisper a thought... (enter to send)" autocomplete="off" spellcheck="false">
+  <div class="chatline" id="fullLine"></div>
+</div>
+
+<p class="foot">
+<b>When you've picked:</b> tell Claude the two ids (e.g. <code>bubble</code> + <code>classic</code>) — they become the
+game defaults. You can also audition in the real game right now: open the whisper box and run
+<code>RYFARMS.keySound('thock')</code> / <code>RYFARMS.voiceSound('babble')</code> in the console ('off' silences one half).
+Both picks persist per browser. This page imports <code>whisper-fx.js</code> — the exact module the game plays.
+</p>
+
+<script type="module">
+import { KEY_VARIANTS, VOICE_VARIANTS, DEFAULT_KEY_VARIANT, DEFAULT_VOICE_VARIANT,
+         keyPop, speakWord, voiceOf, wordDelay } from './whisper-fx.js';
+
+const AC = window.AudioContext || window.webkitAudioContext;
+const ctx = new AC();
+const master = ctx.createGain(); master.gain.value = 0.7; master.connect(ctx.destination);
+const wake = () => { if (ctx.state === 'suspended') ctx.resume(); };
+document.addEventListener('pointerdown', wake); document.addEventListener('keydown', wake);
+
+const vol = document.getElementById('vol'), volv = document.getElementById('volv');
+vol.addEventListener('input', () => { master.gain.value = +vol.value; volv.textContent = Math.round(vol.value * 100) + '%'; });
+
+let keyPick = DEFAULT_KEY_VARIANT, voicePick = DEFAULT_VOICE_VARIANT;
+
+// ---- section 1: key pops -----------------------------------------------------------------
+const keyCards = document.getElementById('keyCards');
+for (const v of KEY_VARIANTS) {
+    const el = document.createElement('div');
+    el.className = 'cell' + (v.id === keyPick ? ' pick' : '');
+    el.innerHTML = `<h2>${v.label} <em>${v.id}</em></h2><div class="note">${v.note}</div>`;
+    el.addEventListener('click', () => {
+        keyPick = v.id;
+        [...keyCards.children].forEach(c => c.classList.remove('pick')); el.classList.add('pick');
+        // a demo burst: the rhythm of the word "propagate", spaces and a backspace included
+        wake();
+        const kinds = ['insert','insert','insert','space','insert','insert','delete','insert','insert'];
+        kinds.forEach((k, i) => setTimeout(() => keyPop(ctx, master, v.id, k), i * 85 + Math.random() * 20));
+        document.getElementById('keyType').focus();
+    });
+    keyCards.appendChild(el);
+}
+document.getElementById('keyType').addEventListener('input', (e) => {
+    const it = e.inputType || '';
+    if (it.startsWith('delete')) keyPop(ctx, master, keyPick, 'delete');
+    else if (it === 'insertText' && e.data === ' ') keyPop(ctx, master, keyPick, 'space');
+    else if (it.startsWith('insert')) keyPop(ctx, master, keyPick, 'insert');
+});
+
+// ---- section 2: the farmer's voice ---------------------------------------------------------
+const SPEAKERS = [
+    { label: 'BRAM (HUMAN)',     seed: 8151623,  culture: 'human', character: 0.2 },
+    { label: 'MARIGOLD (HUMAN)', seed: 424242,   culture: 'human', character: 0.9 },
+    { label: 'WREN (HUMAN)',     seed: 20260101, culture: 'human', character: 0.5 },
+    { label: 'GRULL (ORC)',      seed: 515151,   culture: 'orc',   character: 0.6 },
+];
+const SAYINGS = [
+    "The fence first. Then we talk about your beans.",
+    "Rain.",
+    "I have carried water since dawn and my arms know it.",
+    "A fine thought. I will chop the pine by the west gate.",
+];
+let speaker = SPEAKERS[0], saying = SAYINGS[0];
+
+const voiceCards = document.getElementById('voiceCards');
+for (const v of VOICE_VARIANTS) {
+    const el = document.createElement('div');
+    el.className = 'cell' + (v.id === voicePick ? ' pick' : '');
+    el.innerHTML = `<h2>${v.label} <em>${v.id}</em></h2><div class="note">${v.note}</div>`;
+    el.addEventListener('click', () => {
+        voicePick = v.id;
+        [...voiceCards.children].forEach(c => c.classList.remove('pick')); el.classList.add('pick');
+        playReply();
+    });
+    voiceCards.appendChild(el);
+}
+const speakerChips = document.getElementById('speakerChips');
+SPEAKERS.forEach((s, i) => {
+    const b = document.createElement('button');
+    b.className = 'chip' + (s.culture === 'orc' ? ' orc' : '') + (i === 0 ? ' pick' : '');
+    b.textContent = s.label;
+    b.addEventListener('click', () => { speaker = s; [...speakerChips.children].forEach(c => c.classList.remove('pick')); b.classList.add('pick'); playReply(); });
+    speakerChips.appendChild(b);
+});
+const sayChips = document.getElementById('sayChips');
+SAYINGS.forEach((s, i) => {
+    const b = document.createElement('button');
+    b.className = 'chip' + (i === 0 ? ' pick' : '');
+    b.textContent = s.length > 34 ? s.slice(0, 31) + '...' : s;
+    b.addEventListener('click', () => { saying = s; [...sayChips.children].forEach(c => c.classList.remove('pick')); b.classList.add('pick'); playReply(); });
+    sayChips.appendChild(b);
+});
+
+// write a line out word by word at the GAME's cadence (wordDelay), voicing each word as it lands
+let playGen = 0;
+function writeOut(target, text, voice, variant) {
+    wake();
+    const gen = ++playGen;
+    const words = text.split(' ');
+    target.textContent = '';
+    let t = 0;
+    words.forEach((w, i) => {
+        if (i > 0) t += wordDelay(w, voice) * 1000;
+        setTimeout(() => {
+            if (gen !== playGen) return;
+            target.textContent = words.slice(0, i + 1).join(' ');
+            speakWord(ctx, master, voice, w, variant);
+        }, t);
+    });
+}
+function playReply() {
+    const v = voiceOf(speaker.seed, speaker.culture, speaker.character);
+    writeOut(document.querySelector('#voiceLine .them'), saying, v, voicePick);
+}
+document.getElementById('playReply').addEventListener('click', playReply);
+
+// ---- section 3: the full exchange ----------------------------------------------------------
+const fullType = document.getElementById('fullType');
+const fullLine = document.getElementById('fullLine');
+const REPLIES = [
+    "Hm. The thought has roots. I will see to it after the watering.",
+    "No. My bones say storm, and my bones outrank you.",
+    "You whisper, I dig. That is the whole arrangement.",
+    "A kind thought. Marigold said the same, and louder.",
+];
+let exchangeN = 0;
+fullType.addEventListener('input', (e) => {
+    const it = e.inputType || '';
+    if (it.startsWith('delete')) keyPop(ctx, master, keyPick, 'delete');
+    else if (it === 'insertText' && e.data === ' ') keyPop(ctx, master, keyPick, 'space');
+    else if (it.startsWith('insert')) keyPop(ctx, master, keyPick, 'insert');
+});
+fullType.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    const text = fullType.value.trim();
+    if (!text) return;
+    fullType.value = '';
+    fullLine.innerHTML = `<div class="you">&gt; ${text.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</div><div class="them"></div>`;
+    const v = voiceOf(speaker.seed, speaker.culture, speaker.character);
+    const reply = REPLIES[exchangeN++ % REPLIES.length];
+    setTimeout(() => writeOut(fullLine.querySelector('.them'), reply, v, voicePick), 450);
+});
+</script>
+</body>
+</html>
