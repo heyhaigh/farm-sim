@@ -16,7 +16,7 @@ whose town is a non-persisting backdrop.
 `window.RYFARMS` is the debug surface: `world`, `speed(n)`, `saveNow()`, `peekSave()`, `restoreSave()`,
 `demoFaceoff()`, `demoRaid()`, `goTo(i,j)`, `wipeSave()`, `undoWipe()`.
 
-## The suite — thirteen files, all `node tests/<name>.mjs`
+## The suite — fourteen files, all `node tests/<name>.mjs`
 
 Run them all before pushing. Several protect properties that no amount of care at the call site will.
 

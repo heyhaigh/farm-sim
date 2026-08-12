@@ -10,9 +10,20 @@ import { generateTownName } from './farm.js';
 
 const PUBLIC_ORIGIN = 'https://propagate.heyhaigh.ai';   // matches index.html's static og:url
 
-// The client boot's exact seed coercion (main.js): parseInt >>> 0, so junk parses to 0 — the meta
-// must name the SAME town the boot would found, garbage in or not.
-function coerceSeed(raw) { return parseInt(raw, 10) >>> 0; }
+// The ONE reading of a query's town identity — seed and culture. The boot (main.js) and the OG
+// preview (postcardMeta) MUST agree byte-for-byte, because a preview that names a different town
+// than the click founds is exactly the contract failure this module exists to prevent — so BOTH
+// consume this helper (Codex #123-3: each side keeping its own parseInt was a green-suite
+// divergence waiting to happen). Junk parses to 0 — a valid town, the same one the boot founds.
+export function queryTown(params) {
+    const raw = params.get('seed');
+    const hasSeed = raw != null && raw !== '';
+    return {
+        hasSeed,
+        seed: hasSeed ? (parseInt(raw, 10) >>> 0) : null,
+        culture: (params.get('orc') != null || params.get('culture') === 'orc') ? 'orc' : 'human',
+    };
+}
 
 // The sender's half: the URL a recipient opens and the line that travels with it.
 // `pc=1` marks the arrival so the founding boot can greet it (and the funnel can count it);
@@ -28,15 +39,13 @@ export function buildPostcard({ seed, name, day, year, culture, origin }) {
 // The scraper's half: share-card fields for a link that carries a seed. Returns null when the
 // query names no seed (the plain page's static tags stand).
 export function postcardMeta(params) {
-    const raw = params.get('seed');
-    if (raw == null || raw === '') return null;
-    const seed = coerceSeed(raw);
-    const culture = (params.get('orc') != null || params.get('culture') === 'orc') ? 'orc' : 'human';
-    const name = generateTownName(seed, culture);
+    const q = queryTown(params);
+    if (!q.hasSeed) return null;
+    const name = generateTownName(q.seed, q.culture);
     return {
         title: `${name} — Propagate`,
         description: `A postcard from ${name}. This exact town will grow for you too — a procedural, AI-driven farm sim, free in your browser.`,
-        url: `${PUBLIC_ORIGIN}/?seed=${seed}${culture === 'orc' ? '&orc=1' : ''}`,
+        url: `${PUBLIC_ORIGIN}/?seed=${q.seed}${q.culture === 'orc' ? '&orc=1' : ''}`,
     };
 }
 

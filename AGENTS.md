@@ -25,7 +25,7 @@ never reach or fix. Several ordinary-looking edits silently rewrite or destroy t
 
 There is a test that catches all of those. Run it.
 
-**[TESTING.md](TESTING.md)** — how to run the game and the thirteen test files, and what each one protects.
+**[TESTING.md](TESTING.md)** — how to run the game and the test suite, and what each file protects.
 `node tests/compat.mjs` takes half a second and is the one that catches the save-breaking changes.
 
 **[HOSTING.md](HOSTING.md)** — how the live site is built and deployed, and the one thing that bites: a new

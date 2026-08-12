@@ -29,7 +29,7 @@ import { enrichInventions, persistTownInventions } from './memory-invent.js';
 import { whisper, whisperLog } from './conscience.js';
 import { cultureWord } from './culture.js';   // #3.1 orc-vs-human display copy
 import { track, trackOnce, resetFunnel } from './analytics.js';   // #funnel display-side GA4 events
-import { buildPostcard } from './postcard.js';   // #postcard the share link + copy line (off-sim)
+import { buildPostcard, queryTown } from './postcard.js';   // #postcard the share link + copy line, and THE ?seed/?orc reading (off-sim)
 import { voiceOf, wordDelay, KEY_VARIANTS, VOICE_VARIANTS, DEFAULT_KEY_VARIANT, DEFAULT_VOICE_VARIANT } from './whisper-fx.js';   // #whisper-fx key pops + animalese
 import { revealLine, DEFAULT_VARIANT } from './speech-anim.js';   // #bubble-reveal how a spoken line arrives
 
@@ -5796,9 +5796,16 @@ function drawConscienceChat(x, y, w, h) {
     let revealEntry = null, revealText = '';
     if (chatReveal && chatReveal.c === c) {
         const last = c.log[c.log.length - 1];
-        if (last && last.who !== 'voice' && last.text === chatReveal.text) {
+        // Codex #123-2: a reveal held across a day boundary would chirp a line the display loop
+        // below no longer shows (or shows dimmed) — the moment has passed, stand down and render
+        // plain. age < 1 keeps the reveal strictly a today thing.
+        const age = last ? world.day - (last.day ?? world.day) : 0;
+        if (last && last.who !== 'voice' && last.text === chatReveal.text && age < 1) {
             const now = performance.now();
-            const dt = chatReveal.last ? Math.min(0.1, (now - chatReveal.last) / 1000) : 0;
+            // A gap over 500ms means the panel was hidden or the tab slept — rebase to a ZERO
+            // delta instead of granting the capped 0.1s (Codex #123-2: `last` kept its stale
+            // timestamp while hidden, so every reopen silently advanced a tenth of a second).
+            const dt = chatReveal.last && (now - chatReveal.last) < 500 ? Math.min(0.1, (now - chatReveal.last) / 1000) : 0;
             chatReveal.last = now; chatReveal.progress += dt;
             const wordsAll = String(last.text).split(' ');
             let tAcc = 0, count = 1;   // word 0 is free
@@ -5809,7 +5816,7 @@ function drawConscienceChat(x, y, w, h) {
             while (chatReveal.spoken < count) { if (whisperVoiceFx !== 'off') audio.speakWord(chatReveal.voice, wordsAll[chatReveal.spoken], whisperVoiceFx); chatReveal.spoken++; }
             if (count >= wordsAll.length) chatReveal = null;   // fully out — render plain from here on
             else { revealEntry = last; revealText = wordsAll.slice(0, count).join(' '); }
-        } else if (!last || last.who !== 'voice') chatReveal = null;   // log moved on (day fade, cap) — stand down
+        } else if (!last || last.who !== 'voice') chatReveal = null;   // log moved on, or the entry aged past today — stand down (only an armed-and-awaiting 'voice' tail keeps it)
     }
     for (const e of c.log) {
         // thoughts FADE: yesterday's dim, older than that leave the panel entirely (the stored log keeps
@@ -9030,7 +9037,9 @@ function drawStartScreen() {
     // ?fresh=1 always founds a new town (random seed unless &seed pins it) — the reset hatch
     // and the determinism-test entrance (?fresh=1&seed=42 never loads a save).
     const bootParams = new URLSearchParams(location.search);
-    const urlSeed = bootParams.get('seed');
+    // #postcard shared normalization (Codex #123-3) — queryTown is THE reading of ?seed/?orc, used
+    // here and by the server's OG preview, so the preview names exactly the town this boot founds.
+    const townQ = queryTown(bootParams);
     // #START the LAUNCH OVERLAY: a plain visit (no ?seed / ?fresh / ?play intent) opens the start
     // screen — three ways in over a LIVE, randomised, NON-PERSISTING town (see world._spectator).
     // The buttons then navigate to the real, persisting experience (?fresh=1 / ?fresh=1&orc=1) or
@@ -9040,9 +9049,9 @@ function drawStartScreen() {
     const startMode = !bootParams.has('seed') && !bootParams.has('fresh') && !bootParams.has('play');
     _startModeBoot = startMode;   // the gate reads this from module scope
     const wantFresh = bootParams.get('fresh') != null || startMode;   // the menu's backdrop is always a fresh random town
-    const worldSeed = urlSeed != null && urlSeed !== '' ? (parseInt(urlSeed, 10) >>> 0) : Math.floor(Math.random() * 0x7fffffff);
+    const worldSeed = townQ.hasSeed ? townQ.seed : Math.floor(Math.random() * 0x7fffffff);
     // ?play=1 with no ?orc keeps the human default; the menu backdrop is always a calm human town.
-    const bootCulture = (bootParams.get('orc') != null || bootParams.get('culture') === 'orc') ? 'orc' : 'human';   // #3.1 ?orc=1 raises a warband
+    const bootCulture = townQ.culture;   // #3.1 ?orc=1 raises a warband
     // Must come AFTER the const above: a `const` is in its temporal dead zone until initialised, so assigning
     // from it earlier throws "Cannot access 'bootCulture' before initialization" and kills boot entirely.
     // Corrected again once the world is hydrated — a resumed orc town carries no ?orc= in its URL.
@@ -9104,7 +9113,7 @@ function drawStartScreen() {
         } else foundGen = st.gen;   // observed EMPTY at this generation — a rev-0 claim is legitimate
     }
     if (!wantFresh && !startMode) {
-        const st = await loadTownState(urlSeed != null && urlSeed !== '' ? worldSeed : undefined);
+        const st = await loadTownState(townQ.hasSeed ? worldSeed : undefined);
         const saved = st.snap;
         // Codex #58 — a FAILED OBSERVATION is not an empty slot. If storage could not be read we do not know
         // whether a town is sitting there, so this session must not persist: founding a savable world over a
@@ -9197,11 +9206,24 @@ function drawStartScreen() {
         // boot flag misreports it (see the correction note at the top of this function).
         else {
             track('town_created', { seed: world.seed, culture: world.culture || 'human' });
-            // #postcard — an arrival through a shared link, at the FOUNDING moment only: a later
-            // reload of the same ?pc=1 URL resumes and stays quiet (no flag, no repeat toast).
+            // #postcard — an arrival through a shared link. `!resumed` alone is NOT a one-time
+            // founding (Codex #123-1): a fresh town is not durably saved at boot (`lastSavedDay`
+            // suppresses the same-day autosave), so reloading the unchanged pc URL founds — and
+            // greeted — again, and storage-failure sessions reach here every load. The durable
+            // once-marker is localStorage, per seed, stamped at arm (the memory-intro precedent:
+            // a crashed tab costs the greeting, accepted). If localStorage itself fails (private
+            // mode) the greeting may repeat — accepted over never greeting at all.
             if (bootParams.get('pc') != null) {
-                _postcardArrival = true;
-                track('postcard_arrival', { seed: world.seed, culture: world.culture || 'human' });
+                let pcSeen = false;
+                try {
+                    const k = 'ryfarms-postcard-' + world.seed;
+                    pcSeen = !!localStorage.getItem(k);
+                    if (!pcSeen) localStorage.setItem(k, String(Date.now()));
+                } catch { /* private mode — may greet again */ }
+                if (!pcSeen) {
+                    _postcardArrival = true;
+                    track('postcard_arrival', { seed: world.seed, culture: world.culture || 'human' });
+                }
             }
         }
     }

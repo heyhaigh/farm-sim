@@ -13,7 +13,7 @@
 
 import fs from 'node:fs';
 import assert from 'node:assert/strict';
-import { buildPostcard, postcardMeta, injectOgTags } from '../postcard.js';
+import { buildPostcard, postcardMeta, injectOgTags, queryTown } from '../postcard.js';
 import { generateTownName } from '../farm.js';
 
 let passed = 0;
@@ -67,12 +67,36 @@ const ok = (name) => { passed++; console.log(`  ok - ${name}`); };
     ok('meta names the exact town the boot would found, per culture');
 }
 {
-    // main.js boot: parseInt('abc') >>> 0 === 0 — the meta must follow the client, not "fix" it,
-    // or the preview names a different town than the click founds.
+    // parseInt('abc') >>> 0 === 0 — junk names a real town (seed 0), it does not error, because the
+    // click through the same URL founds that town.
     const junk = postcardMeta(new URLSearchParams('seed=abc'));
     assert.equal(junk.title, `${generateTownName(0, 'human')} — Propagate`);
     assert.ok(junk.url.endsWith('?seed=0'));
-    ok('junk seed mirrors the client boot coercion (NaN → 0)');
+    ok('junk seed coerces to seed 0, same as the boot founds');
+}
+
+// ---- queryTown: THE shared ?seed/?orc reading (Codex #123-3) ---------------------------------
+{
+    assert.deepEqual(queryTown(new URLSearchParams('')), { hasSeed: false, seed: null, culture: 'human' });
+    assert.deepEqual(queryTown(new URLSearchParams('seed=')), { hasSeed: false, seed: null, culture: 'human' });
+    assert.deepEqual(queryTown(new URLSearchParams('seed=424242')), { hasSeed: true, seed: 424242, culture: 'human' });
+    assert.deepEqual(queryTown(new URLSearchParams('seed=-1')), { hasSeed: true, seed: 4294967295, culture: 'human' });
+    assert.deepEqual(queryTown(new URLSearchParams('seed=zzz')), { hasSeed: true, seed: 0, culture: 'human' });
+    assert.equal(queryTown(new URLSearchParams('seed=1&orc=1')).culture, 'orc');
+    assert.equal(queryTown(new URLSearchParams('seed=1&orc')).culture, 'orc');          // bare flag counts, like the boot
+    assert.equal(queryTown(new URLSearchParams('seed=1&culture=orc')).culture, 'orc');  // the long spelling too
+    assert.equal(queryTown(new URLSearchParams('seed=1&culture=human')).culture, 'human');
+    ok('queryTown: seed coercion (uint32, junk→0, empty→none) and both culture spellings');
+}
+{
+    // The helper only guarantees agreement if BOTH sides consume it. main.js cannot be imported
+    // headless, so this is a source-level pin (the llm-chokepoint precedent): the boot must call
+    // queryTown and must not keep a duplicate coercion of its own.
+    const mainSrc = fs.readFileSync(new URL('../main.js', import.meta.url), 'utf8');
+    assert.ok(mainSrc.includes('queryTown(bootParams)'), 'the boot consumes the shared helper');
+    assert.ok(!/parseInt\(\s*urlSeed/.test(mainSrc), 'no duplicate seed coercion survives in the boot');
+    assert.ok(!/bootParams\.get\('orc'\)/.test(mainSrc), 'no duplicate culture reading survives in the boot');
+    ok('main.js boot routes through queryTown — no divergent duplicate to drift');
 }
 
 // ---- injectOgTags: against the file production actually serves ------------------------------
