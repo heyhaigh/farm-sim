@@ -5849,6 +5849,12 @@ function drawConscienceChat(x, y, w, h) {
         const prefix = isVoice ? '> ' : (e.verdict === 'QUESTION' ? '* ' : '  ');
         const wrapped = wrapLine(prefix + (e === revealEntry ? revealText : e.text), maxChars);
         wrapped.forEach((ln, i) => lines.push({ text: (i === 0 ? ln : '  ' + ln), col }));
+        // #inspiration C2 — the out-of-fiction credit in the player's own notebook: the QUESTION
+        // exchange whose seed later germinated gets its "took root" line. The town never salutes
+        // the whisperer; the notebook just updates.
+        if (!isVoice && e.verdict === 'QUESTION' && e.kind && c.rooted && c.rooted[e.kind] != null && c.rooted[e.kind] >= (e.day ?? 0)) {
+            lines.push({ text: `  * TOOK ROOT DAY ${c.rooted[e.kind]}`, col: '#c8b060' });
+        }
     }
     if (chatThinking) lines.push({ text: '  ' + '.'.repeat(1 + (Math.floor(Date.now() / 300) % 3)), col: '#7dd069' });
 
@@ -8319,6 +8325,12 @@ function frame(now) {
     if (!_heldToasted && !startScreen && world && new URLSearchParams(location.search).has('held')) {
         _heldToasted = true;
         calloutQueue.push({ text: 'This ground already holds a living town - resumed it. Start a new town from the menu to begin again', tone: 'neutral' });
+    }
+    // #inspiration slice 2 — germination telemetry pickup: the sim stamps a transient event at
+    // the dawn beat (display-side field, like lightningFlash); the funnel counts it here.
+    if (world && world._germEvent) {
+        const g = world._germEvent; world._germEvent = null;
+        track('seed_germinated', { seed: world.seed, kind: g.kind, day: g.day });
     }
     // #postcard — greet the recipient of a shared link, once, on the founding boot (flag set beside
     // town_created, where `resumed` is settled).

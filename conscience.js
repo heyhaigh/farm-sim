@@ -419,12 +419,14 @@ export async function whisper(world, farmer, message, save) {
         line = offlineReply(verdict, farmer, seedInfo && seedInfo.stage);
     }
 
-    logLine(c, 'ry', line, world.day, verdict);
+    logLine(c, 'ry', line, world.day, verdict, kind);
     if (typeof save === 'function') { try { save(); } catch { /* best effort */ } }
     return { verdict, kind, target, reply: line };
 }
 
-function logLine(c, who, text, day, verdict) {
-    c.log.push(verdict ? { who, text, day, verdict } : { who, text, day });
+function logLine(c, who, text, day, verdict, kind) {
+    // kind rides reply rows (#inspiration slice 2) so the panel can mark the QUESTION exchange
+    // whose seed later took root. Additive; old entries without it simply never match.
+    c.log.push(verdict ? { who, text, day, verdict, ...(kind ? { kind } : {}) } : { who, text, day });
     while (c.log.length > 40) c.log.shift();
 }

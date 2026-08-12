@@ -9191,21 +9191,48 @@ export function seedDeposit(s, amount) {
 // The display-side reading of a seed's life — shared by the reply payload (conscience.js) and the
 // sheet line (main.js) so the two surfaces can never disagree about what stage a thought is in.
 // fresh = planted today (the reply says a seed was planted, it does NOT claim "it keeps returning");
-// turning = it survived a dawn and still has weight (the "keeps coming back to me" tier);
+// turning = it survived a dawn and still has weight (the "keeps coming back to me" tier — the
+// threshold matches GERM_RIPE_W so a seed the sheet calls TAKING ROOT really can);
 // fading = still remembered, but going.
 export function seedStage(s, day) {
     if (!s) return null;
     if (day - s.firstDay < 1) return 'fresh';
-    return s.w >= SEED_MAX * 0.35 ? 'turning' : 'fading';
+    return s.w >= SEED_MAX * 0.2 ? 'turning' : 'fading';
 }
+
+// #inspiration slice 2 — GERMINATION (INSPIRATION_PLAN.md items 10-16). Only kinds with a real
+// decide-loop consumer may sprout: plant/water urges have NO consumer today (they would sit inert
+// for two days and lapse — the "nothing happened" failure), so they wait for their wiring.
+const GERM_KINDS = ['chop', 'rest', 'explore', 'build', 'hunt', 'trade', 'visit', 'watch'];
+const GERM_MIN_AGE = 2;                  // dawns a seed must survive before it can sprout
+const GERM_RIPE_W = SEED_MAX * 0.2;      // must still be 'turning' — one deposit stays ripe ~dawns 2-5
+const GERM_TOWN_CAP = 1;                 // pending SELF-SOWN urges town-wide — a budget of its own,
+                                         // never the player's heeds or the whisper town cap (item 11)
+
+// The germination chance, pure and exported so the rate-sweep harness pins the bands the plan
+// requires (high-curiosity+fit sprouts likely within the window; low-curiosity rarely — that is
+// character, and the sweep is what keeps "character" distinguishable from "dead feature").
+export function germChance(w, curiosity, fit) {
+    return Math.max(0.01, Math.min(0.5, 0.04 + 0.20 * (w / SEED_MAX) + 0.55 * (curiosity - 0.5) + fit * 0.6));
+}
+
+// fallback germination lines when a seed carries no phrase (sim-planted seeds have none)
+const GERM_LINE = {
+    chop: 'THAT THOUGHT ABOUT THE TIMBER... TODAY I SEE ABOUT IT.', rest: 'THAT THOUGHT ABOUT RESTING... TODAY I LISTEN.',
+    explore: 'THE FOG HAS CALLED FOR DAYS. TODAY I ANSWER.', build: 'THAT BUILDING THOUGHT AGAIN. TODAY I RAISE IT.',
+    hunt: 'THE HUNT HAS BEEN ON MY MIND. TODAY I GO.', trade: 'THAT TRADING NOTION AGAIN. TODAY I DEAL.',
+    visit: 'I KEEP THINKING OF THEM. TODAY I CALL.', watch: 'SOMETHING SAYS: KEEP WATCH. TODAY I DO.',
+};
 // #legibility Slice 2 — what a farmer SAYS (bubble) + how the chronicle PHRASES it when they act on a whisper.
 const URGE_HEEDED_LINE = {
     rest: "YOU'RE RIGHT - I'LL REST.", hunt: 'MEAT IT IS - I HUNT.', build: 'A GOOD THOUGHT - I BUILD.',
     chop: 'TIMBER, THEN. AS YOU SAY.', explore: "YOU'RE RIGHT - I'LL GO SEE.", trade: 'A FAIR NOTION - I TRADE.',
+    visit: 'A CALL TO PAY, THEN.', watch: 'EYES OPEN. I TAKE THE WATCH.',   // #inspiration — germinating kinds all need a voice
 };
 const URGE_HEEDED_VERB = {
     rest: 'went to rest', hunt: 'set out to hunt', build: 'turned to building',
     chop: 'went to fell timber', explore: 'struck out past the fog', trade: 'went to barter',
+    visit: 'went visiting', watch: 'took up the watch',
 };
 
 // a stable small integer per urge kind, folded into the check seed so different
@@ -9575,6 +9602,22 @@ export class Farmer {
         const u = this.activeUrge();
         if (!u || u.kind !== kind || u.acted) return;
         u.acted = true;
+        // #inspiration item 14 — a SELF-SOWN urge's follow-through is visibly THEIRS: no whisper
+        // credit, the farmer's own words (the abbreviated whisper if the seed kept one), a
+        // distinct chronicle verb, the seed fulfilled, and the O2 warmth channel fed. Display +
+        // additive state only; no rng.
+        if (u.origin === 'inspiration') {
+            const c = this.conscience;
+            const sd = c.seeds && c.seeds[kind];
+            const ph = sd && sd.phrase ? `"${String(sd.phrase).toUpperCase().slice(0, 38)}" - ` : '';
+            this.say(`${ph}I SAID I WOULD.`, '#c8b060');
+            this.sparkle = Math.max(this.sparkle, 1);
+            this.world.addChronicle('whisper', `${shortName(this)} followed a thought that had taken root and ${URGE_HEEDED_VERB[kind] || 'saw it through'}.`,
+                this, null, '#c8b060', { tier: 'callout', tone: 'triumph', why: 'a thought of their own' });
+            if (sd) delete c.seeds[kind];                       // fulfilled — the seed became the deed
+            c.warmth = Math.min(3, (c.warmth || 0) + 1);        // O2 — it bore fruit; the voice earns a little trust
+            return;
+        }
         this.say(URGE_HEEDED_LINE[kind] || "YOU'RE RIGHT. I WILL.", '#f0d88a');
         this.sparkle = Math.max(this.sparkle, 1);
         this.world.addChronicle('whisper', `${shortName(this)} heeded a whisper and ${URGE_HEEDED_VERB[kind] || 'changed course'}.`,
@@ -9622,9 +9665,11 @@ export class Farmer {
         // urge — armed or a still-disarmed BARGAIN (activeUrge() hides the latter) — so a wave of
         // deferred bargains can't smuggle the town past the cap.
         const todayHeeds = c.heededDay.day === w.day ? c.heededDay.count : 0;
+        // #inspiration item 11 — SELF-SOWN urges never count against the player's whisper cap:
+        // the town inspiring itself must not bounce the player's own whisper.
         const townPending = w.farmers.reduce((n, f) => {
             const u = f.sheet.conscience && f.sheet.conscience.urge;
-            return n + (u && w.day <= u.expiresDay ? 1 : 0);
+            return n + (u && w.day <= u.expiresDay && u.origin !== 'inspiration' ? 1 : 0);
         }, 0);
         const budgetLeft = todayHeeds < URGE_DAILY_HEEDS && townPending < URGE_TOWN_CAP;
 
@@ -9632,7 +9677,11 @@ export class Farmer {
         const roll = mulberry32((w.seed ^ s.seed ^ urgeKindSeed(kind) ^ (w.day * 0x1f1f)) >>> 0)();
         const fit = this.#urgeFit(kind);                        // -0.4..+0.4 personality/dream/state fit
         const pressurePenalty = Math.min(0.5, priorPressure * 0.13);   // nagging on PRIOR days lowered the odds
-        const chance = Math.max(0, Math.min(0.9, 0.4 + fit - pressurePenalty));
+        // #inspiration O2 — the warmth channel: a sprout that bore fruit taught them the returning
+        // thoughts are worth hearing. Small, capped, whisper-gated (warmth only ever set when a
+        // germinated urge is ACTED) — the one cross-day memory that works in the player's favor.
+        const warmth = Math.min(0.15, (c.warmth || 0) * 0.05);
+        const chance = Math.max(0, Math.min(0.9, 0.4 + fit - pressurePenalty + warmth));
 
         // DEFY — rare, and only for a mind primed to bristle AND worn down over days. The spite
         // act must be SAFE (never self-harming), so it's gated hard and re-checked here.
@@ -9647,6 +9696,15 @@ export class Farmer {
         }
 
         if (budgetLeft && roll < chance) {
+            // #inspiration item 15, the SLOT POLICY — one urge slot exists and #plantUrge REPLACES
+            // it. A live SELF-SOWN urge must not die to the next suggestion (the thought that
+            // finally sprouted is the whole feature), so a would-be HEED on another kind becomes a
+            // QUESTION-with-deposit: noted, seeded for later, their mind stays set on their own
+            // errand. (A same-kind whisper already landed ALREADY above.)
+            if (c.urge && c.urge.origin === 'inspiration' && w.day <= c.urge.expiresDay) {
+                this.#plantSeed(kind, targetName, SEED_DEPOSIT);
+                record('QUESTION'); return { verdict: 'QUESTION', kind, reason: 'set on their own errand' };
+            }
             // BARGAIN — a diligent/collaborative mind that's busy defers the heed to when the
             // current backlog clears, rather than dropping a ripe field to chase a whim. NOT for the
             // watch (#132): standing guard against a coming raid is no time to finish the weeding first.
@@ -9685,6 +9743,71 @@ export class Farmer {
         seedDeposit(s, amount);
         s.day = this.world.day;
         if (targetName) s.target = targetName;
+    }
+
+    // #inspiration slice 2 — evaluate this farmer's germination candidacy for TODAY. Pure: keyed
+    // hashes and reads only, no stream consumption — so any farmer can evaluate any other's
+    // candidate during arbitration and all agree. Returns { kind, seed, prio } or null.
+    #germCandidate() {
+        const w = this.world, c = this.sheet.conscience;
+        if (!c || !c.seeds) return null;
+        if (c.urge && w.day <= c.urge.expiresDay) return null;         // the one slot is occupied
+        let best = null;
+        for (const k of Object.keys(c.seeds)) {
+            if (!GERM_KINDS.includes(k)) continue;                     // no decide-loop consumer -> cannot sprout
+            const s = c.seeds[k];
+            if (s.sprouted) continue;                                  // had its day (a lapse re-arms it)
+            if (w.day - s.firstDay < GERM_MIN_AGE || s.w < GERM_RIPE_W) continue;   // not ripe
+            if (c.pressure[k]) continue;                               // C3: a nagged mind does not sprout
+            if (k === 'visit' && !s.target) continue;                  // a visit without a target is inert
+            if (!best || s.w > best.s.w || (s.w === best.s.w && k < best.k)) best = { k, s };   // deterministic tiebreak
+        }
+        if (!best) return null;
+        // the roll: salted stream (never the conscience-roll formula — reusing it would hand the
+        // dawn draw the SAME number as that day's whisper verdict roll for the kind)
+        const roll = mulberry32((w.seed ^ this.sheet.seed ^ hashString('germ:' + best.k) ^ (w.day * 0x1f1f)) >>> 0)();
+        // fit is re-evaluated NOW, not frozen at deposit (watch-fit includes live-raid terms —
+        // the whisper asked its question in a different world)
+        const chance = germChance(best.s.w, this.p.curiosity ?? 0.5, this.#urgeFit(best.k));
+        if (roll >= chance) return null;
+        return { kind: best.k, seed: best.s, prio: hashString('germorder:' + w.seed + ':' + w.day + ':' + this.sheet.seed) };
+    }
+
+    // Run at dawn (inside the conscience fold). Own budget + keyed arbitration: every successful
+    // candidate computes the same pure winner, so only the lowest germorder hash sprouts — never
+    // farmer-array order (which would hand early-index farmers a permanent win).
+    #maybeGerminate() {
+        const cand = this.#germCandidate();
+        if (!cand) return;
+        const w = this.world;
+        const pendingGerm = w.farmers.reduce((n, f) => {
+            const u = f.sheet.conscience && f.sheet.conscience.urge;
+            return n + (u && u.origin === 'inspiration' && w.day <= u.expiresDay ? 1 : 0);
+        }, 0);
+        if (pendingGerm >= GERM_TOWN_CAP) return;
+        for (const f of w.farmers) {
+            if (f === this) continue;
+            const oc = f.#germCandidate();
+            if (oc && oc.prio < cand.prio) return;   // theirs is today's sprout — yield
+        }
+        this.#germinate(cand.kind, cand.seed);
+    }
+
+    // The sprout: a normal urge with origin 'inspiration'. Deliberately NOT via #plantUrge — a
+    // self-sown urge must not spend the farmer's daily heed count (item 11); the decide loop
+    // treats it like any want, and every beat downstream branches on the origin.
+    #germinate(kind, s) {
+        const w = this.world, c = this.conscience;
+        c.urge = { kind, target: s.target || null, weight: URGE_WEIGHT, expiresDay: w.day + 1, condition: null, armed: true, origin: 'inspiration' };
+        s.sprouted = w.day;
+        s.w = SEED_FLOOR * 2;   // dormant, not forgotten: phrase/target survive; acted -> deleted, lapsed -> re-armed
+        c.rooted = c.rooted || {};
+        c.rooted[kind] = w.day;                                    // powers the whisper-log "took root" marker
+        const ph = s.phrase ? `"${String(s.phrase).toUpperCase().slice(0, 38)}"` : null;
+        this.say(ph ? `${ph}... TODAY I SEE ABOUT IT.` : (GERM_LINE[kind] || 'THAT THOUGHT AGAIN. TODAY I SEE ABOUT IT.'), '#c8b060');
+        this.remember('lesson', `The thought kept returning${s.phrase ? ` - "${s.phrase}"` : ''}. Today I gave in to it.`, null, 0.8);
+        w.addLog(`${shortName(this)} woke set on a thought of their own`, '#c8b060');
+        w._germEvent = { kind, day: w.day, farmerSeed: this.sheet.seed };   // display/telemetry pickup (main.js), off-sim
     }
 
     // Plant (or replace) the single active urge and spend a daily heed. A BARGAIN starts
@@ -11311,8 +11434,14 @@ export class Farmer {
             if (c.urge && this.world.day > c.urge.expiresDay) {
                 // #inspiration — a heeded thought the days swallowed (never acted on: sickness, a
                 // raid week, the backlog) leaves the STRONGEST residue. The genuinely sad case
-                // used to leave nothing; now the thought survives the interruption as a seed.
-                if (!c.urge.acted) this.#plantSeed(c.urge.kind, c.urge.target, SEED_LAPSED);
+                // used to leave nothing; now the thought survives the interruption as a seed —
+                // and a lapsed SPROUT re-arms (sprouted cleared), so an interrupted germination
+                // may sprout again rather than dying to a raid week (item 16).
+                if (!c.urge.acted) {
+                    this.#plantSeed(c.urge.kind, c.urge.target, SEED_LAPSED);
+                    const rs = c.seeds && c.seeds[c.urge.kind];
+                    if (rs) delete rs.sprouted;
+                }
                 c.urge = null;
             }
             // #inspiration — seeds fade nightly: volatile minds faster, curious minds hold longer.
@@ -11321,10 +11450,21 @@ export class Farmer {
             if (c.seeds) {
                 const keep = Math.max(0.6, Math.min(0.97,
                     SEED_DECAY_BASE - this.volatility * 0.10 + (this.p.curiosity ?? 0.5) * 0.08));
+                let mused = false;
                 for (const k of Object.keys(c.seeds)) {
                     c.seeds[k].w *= keep;
-                    if (c.seeds[k].w < SEED_FLOOR) delete c.seeds[k];
+                    if (c.seeds[k].w < SEED_FLOOR) { delete c.seeds[k]; continue; }
+                    // item 10 — one soft musing the dawn after planting: the "thought keeps
+                    // returning" texture between whisper and sprout. Display-only, at most one.
+                    if (!mused && !c.seeds[k].sprouted && this.world.day - c.seeds[k].firstDay === 1 && c.seeds[k].w >= GERM_RIPE_W) {
+                        this.think(c.seeds[k].phrase ? `"${c.seeds[k].phrase}"... still with me` : 'that stray thought is still with me');
+                        mused = true;
+                    }
                 }
+                // item 12 — GERMINATION: the returning thought finally wins, as the farmer's OWN
+                // act at dawn. Keyed salted stream, pressure hard-gated, own town budget, keyed
+                // arbitration (never farmer-array order). Whisper-gated like everything above.
+                this.#maybeGerminate();
             }
         }
 

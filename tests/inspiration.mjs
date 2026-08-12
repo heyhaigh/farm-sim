@@ -181,4 +181,193 @@ function findVerdict(w, f, kind, want, { tone = 'suggest', maxDays = 400, target
     ok('a QUESTIONed whisper stamps seed.phrase (the words a germination will speak)');
 }
 
+// ================================ SLICE 2 · GERMINATION =======================================
+
+// Prime a farmer with a ripe, phraseless seed and walk dawns (day bump + reflect) until the
+// returning thought wins. Deterministic per world seed — the germ roll is a keyed stream.
+function ripen(f, kind, { target = null, phrase = null } = {}) {
+    const c = f.conscience;
+    c.seeds = c.seeds || {};
+    c.seeds[kind] = { w: SEED_MAX_TEST, firstDay: f.world.day - 2, day: f.world.day, target, ...(phrase ? { phrase } : {}) };
+    return c.seeds[kind];
+}
+const SEED_MAX_TEST = 3;   // keep chance high alongside curiosity so the walk stays short
+
+function walkDawns(w, farmers, days, each) {
+    for (let i = 0; i < days; i++) {
+        w.day += 1;
+        for (const f of farmers) f.reflect();
+        if (each && each(i)) return true;
+    }
+    return false;
+}
+
+// ---- 8 · germination fires, as the farmer's own act ------------------------------------------
+{
+    const w = boot(424242);
+    const f = w.farmers[0];
+    f.sheet.personality.curiosity = 1.0;
+    const s = ripen(f, 'explore', { phrase: 'explore past the northern fog' });
+    const hit = walkDawns(w, [f], 40, () => f.sheet.conscience.urge?.origin === 'inspiration');
+    assert.ok(hit, 'a ripe seed on a curious mind germinated within 40 dawns');
+    const u = f.sheet.conscience.urge;
+    assert.equal(u.kind, 'explore');
+    assert.ok(s.sprouted, 'seed marked sprouted (dormant, not forgotten)');
+    assert.ok(s.phrase, 'the phrase survives germination');
+    assert.equal(f.sheet.conscience.rooted.explore, w.day, 'rooted[kind] powers the took-root marker');
+    assert.ok(w._germEvent && w._germEvent.kind === 'explore', 'the telemetry event was stamped');
+    assert.ok((f.bubble?.lines || []).join(' ').includes('EXPLORE PAST THE NORTHERN FOG'), 'the farmer SPEAKS the abbreviated whisper');
+    ok('germination: self-sown urge, dormant seed, rooted marker, spoken phrase');
+}
+
+// ---- 9 · the gates: pressure, kind coverage, visit target ------------------------------------
+{
+    const w = boot(515151);
+    const f = w.farmers[1];
+    f.sheet.personality.curiosity = 1.0;
+    ripen(f, 'explore');
+    // C3 — a nagged mind does not sprout WHILE pressure stands. Pressure ebbs at dawn (that is
+    // the design: let it rest and it may grow), so the gate test must re-pin it each dawn —
+    // including BEFORE the first (the callback runs after each reflect).
+    f.conscience.pressure.explore = 1;
+    walkDawns(w, [f], 12, () => {
+        f.conscience.pressure.explore = 1;                                  // the nagging never stops
+        const s = f.conscience.seeds.explore; if (s && !s.sprouted) s.w = 3;   // and the seed stays ripe
+        return false;
+    });
+    assert.ok(!f.sheet.conscience.urge, 'no sprout while pressure stands');
+    assert.ok(!f.conscience.seeds.explore.sprouted, 'seed never sprouted under held pressure');
+    // ...and once the player lets it rest, the same seed may finally sprout
+    delete f.conscience.pressure.explore;
+    const freed = walkDawns(w, [f], 30, () => { const s = f.conscience.seeds.explore; if (s && !s.sprouted) s.w = 3; return f.sheet.conscience.urge?.origin === 'inspiration'; });
+    assert.ok(freed, 'released pressure let the seed sprout');
+    ok('C3: pressure hard-gates germination; letting it rest releases it');
+
+    const f2 = w.farmers[2];
+    f2.sheet.personality.curiosity = 1.0;
+    ripen(f2, 'plant');                   // no decide-loop consumer -> excluded
+    ripen(f2, 'visit');                   // no target -> inert
+    // keep them ripe against decay so the exclusion is what's tested, not the floor
+    walkDawns(w, [f2], 30, () => { const cs = f2.conscience.seeds; if (cs.plant) cs.plant.w = 3; if (cs.visit) cs.visit.w = 3; return !!f2.sheet.conscience.urge; });
+    assert.ok(!f2.sheet.conscience.urge, 'plant (unwired) and targetless visit never germinate');
+    ok('kind coverage honest: plant excluded, visit needs its target');
+}
+
+// ---- 10 · the town budget: at most one pending sprout ----------------------------------------
+{
+    const w = boot(20260101);
+    const a = w.farmers[0], b = w.farmers[3];
+    for (const f of [a, b]) { f.sheet.personality.curiosity = 1.0; ripen(f, 'explore'); }
+    let maxPending = 0;
+    walkDawns(w, [a, b], 30, () => {
+        const n = [a, b].filter(f => f.sheet.conscience.urge?.origin === 'inspiration').length;
+        maxPending = Math.max(maxPending, n);
+        for (const f of [a, b]) { const s = f.conscience.seeds?.explore; if (s && !s.sprouted) s.w = 3; }
+        return false;
+    });
+    assert.ok(maxPending >= 1, 'the scenario is live - at least one sprout happened');
+    assert.ok(maxPending <= 1, `never more than GERM_TOWN_CAP pending sprouts (saw ${maxPending})`);
+    ok('germination budget: one pending self-sown urge town-wide');
+}
+
+// ---- 11 · slot policy: a whisper cannot kill the sprout --------------------------------------
+{
+    const w = boot(424242 ^ 7);
+    const f = w.farmers[4];
+    const c = f.conscience;
+    c.urge = { kind: 'explore', target: null, weight: 0.07, expiresDay: w.day + 1, condition: null, armed: true, origin: 'inspiration' };
+    // walk kinds/days until a would-be HEED hits the slot-policy branch (its reason names it)
+    let got = null;
+    outer: for (let d = 0; d < 2; d++) {
+        for (const k of ['chop', 'rest', 'build', 'hunt', 'trade']) {
+            c.verdictDay = -1; c.verdicts = {}; c.asks = {};
+            const r = f.conscienceCheck(k, null, 'suggest');
+            if (r.reason === 'set on their own errand') { got = r; break outer; }
+        }
+        w.day += 1; c.urge.expiresDay = w.day + 1;   // keep the sprout alive for the search
+    }
+    assert.ok(got, 'found a would-be HEED while the sprout lives');
+    assert.equal(got.verdict, 'QUESTION', 'the heed became a QUESTION-with-deposit');
+    assert.ok(c.seeds[got.kind] && c.seeds[got.kind].w > 0, 'the whisper was seeded, not wasted');
+    assert.equal(c.urge.origin, 'inspiration', 'the sprout survived the whisper');
+    ok('slot policy: a live sprout absorbs a would-be HEED as a seed');
+}
+
+// ---- 12 · O2 warmth: bore fruit -> the voice is trusted a little more ------------------------
+{
+    const w = boot(898989);
+    const f = w.farmers[5];
+    const c = f.conscience;
+    // find a day where warmth alone flips the verdict upward (chance +0.15 at warmth 3)
+    let flipped = false;
+    for (let d = 0; d < 300 && !flipped; d++, w.day += 1) {
+        c.verdictDay = -1; c.verdicts = {}; c.asks = {}; c.urge = null; delete c.warmth;
+        const cold = f.conscienceCheck('trade', null, 'suggest').verdict;
+        c.verdictDay = -1; c.verdicts = {}; c.asks = {}; c.urge = null; if (c.seeds) delete c.seeds.trade;
+        c.warmth = 3;
+        const warm = f.conscienceCheck('trade', null, 'suggest').verdict;
+        assert.ok(!(cold === 'HEED' && (warm === 'DISMISS' || warm === 'QUESTION')), 'warmth never lowers receptivity');
+        if ((cold === 'DISMISS' || cold === 'QUESTION') && (warm === 'HEED' || warm === 'BARGAIN')) flipped = true;
+        c.urge = null; delete c.warmth; if (c.seeds) delete c.seeds.trade;
+    }
+    assert.ok(flipped, 'warmth flipped at least one cold day upward within 300 days');
+    ok('O2 warmth raises whisper receptivity (and never lowers it)');
+}
+
+// ---- 13 · a lapsed sprout re-arms ------------------------------------------------------------
+{
+    const w = boot(777001);
+    w.day += 4;   // clear of day 1: `sprouted: w.day - 1` must be TRUTHY or the re-arm assert is vacuous (a mutation proved it)
+    const f = w.farmers[6];
+    const c = f.conscience;
+    c.seeds = { hunt: { w: 0.3, firstDay: w.day - 3, day: w.day, target: null, sprouted: w.day - 1, phrase: 'hunt the ridge' } };
+    c.urge = { kind: 'hunt', target: null, weight: 0.07, expiresDay: w.day - 1, condition: null, armed: true, origin: 'inspiration', acted: false };
+    f.reflect();
+    assert.equal(c.urge, null, 'the lapsed sprout cleared');
+    assert.ok(c.seeds.hunt.w > 1, 'the interruption re-deposited the strongest residue');
+    assert.ok(!c.seeds.hunt.sprouted, 'sprouted cleared - the thought may sprout again (item 16)');
+    assert.equal(c.seeds.hunt.phrase, 'hunt the ridge', 'the phrase survived the whole cycle');
+    ok('a sprout swallowed by the days re-arms instead of dying');
+}
+
+// ---- 13b · nothing sprouts before GERM_MIN_AGE (fast local pin; the rates harness re-proves it)
+{
+    let sprouted = 0;
+    for (let i = 0; i < 20; i++) {
+        const w = boot(600000 + i * 101);
+        const f = w.farmers[0];
+        f.sheet.personality.curiosity = 1.0;
+        f.conscience.seeds = { explore: { w: 3, firstDay: w.day, day: w.day, target: null } };   // planted TODAY
+        w.day += 1; f.reflect();                                                                 // dawn 1: age 1
+        if (f.sheet.conscience.urge?.origin === 'inspiration') sprouted++;
+    }
+    assert.equal(sprouted, 0, 'a day-old thought never sprouts - the window starts at GERM_MIN_AGE');
+    ok('min-age holds: no dawn-1 sprouts across 20 towns');
+}
+
+// ---- 14 · a pending sprout never eats the player's town cap (item 11) ------------------------
+{
+    const w = boot(313131);
+    // fill the whisper town cap to ONE below (3 of 4), plus a pending SELF-SOWN urge — if the
+    // sprout counted, townPending would read 4 and no whisper could ever HEED again
+    for (let i = 0; i < 3; i++) {
+        const c = w.farmers[i].conscience;
+        c.urge = { kind: 'chop', target: null, weight: 0.07, expiresDay: w.day + 1, condition: null, armed: true };
+    }
+    const cg = w.farmers[3].conscience;
+    cg.urge = { kind: 'explore', target: null, weight: 0.07, expiresDay: w.day + 1, condition: null, armed: true, origin: 'inspiration' };
+    const f = w.farmers[5];
+    let heeded = false;
+    for (let d = 0; d < 120 && !heeded; d++, w.day += 1) {
+        for (let i = 0; i < 4; i++) w.farmers[i].conscience.urge.expiresDay = w.day + 1;   // keep all four alive
+        const c = f.conscience;
+        c.verdictDay = -1; c.verdicts = {}; c.asks = {}; c.urge = null;
+        c.heededDay = { day: -1, count: 0 };
+        const r = f.conscienceCheck('rest', null, 'suggest');
+        if (r.verdict === 'HEED' || r.verdict === 'BARGAIN') heeded = true;
+    }
+    assert.ok(heeded, 'a whisper still HEEDs with 3 whispered urges + 1 pending sprout (the sprout is off the player\'s cap)');
+    ok('item 11: self-sown urges never consume the whisper town cap');
+}
+
 console.log(`inspiration: ${passed} checks passed`);
