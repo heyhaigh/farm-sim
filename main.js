@@ -9523,6 +9523,20 @@ function drawStartScreen() {
         // and a fallback:true body all died in the same silent catch.
         whisperLog,
         watchIcon: (n) => { START_WATCH_ICON = n; },   // #start-icons side-by-side picker
+        // #inspiration QA — force the selected (else first-seeded) farmer's strongest seed RIPE:
+        // age backdated past GERM_MIN_AGE, weight maxed, pressure cleared — sprout-eligible at the
+        // very next dawn (still subject to the roll/budget, which is the honest part to watch).
+        ripen: () => {
+            const f = (selected && selected.sheet.conscience?.seeds) ? selected
+                : world.farmers.find(x => x.sheet.conscience?.seeds && Object.keys(x.sheet.conscience.seeds).length);
+            if (!f) return 'no seeded farmer - whisper something a farmer QUESTIONs first (look for the * reply)';
+            const c = f.sheet.conscience;
+            let bk = null;
+            for (const k of Object.keys(c.seeds)) if (!bk || c.seeds[k].w > c.seeds[bk].w) bk = k;
+            const s = c.seeds[bk];
+            s.firstDay = Math.min(s.firstDay, world.day - 2); s.w = 3; delete s.sprouted; delete c.pressure[bk];
+            return `ripe: ${f.sheet.name.split(' ')[0]} / ${bk}${s.phrase ? ` ("${s.phrase}")` : ''} - watch the next dawn`;
+        },
         // #whisper-fx live pickers — RYFARMS.keySound('bubble'|'thock'|'terminal'|'soft'|'off'),
         // RYFARMS.voiceSound('classic'|'babble'|'hum'|'off'). No arg reads the current pick. Persisted.
         keySound: (id) => { if (id === 'off' || KEY_VARIANTS.some(v => v.id === id)) { whisperKeyFx = id; try { localStorage.setItem('ryf.keyfx', id); } catch { /* private mode */ } } return whisperKeyFx; },
