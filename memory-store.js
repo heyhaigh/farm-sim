@@ -295,3 +295,40 @@ export async function localGraphTowns() {
         return out;
     } catch { return []; }
 }
+
+// ---------------------------------------------------------------------------
+// #saveport — a town's memory rows travel with its save file (Codex #121).
+//
+// The export used to carry serialize() alone, and two findings landed on the same seam: battle
+// documents are explicitly IRRECONSTRUCTIBLE (backfill's own comment — their display-derived detail
+// was never saved), so moving a town lost part of its memory portal; and rows are addressed by seed
+// with no occupant identity, so importing a DIFFERENT town onto the same seed left it wearing the
+// displaced town's lives ("IMPORTED_* exposing OLD_* lives", reproduced). Rows are therefore part of
+// the town file, and import REPLACES the seed's rows wholesale.
+// ---------------------------------------------------------------------------
+
+// Everything in this store that belongs to one town. Battle docs are keyed by raid id, so ownership
+// for those is the document's own townSeed.
+function ownsRow(townSeed, key, value) {
+    const s = String(townSeed), k = String(key);
+    return k.startsWith(`life:${s}:`) || k === `town:${s}` || k === `invent:${s}`
+        || (k.startsWith('battle:') && String(value?.townSeed) === s);
+}
+
+export async function townMemoryRows(townSeed) {
+    return (await backend.all()).filter(([k, v]) => ownsRow(townSeed, k, v));
+}
+
+// Delete every row the town owns, then write the provided ones — FILTERED by the same ownership
+// predicate. A crafted file must not be able to write keys into another town's rows (a life for a
+// different seed, a battle claiming a different townSeed): a row that does not belong to this town
+// is dropped, not written.
+export async function replaceTownMemoryRows(townSeed, rows) {
+    for (const [k] of await townMemoryRows(townSeed)) await backend.del(k);
+    let wrote = 0;
+    for (const [k, v] of (Array.isArray(rows) ? rows : [])) {
+        if (!ownsRow(townSeed, k, v)) continue;
+        await backend.put(String(k), v); wrote++;
+    }
+    return wrote;
+}

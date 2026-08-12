@@ -11,6 +11,16 @@
 import assert from 'node:assert';
 import { World } from '../farm.js';
 import { encodeSnapshot, decodeSnapshot, buildTownExport, importTownFile, parseTownFile } from '../save.js';
+import { _setBackendForTests, townMemoryRows, replaceTownMemoryRows } from '../memory-store.js';
+
+// memory rows ride the export now — a Map-backed fake, keys sorted like real IDB (LEARNINGS: fakes
+// must mirror real semantics)
+const memRows = new Map();
+_setBackendForTests({
+    put: async (k, v) => { memRows.set(k, v); },
+    del: async (k) => { memRows.delete(k); },
+    all: async () => [...memRows.entries()].sort(([a], [b]) => (a < b ? -1 : 1)),
+});
 
 let passes = 0, failures = 0;
 async function check(name, fn) {
@@ -94,8 +104,8 @@ await check('a naive JSON round trip really does destroy the snapshot (the trap 
     assert.ok(threw, 'plain JSON round-tripped a snapshot cleanly — if this ever passes, the tagged format may be removable');
 });
 
-await check('buildTownExport carries identifying metadata outside the encoded blob', () => {
-    const file = buildTownExport(w);
+await check('buildTownExport carries identifying metadata outside the encoded blob', async () => {
+    const file = await buildTownExport(w);
     assert.strictEqual(file.format, 'propagate-town');
     assert.strictEqual(file.seed, w.seed);
     assert.strictEqual(file.v, World.SAVE_VERSION);
@@ -104,10 +114,10 @@ await check('buildTownExport carries identifying metadata outside the encoded bl
     World.fromSave(back);   // must hydrate
 });
 
-await check('a non-persisting session exports NOTHING (the quarantine-refusal contract)', () => {
+await check('a non-persisting session exports NOTHING (the quarantine-refusal contract)', async () => {
     const wq = new World(4208, 'human');
     wq._persistenceDisabled = true;
-    assert.strictEqual(buildTownExport(wq), null,
+    assert.strictEqual(await buildTownExport(wq), null,
         'a session refusing to persist must not export the town it was refused over');
 });
 
@@ -129,7 +139,7 @@ await check('a hydrator that MUTATES its input cannot poison the import', async 
     // validated the object it stores, a migration would run TWICE on imported saves. Provable
     // without IndexedDB: hydrate validates, then vandalises its argument — the import must still
     // proceed past validation to the write (which is what fails in Node, there being no IDB here).
-    const file = buildTownExport(w);
+    const file = await buildTownExport(w);
     let sawV = null;
     const hydrate = (s) => { sawV = s.v; const out = World.fromSave(structuredClone(s)); s.v = 999; s.snap = null; return out; };
     const r = await importTownFile(JSON.parse(JSON.stringify(file)), hydrate);
@@ -156,16 +166,109 @@ await check('shapes the real snapshot happens to lack still round-trip (NaN, Inf
         'a $-keyed object INSIDE a Map was decoded as a tag instead of data');
 });
 
-await check('parseTownFile stores a snapshot the validator never touched (pure, so provable)', () => {
+await check('parseTownFile stores a snapshot the validator never touched (pure, so provable)', async () => {
     // The double-migration hazard, now assertable without IndexedDB: the returned snap must not be
     // the object hydrate saw, and vandalising hydrate's argument must not reach the returned snap.
-    const file = JSON.parse(JSON.stringify(buildTownExport(w)));
+    const file = JSON.parse(JSON.stringify(await buildTownExport(w)));
     let seen = null;
     const r = parseTownFile(file, (s) => { seen = s; World.fromSave(structuredClone(s)); s.v = 999; s.farmers = null; });
     assert.strictEqual(r.ok, true);
     assert.notStrictEqual(r.snap, seen, 'the validator was handed the object that gets stored');
     assert.strictEqual(r.snap.v, World.SAVE_VERSION, `the stored snapshot was mutated by validation: v=${r.snap.v}`);
     assert.ok(r.snap.farmers, 'the stored snapshot lost a field to validation');
+});
+
+await check('non-canonical seeds are refused — World would hydrate them under a DIFFERENT slot', async () => {
+    // World canonicalizes seed >>> 0, so 1.5, -1 and 2^32+1 pass a finite check, hydrate as 1,
+    // 4294967295 and 1, and the import then stores the town under a key its own saves never address.
+    const base = await buildTownExport(w);
+    for (const badSeed of [1.5, -1, 4294967297, Number.MAX_SAFE_INTEGER]) {
+        const file = JSON.parse(JSON.stringify(base));
+        const snap = decodeSnapshot(file.snap); snap.seed = badSeed; file.snap = encodeSnapshot(snap); file.seed = badSeed;
+        // A hydrator that returns NOTHING, on purpose: the belt (hydrated.seed !== snap.seed) only
+        // runs when the hydrator hands back a world, so with a void hydrator the uint32 check is the
+        // ONLY line refusing these. A mutation reverting it to finite-only escaped the first version
+        // of this case, which was passing on the belt instead of the braces.
+        const r = parseTownFile(file, () => undefined);
+        assert.strictEqual(r.ok, false, `seed ${badSeed} was accepted by the seed check itself`);
+        // ...and with the real hydrator the belt agrees
+        const r2 = parseTownFile(JSON.parse(JSON.stringify(file)), (x) => World.fromSave(x));
+        assert.strictEqual(r2.ok, false, `seed ${badSeed} was accepted end to end`);
+    }
+});
+
+await check('the envelope must AGREE with the snapshot it previews (the confirm beat shows the envelope)', async () => {
+    const hydrate = (s) => World.fromSave(structuredClone(s));
+    const base = await buildTownExport(w);
+    for (const [mutate, label] of [
+        [(f) => { f.formatV = 999; }, 'future formatV'],
+        [(f) => { f.seed = 999999; }, 'preview seed lies'],
+        [(f) => { f.town = 'HARMLESS PREVIEW'; }, 'preview name lies'],
+        [(f) => { f.day = 1; }, 'preview day lies'],
+        [(f) => { f.v = 99; }, 'preview schema lies'],
+    ]) {
+        const file = JSON.parse(JSON.stringify(base));
+        mutate(file);
+        const r = parseTownFile(file, hydrate);
+        assert.strictEqual(r.ok, false, `${label} was accepted`);
+    }
+    // and the unmutated file must still pass, or this passes by refusing everything
+    assert.strictEqual(parseTownFile(JSON.parse(JSON.stringify(base)), hydrate).ok, true);
+});
+
+await check('corrupt multi-byte typed arrays are REFUSED, not silently truncated', () => {
+    // Three bytes as Uint16Array used to yield a one-element view with the third byte outside it —
+    // corruption altered data instead of failing.
+    const enc = encodeSnapshot(new Uint16Array([7, 9]));
+    enc.v = btoa('abc');   // 3 bytes: not divisible by 2
+    let threw = false;
+    try { decodeSnapshot(enc); } catch { threw = true; }
+    assert.ok(threw, '3 bytes decoded as Uint16Array without complaint');
+});
+
+await check('memory rows ride the export and REPLACE the seed\'s rows on import (Codex #121 repro)', async () => {
+    // The reproduced bug: a different town imported onto the same seed kept exposing the displaced
+    // town\'s lives. Stage OLD_* rows for the seed, import a file carrying NEW_* rows, and the
+    // portal must show only NEW_*.
+    memRows.clear();
+    memRows.set(`life:${w.seed}:111`, { kind: 'life', townSeed: w.seed, life: { seed: 111, name: 'OLD_RESIDENT' } });
+    memRows.set(`town:${w.seed}`, { kind: 'town', townSeed: w.seed, history: ['OLD_HISTORY'] });
+    memRows.set('battle:r77', { kind: 'battle', townSeed: w.seed, battle: { rid: 'r77', tale: 'OLD_BATTLE' } });
+    memRows.set('life:424242:5', { kind: 'life', townSeed: 424242, life: { name: 'NEIGHBOUR — MUST SURVIVE' } });
+
+    const exported = await buildTownExport(w);   // carries the OLD rows (they are the seed's rows right now)
+    const carried = decodeSnapshot(JSON.parse(JSON.stringify(exported)).memories);
+    assert.strictEqual(carried.length, 3, `expected 3 town rows in the file, got ${carried.length}`);
+    assert.ok(!JSON.stringify(carried).includes('NEIGHBOUR'), 'another town\'s row rode the export');
+
+    // simulate the import-side replacement directly (the IDB slot write cannot run in Node):
+    // stage DIFFERENT rows as the displaced occupant — one at a key the file also carries, and one
+    // at a key it does NOT. The second is the one that matters: a replacement that only overwrites
+    // (never deletes) leaves it behind, and a first version of this case used only shared keys, so
+    // exactly that mutation escaped.
+    memRows.set(`life:${w.seed}:111`, { kind: 'life', townSeed: w.seed, life: { seed: 111, name: 'DISPLACED_RESIDENT' } });
+    memRows.set(`life:${w.seed}:222`, { kind: 'life', townSeed: w.seed, life: { seed: 222, name: 'EXTRA_RESIDENT' } });
+    const wrote = await replaceTownMemoryRows(w.seed, carried);
+    assert.strictEqual(wrote, 3);
+    const after = await townMemoryRows(w.seed);
+    const dump = JSON.stringify(after);
+    assert.ok(dump.includes('OLD_RESIDENT') && !dump.includes('DISPLACED_RESIDENT'),
+        'the displaced town\'s rows survived the import');
+    assert.ok(!dump.includes('EXTRA_RESIDENT'),
+        'a displaced row at a key the file does not carry survived — replacement is overwriting, not replacing');
+    assert.ok(memRows.has('life:424242:5'), 'replacement deleted another town\'s rows');
+});
+
+await check('a crafted file cannot write rows into ANOTHER town\'s memories', async () => {
+    memRows.clear();
+    const wrote = await replaceTownMemoryRows(w.seed, [
+        [`life:${w.seed}:9`, { kind: 'life', townSeed: w.seed, life: { name: 'LEGIT' } }],
+        ['life:999999:1', { kind: 'life', townSeed: 999999, life: { name: 'FOREIGN' } }],
+        ['battle:rX', { kind: 'battle', townSeed: 999999, battle: { tale: 'FOREIGN BATTLE' } }],
+        ['latest', { evil: true }],
+    ]);
+    assert.strictEqual(wrote, 1, `wrote ${wrote} rows — the ownership filter is leaking`);
+    assert.ok(!memRows.has('life:999999:1') && !memRows.has('battle:rX') && !memRows.has('latest'));
 });
 
 console.log(`\n${passes} passed, ${failures} failed`);

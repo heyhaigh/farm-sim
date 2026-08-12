@@ -321,7 +321,12 @@ let settingsHits = null;
 // #saveport — the import flow's one-beat confirm: a parsed file waits here for a second click, so a
 // mis-tap cannot replace a town. { parsed, town, day, seed } while confirming; null otherwise.
 let pendingImport = null;
-let saveportNote = null;   // { text, until } — result/error line under the town-file row                           // { music, sfx, musicSlider, sfxSlider, portalBtn, admRaid, admVote, close } rects (game px)
+let saveportNote = null;   // { text, until } — result/error line under the town-file row
+// Every close path bumps this token, and a file picked under an older token is DISCARDED when its
+// async read lands (Codex #121): f.text() resolving after a close used to re-arm the confirm on a
+// closed panel, so reopening presented an unrelated second click as consent.
+let importPickGen = 0;
+const disarmImport = () => { pendingImport = null; importPickGen++; };                           // { music, sfx, musicSlider, sfxSlider, portalBtn, admRaid, admVote, close } rects (game px)
 let adminNote = null;                               // #Codex38 P2-5 transient booth feedback { text, until } (ms)
 let settingsDrag = null;                           // 'music' | 'sfx' while dragging a volume slider
 // (the settings NEW TOWN reset hatch is gone — founding lives on the world map; RYFARMS.wipeSave remains for QA)
@@ -7325,10 +7330,10 @@ out.addEventListener('pointerup', (e) => {
     // sound quick-mute (stays on the top bar)
     if (inRect(p, SND_BTN)) { audio.ensure(); audio.toggle(); return; }
     // settings cog: open/close the menu (New Town + volume)
-    if (SETTINGS_BTN.w && inRect(p, SETTINGS_BTN)) { audio.ensure(); settingsOpen = !settingsOpen; if (settingsOpen) { rosterOpen = chronOpen = boardOpen = false; blurChatInput(); localLifeCount().then(n => { localMemoryCount = n; }).catch(() => {}); } return; }
+    if (SETTINGS_BTN.w && inRect(p, SETTINGS_BTN)) { audio.ensure(); settingsOpen = !settingsOpen; disarmImport(); if (settingsOpen) { rosterOpen = chronOpen = boardOpen = false; blurChatInput(); localLifeCount().then(n => { localMemoryCount = n; }).catch(() => {}); } return; }
     // settings menu interactions
     if (settingsOpen && settingsHits) {
-        if (inRect(p, settingsHits.close)) { settingsOpen = false; pendingImport = null; return; }
+        if (inRect(p, settingsHits.close)) { settingsOpen = false; disarmImport(); return; }
         if (inRect(p, settingsHits.music)) { audio.ensure(); audio.toggleMusic(); return; }
         if (inRect(p, settingsHits.sfx)) { audio.ensure(); audio.toggleSfx(); return; }
         if (inRect(p, settingsHits.musicSlider)) { audio.setMusicVolume((p.x - settingsHits.musicSlider.x) / settingsHits.musicSlider.w); return; }
@@ -7336,16 +7341,18 @@ out.addEventListener('pointerup', (e) => {
         if (inRect(p, settingsHits.portalBtn)) { window.open('/memory-graph.html', '_blank', 'noopener'); return; }
         // #saveport — EXPORT: the current world, as a downloadable tagged-JSON file
         if (settingsHits.exportBtn && inRect(p, settingsHits.exportBtn)) {
-            const file = buildTownExport(world);
-            if (!file) { saveportNote = { text: 'THIS SESSION IS NOT SAVING - NOTHING TO EXPORT', until: performance.now() + 4000 }; return; }
-            const stamp = `${String(file.town || 'town').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'town'}-day${file.day}`;
-            const blob = new Blob([JSON.stringify(file)], { type: 'application/json' });
-            const a = document.createElement('a');
-            a.href = URL.createObjectURL(blob);
-            a.download = `propagate-${stamp}.json`;
-            a.click();
-            setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-            saveportNote = { text: 'TOWN FILE DOWNLOADED', until: performance.now() + 4000 };
+            saveportNote = { text: 'PACKING THE TOWN FILE...', until: performance.now() + 10000 };
+            buildTownExport(world).then((file) => {
+                if (!file) { saveportNote = { text: 'THIS SESSION IS NOT SAVING - NOTHING TO EXPORT', until: performance.now() + 4000 }; return; }
+                const stamp = `${String(file.town || 'town').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'town'}-day${file.day}`;
+                const blob = new Blob([JSON.stringify(file)], { type: 'application/json' });
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = `propagate-${stamp}.json`;
+                a.click();
+                setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+                saveportNote = { text: 'TOWN FILE DOWNLOADED', until: performance.now() + 4000 };
+            }).catch(() => { saveportNote = { text: 'EXPORT FAILED', until: performance.now() + 5000 }; });
             return;
         }
         // #saveport — IMPORT: pick a file, then a SECOND click confirms. The confirm beat is armed by
@@ -7367,10 +7374,12 @@ out.addEventListener('pointerup', (e) => {
             const input = document.createElement('input');
             input.type = 'file';
             input.accept = '.json,application/json';
+            const myGen = importPickGen;   // a close between pick and read invalidates this selection
             input.onchange = () => {
                 const f = input.files && input.files[0];
                 if (!f) return;
                 f.text().then((txt) => {
+                    if (myGen !== importPickGen) return;   // panel closed while the file was reading — stale
                     let parsed;
                     try { parsed = JSON.parse(txt); } catch { saveportNote = { text: 'NOT A TOWN FILE (BAD JSON)', until: performance.now() + 6000 }; return; }
                     if (!parsed || parsed.format !== 'propagate-town') { saveportNote = { text: 'NOT A PROPAGATE TOWN FILE', until: performance.now() + 6000 }; return; }
@@ -7406,7 +7415,7 @@ out.addEventListener('pointerup', (e) => {
             else adminNote = { text: 'A REAL RAID IS UNDER WAY - WAR PARTY HELD', until: performance.now() + 3000 };
             return;
         }
-        if (!inRect(p, settingsHits.panel)) { settingsOpen = false; pendingImport = null; return; }   // click outside closes
+        if (!inRect(p, settingsHits.panel)) { settingsOpen = false; disarmImport(); return; }   // click outside closes
         return;   // click inside the panel, no-op
     }
     if (inRect(p, ROSTER_BTN)) { rosterOpen = !rosterOpen; if (rosterOpen) { boardOpen = false; chronOpen = false; closeWorldMap(); } else { chatDropdownOpen = false; blurChatInput(); } return; }
@@ -7879,7 +7888,7 @@ window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && world && booted) {
         followMode = false; followTarget = null;
         selected = null; selectedSlotKey = null;
-        rosterOpen = false; chronOpen = false; boardOpen = false; settingsOpen = false; pendingImport = null; closeWorldMap();
+        rosterOpen = false; chronOpen = false; boardOpen = false; settingsOpen = false; disarmImport(); closeWorldMap();
         chatDropdownOpen = false; blurChatInput();
     }
     // ← / → — cycle through the whole cast: moves the open card and/or the follow target together
@@ -9326,7 +9335,7 @@ function drawStartScreen() {
         rehearsalDebug: () => ({ had: _hadRehearsal, reh: !!(world && world.rehearsal), snap: !!(world && world._rehearsalSnapshot), speed: world && world._speedMult }),   // #Codex67-1 watcher visibility
         FIXED_DT,
         // QA: open the town chronicle straight to a tab (0 NEWS / 1 RECIPES / 2 TALES)
-        openChron: (tab = 0) => { rosterOpen = boardOpen = worldMapOpen = settingsOpen = false; pendingImport = null; chronOpen = true; chronTab = tab; chronScroll = 0; },
+        openChron: (tab = 0) => { rosterOpen = boardOpen = worldMapOpen = settingsOpen = false; disarmImport(); chronOpen = true; chronTab = tab; chronScroll = 0; },
         // QA: open the Roster straight to a tab (0 PLAYER STATS / 1 ROLES)
         openRoster: (tab = 0) => { chronOpen = boardOpen = worldMapOpen = settingsOpen = false; rosterOpen = true; rosterTab = tab; rosterScroll = 0; },
         // center the camera on a tile (uses the REAL internal resolution — external camera

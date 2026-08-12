@@ -9,6 +9,8 @@
 // plain visit resumes the last-played town. Everything here is best-effort: a storage
 // failure must NEVER take down the game — worst case the town simply starts fresh.
 
+import { townMemoryRows, replaceTownMemoryRows } from './memory-store.js';
+
 const DB_NAME = 'ryfarms';
 const DB_VER = 1;
 const STORE = 'towns';
@@ -551,10 +553,12 @@ export async function wipeTown(seed) {
 export async function undoWipe() {
     try {
         const db = await openDb();
+        let backupMemories = null;
         return await new Promise((resolve, reject) => {
             const tx = db.transaction(STORE, 'readwrite');
             const store = tx.objectStore(STORE);
             let backup, lgTown, lgLatest, lgSlice, restoredSeed = null;
+            backupMemories = null;
             const rBackup = store.get('backup:wipe'); rBackup.onsuccess = () => { backup = rBackup.result; };
             // #Codex27-2 also read the pre-upgrade 3-key backup so a wipe done by the OLD build is still undoable
             const rLgTown = store.get('backup:town'); rLgTown.onsuccess = () => { lgTown = rLgTown.result; };
@@ -566,6 +570,7 @@ export async function undoWipe() {
                 if (!backup || !backup.snap) backup = lgTown ? { seed: lgTown.seed, snap: lgTown, latest: lgLatest, slice: lgSlice } : null;
                 if (!backup || !backup.snap) return;   // nothing to restore — leave everything, resolve null
                 const { snap, latest, slice } = backup;   // #Codex26-2 one coherent generation: same seed's snap+latest+slice
+                backupMemories = Array.isArray(backup.memories) ? backup.memories : null;   // #saveport import backups only
                 restoredSeed = snap.seed;
                 store.put(snap, 'town:' + snap.seed);
                 // Codex #57 judgment — undo puts a town BACK, which supersedes any tab holding whatever
@@ -584,6 +589,16 @@ export async function undoWipe() {
             tx.oncomplete = () => resolve(restoredSeed);
             tx.onerror = () => reject(tx.error);
             tx.onabort = () => reject(tx.error || new Error('undo txn aborted'));
+        }).then(async (restoredSeed) => {
+            // #saveport — an import's backup carries the displaced town's memory rows; undoing the
+            // import puts them back so the restored town wears its own lives again. A wipe-era backup
+            // has no `memories` field and is untouched. Not atomic with the slot (different db), so a
+            // failure here leaves the town restored with stale rows — warned, never fatal.
+            if (restoredSeed != null && backupMemories) {
+                try { await replaceTownMemoryRows(restoredSeed, backupMemories); }
+                catch (err) { console.warn('ry-farms: undo restored the town but not its memory rows', err); }
+            }
+            return restoredSeed;
         });
     } catch (err) {
         console.warn('ry-farms: undo failed', err);
@@ -649,6 +664,10 @@ export function decodeSnapshot(v) {
                 const Ctor = TYPED[v.t];
                 if (!Ctor) throw new Error(`unknown typed array ${v.t}`);
                 const bytes = bytesFromB64(v.v);
+                // The constructor does not reject every fractional element count (Codex #121): three
+                // bytes as Uint16Array yielded a ONE-element view with the third byte silently outside
+                // it — corruption altered the data instead of refusing. Exactness is the check.
+                if (bytes.byteLength % Ctor.BYTES_PER_ELEMENT !== 0) throw new Error(`corrupt ${v.t}: ${bytes.byteLength} bytes`);
                 return new Ctor(bytes.buffer, 0, bytes.byteLength / Ctor.BYTES_PER_ELEMENT);
             }
             case 'O': {
@@ -670,7 +689,7 @@ export function decodeSnapshot(v) {
 
 // The file the player downloads. Metadata first so a human (or a future build) can identify it
 // without decoding; the snapshot itself stays exactly what serialize() produced.
-export function buildTownExport(world) {
+export async function buildTownExport(world) {
     // A non-persisting session is running a SCRATCH world founded over a slot that could not be
     // read. Exporting it would hand the player a file they will treat as their real town's backup —
     // worse than no file. The check lives in saveTown for saves; export needs its own, because
@@ -678,6 +697,12 @@ export function buildTownExport(world) {
     if (world._persistenceDisabled) return null;
     const snap = world.serialize();
     if (!snap) return null;
+    // The memory rows ride too (Codex #121): battle documents are irreconstructible — backfill's
+    // own comment says their display-derived detail was never saved — so a file without them loses
+    // part of the memory portal permanently. A failed read degrades to a file without memories
+    // rather than no file: the town itself is the thing being backed up.
+    let memories = [];
+    try { memories = await townMemoryRows(world.seed); } catch { /* file still valid without them */ }
     return {
         format: 'propagate-town',
         formatV: 1,
@@ -687,6 +712,7 @@ export function buildTownExport(world) {
         day: world.day,
         v: snap.v,
         snap: encodeSnapshot(snap),
+        memories: encodeSnapshot(memories),
     };
 }
 
@@ -702,15 +728,38 @@ export function buildTownExport(world) {
 // without IndexedDB — as a pure function the copy property is directly assertable).
 export function parseTownFile(parsed, hydrate) {
     if (!parsed || parsed.format !== 'propagate-town') return { ok: false, error: 'not a Propagate town file' };
+    // formatV gates the ENVELOPE the way snap.v gates the schema (Codex #121): a file from a future
+    // build whose envelope we cannot interpret is refused, not guessed at.
+    if (parsed.formatV !== 1) return { ok: false, error: `file format v${parsed.formatV} is newer than this build` };
     let snap;
     try { snap = decodeSnapshot(parsed.snap); } catch (err) { return { ok: false, error: `unreadable file: ${err.message}` }; }
-    if (!snap || typeof snap !== 'object' || !Number.isFinite(snap.seed)) return { ok: false, error: 'file has no usable town' };
+    // EXACT uint32, not merely finite (Codex #121): World canonicalizes seed >>> 0, so 1.5, -1 and
+    // 2^32+1 all pass a finite check, hydrate as a DIFFERENT seed, and the import then stores the
+    // town under a key its own saves will never address again.
+    if (!snap || typeof snap !== 'object' || !Number.isInteger(snap.seed) || snap.seed !== (snap.seed >>> 0)) {
+        return { ok: false, error: 'file has no usable town seed' };
+    }
+    // The human-readable preview must AGREE with the snapshot it previews (Codex #121): a file whose
+    // envelope claims one town while its payload imports another is exactly how a player gets tricked
+    // into replacing the wrong save. The preview is what the confirm beat shows.
+    if (parsed.seed !== snap.seed) return { ok: false, error: 'file preview does not match its town' };
+    if (parsed.v !== snap.v) return { ok: false, error: 'file preview does not match its town' };
+    if ((parsed.town ?? null) !== (snap.name ?? null)) return { ok: false, error: 'file preview does not match its town' };
+    if (parsed.day !== snap.day) return { ok: false, error: 'file preview does not match its town' };
+    let hydrated;
     try {
-        hydrate(structuredClone(snap));   // migrate() mutates in place — validate a copy, store the original
+        hydrated = hydrate(structuredClone(snap));   // migrate() mutates in place — validate a copy, store the original
     } catch (err) {
         return { ok: false, error: String(err && err.message || 'town failed to load') };
     }
-    return { ok: true, snap };
+    // belt over the uint32 braces: whatever the hydrator canonicalized, it must still be THIS slot
+    if (hydrated && typeof hydrated.seed === 'number' && hydrated.seed !== snap.seed) {
+        return { ok: false, error: 'town hydrates under a different seed' };
+    }
+    let memories = [];
+    try { memories = decodeSnapshot(parsed.memories) || []; } catch { memories = []; }   // absent/corrupt memories never block the town
+    if (!Array.isArray(memories)) memories = [];
+    return { ok: true, snap, memories };
 }
 
 export async function importTownFile(parsed, hydrate) {
@@ -719,6 +768,11 @@ export async function importTownFile(parsed, hydrate) {
     const snap = p.snap;
     const seed = snap.seed;
     let replacedFlag = false;
+    // The seed's memory rows have no occupant identity (Codex #121): without this, a different town
+    // imported onto the same seed keeps exposing the displaced town's lives through the portal.
+    // Read the displaced rows BEFORE the transaction so they ride the backup object.
+    let displacedMemories = [];
+    try { displacedMemories = await townMemoryRows(seed); } catch { /* store unreachable — proceed; rows handled below */ }
     try {
         const db = await openDb();
         await new Promise((resolve, reject) => {
@@ -735,7 +789,7 @@ export async function importTownFile(parsed, hydrate) {
                 // preserve what the slot held, exactly as wipeTown does — one coherent undoable object
                 if (existing) {
                     replacedFlag = true;
-                    store.put({ seed, snap: existing, latest, slice: sliceKeyed(index, seed) }, 'backup:wipe');
+                    store.put({ seed, snap: existing, latest, slice: sliceKeyed(index, seed), memories: displacedMemories }, 'backup:wipe');
                 }
                 // the imported town's index summary is unknown until its first save — a stale slice is
                 // the danger COMPATIBILITY.md documents, so prune rather than carry it
@@ -749,7 +803,12 @@ export async function importTownFile(parsed, hydrate) {
             tx.onerror = () => reject(tx.error);
             tx.onabort = () => reject(tx.error || new Error('import txn aborted'));
         });
-        return { ok: true, seed, replaced: replacedFlag };
+        // The slot committed; now the memory rows. A different database, so not atomic with the slot
+        // — the failure mode is an imported town with stale rows, surfaced rather than silent.
+        let memoryError = null;
+        try { await replaceTownMemoryRows(seed, p.memories); }
+        catch (err) { memoryError = String(err && err.message || 'memory rows not replaced'); }
+        return { ok: true, seed, replaced: replacedFlag, memoryError };
     } catch (err) {
         return { ok: false, error: `storage write failed: ${err && err.message}` };
     }
