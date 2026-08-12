@@ -9,6 +9,29 @@
 // Every LLM call falls back cleanly, so the feature works with no key at all (keyword classify +
 // templated reply). Transcripts are stored on the farmer's sheet (conscience.log) and ride the save.
 
+import { seedStage } from './farm.js';   // #inspiration — one reading of a seed's life, shared with the sheet
+
+// #inspiration C2 (owner) — the ABBREVIATED whisper: what the farmer will one day speak back as
+// they set off to do the thing. A long whisper is trimmed to its first clause, cut at a word
+// boundary (~42 chars), so "have you ever thought about exploring past the northern fog to see
+// whether..." germinates as them muttering "exploring past the northern fog". Deterministic,
+// display-only; stamped onto the seed CLIENT-SIDE after the verdict, because conscienceCheck is
+// deliberately text-blind (the sim never reads the raw message) and must stay that way.
+export function abbreviateWhisper(text) {
+    let t = String(text || '').trim().replace(/\s+/g, ' ');
+    // drop a leading conversational runway — the quote should start at the MEAT
+    t = t.replace(/^(have you (ever )?thought about|what if you|maybe you (should|could)|you (should|could|might)|why (don't|not) you|perhaps|maybe|please)\s+/i, '');
+    // first clause only: cut at sentence punctuation
+    const m = t.match(/^[^.!?;]+/);
+    if (m) t = m[0].trim();
+    if (t.length > 42) {
+        t = t.slice(0, 42);
+        const sp = t.lastIndexOf(' ');
+        if (sp > 12) t = t.slice(0, sp);   // word boundary, unless it leaves a stub
+    }
+    return t.trim();
+}
+
 const ENDPOINT = '/api/ry-farms-conscience';
 const TIMEOUT_MS = 20000;
 
@@ -103,12 +126,34 @@ const TEMPLATES = {
     DEFY:     ['No. If anything, I will do the opposite.', 'Push me and I dig in. Not a chance.', 'The more I hear it, the less I want to.'],
 };
 
+// #inspiration slice 1 — seed-aware tiers OVER the base pools. The stage rule (seedStage) keeps
+// the claims honest: 'fresh' says a seed was planted TODAY (never "it keeps returning" on first
+// contact — that would be a lie); 'turning' is the it-keeps-coming-back register, earned only by a
+// seed that survived a dawn; 'fading' is the thought going. The high-pressure turning lines
+// foreshadow slice 2's one interaction rule (a hardened mind won't let it grow) so the player
+// learns the let-it-rest rhythm before germination even exists.
+const SEED_TEMPLATES = {
+    QUESTION: {
+        fresh:   ['Hm. That thought has a hook in it. I will turn it over.', 'Strange - it is not mine, but it is... planted now.', 'I will not act on that. But I doubt I have heard the last of it.'],
+        turning: ['That thought again. It has been circling me since you first left it.', 'I keep coming back to it, you know. Unbidden.', 'It returns on its own now. I did not invite it.'],
+        fading:  ['That old thought... it was louder a few days ago.', 'I remember that notion. It is quieter now.'],
+    },
+    DISMISS: {
+        turning: ['I said no. And yet it keeps coming back to me.', 'No - though I confess the idea has not left me alone.', 'Still no. Stop asking; the thought nags me enough by itself.'],
+        fading:  ['No. And the old pull of it is nearly gone, besides.'],
+    },
+    DEFY: {
+        turning: ['NO. And there - I have shaken the whole notion out of my head for good.', 'Push me again and lose the thought entirely. In fact - it is already gone.'],
+        fading:  ['NO. Whatever was growing there, I have torn it out.'],
+    },
+};
+
 // Rotate through the pool by TURN (how many lines are already logged) so repeated whispers -
 // which land the same verdict - don't echo the same canned line back over and over. The seed
 // offset just varies which farmer starts where. (Display text only; no sim determinism here.)
 let offlineReplyTick = 0;
-function offlineReply(verdict, farmer) {
-    const pool = TEMPLATES[verdict] || TEMPLATES.DISMISS;
+function offlineReply(verdict, farmer, stage) {
+    const pool = (SEED_TEMPLATES[verdict] && SEED_TEMPLATES[verdict][stage]) || TEMPLATES[verdict] || TEMPLATES.DISMISS;
     const turn = (farmer.sheet.conscience?.log?.length || 0) + (farmer.sheet.seed >>> 5) + (offlineReplyTick++);
     return pool[turn % pool.length];
 }
@@ -321,8 +366,30 @@ export async function whisper(world, farmer, message, save) {
     const tone = cls.tone || 'suggest';
 
     // stage 2: the sim decides (deterministic — this is the real event)
+    // #inspiration — capture the seed's PRE-check life: DEFY deletes the seed inside the check,
+    // and its reply must speak of the thing just torn out (post-check it no longer exists).
+    const preSeed = farmer.sheet.conscience?.seeds?.[kind];
+    const preSnap = preSeed ? { stage: seedStage(preSeed, world.day), firstDay: preSeed.firstDay } : null;
+
     const outcome = farmer.conscienceCheck(kind, target, tone);
     const verdict = outcome.verdict;
+
+    // The reply describes the mind AFTER the verdict — post-check state for everything (a QUESTION
+    // that just planted reads 'fresh'; a re-QUESTION over a survivor reads 'turning') EXCEPT DEFY,
+    // which uses the pre-check snapshot of the seed it destroyed.
+    const postSeed = farmer.sheet.conscience?.seeds?.[kind];
+    // #inspiration C2 — stamp the abbreviated whisper onto a seed this whisper planted or fed
+    // (QUESTION only; freshest phrasing wins). Display metadata on a digest-invisible ledger:
+    // the sim's deposit logic stays text-blind, and lapsed-urge seeds (planted sim-side, no text
+    // in reach) simply carry no phrase — their beats fall back to the kind's verb.
+    if (verdict === 'QUESTION' && postSeed) {
+        const ph = abbreviateWhisper(text);
+        if (ph) postSeed.phrase = ph;
+    }
+    const seedView = verdict === 'DEFY'
+        ? preSnap
+        : (postSeed ? { stage: seedStage(postSeed, world.day), firstDay: postSeed.firstDay } : null);
+    const seedInfo = seedView ? { stage: seedView.stage, days: Math.max(0, world.day - seedView.firstDay) } : null;
 
     // stage 3: reply (LLM, else template)
     let line;
@@ -335,6 +402,10 @@ export async function whisper(world, farmer, message, save) {
             // roll-affecting pressure (day-stable) PLUS today's repeat count, so a nagged reply can
             // sound more irritated even though the verdict itself is locked for the day.
             pressure: Math.round(((c.pressure[kind] || 0) + Math.max(0, (c.asks?.[kind] || 1) - 1)) * 10) / 10,
+            // #inspiration — how this idea has been sitting in their mind (null = no seed). The
+            // model uses it to colour the reply ("it keeps coming back to me"); a few tokens
+            // against Groq's TPM budget.
+            seed: seedInfo,
             // -6 with capped lines, not -12 raw: Groq's free tier meters TOKENS PER MINUTE (6k), and the
             // fat thread was the main reason rapid whispers 429'd into the breaker and read as "dropped"
             history: c.log.slice(-6).map(e => ({ who: e.who, text: String(e.text).slice(0, 120) })),
@@ -345,7 +416,7 @@ export async function whisper(world, farmer, message, save) {
         diagRecord('reply', true, `verdict=${verdict}`, Date.now() - t1);
     } catch (err) {
         diagRecord('reply', false, diagReason(err), Date.now() - t1);
-        line = offlineReply(verdict, farmer);
+        line = offlineReply(verdict, farmer, seedInfo && seedInfo.stage);
     }
 
     logLine(c, 'ry', line, world.day, verdict);

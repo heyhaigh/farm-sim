@@ -179,6 +179,7 @@ async function reply(body) {
         'THE SHEET IS THE SOUL: the `character` object is who this farmer IS. Their `creeds` are rules they live by and quote - if the voice touches one, they RECOGNISE it ("...that\'s my own rule" / defensiveness that the voice knows it). Their `traits` words colour every line: very low honesty angles, deflects, looks for the profit in it; very high temper flares; high drive measures everything against winning; a schemer schemes even at rest. Their `flaw` is real and shows. React as THIS person, never a generic farmer.',
         'THEIR PRESENT MOMENT: `snapshot.state` and `snapshot.doing` are what they are ACTUALLY doing and thinking right now - a farmer resting at night answers as someone resting at night. Stay true to their mood, dream, and situation as given. Never promise a specific mechanical result, never mention stats, rolls, or game terms.',
         'THE THREAD: `recent` is this farmer\'s OWN inner life - earlier stray thoughts (who:"voice") and their own reactions (who:"ry"). If the new thought echoes, follows, or contradicts an earlier one, let them NOTICE the thread - "that thought again", "first rest, now this" - with growing familiarity, suspicion, curiosity, or irritation at their own mind. These intrusions accumulate; they are not amnesiac.',
+        'THE SEED: `seed` (may be null) is how THIS idea has been sitting in their mind. stage "fresh": it was planted by this very whisper - they may sense it will linger ("I doubt I have heard the last of it") but it does NOT "keep returning" yet. stage "turning" (with `days`): the idea has survived on its own and returns unbidden - let that show, even inside a refusal ("I said no. And yet it keeps coming back to me"). stage "fading": it is going quiet. On a DEFY with a seed, they have just torn the lingering idea out for good and may say so.',
         'TEMPORAL TRUTH: the snapshot (day, season, year, weather) is the WHOLE of history. NEVER invent past seasons, past events, or people not given - a town on day 1 of year 1 has no "last autumn", no old raids, no history at all yet.',
         'ALWAYS speak as "I". Keep it grounded and human. Plain ASCII only: no markdown, no em dashes (use " - "), straight quotes, no emojis, no modern or technological references.',
         'Return JSON only: { "line": "<the farmer\'s reaction>" }.',
@@ -189,6 +190,10 @@ async function reply(body) {
         classifiedAs: { kind: body.kind || 'none', tone: body.tone || 'suggest' },
         verdict,
         pressure: body.pressure || 0,
+        // #inspiration — bounded copy, never the raw object: only the two fields the prompt names
+        seed: body.seed && typeof body.seed.stage === 'string'
+            ? { stage: String(body.seed.stage).slice(0, 12), days: Math.max(0, Math.min(99, body.seed.days | 0)) }
+            : null,
         recent: Array.isArray(body.history) ? body.history.slice(-12) : [],
         snapshot: body.snapshot || {},
     });

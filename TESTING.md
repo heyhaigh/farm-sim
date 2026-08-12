@@ -16,7 +16,7 @@ whose town is a non-persisting backdrop.
 `window.RYFARMS` is the debug surface: `world`, `speed(n)`, `saveNow()`, `peekSave()`, `restoreSave()`,
 `demoFaceoff()`, `demoRaid()`, `goTo(i,j)`, `wipeSave()`, `undoWipe()`.
 
-## The suite — fourteen files, all `node tests/<name>.mjs`
+## The suite — fifteen files, all `node tests/<name>.mjs`
 
 Run them all before pushing. Several protect properties that no amount of care at the call site will.
 
@@ -36,6 +36,7 @@ Run them all before pushing. Several protect properties that no amount of care a
 | `gate-loop.mjs` | the mobile gate never forks a second render loop — a throw leaves a backoff pending, and a context loss+restore before it fires used to start a duplicate that ran forever (61 vs 122 renders/sec) | fast |
 | `gate-layout.mjs` | the **mobile gate's** geometry across real device sizes — the one screen most first-time visitors see, and otherwise unreachable by the suite (it needs a canvas and a matching media query) | fast |
 | `postcard.mjs` | the **share link is the town**: minted URL shape (incl. the `&orc=1` an orc link must carry), seed coercion mirroring the boot, and OG injection against the real `index.html` | fast |
+| `inspiration.mjs` | the **seeds ledger**: QUESTION-only deposits (once per kind/day, target kept), DEFY zeroing, headroom scaling, dawn decay/floor, lapsed-urge residue, old-save guard, and whisper-gating (no seeds headless) | fast |
 
 ## Reading a failure
 

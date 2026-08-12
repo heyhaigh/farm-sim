@@ -4,7 +4,7 @@ import { fetchMemories, generateCrew, mod, fmtMod, STAT_NAMES, TRAIT_NAMES, TRAI
 import { localLineage, mergeLineage, localLifeCount } from './memory-store.js';
 import { backfillMemory } from './memory-backfill.js';
 import { audio } from './audio.js';
-import { World, CHUNK, T, GRID, CENTER, DAY_LENGTH, NIGHT_LENGTH, ITEMS, CRAFTABLES, RECIPE_BY_ID, INVENTION_TABLE, RARE_NAME, xpForLevel, obstacleTier, treeVariant, treeIsFruit, SEASONS } from './farm.js';
+import { World, CHUNK, T, GRID, CENTER, DAY_LENGTH, NIGHT_LENGTH, ITEMS, CRAFTABLES, RECIPE_BY_ID, INVENTION_TABLE, RARE_NAME, xpForLevel, obstacleTier, treeVariant, treeIsFruit, SEASONS, seedStage } from './farm.js';
 import {
     TILE_W, TILE_H, makeCanvas, drawText, textWidth,
     makeFarmerSprites, makeCropSprites, makeHouse, makeWell, makeBoard, makeFencePost,
@@ -5451,6 +5451,25 @@ function drawSheet(f) {
             for (const ln of wrapText(f.sheet.dream ? f.sheet.dream.yearn : 'none yet', 34)) { drawText(ctx, ln, IX + 2, y, '#e8c860'); y += 7; }
             drawText(ctx, f.sheet.dreamDone ? `WON ON DAY ${f.sheet.dreamDone}` : 'STILL CHASING IT', IX + 2, y, f.sheet.dreamDone ? '#7dd069' : SHEET_LABEL); y += 8;
             if (f.goal) { drawText(ctx, `COURSE THIS SEASON: ${f.goal.toUpperCase()}`, IX + 2, y, '#d08cc8'); y += 7; }
+            // #inspiration slice 1 — the strongest live seed, beside the course line (the sheet's
+            // self-decision surface). Opt-in inspection only: no numbers, just the thought's life.
+            {
+                const seeds = f.sheet.conscience?.seeds;
+                if (seeds) {
+                    let bk = null;
+                    for (const k of Object.keys(seeds)) if (!bk || seeds[k].w > seeds[bk].w) bk = k;
+                    if (bk) {
+                        const s = seeds[bk];
+                        const st = seedStage(s, world.day);
+                        // the farmer's own remembered phrasing of the whisper when it exists (C2 —
+                        // the same words they'll speak if it ever germinates); kind/target otherwise
+                        const what = s.phrase ? `'${String(s.phrase).slice(0, 24)}'`
+                            : (s.target ? `${bk} (${String(s.target).split(' ')[0]})` : bk);
+                        const word = st === 'fresh' ? 'PLANTED' : st === 'turning' ? 'TAKING ROOT' : 'FADING';
+                        for (const ln of wrapText(`A SEED: ${what.toUpperCase()} - ${word}`, 34)) { drawText(ctx, ln, IX + 2, y, st === 'fading' ? '#8a8f9c' : '#c8b060'); y += 7; }
+                    }
+                }
+            }
 
             // #1.2 LINEAGE / provenance — when this farmer is an HEIR, trace the closed memory loop on the
             // sheet: who they descend from, that forebear's OWN source memory, and (in CREEDS) the creed
@@ -5825,7 +5844,9 @@ function drawConscienceChat(x, y, w, h) {
         if (age >= 2) continue;
         const isVoice = e.who === 'voice';
         const col = age >= 1 ? '#6a6f7c' : (isVoice ? '#c8b060' : '#c8ccd8');   // gold = your thought, white = their reply, grey = yesterday
-        const prefix = isVoice ? '> ' : '  ';
+        // #inspiration — a QUESTION reply is the seed verdict: mark it in the player's own log
+        // (out-of-fiction bookkeeping, adjudication C2) with a small gold sprout glyph.
+        const prefix = isVoice ? '> ' : (e.verdict === 'QUESTION' ? '* ' : '  ');
         const wrapped = wrapLine(prefix + (e === revealEntry ? revealText : e.text), maxChars);
         wrapped.forEach((ln, i) => lines.push({ text: (i === 0 ? ln : '  ' + ln), col }));
     }
@@ -5967,6 +5988,9 @@ async function submitWhisper() {
                 voice: voiceOf(f.sheet.seed, w.culture, f.sheet.personality?.competitiveness ?? 0.5),
             };
         }
+        // #inspiration telemetry — a perception feature's only real test is whether players meet
+        // it; seed_planted per QUESTION verdict (germination adds seed_germinated in slice 2).
+        if (r && r.verdict === 'QUESTION') track('seed_planted', { seed: w.seed, kind: r.kind });
     } catch (err) {
         console.warn('ry-farms: whisper failed', err);
     } finally {

@@ -9168,6 +9168,36 @@ const URGE_MAX_PRESSURE = 5;        // asks of one kind before the well runs dry
 const URGE_DAILY_HEEDS = 2;         // new nudges a single farmer will take per day
 const URGE_TOWN_CAP = 4;            // active urges town-wide (anti "town manager")
 const CONSCIENCE_LOG_CAP = 40;      // transcript lines kept per farmer (FIFO)
+
+// #inspiration slice 1 (INSPIRATION_PLAN.md) — the SEEDS ledger: a QUESTIONed whisper leaves a
+// target-bearing impression on `sheet.conscience.seeds[kind]` that fades or holds across dawns.
+// Slice 1 is PERCEPTION ONLY: nothing in the decide loop reads seeds (germination is slice 2), so
+// the ledger is digest-invisible by construction — it exists only on the whisper path, which never
+// occurs headless. Named `seeds`, NOT `impressions` (that word is taken by sheet.civic).
+const SEED_MAX = 3;                 // weight ceiling — deposits fill the HEADROOM (see seedDeposit)
+const SEED_DEPOSIT = 1.2;           // a QUESTION's deposit, before headroom scaling
+const SEED_LAPSED = 1.8;            // a HEED that lapsed unfulfilled leaves the STRONGEST residue
+const SEED_FLOOR = 0.15;            // fades below this at dawn -> forgotten
+const SEED_DECAY_BASE = 0.88;       // nightly keep-fraction before personality shading
+
+// Headroom deposit (council O3): a faded seed accepts a full deposit, a full one barely moves —
+// novelty REGENERATES as a seed decays, so the game's only verb never goes monotonically dark.
+// Pure + exported for the test harness; the ledger writer below is the only game caller.
+export function seedDeposit(s, amount) {
+    s.w = Math.min(SEED_MAX, s.w + amount * (1 - s.w / SEED_MAX));
+    return s;
+}
+
+// The display-side reading of a seed's life — shared by the reply payload (conscience.js) and the
+// sheet line (main.js) so the two surfaces can never disagree about what stage a thought is in.
+// fresh = planted today (the reply says a seed was planted, it does NOT claim "it keeps returning");
+// turning = it survived a dawn and still has weight (the "keeps coming back to me" tier);
+// fading = still remembered, but going.
+export function seedStage(s, day) {
+    if (!s) return null;
+    if (day - s.firstDay < 1) return 'fresh';
+    return s.w >= SEED_MAX * 0.35 ? 'turning' : 'fading';
+}
 // #legibility Slice 2 — what a farmer SAYS (bubble) + how the chronicle PHRASES it when they act on a whisper.
 const URGE_HEEDED_LINE = {
     rest: "YOU'RE RIGHT - I'LL REST.", hunt: 'MEAT IT IS - I HUNT.', build: 'A GOOD THOUGHT - I BUILD.',
@@ -9608,6 +9638,11 @@ export class Farmer {
         // act must be SAFE (never self-harming), so it's gated hard and re-checked here.
         const defiant = (p.collaboration < 0.3 || this.volatility > 0.7) && priorPressure >= 2 && (tone === 'press');
         if (defiant && roll < 0.28 && this.#defySafe(kind)) {
+            // #inspiration C1 — DEFY ZEROES the seed. Every DEFY gate is player-manufacturable, so
+            // "defied ideas lodge deepest" would make provoking spite the highest-yield deposit
+            // route; zeroing instead makes nagging a GAMBLE — pressure raises DEFY odds, and DEFY
+            // wipes the investment. (The voiced white-bear beat is banked for slice 3.)
+            if (c.seeds && c.seeds[kind]) delete c.seeds[kind];
             record('DEFY'); return { verdict: 'DEFY', kind, reason: 'bristles at being pushed' };
         }
 
@@ -9628,10 +9663,28 @@ export class Farmer {
         // above, so once per kind per day) that can surface in their own dawn reflection.
         if (roll < chance + 0.18) {
             this.remember('lesson', `A strange thought today - why did I want to ${this.#urgeVerb(kind)}?`, null, 0.5);
+            // #inspiration — QUESTION is the SEED verdict, and the only one (council consensus:
+            // if DISMISS deposited too, "no" would secretly mean "not yet" and refusal would become
+            // the best outcome). Once per (kind, day) is structural: the verdict memo above returns
+            // re-asks before they reach this line. No rng — a deterministic write on the whisper path.
+            this.#plantSeed(kind, targetName, SEED_DEPOSIT);
             record('QUESTION'); return { verdict: 'QUESTION', kind, reason: 'wonders at the thought' };
         }
 
         record('DISMISS'); return { verdict: 'DISMISS', kind, reason: 'shrugged off' };
+    }
+
+    // #inspiration — write into the seeds ledger (headroom-scaled; see seedDeposit). Target is
+    // kept because a seed that forgot its specifics germinates as noise ("hunt the wolf" must not
+    // sprout as "hunt the rabbit" — council consensus), and `visit` is inert without one.
+    // Old-save guard: the lazy conscience getter never backfills fields, so `seeds` is created here.
+    #plantSeed(kind, targetName, amount) {
+        const c = this.conscience;
+        if (!c.seeds) c.seeds = {};
+        const s = c.seeds[kind] || (c.seeds[kind] = { w: 0, firstDay: this.world.day, day: this.world.day, target: null });
+        seedDeposit(s, amount);
+        s.day = this.world.day;
+        if (targetName) s.target = targetName;
     }
 
     // Plant (or replace) the single active urge and spend a daily heed. A BARGAIN starts
@@ -11255,7 +11308,24 @@ export class Farmer {
                 if (c.pressure[k] <= 0) delete c.pressure[k];
             }
             c.asks = {}; c.verdicts = {}; c.verdictDay = this.world.day;
-            if (c.urge && this.world.day > c.urge.expiresDay) c.urge = null;
+            if (c.urge && this.world.day > c.urge.expiresDay) {
+                // #inspiration — a heeded thought the days swallowed (never acted on: sickness, a
+                // raid week, the backlog) leaves the STRONGEST residue. The genuinely sad case
+                // used to leave nothing; now the thought survives the interruption as a seed.
+                if (!c.urge.acted) this.#plantSeed(c.urge.kind, c.urge.target, SEED_LAPSED);
+                c.urge = null;
+            }
+            // #inspiration — seeds fade nightly: volatile minds faster, curious minds hold longer.
+            // Forgotten under the floor. No rng, and like the whole block it no-ops for the
+            // never-whispered (seeds only ever exist on the whisper path — digest-invisible).
+            if (c.seeds) {
+                const keep = Math.max(0.6, Math.min(0.97,
+                    SEED_DECAY_BASE - this.volatility * 0.10 + (this.p.curiosity ?? 0.5) * 0.08));
+                for (const k of Object.keys(c.seeds)) {
+                    c.seeds[k].w *= keep;
+                    if (c.seeds[k].w < SEED_FLOOR) delete c.seeds[k];
+                }
+            }
         }
 
         this.#reviseBeliefs();        // W2: reinforce / erode / shed beliefs against recent life first
