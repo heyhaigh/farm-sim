@@ -57,7 +57,10 @@ function farmer(w) {
     return f;
 }
 function world() {
-    const w = { farmers: [], day: 1, seasonName: 'SPRING', year: 1, weather: 'sun', culture: 'human' };
+    // clock + isNight mirror the real World (snapshotOf reads them for the time-of-day field —
+    // the owner-found "quiet night at 56 AFTERNOON" fix); a fake without them throws the exact
+    // producer-drift TypeError this suite exists to catch.
+    const w = { farmers: [], day: 1, seasonName: 'SPRING', year: 1, weather: 'sun', culture: 'human', clock: 150, isNight: () => false };
     w.farmers.push(farmer(w));
     return w;
 }

@@ -9,7 +9,7 @@
 // Every LLM call falls back cleanly, so the feature works with no key at all (keyword classify +
 // templated reply). Transcripts are stored on the farmer's sheet (conscience.log) and ride the save.
 
-import { seedStage } from './farm.js';   // #inspiration — one reading of a seed's life, shared with the sheet
+import { seedStage, DAY_LENGTH } from './farm.js';   // #inspiration — one reading of a seed's life, shared with the sheet; DAY_LENGTH for the snapshot clock
 
 // #inspiration C2 (owner) — the ABBREVIATED whisper: what the farmer will one day speak back as
 // they set off to do the thing. A long whisper is trimmed to its first clause, cut at a word
@@ -151,9 +151,19 @@ const SEED_TEMPLATES = {
 // Rotate through the pool by TURN (how many lines are already logged) so repeated whispers -
 // which land the same verdict - don't echo the same canned line back over and over. The seed
 // offset just varies which farmer starts where. (Display text only; no sim determinism here.)
+// Codex #124 P2 — the slot-policy QUESTION ('set on their own errand', plan item 15) must SOUND
+// like an occupied mind, not an ordinary musing: the farmer has a live self-sown intention and is
+// filing the new thought for later.
+const ERRAND_TEMPLATES = [
+    'Not now. My mind is set on something of my own - but I hear you.',
+    'Later. I have my own errand first. The thought is noted.',
+    'My own thought has the reins today. Yours can wait its turn.',
+];
+
 let offlineReplyTick = 0;
-function offlineReply(verdict, farmer, stage) {
-    const pool = (SEED_TEMPLATES[verdict] && SEED_TEMPLATES[verdict][stage]) || TEMPLATES[verdict] || TEMPLATES.DISMISS;
+function offlineReply(verdict, farmer, stage, reason) {
+    const pool = reason === 'set on their own errand' ? ERRAND_TEMPLATES
+        : (SEED_TEMPLATES[verdict] && SEED_TEMPLATES[verdict][stage]) || TEMPLATES[verdict] || TEMPLATES.DISMISS;
     const turn = (farmer.sheet.conscience?.log?.length || 0) + (farmer.sheet.seed >>> 5) + (offlineReplyTick++);
     return pool[turn % pool.length];
 }
@@ -211,10 +221,21 @@ function characterView(f) {
 
 // a snapshot of the world AS IT WAS when the whisper landed — the reply is written against this,
 // so a world that ticks on during generation can never contradict the answer.
+// Time of day, mirroring the top bar's exact boundaries (main.js) — the one clock the player can
+// see must be the one clock the farmer speaks from. Owner-found bug: without this field the model
+// filled the temporal hole itself ("just a quiet night" at 56 AFTERNOON; "no more working after
+// dark" ditto) — a resting state plus no clock reads as bedtime to an LLM.
+function timeWord(w) {
+    if (w.isNight()) return 'night';
+    const fr = Math.min(0.999, Math.max(0, w.clock / DAY_LENGTH));
+    return fr < 0.34 ? 'morning' : fr < 0.67 ? 'afternoon' : 'evening';
+}
+
 function snapshotOf(f) {
     const w = f.world;
     return {
         day: w.day, season: w.seasonName, year: w.year, weather: w.weather,
+        time: timeWord(w),   // morning/afternoon/evening/night — the visible top-bar clock
         doing: (f.thought || '').slice(0, 48),   // their actual inner thought — replies ground on this
         state: STATE_WORDS[f.state] || 'up and about their day',   // so a roused sleeper KNOWS they were roused
     };   // year: the temporal-truth anchor (day-1 towns kept inventing 'last autumn')
@@ -404,8 +425,10 @@ export async function whisper(world, farmer, message, save) {
             pressure: Math.round(((c.pressure[kind] || 0) + Math.max(0, (c.asks?.[kind] || 1) - 1)) * 10) / 10,
             // #inspiration — how this idea has been sitting in their mind (null = no seed). The
             // model uses it to colour the reply ("it keeps coming back to me"); a few tokens
-            // against Groq's TPM budget.
+            // against Groq's TPM budget. `reason` carries the verdict's WHY — the slot-policy
+            // QUESTION ('set on their own errand') must read as an occupied mind (Codex #124 P2).
             seed: seedInfo,
+            reason: outcome.reason || undefined,
             // -6 with capped lines, not -12 raw: Groq's free tier meters TOKENS PER MINUTE (6k), and the
             // fat thread was the main reason rapid whispers 429'd into the breaker and read as "dropped"
             history: c.log.slice(-6).map(e => ({ who: e.who, text: String(e.text).slice(0, 120) })),
@@ -416,12 +439,12 @@ export async function whisper(world, farmer, message, save) {
         diagRecord('reply', true, `verdict=${verdict}`, Date.now() - t1);
     } catch (err) {
         diagRecord('reply', false, diagReason(err), Date.now() - t1);
-        line = offlineReply(verdict, farmer, seedInfo && seedInfo.stage);
+        line = offlineReply(verdict, farmer, seedInfo && seedInfo.stage, outcome.reason);
     }
 
     logLine(c, 'ry', line, world.day, verdict, kind);
     if (typeof save === 'function') { try { save(); } catch { /* best effort */ } }
-    return { verdict, kind, target, reply: line };
+    return { verdict, kind, target, reply: line, reason: outcome.reason };
 }
 
 function logLine(c, who, text, day, verdict, kind) {

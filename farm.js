@@ -6790,6 +6790,30 @@ export class World {
             f.journal = f.journal.filter(m => (m.strength *= (JOURNAL_DECAY[m.kind] || 0.96)) > JOURNAL_FORGET);
             f.reflect();   // a new day: reread the journal, maybe set a new course
         }
+        // #inspiration (Codex #124 P1) — germination arbitrates AFTER every farmer's dawn fold,
+        // in ONE town-wide pass. Evaluating candidates from inside per-farmer reflect() saw
+        // earlier-index farmers post-fold and later-index farmers pre-fold, so the winner
+        // depended on farmer-array order (reproduced at world seed 100003). Two phases:
+        // fold everyone above, then arbitrate once here. Whisper-gated: candidates are null
+        // for any farmer without seeds, so a headless dawn does nothing and touches no rng.
+        this.dawnGermination();
+    }
+
+    // The single arbitration: lowest germorder hash among today's successful candidates sprouts,
+    // budget permitting. Public so the test harness can drive dawns the way the rollover does.
+    dawnGermination() {
+        let pending = 0;
+        for (const f of this.farmers) {
+            const u = f.sheet.conscience && f.sheet.conscience.urge;
+            if (u && u.origin === 'inspiration' && this.day <= u.expiresDay) pending++;
+        }
+        if (pending >= GERM_TOWN_CAP) return;
+        let win = null, winCand = null;
+        for (const f of this.farmers) {
+            const cand = f.germCandidate();
+            if (cand && (!winCand || cand.prio < winCand.prio)) { win = f; winCand = cand; }
+        }
+        if (win) win.germinateNow(winCand);
     }
 
     // ---- main tick ---------------------------------------------------------------
@@ -9607,30 +9631,11 @@ export class Farmer {
         const u = this.activeUrge();
         if (!u || u.kind !== kind || u.acted) return;
         u.acted = true;
-        // #inspiration item 14 — a SELF-SOWN urge's follow-through is visibly THEIRS: no whisper
-        // credit, the farmer's own words (the abbreviated whisper if the seed kept one), a
-        // distinct chronicle verb, the seed fulfilled, and the O2 warmth channel fed. Display +
-        // additive state only; no rng.
-        if (u.origin === 'inspiration') {
-            // THE SPROUT MOMENT (owner: not at dawn — when it serves them). This is the first
-            // instant the self-sown want became a deed, so everything visible lands here: the
-            // spoken phrase, the journal, the chronicle, the took-root credit, the telemetry.
-            const w = this.world, c = this.conscience;
-            const sd = c.seeds && c.seeds[kind];
-            const phRaw = sd && sd.phrase;
-            const ph = phRaw ? `"${String(phRaw).toUpperCase().slice(0, 38)}"... ` : '';
-            this.say(ph ? `${ph}THE THOUGHT KEPT RETURNING. TODAY I ANSWER IT.` : (GERM_LINE[kind] || 'THAT THOUGHT AGAIN. TODAY I ANSWER IT.'), '#c8b060');
-            this.sparkle = Math.max(this.sparkle, 1);
-            this.remember('lesson', `The thought kept returning${phRaw ? ` - "${phRaw}"` : ''}. Today I gave in to it.`, null, 0.8);
-            this.world.addChronicle('whisper', `${shortName(this)} followed a thought that had taken root and ${URGE_HEEDED_VERB[kind] || 'saw it through'}.`,
-                this, null, '#c8b060', { tier: 'callout', tone: 'triumph', why: 'a thought of their own' });
-            c.rooted = c.rooted || {};
-            c.rooted[kind] = w.day;                             // the notebook's credit: it BECAME a deed today
-            w._germEvent = { kind, day: w.day, farmerSeed: this.sheet.seed };   // telemetry pickup (main.js), off-sim
-            if (sd) delete c.seeds[kind];                       // fulfilled — the seed became the deed
-            c.warmth = Math.min(3, (c.warmth || 0) + 1);        // O2 — it bore fruit; the voice earns a little trust
-            return;
-        }
+        // #inspiration item 14 — a SELF-SOWN urge's follow-through is visibly THEIRS. Routed
+        // through the shared completion so EVERY consumer (urgeBias kinds here, the watch's own
+        // path, the visit arrival) lands the same beat — Codex #124 P1: watch bypassed this and
+        // stayed whisper-credited with a surviving seed and no warmth.
+        if (u.origin === 'inspiration') { this.#completeInspiration(kind); return; }
         this.say(URGE_HEEDED_LINE[kind] || "YOU'RE RIGHT. I WILL.", '#f0d88a');
         this.sparkle = Math.max(this.sparkle, 1);
         this.world.addChronicle('whisper', `${shortName(this)} heeded a whisper and ${URGE_HEEDED_VERB[kind] || 'changed course'}.`,
@@ -9770,9 +9775,11 @@ export class Farmer {
     }
 
     // #inspiration slice 2 — evaluate this farmer's germination candidacy for TODAY. Pure: keyed
-    // hashes and reads only, no stream consumption — so any farmer can evaluate any other's
-    // candidate during arbitration and all agree. Returns { kind, seed, prio } or null.
-    #germCandidate() {
+    // hashes and reads only, no stream consumption. PUBLIC because the World's #dawnGermination
+    // pass evaluates every farmer AFTER all dawn folds have run (Codex #124 P1 — evaluating from
+    // inside reflect() made the winner depend on farmer-array order). Returns
+    // { kind, seed, prio } or null.
+    germCandidate() {
         const w = this.world, c = this.sheet.conscience;
         if (!c || !c.seeds) return null;
         if (c.urge && w.day <= c.urge.expiresDay) return null;         // the one slot is occupied
@@ -9797,24 +9804,37 @@ export class Farmer {
         return { kind: best.k, seed: best.s, prio: hashString('germorder:' + w.seed + ':' + w.day + ':' + this.sheet.seed) };
     }
 
-    // Run at dawn (inside the conscience fold). Own budget + keyed arbitration: every successful
-    // candidate computes the same pure winner, so only the lowest germorder hash sprouts — never
-    // farmer-array order (which would hand early-index farmers a permanent win).
-    #maybeGerminate() {
-        const cand = this.#germCandidate();
-        if (!cand) return;
-        const w = this.world;
-        const pendingGerm = w.farmers.reduce((n, f) => {
-            const u = f.sheet.conscience && f.sheet.conscience.urge;
-            return n + (u && u.origin === 'inspiration' && w.day <= u.expiresDay ? 1 : 0);
-        }, 0);
-        if (pendingGerm >= GERM_TOWN_CAP) return;
-        for (const f of w.farmers) {
-            if (f === this) continue;
-            const oc = f.#germCandidate();
-            if (oc && oc.prio < cand.prio) return;   // theirs is today's sprout — yield
+    // The World's arbitration pass calls this on the single winner. Public for the same reason
+    // as germCandidate; does nothing a whisperless world could ever reach.
+    germinateNow(cand) { this.#germinate(cand.kind, cand.seed); }
+
+    // THE SPROUT MOMENT (owner: not at dawn — when it serves them). The first instant a
+    // self-sown want became a deed: the spoken phrase, journal, chronicle, took-root credit
+    // (stamped on the EXACT log entry, Codex #124 P2 — a same-day later QUESTION must not
+    // inherit it), telemetry, seed fulfilled, warmth fed. One helper so every consumer of an
+    // inspiration urge — urgeBias kinds, the watch path, the visit arrival — lands identically.
+    #completeInspiration(kind) {
+        const w = this.world, c = this.conscience;
+        const sd = c.seeds && c.seeds[kind];
+        const phRaw = sd && sd.phrase;
+        const ph = phRaw ? `"${String(phRaw).toUpperCase().slice(0, 38)}"... ` : '';
+        this.say(ph ? `${ph}THE THOUGHT KEPT RETURNING. TODAY I ANSWER IT.` : (GERM_LINE[kind] || 'THAT THOUGHT AGAIN. TODAY I ANSWER IT.'), '#c8b060');
+        this.sparkle = Math.max(this.sparkle, 1);
+        this.remember('lesson', `The thought kept returning${phRaw ? ` - "${phRaw}"` : ''}. Today I gave in to it.`, null, 0.8);
+        w.addChronicle('whisper', `${shortName(this)} followed a thought that had taken root and ${URGE_HEEDED_VERB[kind] || 'saw it through'}.`,
+            this, null, '#c8b060', { tier: 'callout', tone: 'triumph', why: 'a thought of their own' });
+        c.rooted = c.rooted || {};
+        c.rooted[kind] = w.day;
+        // the notebook credit belongs to the exact exchange that planted this seed — mark the
+        // newest matching QUESTION entry itself, so a NEW same-kind QUESTION later today can
+        // never inherit an earlier sprout's marker (entry evicted by the cap = marker gone, honest)
+        if (c.log) for (let i = c.log.length - 1; i >= 0; i--) {
+            const e = c.log[i];
+            if (e.who !== 'voice' && e.verdict === 'QUESTION' && e.kind === kind) { e.rooted = w.day; break; }
         }
-        this.#germinate(cand.kind, cand.seed);
+        w._germEvent = { kind, day: w.day, farmerSeed: this.sheet.seed };   // telemetry pickup (main.js), off-sim
+        if (sd) delete c.seeds[kind];                           // fulfilled — the seed became the deed
+        c.warmth = Math.min(3, (c.warmth || 0) + 1);            // O2 — it bore fruit; the voice earns a little trust
     }
 
     // The sprout: a normal urge with origin 'inspiration'. Deliberately NOT via #plantUrge — a
@@ -10820,7 +10840,11 @@ export class Farmer {
         const w = this.world, mgr = w.managerFarmer();
         const alarm = w.pendingRaid && w.pendingRaid.detected;
         if (!mgr || mgr === this || alarm) {
-            w.postWatch(this, 'whisper'); u.resolved = true; u.acted = true;
+            // Codex #124 P1 — a SELF-SOWN watch must not be credited "at a whisper": route the
+            // origin through the shared inspiration completion (seed fulfilled, warmth, honest
+            // chronicle) instead of the legacy whisper lines.
+            w.postWatch(this, u.origin === 'inspiration' ? 'inspiration' : 'whisper'); u.resolved = true; u.acted = true;
+            if (u.origin === 'inspiration') { this.#completeInspiration('watch'); return true; }
             this.say(w.culture === 'orc' ? 'I STAND THE WATCH.' : "I'LL TAKE THE WATCH.", '#f0d88a');
             this.sparkle = Math.max(this.sparkle, 1);
             w.addChronicle('whisper', `${shortName(this)} took up the watch at a whisper.`, this, null, '#f0d88a',
@@ -10838,8 +10862,11 @@ export class Farmer {
             u.conferred = true;
             this.facing = (mgr.pos.i - mgr.pos.j) >= (this.pos.i - this.pos.j) ? 1 : -1;
             if (w.managerApprovesWatch(this, mgr)) {
-                w.postWatch(this, 'manager'); u.resolved = true; u.acted = true;
+                w.postWatch(this, u.origin === 'inspiration' ? 'inspiration' : 'manager'); u.resolved = true; u.acted = true;
                 mgr.say(w.culture === 'orc' ? 'AYE. STAND THE WATCH.' : 'AYE - TAKE THE WATCH.', '#f0d88a');
+                // Codex #124 P1 — the origin decides the CREDIT: the Manager still speaks, but a
+                // self-sown watch completes as the farmer's own thought, not whisper-obedience.
+                if (u.origin === 'inspiration') { this.#completeInspiration('watch'); return true; }
                 this.sayAfter(mgr.speechReadTime('AYE') + 0.3, w.culture === 'orc' ? 'THE LINE IS MINE.' : "I'LL KEEP THE WATCH.", '#f0d88a');
                 this.sparkle = Math.max(this.sparkle, 1);
                 w.addChronicle('whisper', `${shortName(this)} went to ${shortName(mgr)}, who posted them to the watch.`, this, mgr, '#f0d88a',
@@ -11484,10 +11511,10 @@ export class Farmer {
                         mused = true;
                     }
                 }
-                // item 12 — GERMINATION: the returning thought finally wins, as the farmer's OWN
-                // act at dawn. Keyed salted stream, pressure hard-gated, own town budget, keyed
-                // arbitration (never farmer-array order). Whisper-gated like everything above.
-                this.#maybeGerminate();
+                // (germination moved to the World's #dawnGermination pass — Codex #124 P1: a
+                // candidate evaluated INSIDE reflect() saw earlier farmers post-fold and later
+                // farmers pre-fold, so the winner depended on array order. Fold first, then one
+                // town-wide arbitration.)
             }
             // slice 3 — the white-bear echoes ONCE, the dawn after the tearing-out, then is done.
             // Voiced + journaled, no state beyond the beat itself (the seed stays gone).
@@ -12659,12 +12686,20 @@ export class Farmer {
         //     exists and isn't someone they can't stand. No active urge -> this whole block is skipped.
         {
             const vu = this.activeUrge();
-            if (vu && vu.kind === 'visit' && vu.target && !w.isNight()) {
+            if (vu && vu.kind === 'visit' && vu.target && !vu.acted && !w.isNight()) {
                 const t = w.farmers.find(o => o !== this && shortName(o).toLowerCase() === String(vu.target).toLowerCase());
                 if (t && this.opinionOf(t) > -0.35) {
+                    // Codex #124 P1 — the visit COMPLETES: without this the urge was never marked
+                    // acted, so a followed visit earned no credit/warmth and lapsed as
+                    // "unfulfilled", re-arming its seed despite the walk having happened. The
+                    // watch-confer pattern: walk while walking; when #goTo says arrived-or-can't-
+                    // get-closer (a housed target's footprint keeps callers ~3 tiles out —
+                    // measured), the call is paid from where they stand.
+                    if (Math.hypot(this.pos.i - t.pos.i, this.pos.j - t.pos.j) < 3.8) { this.#heededWhisper('visit'); return; }
                     this.think(this.#tr(`I'LL LOOK IN ON ${shortName(t).toUpperCase()}.`, `I SHOULD LOOK IN ON ${shortName(t).toUpperCase()}.`));
                     const vt = this.#standNear(t.pos.i + 0.5, t.pos.j + 0.5);
-                    if (vt && this.#goTo(vt.i, vt.j, 'wander')) return;
+                    if (vt && this.#goTo(vt.i, vt.j, 'wander')) return;   // still walking to them
+                    this.#heededWhisper('visit'); return;   // arrived, or as close as pathing allows — the call is paid
                 }
             }
         }

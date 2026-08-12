@@ -12,6 +12,7 @@
 //
 // Run: `node tests/inspiration.mjs`
 
+import fs from 'node:fs';
 import assert from 'node:assert/strict';
 import { World, seedDeposit, seedStage } from '../farm.js';
 import { generateCrew, hashString } from '../dna.js';
@@ -197,6 +198,7 @@ function walkDawns(w, farmers, days, each) {
     for (let i = 0; i < days; i++) {
         w.day += 1;
         for (const f of farmers) f.reflect();
+        w.dawnGermination();   // the world's post-fold arbitration pass (Codex #124 P1)
         if (each && each(i)) return true;
     }
     return false;
@@ -358,11 +360,128 @@ function walkDawns(w, farmers, days, each) {
         const f = w.farmers[0];
         f.sheet.personality.curiosity = 1.0;
         f.conscience.seeds = { explore: { w: 3, firstDay: w.day, day: w.day, target: null } };   // planted TODAY
-        w.day += 1; f.reflect();                                                                 // dawn 1: age 1
+        w.day += 1; f.reflect(); w.dawnGermination();                                            // dawn 1: age 1
         if (f.sheet.conscience.urge?.origin === 'inspiration') sprouted++;
     }
     assert.equal(sprouted, 0, 'a day-old thought never sprouts - the window starts at GERM_MIN_AGE');
     ok('min-age holds: no dawn-1 sprouts across 20 towns');
+}
+
+// ---- 13c · arbitration is order-independent (Codex #124 P1's exact repro shape) ---------------
+// A first-sprout walk can land on a SINGLE-candidate dawn, where first-wins and min-prio agree
+// (a mutation proved it). The rolls are reproducible keyed streams, so ENGINEER a dawn where BOTH
+// candidates' rolls succeed — that is the only dawn arbitration exists for — then require both
+// array orders to crown the keyed-priority winner.
+{
+    const { mulberry32 } = await import('../dna.js');
+    const A = 0, B = 3;
+    const probe = boot(100003);
+    const sa = probe.farmers[A].sheet.seed, sb = probe.farmers[B].sheet.seed;
+    const roll = (fs, d) => mulberry32((probe.seed ^ fs ^ hashString('germ:explore') ^ (d * 0x1f1f)) >>> 0)();
+    // chance floor with w~2.6 (post-decay), curiosity 1, fit >= -0.4 is ~0.248 — a dawn where both
+    // rolls sit under 0.24 is a guaranteed both-succeed dawn
+    let D = null;
+    for (let d = probe.day + 3; d < probe.day + 800 && !D; d++) if (roll(sa, d) < 0.24 && roll(sb, d) < 0.24) D = d;
+    assert.ok(D, 'found an engineered both-succeed dawn');
+    const expected = [sa, sb].sort((x, y) =>
+        hashString('germorder:' + probe.seed + ':' + D + ':' + x) - hashString('germorder:' + probe.seed + ':' + D + ':' + y))[0];
+    const run = (reverse) => {
+        const w = boot(100003);
+        for (const i of [A, B]) {
+            const f = w.farmers[i];
+            f.sheet.personality.curiosity = 1.0;
+            f.conscience.seeds = { explore: { w: 3.4, firstDay: D - 2, day: D, target: null } };   // ~3 after the fold's decay
+        }
+        if (reverse) w.farmers.reverse();   // reverses BOTH the fold order and the scan order
+        w.day = D;
+        for (const f of w.farmers) f.reflect();
+        w.dawnGermination();
+        const win = w.farmers.find(f => f.sheet.conscience?.urge?.origin === 'inspiration');
+        return win && win.sheet.seed;
+    };
+    const fwd = run(false), rev = run(true);
+    assert.ok(fwd && rev, 'both orders sprouted on the engineered dawn');
+    assert.equal(fwd, rev, 'the same farmer wins regardless of array order');
+    assert.equal(fwd, expected, 'and the winner is the keyed-priority minimum, not an index');
+    ok('arbitration is order-independent and keyed (engineered both-succeed dawn)');
+}
+
+// ---- 13d · the watch path completes as inspiration (Codex #124 P1) ---------------------------
+{
+    const w = boot(343434);
+    const f = w.farmers[0];
+    const c = f.conscience;
+    f.plot.sited = true;   // the decide branch requires a sited plot
+    c.seeds = { watch: { w: 0.3, firstDay: w.day - 3, day: w.day, target: null, sprouted: w.day, phrase: 'keep watch tonight' } };
+    c.urge = { kind: 'watch', target: null, weight: 0.07, expiresDay: w.day + 1, condition: null, armed: true, origin: 'inspiration' };
+    let done = false;
+    for (let i = 0; i < 6000 && !done; i++) { w.tick(1 / 30); done = !!(c.rooted && c.rooted.watch != null); }
+    assert.ok(done, 'the self-sown watch completed');
+    assert.ok(!c.seeds.watch, 'the watch seed became the deed (was: survived, whisper-credited)');
+    assert.ok(c.warmth >= 1, 'warmth fed');
+    assert.equal(w.roles.watchPost?.via, 'inspiration', 'the post records its true source');
+    ok('a self-sown watch completes through the inspiration path, not the whisper lines');
+}
+
+// ---- 13e · the visit branch completes (Codex #124 P1) — source pin ---------------------------
+// The 5d visit branch is downtime-tier and MEASUREDLY unreachable during the founding grind
+// (three instrumented probes: fence-posting owns every decide; pinning energy routes to rest) —
+// which is exactly why the missing completion shipped unnoticed. The completion MECHANISM
+// (#heededWhisper -> #completeInspiration) is sim-proven twice above (rest 8b, watch 13d); this
+// pin holds the visit branch's two completion calls in place (near-arrival + the watch-confer
+// arrived-or-can't-get-closer fallback) so a refactor cannot silently drop them again.
+{
+    const src = fsInspiration();
+    const branch = src.slice(src.indexOf("vu.kind === 'visit'"), src.indexOf('// 5e.'));
+    assert.ok(branch.length > 100, 'found the 5d visit branch');
+    assert.equal((branch.match(/#heededWhisper\('visit'\)/g) || []).length, 2,
+        'the visit branch completes on BOTH paths: near-arrival and goTo-false (arrived/can\'t-get-closer)');
+    assert.ok(/!vu\.acted/.test(src.slice(src.indexOf("vu.kind === 'visit'") - 200, src.indexOf("vu.kind === 'visit'") + 100)),
+        'an acted visit urge does not re-trigger the branch');
+    ok('visit completion pinned at source (mechanism sim-proven via rest + watch)');
+}
+function fsInspiration() {
+    return fs.readFileSync(new URL('../farm.js', import.meta.url), 'utf8');
+}
+
+// ---- 13f · the slot-policy reply sounds like an occupied mind (Codex #124 P2) ----------------
+{
+    const { whisper } = await import('../conscience.js');
+    const w = boot(232323);
+    const f = w.farmers[2];
+    const c = f.conscience;
+    c.urge = { kind: 'explore', target: null, weight: 0.07, expiresDay: w.day + 1, condition: null, armed: true, origin: 'inspiration' };
+    let line = null;
+    for (let d = 0; d < 120 && !line; d++, w.day += 1) {
+        c.verdictDay = -1; c.verdicts = {}; c.asks = {}; c.urge.expiresDay = w.day + 1;
+        const r = await whisper(w, f, 'go chop some wood for the pile', () => {});
+        if (r && r.reason === 'set on their own errand') line = c.log[c.log.length - 1].text;
+        if (c.seeds) delete c.seeds.chop;   // keep each day's probe independent
+    }
+    assert.ok(line, 'found a slot-policy day (a would-be HEED absorbed by the live sprout)');
+    assert.ok(/own errand|mind is set|its turn|noted/i.test(line),
+        `the reply acknowledges the occupied mind (got: "${line}")`);
+    ok('slot-policy replies speak as an occupied mind, not an ordinary musing');
+}
+
+// ---- 13g · the took-root credit lands on the EXACT exchange (Codex #124 P2) ------------------
+{
+    const w = boot(575757);
+    const f = w.farmers[0];
+    const c = f.conscience;
+    // the exchange that planted the seed, then a rival same-kind exchange logged AFTER the act
+    c.log = [{ who: 'ry', text: 'the planted exchange', day: w.day - 2, verdict: 'QUESTION', kind: 'rest' }];
+    c.seeds = { rest: { w: 0.3, firstDay: w.day - 3, day: w.day, target: null, sprouted: w.day, phrase: 'rest' } };
+    c.urge = { kind: 'rest', target: null, weight: 0.07, expiresDay: w.day + 1, condition: null, armed: true, origin: 'inspiration' };
+    f.energy = 0.05;
+    let acted = false;
+    for (let i = 0; i < 6000 && !acted; i++) { w.tick(1 / 30); acted = !!(c.rooted && c.rooted.rest != null); }
+    assert.ok(acted, 'the act happened');
+    assert.equal(c.log[0].rooted, c.rooted.rest, 'the planting exchange itself carries the credit');
+    const later = { who: 'ry', text: 'a later same-kind exchange', day: w.day, verdict: 'QUESTION', kind: 'rest' };
+    c.log.push(later);
+    assert.ok(later.rooted == null, 'a later same-kind exchange can never inherit the earlier credit');
+    ok('took-root credit is entry-exact - no same-day inheritance');
 }
 
 // ---- 14 · a pending sprout never eats the player's town cap (item 11) ------------------------

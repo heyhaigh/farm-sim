@@ -5863,10 +5863,11 @@ function drawConscienceChat(x, y, w, h) {
         // took root. Derived, never stored — the capped log and the LLM history stay clean — and
         // it waits for the reveal to finish so the reply lands before its consequence.
         if (!isVoice && e.verdict === 'QUESTION' && e.kind && e === lastQuestionFor[e.kind] && e !== revealEntry) {
-            const rootedDay = c.rooted && c.rooted[e.kind];
+            // e.rooted is stamped on the EXACT entry at the sprout moment (Codex #124 P2 — a
+            // kind+day lookup let a later same-day QUESTION inherit an earlier sprout's credit)
             const seed = c.seeds && c.seeds[e.kind];
-            if (rootedDay != null && rootedDay >= (e.day ?? 0)) {
-                lines.push({ text: `  * TOOK ROOT DAY ${rootedDay}`, col: age >= 1 ? '#6a6f7c' : '#c8b060' });
+            if (e.rooted != null) {
+                lines.push({ text: `  * TOOK ROOT DAY ${e.rooted}`, col: age >= 1 ? '#6a6f7c' : '#c8b060' });
             } else if (seed) {
                 const stirring = seed.sprouted && c.urge && c.urge.origin === 'inspiration' && c.urge.kind === e.kind && world.day <= c.urge.expiresDay;
                 const st = stirring ? 'stirring' : seedStage(seed, world.day);
