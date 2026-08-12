@@ -22,6 +22,15 @@ writers).
 - `node --check` / `node -c` **passes broken ES modules** — it only checks syntax, not references.
   Verify semantics with a `.mjs` import probe, not a syntax check.
 
+### A multi-step edit script that dies mid-way leaves CALLS without DEFINITIONS
+A python edit script asserting between replacements writes nothing if a later assert throws — but a
+SECOND script may then apply its half against the unmodified file. Shipped instance (#122): the
+extraction script died before writing `saveportOpenChooser`/`saveportRunImport`, the follow-up wired
+the CALLS, `node --check` passed, and an import click would have thrown at runtime — the boot-freeze
+class, caught only by grepping for the definitions. **After any scripted refactor: grep that every
+newly-referenced identifier is DEFINED, then load the page.** ESLint `no-undef` would be the standing
+guard; grep + a browser smoke is the current floor.
+
 ### Silent-anchor near-misses
 `str.replace(old, new)` where `old` isn't present is a **no-op that reports success**. Caught one
 this session (`persistInventions` vs `persistTournInventions`). **Grep for the new symbol after the
@@ -125,6 +134,42 @@ three** of:
   an object becomes the literal text `"[object Object]."` — both pass a `length > 1` filter and render
   in a speech bubble. Filter to `typeof x === 'string'` at the boundary; never let a sanitiser's
   coercion be the type check.
+
+---
+
+## Destructive confirms (the #saveport/#122 arc, five review rounds of one invariant)
+
+The whole arc was one sentence sharpened five times: **a confirm is only consent for the state the
+player was shown, and only the transaction can enforce that.**
+
+- **Bind the write to the observed token, IN the transaction.** UI-side rechecks narrow the race;
+  only an in-tx compare closes it. And the token must cover every transition: `expectGen` alone
+  missed the empty-claim race because **claiming an empty slot is deliberately a no-bump transition**
+  (COMPATIBILITY.md's own rule — enforced in saveTown, forgotten at import). Generation AND occupancy.
+- **Quarantine counts as occupied.** `loadTownState` reports the live slot; the state the quarantine
+  mechanism exists to protect (`unreadable:<seed>`) read as "empty". Any occupancy decision must
+  include it, and a read that can't report failure (peekQuarantined nulls errors) can't be used —
+  fail toward the warning.
+- **A disarm must kill work IN FLIGHT, not only work that finished.** `pendingImport` was null while
+  f.text() and the occupancy reads awaited, so `if (pendingImport) disarmImport()` was a no-op in
+  exactly the window it mattered. Invalidate by token, unconditionally, on every non-consenting click.
+- **Starting a new selection is itself the act that supersedes the old one** — advance the token
+  BEFORE capturing it, or two overlapping choosers share authorization and the last read to finish
+  swaps the file under a painted confirm.
+- Disclose conditionally and honestly: the loss warning only when something is actually lost
+  (warning a fresh browser about losing nothing is a false scare), and BEFORE the destructive click,
+  on the surface that will see it (the export-time notice shows on the SENDER's browser).
+
+## Cross-database protocols (why the memory transport died)
+
+Two IndexedDB databases cannot share a transaction. The #121 memory transport tried to keep
+`ryfarms` (slots) and `ryfarms-memory` (rows) in agreement with fences, ownership validators and
+atomic-replace shims — 22 findings in three rounds, every patch opening the next seam, including a
+validator that required arrays where every real writer stores objects (fixture invented from memory;
+the producer-fidelity trap inside machinery built to prevent it). The fix was Codex's option (a):
+**delete the protocol, clear-on-import, regenerate via backfill, disclose what does not travel.**
+If state must stay coherent with a slot, either it lives in the SAME database as the slot or its
+lifecycle is "clear and rebuild" — never "synchronize".
 
 ---
 
