@@ -789,6 +789,12 @@ export async function importTownFile(parsed, hydrate) {
                     // would destroy the restored town's lives and irreconstructible battles for
                     // nothing. The field marks which undo owes a clear.
                     store.put({ seed, snap: existing, latest, slice: sliceKeyed(index, seed), via: 'import' }, 'backup:wipe');
+                    // A new coherent backup retires the pre-upgrade 3-key backup UNCONDITIONALLY,
+                    // exactly as wipeTown does two screens up (Codex #121 r5): a still-open
+                    // pre-upgrade tab only reads the legacy keys, and a stale legacy backup — for
+                    // ANY seed — could be undone over the town this import just installed. The
+                    // legacy keys' one owner is "the latest backup", and this is now it.
+                    store.delete('backup:town'); store.delete('backup:latest'); store.delete('backup:worldslice');
                 } else if (oldBackup && oldBackup.seed === seed) {
                     // EMPTY-slot import over a same-seed backup (Codex #121 r2): the backup's
                     // coherence window closed when this import claimed the slot; supersede it. A
