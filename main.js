@@ -19,7 +19,7 @@ import { tileHash as hash2, tileRand as rand2, smooth,
          pickIndex, grassPatch, tileJitter } from './tilehash.js';
 import { CRT } from './crt.js';
 import { TITLE_SHEET, drawTitleArt as drawTitleSheet, isTitleSettled } from './title-anim.js';
-import { saveTown, loadTownState, wipeTown, undoWipe, loadWorldIndex, updateWorldIndex, quarantineTown, peekQuarantined, restoreQuarantined, requestPersistentStorage, buildTownExport, importTownFile } from './save.js';
+import { saveTown, loadTownState, wipeTown, undoWipe, loadWorldIndex, updateWorldIndex, quarantineTown, peekQuarantined, restoreQuarantined, requestPersistentStorage, buildTownExport, importTownFile, quarantineState } from './save.js';
 import { computeLayout, detectEncounters, encounterLine, townPos, townReach, townTint } from './worldmap.js';
 import { enrichStories } from './dm.js';
 import { requestCongregation, requestElectionScene } from './congregation.js';
@@ -92,7 +92,10 @@ let bootT0 = null;   // #Codex-VS first-boot-frame timestamp (seconds) → refre
 let booted = false;
 let startScreen = false;                            // #START the launch menu is up (drawn into the canvas, CRT-shaded)
 let startPage = 'title';                            // 'title' (Start Game / View) → 'choose' (human / orc / view / back)
-let startHits = null;                              // button rects (game px), set each frame by drawStartScreen (keys vary by page)
+let startHits = null;
+// #start-icons the WATCH glyph, switchable for the side-by-side pick (83 = camera, 169 = scope/eye).
+// RYFARMS.watchIcon(n) swaps it live so candidates can be compared in place.
+let START_WATCH_ICON = 83;                              // button rects (game px), set each frame by drawStartScreen (keys vary by page)
 let _startScreenErr = false;                        // #START logged-once guard for a menu-draw failure (never black the game)
 let rosterOpen = false;
 let rosterScroll = 0;
@@ -345,22 +348,49 @@ function saveportOpenChooser() {
             let parsed;
             try { parsed = JSON.parse(txt); } catch { saveportNote = { text: 'NOT A TOWN FILE (BAD JSON)', until: performance.now() + 6000 }; return; }
             if (!parsed || parsed.format !== 'propagate-town') { saveportNote = { text: 'NOT A PROPAGATE TOWN FILE', until: performance.now() + 6000 }; return; }
-            // occupancy decides the disclosure; an unreadable check discloses anyway (fail toward warning)
-            let occupied = true;
-            try { const st = await loadTownState(parsed.seed); occupied = !st.ok || !!st.snap; } catch { occupied = true; }
+            // occupancy decides the disclosure — and QUARANTINE counts (Codex #122): a town preserved
+            // under unreadable:<seed> looks empty to loadTownState, yet import clears its memory rows
+            // and irreconstructible battle tales. Any unreadable state discloses (fail toward warning).
+            let occupied = true, slotGen = null;
+            try {
+                const st = await loadTownState(parsed.seed);
+                const q = await quarantineState(parsed.seed);
+                occupied = !st.ok || !!st.snap || !q.ok || !!q.rec;
+                if (st.ok) slotGen = st.gen;
+            } catch { occupied = true; }
             if (myGen !== importPickGen) return;   // closed during the occupancy read
-            pendingImport = { parsed, town: parsed.town, day: parsed.day, seed: parsed.seed, occupied };
+            pendingImport = { parsed, town: parsed.town, day: parsed.day, seed: parsed.seed, occupied, slotGen };
         }).catch(() => { saveportNote = { text: 'COULD NOT READ THE FILE', until: performance.now() + 6000 }; });
     };
     input.click();
 }
-function saveportRunImport() {
-    const parsed = pendingImport && pendingImport.parsed;
+async function saveportRunImport() {
+    const pend = pendingImport;
     pendingImport = null;
-    if (!parsed) return;
+    if (!pend || !pend.parsed) return;
+    const parsed = pend.parsed;
     saveportNote = { text: 'IMPORTING...', until: performance.now() + 60000 };
-    importTownFile(parsed, (snap) => World.fromSave(snap)).then((r) => {
-        if (!r.ok) { saveportNote = { text: `IMPORT REFUSED: ${String(r.error || '').toUpperCase().slice(0, 34)}`, until: performance.now() + 8000 }; return; }
+    // RE-VERIFY the disclosure before acting on it (Codex #122): another tab can occupy the slot
+    // between the chooser's read and this click. If the player confirmed the EMPTY-slot wording and
+    // the slot is no longer empty, that consent does not cover what the import would now do —
+    // re-arm with the destructive warning instead of importing.
+    let freshGen = null;
+    try {
+        const st = await loadTownState(parsed.seed);
+        const q = await quarantineState(parsed.seed);
+        const nowOccupied = !st.ok || !!st.snap || !q.ok || !!q.rec;
+        if (st.ok) freshGen = st.gen;
+        if (!pend.occupied && nowOccupied) {
+            pendingImport = { ...pend, occupied: true, slotGen: freshGen };
+            saveportNote = { text: 'THE SAVE SLOT CHANGED - CONFIRM AGAIN', until: performance.now() + 8000 };
+            return;
+        }
+    } catch { /* unreadable — the in-transaction expectGen below is the backstop */ }
+    importTownFile(parsed, (snap) => World.fromSave(snap), { expectGen: freshGen ?? undefined }).then((r) => {
+        if (!r.ok) {
+            saveportNote = { text: r.slotChanged ? 'THE SAVE SLOT CHANGED - PICK THE FILE AGAIN' : `IMPORT REFUSED: ${String(r.error || '').toUpperCase().slice(0, 34)}`, until: performance.now() + 8000 };
+            return;
+        }
         // A failed clear does NOT heal on its own — the active backfill preserves existing keys.
         const uncleared = !!r.memoryError;
         saveportNote = { text: uncleared ? 'IMPORTED - OLD MEMORIES COULD NOT BE CLEARED' : 'IMPORTED - MEMORIES WILL REGROW HERE', until: performance.now() + 60000 };
@@ -7337,7 +7367,7 @@ out.addEventListener('pointerup', (e) => {
     // #START the launch menu owns every click while it's up: a button acts, anything else is swallowed
     if (startScreen) {
         const H = startHits || {};
-        if (H.sound && inRect(p, H.sound)) { menuMuted = !menuMuted; audio.ensure(); audio.setMuted(menuMuted); return; }   // #START universal mute (music + SFX)
+        if (H.sound && inRect(p, H.sound)) { menuMuted = !menuMuted; audio.ensure(); audio.setMuted(menuMuted); if (pendingImport) disarmImport(); return; }   // #START universal mute; a non-rung click disarms a pending confirm (Codex #122)
         if (startPage === 'title') {
             if (H.importFile && inRect(p, H.importFile)) {
                 if (pendingImport) { saveportRunImport(); } else { saveportOpenChooser(); }
@@ -8804,18 +8834,40 @@ function drawStartScreen() {
         // promised somebody's creation. WATCH A WILD TOWN is what it actually does.
         let ry = gy + iconH + 13;
         if (startContinue) { startTextButton('start', cx, ry, 'START A NEW TOWN', 1, '#ffffff', 'rgba(255,255,255,0.3)'); ry += 18; }
-        startTextButton('view', cx, ry, 'OR WATCH A WILD TOWN', 1, startContinue ? '#8a8f9c' : '#ffffff', 'rgba(255,255,255,0.3)'); ry += 18;
-        // #saveport — the receiving side of a town file lives HERE, not only in settings: a fresh
-        // browser (the whole point of the file) has no town, so it cannot reach settings without
-        // founding a throwaway first. Same shared flow, same one-beat confirm, same disclosure.
+        // #start-icons (owner call): the secondary rungs became ICON buttons — the text stack was
+        // outgrowing the menu. Hover names the action in a tooltip beneath; from the 1-bit pack
+        // (component-library/index.html): WATCH = START_WATCH_ICON, IMPORT = 101 (arrow into tray).
+        // The import CONFIRM stays as words: a destructive confirm has to say what it does.
         if (pendingImport) {
             const warn = pendingImport.occupied ? ' - OLD BATTLE TALES LOST' : '';
             startTextButton('importFile', cx, ry, `GET ${String(pendingImport.town || 'TOWN').toUpperCase().slice(0, 12)} DAY ${pendingImport.day || '?'}${warn} - CONFIRM`, 1, '#f0c860', '#ffd24a');
+            ry += 18;
         } else {
-            startTextButton('importFile', cx, ry, 'IMPORT A TOWN FILE', 1, '#8a8f9c', 'rgba(255,255,255,0.3)');
+            const B = 16, GAP = 6;
+            const rowX = Math.round(cx - (B * 2 + GAP) / 2);
+            const defs = [
+                ['view', START_WATCH_ICON, 'WATCH A WILD TOWN'],
+                ['importFile', 101, 'IMPORT A TOWN FILE'],
+            ];
+            let tip = null;
+            defs.forEach(([key, iconN, label], i) => {
+                const r = { x: rowX + i * (B + GAP), y: ry - 3, w: B, h: B };
+                const hot = inRect(mouse, r);
+                ctx.fillStyle = hot ? 'rgba(255,210,74,0.14)' : 'rgba(255,255,255,0.07)';
+                ctx.fillRect(r.x, r.y, r.w, r.h);
+                ctx.strokeStyle = hot ? '#ffd24a' : 'rgba(255,255,255,0.22)'; ctx.lineWidth = 1;
+                ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
+                const icon = packEmote(iconN, 10, hot ? '#ffd24a' : '#c8ccd8');
+                if (icon) { ctx.imageSmoothingEnabled = false; ctx.drawImage(icon, r.x + 3, r.y + 3); }
+                startHits[key] = r;
+                if (hot) tip = label;
+            });
+            ry += B + 2;
+            if (tip) drawText(ctx, tip, Math.round(cx - textWidth(tip) / 2), ry, '#9aa0b4');
+            ry += 12;
         }
         if (saveportNote && performance.now() < saveportNote.until) {
-            drawText(ctx, saveportNote.text, Math.round(cx - textWidth(saveportNote.text) / 2), ry + 16, '#9aa0b4');
+            drawText(ctx, saveportNote.text, Math.round(cx - textWidth(saveportNote.text) / 2), ry + 2, '#9aa0b4');
         }
         return;
     }
@@ -9302,6 +9354,7 @@ function drawStartScreen() {
         // Exists because the server telemetry cannot see a client-side failure: a timeout, an abort
         // and a fallback:true body all died in the same silent catch.
         whisperLog,
+        watchIcon: (n) => { START_WATCH_ICON = n; },   // #start-icons side-by-side picker
         speed: (mult) => { world._speedMult = mult; },
         // #98 fire a test Moment: RYFARMS.moment() spotlights farmer 0 finding a star-crystal (with its memory why)
         momentMs: (ms) => { MOMENT_MS = ms; },   // hold a Moment open for QA/screenshots

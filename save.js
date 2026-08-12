@@ -296,6 +296,16 @@ export async function loadTownState(seed) {
 }
 
 // Is there a quarantined town for this seed? (Metadata only — the caller decides whether to offer recovery.)
+// #saveport occupancy needs a quarantine read that can REPORT failure (Codex #122): peekQuarantined
+// swallows errors into null, and "could not read" must disclose the destructive warning, not read as
+// "nothing there". ok:false means the caller fails toward warning.
+export async function quarantineState(seed) {
+    try {
+        const rec = await idbReq('readonly', s => s.get('unreadable:' + seed));
+        return { ok: true, rec: rec || null };
+    } catch { return { ok: false, rec: null }; }
+}
+
 export async function peekQuarantined(seed) {
     try {
         const rec = await idbReq('readonly', s => s.get('unreadable:' + seed));
@@ -760,12 +770,19 @@ export function parseTownFile(parsed, hydrate) {
     return { ok: true, snap };
 }
 
-export async function importTownFile(parsed, hydrate) {
+export async function importTownFile(parsed, hydrate, opts = {}) {
     const p = parseTownFile(parsed, hydrate);
     if (!p.ok) return p;
     const snap = p.snap;
     const seed = snap.seed;
     let replacedFlag = false;
+    // #saveport (Codex #122): the confirm's disclosure was read OUTSIDE this transaction, so another
+    // tab could occupy the slot between the chooser's read and this write — the player confirmed
+    // "empty slot, nothing lost" while the import displaced a town and cleared its battle rows.
+    // expectGen binds the confirmation to the slot version the player was actually shown; a
+    // mismatch aborts INSIDE the transaction, where the read is authoritative.
+    const expectGen = Number.isFinite(opts.expectGen) ? opts.expectGen : null;
+    let genMismatch = false;
     try {
         const db = await openDb();
         await new Promise((resolve, reject) => {
@@ -775,11 +792,13 @@ export async function importTownFile(parsed, hydrate) {
             replacedFlag = false;
             const rGen = store.get(genKey(seed)); rGen.onsuccess = () => { gen = rGen.result || 0; };
             const rSnap = store.get('town:' + seed); rSnap.onsuccess = () => { existing = rSnap.result; };
+            // requests fire in order, so `gen` is set before rWorld's writes below run
             const rLatest = store.get('latest'); rLatest.onsuccess = () => { latest = rLatest.result; };
             const rBk = store.get('backup:wipe'); rBk.onsuccess = () => { oldBackup = rBk.result; };
             const rLg = store.get('backup:town'); rLg.onsuccess = () => { lgBackup = rLg.result; };
             const rWorld = store.get(WORLD_KEY);
             rWorld.onsuccess = () => {
+                if (expectGen !== null && gen !== expectGen) { genMismatch = true; return; }   // slot changed since the player confirmed — write NOTHING
                 const index = rWorld.result || { towns: {}, encounters: [] };
                 // preserve what the slot held, exactly as wipeTown does — one coherent undoable object
                 if (existing) {
@@ -821,6 +840,7 @@ export async function importTownFile(parsed, hydrate) {
         });
         // The slot committed; now the memory rows. A different database, so not atomic with the slot
         // — the failure mode is an imported town with stale rows, surfaced rather than silent.
+        if (genMismatch) return { ok: false, error: 'the save slot changed - pick the file again', slotChanged: true };
         // The seed's memory rows and its backfill marker are CLEARED — one memory-db transaction,
         // discovery included. The imported town must not wear the displaced town's lives, and the
         // marker must not suppress the new occupant's backfill sweep. Not atomic with the slot
