@@ -553,6 +553,7 @@ export async function wipeTown(seed) {
 export async function undoWipe() {
     try {
         const db = await openDb();
+        let importOrigin = false;
         return await new Promise((resolve, reject) => {
             const tx = db.transaction(STORE, 'readwrite');
             const store = tx.objectStore(STORE);
@@ -568,6 +569,7 @@ export async function undoWipe() {
                 if (!backup || !backup.snap) backup = lgTown ? { seed: lgTown.seed, snap: lgTown, latest: lgLatest, slice: lgSlice } : null;
                 if (!backup || !backup.snap) return;   // nothing to restore — leave everything, resolve null
                 const { snap, latest, slice } = backup;   // #Codex26-2 one coherent generation: same seed's snap+latest+slice
+                importOrigin = backup.via === 'import';    // legacy and wipe-era backups have no via — no clear owed
                 restoredSeed = snap.seed;
                 store.put(snap, 'town:' + snap.seed);
                 // Codex #57 judgment — undo puts a town BACK, which supersedes any tab holding whatever
@@ -587,12 +589,14 @@ export async function undoWipe() {
             tx.onerror = () => reject(tx.error);
             tx.onabort = () => reject(tx.error || new Error('undo txn aborted'));
         }).then(async (restoredSeed) => {
-            // #saveport — undoing an import restores the TOWN; its memory rows were cleared by the
-            // import and will regenerate via backfill, the same as the imported town's did. Clearing
-            // again here removes anything the interim occupant wrote under this seed.
-            if (restoredSeed != null) {
+            // #saveport — ONLY an import-origin undo clears (Codex #121 r4 P2): the import cleared
+            // the displaced town's rows, so its undo clears the interim occupant's rows the same way
+            // and the restored town backfills fresh. An ordinary wipe never touched the rows, and
+            // its undo re-clearing them would delete the restored town's lives, history and
+            // irreconstructible battles for nothing.
+            if (restoredSeed != null && importOrigin) {
                 try { await clearTownMemoryRows(restoredSeed); }
-                catch (err) { console.warn('ry-farms: undo restored the town; stale memory rows remain until backfill', err); }
+                catch (err) { console.warn('ry-farms: undo restored the town; stale memory rows remain', err); }
             }
             return restoredSeed;
         });
@@ -780,7 +784,11 @@ export async function importTownFile(parsed, hydrate) {
                 // preserve what the slot held, exactly as wipeTown does — one coherent undoable object
                 if (existing) {
                     replacedFlag = true;
-                    store.put({ seed, snap: existing, latest, slice: sliceKeyed(index, seed) }, 'backup:wipe');
+                    // `via` is PROVENANCE (Codex #121 r4 P2): undoing an import must clear the seed's
+                    // rows again, but an ordinary wipe never cleared them — its undo re-clearing
+                    // would destroy the restored town's lives and irreconstructible battles for
+                    // nothing. The field marks which undo owes a clear.
+                    store.put({ seed, snap: existing, latest, slice: sliceKeyed(index, seed), via: 'import' }, 'backup:wipe');
                 } else if (oldBackup && oldBackup.seed === seed) {
                     // EMPTY-slot import over a same-seed backup (Codex #121 r2): the backup's
                     // coherence window closed when this import claimed the slot; supersede it. A

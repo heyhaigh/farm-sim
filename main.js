@@ -4634,8 +4634,12 @@ function drawSettings() {
         const il = confirming ? 'CLICK TO CONFIRM' : 'IMPORT TOWN...';
         drawText(ctx, il, ib.x + Math.floor((ib.w - textWidth(il)) / 2), ib.y + 4, confirming ? '#f0c860' : '#9ab8e8');
         settingsHits.exportBtn = eb; settingsHits.importBtn = ib;
+        // The battle-tale loss is disclosed HERE, before the confirming click (Codex #121 r4 P1):
+        // the export-time notice appeared on the SENDING browser, and this one may never have seen
+        // it. Import clears the target seed's rows and battle tales are irreconstructible — that is
+        // the destructive fact, and it must precede the click that commits it.
         const note = pendingImport
-            ? `REPLACES YOUR SAVE: ${String(pendingImport.town || 'TOWN').slice(0, 14)} DAY ${pendingImport.day || '?'}`
+            ? `GETS ${String(pendingImport.town || 'TOWN').slice(0, 12)} D${pendingImport.day || '?'} - OLD BATTLE TALES LOST FOREVER`
             : (saveportNote && performance.now() < saveportNote.until ? saveportNote.text : 'A TOWN FILE MOVES YOUR SAVE BETWEEN BROWSERS');
         drawText(ctx, note, IX, PY + 118, pendingImport ? '#e0a850' : '#5a5f6c');
     }
@@ -7367,11 +7371,19 @@ out.addEventListener('pointerup', (e) => {
                     // this tab's world is superseded (the import bumped the generation, so its own
                     // saves now fail the CAS by design) — reboot into the imported town.
                     // Clear-on-import: the town travels, memories REGROW from it on this device
-                    // (battle tales are display-derived and stay behind — disclosed, not silent). A
-                    // failed clear means the old occupant's rows linger until backfill; say so.
+                    // (battle tales are display-derived and stay behind — disclosed BEFORE the
+                    // confirming click, not after). A failed clear does NOT heal on its own — the
+                    // active backfill preserves existing keys — so that message claims no regrowth.
                     const uncleared = !!r.memoryError;
-                    saveportNote = { text: uncleared ? 'IMPORTED - OLD MEMORIES LINGER UNTIL THEY REGROW' : 'IMPORTED - MEMORIES WILL REGROW HERE', until: performance.now() + 60000 };
-                    setTimeout(() => location.reload(), uncleared ? 2600 : 1400);
+                    saveportNote = { text: uncleared ? 'IMPORTED - OLD MEMORIES COULD NOT BE CLEARED' : 'IMPORTED - MEMORIES WILL REGROW HERE', until: performance.now() + 60000 };
+                    // NAVIGATE TO THE IMPORTED SEED (Codex #121 r4 P1): location.reload() kept the
+                    // current URL, so ?fresh=1 founded ANOTHER random town and ?seed=<old> reopened
+                    // the town that was just replaced — the import "worked" and the player never saw
+                    // it. The superseded world also stops persisting for the gap: its saves are
+                    // CAS-refused anyway, but a pagehide attempt racing the navigation has no business
+                    // even trying.
+                    world._persistenceDisabled = true;
+                    setTimeout(() => { location.href = `/?seed=${r.seed}`; }, uncleared ? 2600 : 1400);
                 }).catch(() => { saveportNote = { text: 'IMPORT FAILED', until: performance.now() + 6000 }; });
                 return;
             }
