@@ -326,7 +326,50 @@ let saveportNote = null;   // { text, until } — result/error line under the to
 // async read lands (Codex #121): f.text() resolving after a close used to re-arm the confirm on a
 // closed panel, so reopening presented an unrelated second click as consent.
 let importPickGen = 0;
-const disarmImport = () => { pendingImport = null; importPickGen++; };                           // { music, sfx, musicSlider, sfxSlider, portalBtn, admRaid, admVote, close } rects (game px)
+const disarmImport = () => { pendingImport = null; importPickGen++; };
+
+// ONE import flow for both surfaces (settings, start menu) — two implementations of a destructive
+// confirm is how one of them drifts. The chooser arms pendingImport; the confirm click calls
+// saveportRunImport. `occupied` drives the disclosure: battle tales are only LOST when a town at
+// that seed is being replaced, and warning a fresh browser about losing nothing is a false scare.
+function saveportOpenChooser() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json,application/json';
+    const myGen = importPickGen;   // a close between pick and read invalidates this selection
+    input.onchange = () => {
+        const f = input.files && input.files[0];
+        if (!f) return;
+        f.text().then(async (txt) => {
+            if (myGen !== importPickGen) return;   // surface closed while the file was reading — stale
+            let parsed;
+            try { parsed = JSON.parse(txt); } catch { saveportNote = { text: 'NOT A TOWN FILE (BAD JSON)', until: performance.now() + 6000 }; return; }
+            if (!parsed || parsed.format !== 'propagate-town') { saveportNote = { text: 'NOT A PROPAGATE TOWN FILE', until: performance.now() + 6000 }; return; }
+            // occupancy decides the disclosure; an unreadable check discloses anyway (fail toward warning)
+            let occupied = true;
+            try { const st = await loadTownState(parsed.seed); occupied = !st.ok || !!st.snap; } catch { occupied = true; }
+            if (myGen !== importPickGen) return;   // closed during the occupancy read
+            pendingImport = { parsed, town: parsed.town, day: parsed.day, seed: parsed.seed, occupied };
+        }).catch(() => { saveportNote = { text: 'COULD NOT READ THE FILE', until: performance.now() + 6000 }; });
+    };
+    input.click();
+}
+function saveportRunImport() {
+    const parsed = pendingImport && pendingImport.parsed;
+    pendingImport = null;
+    if (!parsed) return;
+    saveportNote = { text: 'IMPORTING...', until: performance.now() + 60000 };
+    importTownFile(parsed, (snap) => World.fromSave(snap)).then((r) => {
+        if (!r.ok) { saveportNote = { text: `IMPORT REFUSED: ${String(r.error || '').toUpperCase().slice(0, 34)}`, until: performance.now() + 8000 }; return; }
+        // A failed clear does NOT heal on its own — the active backfill preserves existing keys.
+        const uncleared = !!r.memoryError;
+        saveportNote = { text: uncleared ? 'IMPORTED - OLD MEMORIES COULD NOT BE CLEARED' : 'IMPORTED - MEMORIES WILL REGROW HERE', until: performance.now() + 60000 };
+        // NAVIGATE TO THE IMPORTED SEED (Codex #121 r4 P1): reload kept ?fresh/?seed and booted the
+        // wrong town. The superseded world stops persisting for the gap.
+        world._persistenceDisabled = true;
+        setTimeout(() => { location.href = `/?seed=${r.seed}`; }, uncleared ? 2600 : 1400);
+    }).catch(() => { saveportNote = { text: 'IMPORT FAILED', until: performance.now() + 6000 }; });
+}                           // { music, sfx, musicSlider, sfxSlider, portalBtn, admRaid, admVote, close } rects (game px)
 let adminNote = null;                               // #Codex38 P2-5 transient booth feedback { text, until } (ms)
 let settingsDrag = null;                           // 'music' | 'sfx' while dragging a volume slider
 // (the settings NEW TOWN reset hatch is gone — founding lives on the world map; RYFARMS.wipeSave remains for QA)
@@ -4639,7 +4682,9 @@ function drawSettings() {
         // it. Import clears the target seed's rows and battle tales are irreconstructible — that is
         // the destructive fact, and it must precede the click that commits it.
         const note = pendingImport
-            ? `GETS ${String(pendingImport.town || 'TOWN').slice(0, 12)} D${pendingImport.day || '?'} - OLD BATTLE TALES LOST FOREVER`
+            ? (pendingImport.occupied
+                ? `GETS ${String(pendingImport.town || 'TOWN').slice(0, 12)} D${pendingImport.day || '?'} - OLD BATTLE TALES LOST FOREVER`
+                : `GETS ${String(pendingImport.town || 'TOWN').slice(0, 12)} DAY ${pendingImport.day || '?'} - CLICK TO CONFIRM`)
             : (saveportNote && performance.now() < saveportNote.until ? saveportNote.text : 'A TOWN FILE MOVES YOUR SAVE BETWEEN BROWSERS');
         drawText(ctx, note, IX, PY + 118, pendingImport ? '#e0a850' : '#5a5f6c');
     }
@@ -7294,6 +7339,13 @@ out.addEventListener('pointerup', (e) => {
         const H = startHits || {};
         if (H.sound && inRect(p, H.sound)) { menuMuted = !menuMuted; audio.ensure(); audio.setMuted(menuMuted); return; }   // #START universal mute (music + SFX)
         if (startPage === 'title') {
+            if (H.importFile && inRect(p, H.importFile)) {
+                if (pendingImport) { saveportRunImport(); } else { saveportOpenChooser(); }
+                return;
+            }
+            // any OTHER title click disarms a pending confirm — leaving it armed would let a later
+            // unrelated click on the rung read as consent (the same trap the settings token closes)
+            if (pendingImport) disarmImport();
             if (H.continue && inRect(p, H.continue)) { location.search = '?play=1'; return; }   // #continue resume the latest town via the tested boot path
             if (H.start && inRect(p, H.start)) { startPage = 'choose'; return; }     // → the choose screen
             if (H.view && inRect(p, H.view)) { startScreen = false; audio.ensure(); audio.setMenuMode(false); audio.setMuted(false); return; }   // dismiss → spectate the town behind (this click is a gesture: unlock the audio ctx + lift the menu mute so game audio — chops, music — plays)
@@ -7362,47 +7414,8 @@ out.addEventListener('pointerup', (e) => {
         // #saveport — IMPORT: pick a file, then a SECOND click confirms. The confirm beat is armed by
         // the file parse below; this branch is both the picker and the confirm depending on state.
         if (settingsHits.importBtn && inRect(p, settingsHits.importBtn)) {
-            if (pendingImport) {
-                const parsed = pendingImport.parsed;
-                pendingImport = null;
-                saveportNote = { text: 'IMPORTING...', until: performance.now() + 60000 };
-                importTownFile(parsed, (snap) => World.fromSave(snap)).then((r) => {
-                    if (!r.ok) { saveportNote = { text: `IMPORT REFUSED: ${String(r.error || '').toUpperCase().slice(0, 34)}`, until: performance.now() + 8000 }; return; }
-                    // this tab's world is superseded (the import bumped the generation, so its own
-                    // saves now fail the CAS by design) — reboot into the imported town.
-                    // Clear-on-import: the town travels, memories REGROW from it on this device
-                    // (battle tales are display-derived and stay behind — disclosed BEFORE the
-                    // confirming click, not after). A failed clear does NOT heal on its own — the
-                    // active backfill preserves existing keys — so that message claims no regrowth.
-                    const uncleared = !!r.memoryError;
-                    saveportNote = { text: uncleared ? 'IMPORTED - OLD MEMORIES COULD NOT BE CLEARED' : 'IMPORTED - MEMORIES WILL REGROW HERE', until: performance.now() + 60000 };
-                    // NAVIGATE TO THE IMPORTED SEED (Codex #121 r4 P1): location.reload() kept the
-                    // current URL, so ?fresh=1 founded ANOTHER random town and ?seed=<old> reopened
-                    // the town that was just replaced — the import "worked" and the player never saw
-                    // it. The superseded world also stops persisting for the gap: its saves are
-                    // CAS-refused anyway, but a pagehide attempt racing the navigation has no business
-                    // even trying.
-                    world._persistenceDisabled = true;
-                    setTimeout(() => { location.href = `/?seed=${r.seed}`; }, uncleared ? 2600 : 1400);
-                }).catch(() => { saveportNote = { text: 'IMPORT FAILED', until: performance.now() + 6000 }; });
-                return;
-            }
-            const input = document.createElement('input');
-            input.type = 'file';
-            input.accept = '.json,application/json';
-            const myGen = importPickGen;   // a close between pick and read invalidates this selection
-            input.onchange = () => {
-                const f = input.files && input.files[0];
-                if (!f) return;
-                f.text().then((txt) => {
-                    if (myGen !== importPickGen) return;   // panel closed while the file was reading — stale
-                    let parsed;
-                    try { parsed = JSON.parse(txt); } catch { saveportNote = { text: 'NOT A TOWN FILE (BAD JSON)', until: performance.now() + 6000 }; return; }
-                    if (!parsed || parsed.format !== 'propagate-town') { saveportNote = { text: 'NOT A PROPAGATE TOWN FILE', until: performance.now() + 6000 }; return; }
-                    pendingImport = { parsed, town: parsed.town, day: parsed.day, seed: parsed.seed };
-                }).catch(() => { saveportNote = { text: 'COULD NOT READ THE FILE', until: performance.now() + 6000 }; });
-            };
-            input.click();
+            if (pendingImport) { saveportRunImport(); return; }
+            saveportOpenChooser();
             return;
         }
         // #credits — the CraftPix attribution link
@@ -8791,7 +8804,19 @@ function drawStartScreen() {
         // promised somebody's creation. WATCH A WILD TOWN is what it actually does.
         let ry = gy + iconH + 13;
         if (startContinue) { startTextButton('start', cx, ry, 'START A NEW TOWN', 1, '#ffffff', 'rgba(255,255,255,0.3)'); ry += 18; }
-        startTextButton('view', cx, ry, 'OR WATCH A WILD TOWN', 1, startContinue ? '#8a8f9c' : '#ffffff', 'rgba(255,255,255,0.3)');
+        startTextButton('view', cx, ry, 'OR WATCH A WILD TOWN', 1, startContinue ? '#8a8f9c' : '#ffffff', 'rgba(255,255,255,0.3)'); ry += 18;
+        // #saveport — the receiving side of a town file lives HERE, not only in settings: a fresh
+        // browser (the whole point of the file) has no town, so it cannot reach settings without
+        // founding a throwaway first. Same shared flow, same one-beat confirm, same disclosure.
+        if (pendingImport) {
+            const warn = pendingImport.occupied ? ' - OLD BATTLE TALES LOST' : '';
+            startTextButton('importFile', cx, ry, `GET ${String(pendingImport.town || 'TOWN').toUpperCase().slice(0, 12)} DAY ${pendingImport.day || '?'}${warn} - CONFIRM`, 1, '#f0c860', '#ffd24a');
+        } else {
+            startTextButton('importFile', cx, ry, 'IMPORT A TOWN FILE', 1, '#8a8f9c', 'rgba(255,255,255,0.3)');
+        }
+        if (saveportNote && performance.now() < saveportNote.until) {
+            drawText(ctx, saveportNote.text, Math.round(cx - textWidth(saveportNote.text) / 2), ry + 16, '#9aa0b4');
+        }
         return;
     }
 
