@@ -93,9 +93,9 @@ let booted = false;
 let startScreen = false;                            // #START the launch menu is up (drawn into the canvas, CRT-shaded)
 let startPage = 'title';                            // 'title' (Start Game / View) → 'choose' (human / orc / view / back)
 let startHits = null;
-// #start-icons the WATCH glyph, switchable for the side-by-side pick (83 = camera, 169 = scope/eye).
-// RYFARMS.watchIcon(n) swaps it live so candidates can be compared in place.
-let START_WATCH_ICON = 83;                              // button rects (game px), set each frame by drawStartScreen (keys vary by page)
+// #start-icons the WATCH glyph — owner pick 2026-08-12: 24 (the paired-lens binoculars) over the
+// 83 camera and 169 scope candidates. RYFARMS.watchIcon(n) still swaps it live for future sweeps.
+let START_WATCH_ICON = 24;                              // button rects (game px), set each frame by drawStartScreen (keys vary by page)
 let _startScreenErr = false;                        // #START logged-once guard for a menu-draw failure (never black the game)
 let rosterOpen = false;
 let rosterScroll = 0;
@@ -8836,7 +8836,7 @@ function drawStartScreen() {
         if (startContinue) { startTextButton('start', cx, ry, 'START A NEW TOWN', 1, '#ffffff', 'rgba(255,255,255,0.3)'); ry += 18; }
         // #start-icons (owner call): the secondary rungs became ICON buttons — the text stack was
         // outgrowing the menu. Hover names the action in a tooltip beneath; from the 1-bit pack
-        // (component-library/index.html): WATCH = START_WATCH_ICON, IMPORT = 101 (arrow into tray).
+        // (component-library/index.html): WATCH = START_WATCH_ICON (24), IMPORT = 102 (up from tray).
         // The import CONFIRM stays as words: a destructive confirm has to say what it does.
         if (pendingImport) {
             const warn = pendingImport.occupied ? ' - OLD BATTLE TALES LOST' : '';
@@ -8847,7 +8847,7 @@ function drawStartScreen() {
             const rowX = Math.round(cx - (B * 2 + GAP) / 2);
             const defs = [
                 ['view', START_WATCH_ICON, 'WATCH A WILD TOWN'],
-                ['importFile', 101, 'IMPORT A TOWN FILE'],
+                ['importFile', 102, 'IMPORT A TOWN FILE'],   // owner pick: 102 (up from tray — loading INTO the game) over 101
             ];
             let tip = null;
             defs.forEach(([key, iconN, label], i) => {
