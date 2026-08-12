@@ -100,8 +100,11 @@ const ok = (name) => { passed++; console.log(`  ok - ${name}`); };
     assert.ok(mainSrc.includes('queryTown(bootParams)'), 'the boot consumes the shared helper');
     assert.ok(mainSrc.includes('const worldSeed = townQ.hasSeed ? townQ.seed'), 'worldSeed is assigned FROM the helper result');
     assert.ok(mainSrc.includes('const bootCulture = townQ.culture'), 'bootCulture is assigned FROM the helper result');
-    assert.ok(!/bootParams\.get\('seed'\)/.test(mainSrc), 'no direct seed value read survives in the boot');
-    assert.ok(!/bootParams\.(get|has)\('orc'\)|bootParams\.get\('culture'\)/.test(mainSrc), 'no direct culture read survives in the boot');
+    // Quote- and whitespace-agnostic (Codex #123 r3): a double-quoted `get("seed")` or spaced
+    // member access is the same read — the ban must recognize the SYNTAX CLASS, not the repo's
+    // current formatting, or an innocent style choice defeats a fail-closed pin.
+    assert.ok(!/bootParams\s*\.\s*get\s*\(\s*["']seed["']\s*\)/.test(mainSrc), 'no direct seed value read survives in the boot');
+    assert.ok(!/bootParams\s*\.\s*(get|has)\s*\(\s*["']orc["']\s*\)|bootParams\s*\.\s*get\s*\(\s*["']culture["']\s*\)/.test(mainSrc), 'no direct culture read survives in the boot');
     assert.ok(!/parseInt\(\s*urlSeed/.test(mainSrc), 'no duplicate seed coercion survives in the boot');
     ok('main.js boot CONSUMES queryTown (assignments pinned, direct identity reads banned)');
 }
