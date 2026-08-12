@@ -7351,7 +7351,9 @@ out.addEventListener('pointerup', (e) => {
                 a.download = `propagate-${stamp}.json`;
                 a.click();
                 setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-                saveportNote = { text: 'TOWN FILE DOWNLOADED', until: performance.now() + 4000 };
+                saveportNote = file.memoriesIncomplete
+                    ? { text: 'DOWNLOADED - MEMORIES COULD NOT BE INCLUDED', until: performance.now() + 7000 }
+                    : { text: 'TOWN FILE DOWNLOADED', until: performance.now() + 4000 };
             }).catch(() => { saveportNote = { text: 'EXPORT FAILED', until: performance.now() + 5000 }; });
             return;
         }
@@ -7365,9 +7367,12 @@ out.addEventListener('pointerup', (e) => {
                 importTownFile(parsed, (snap) => World.fromSave(snap)).then((r) => {
                     if (!r.ok) { saveportNote = { text: `IMPORT REFUSED: ${String(r.error || '').toUpperCase().slice(0, 34)}`, until: performance.now() + 8000 }; return; }
                     // this tab's world is superseded (the import bumped the generation, so its own
-                    // saves now fail the CAS by design) — reboot into the imported town
-                    saveportNote = { text: 'IMPORTED - RELOADING...', until: performance.now() + 60000 };
-                    setTimeout(() => location.reload(), 400);
+                    // saves now fail the CAS by design) — reboot into the imported town.
+                    // A memory failure is NOT a complete import (Codex #121 r2): the town landed but
+                    // its memory rows did not, so say so and give the reader a beat to see it.
+                    const partial = !!r.memoryError;
+                    saveportNote = { text: partial ? 'TOWN IMPORTED - MEMORIES DID NOT TRANSFER' : 'IMPORTED - RELOADING...', until: performance.now() + 60000 };
+                    setTimeout(() => location.reload(), partial ? 2600 : 400);
                 }).catch(() => { saveportNote = { text: 'IMPORT FAILED', until: performance.now() + 6000 }; });
                 return;
             }

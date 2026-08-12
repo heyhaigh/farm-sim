@@ -11,7 +11,7 @@
 import assert from 'node:assert';
 import { World } from '../farm.js';
 import { encodeSnapshot, decodeSnapshot, buildTownExport, importTownFile, parseTownFile } from '../save.js';
-import { _setBackendForTests, townMemoryRows, replaceTownMemoryRows } from '../memory-store.js';
+import { _setBackendForTests, townMemoryRows, replaceTownMemoryRows, validateTownMemoryRows, storePayload } from '../memory-store.js';
 
 // memory rows ride the export now — a Map-backed fake, keys sorted like real IDB (LEARNINGS: fakes
 // must mirror real semantics)
@@ -262,13 +262,111 @@ await check('memory rows ride the export and REPLACE the seed\'s rows on import 
 await check('a crafted file cannot write rows into ANOTHER town\'s memories', async () => {
     memRows.clear();
     const wrote = await replaceTownMemoryRows(w.seed, [
-        [`life:${w.seed}:9`, { kind: 'life', townSeed: w.seed, life: { name: 'LEGIT' } }],
+        [`life:${w.seed}:9`, { kind: 'life', townSeed: w.seed, life: { seed: 9, name: 'LEGIT' } }],
         ['life:999999:1', { kind: 'life', townSeed: 999999, life: { name: 'FOREIGN' } }],
         ['battle:rX', { kind: 'battle', townSeed: 999999, battle: { tale: 'FOREIGN BATTLE' } }],
         ['latest', { evil: true }],
     ]);
     assert.strictEqual(wrote, 1, `wrote ${wrote} rows — the ownership filter is leaking`);
     assert.ok(!memRows.has('life:999999:1') && !memRows.has('battle:rX') && !memRows.has('latest'));
+});
+
+await check('a memory row whose DOCUMENT claims another town refuses the whole file (Codex r2)', async () => {
+    // Reproduced: life:<target>:9 carrying townSeed 999999 inside the document — the key said one
+    // owner, the document another, and the portal believed the document.
+    const base = await buildTownExport(w);
+    const file = JSON.parse(JSON.stringify(base));
+    const rows = decodeSnapshot(file.memories);
+    rows.push([`life:${w.seed}:13`, { kind: 'life', townSeed: 999999, life: { seed: 13, name: 'SMUGGLED' } }]);
+    file.memories = encodeSnapshot(rows);
+    const r = parseTownFile(file, (x) => World.fromSave(x));
+    assert.strictEqual(r.ok, false, 'a document claiming another town was accepted');
+});
+
+await check('corrupt memories REFUSE the file; ABSENT memories import the town alone (Codex r2)', async () => {
+    const base = await buildTownExport(w);
+    // present-but-corrupt: an unknown future tag — used to become [] and DELETE the slot's rows
+    const bad = JSON.parse(JSON.stringify(base));
+    bad.memories = { $: 'FUTURE_MEMORY_TAG' };
+    assert.strictEqual(parseTownFile(bad, (x) => World.fromSave(x)).ok, false, 'corrupt memories were accepted as empty');
+    // absent: legal, and parse says "leave the device rows alone" via memories: null
+    const trimmed = JSON.parse(JSON.stringify(base));
+    delete trimmed.memories; delete trimmed.memoriesIncomplete;
+    const r = parseTownFile(trimmed, (x) => World.fromSave(x));
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.memories, null, 'absence must be distinguishable from an empty list');
+});
+
+await check('#memfence: a stale tab cannot revert imported memory rows', async () => {
+    // Reproduced by Codex: replace a life with NEW under the import, then an ordinary stale
+    // storePayload put STALE back. The floor written by the replacement refuses writers below it.
+    memRows.clear();
+    await replaceTownMemoryRows(w.seed, [
+        [`life:${w.seed}:1`, { kind: 'life', townSeed: w.seed, life: { seed: 1, name: 'NEW' } }],
+    ], 5);   // the import wrote generation 5
+    const stale = await storePayload({ town: 'OLD TAB', townSeed: w.seed, gen: 4, rev: 9,
+        farmers: [{ seed: 1, name: 'STALE' }] });
+    assert.ok(stale && stale.stale === true && !stale.written, `a gen-4 writer got past a gen-5 floor: ${JSON.stringify(stale)}`);
+    assert.ok(JSON.stringify([...memRows.values()]).includes('NEW'), 'the imported row was reverted');
+    // ...and the CURRENT session (at or above the floor) still writes — else the fence bricks the store
+    const live = await storePayload({ town: 'LIVE', townSeed: w.seed, gen: 5, rev: 10,
+        farmers: [{ seed: 1, name: 'LIVE_UPDATE' }] });
+    assert.ok(live && live.written > 0, `the live writer was refused by its own floor: ${JSON.stringify(live)}`);
+});
+
+await check('the fence row itself never rides an export', async () => {
+    // memgen is a fence, not a document — exporting it would carry one town's floor into another
+    // browser's store.
+    const rows = await townMemoryRows(w.seed);
+    assert.ok(!rows.some(([k]) => String(k).startsWith('memgen:')), 'the fence rode the export');
+});
+
+await check('replacement is ALL-OR-NOTHING when the backend is atomic (Codex r2)', async () => {
+    // Reproduced: per-op transactions let a quota failure mid-delete leave one old life among the
+    // new rows. With an atomic backend, a failure must leave the store untouched.
+    const atomicStore = new Map([[`life:${w.seed}:1`, { kind: 'life', townSeed: w.seed, life: { seed: 1, name: 'BEFORE' } }]]);
+    let fail = true;
+    _setBackendForTests({
+        put: async () => { throw new Error('direct put unused here'); },
+        del: async () => { throw new Error('direct del unused here'); },
+        all: async () => [...atomicStore.entries()].sort(([a], [b]) => (a < b ? -1 : 1)),
+        replaceTown: async (delKeys, puts) => {
+            if (fail) throw new Error('quota');
+            for (const k of delKeys) atomicStore.delete(k);
+            for (const [k, v] of puts) atomicStore.set(k, v);
+        },
+    });
+    await assert.rejects(() => replaceTownMemoryRows(w.seed, [
+        [`life:${w.seed}:2`, { kind: 'life', townSeed: w.seed, life: { seed: 2, name: 'AFTER' } }],
+    ], 7));
+    assert.ok(atomicStore.has(`life:${w.seed}:1`), 'a failed atomic replacement still deleted rows');
+    fail = false;
+    await replaceTownMemoryRows(w.seed, [
+        [`life:${w.seed}:2`, { kind: 'life', townSeed: w.seed, life: { seed: 2, name: 'AFTER' } }],
+    ], 7);
+    assert.ok(!atomicStore.has(`life:${w.seed}:1`) && atomicStore.has(`life:${w.seed}:2`));
+    // restore the shared fake for any later case
+    _setBackendForTests({
+        put: async (k, v) => { memRows.set(k, v); },
+        del: async (k) => { memRows.delete(k); },
+        all: async () => [...memRows.entries()].sort(([a], [b]) => (a < b ? -1 : 1)),
+    });
+});
+
+await check('a PARTIAL export is disclosed, and its import leaves the device rows alone', async () => {
+    // The memory store being unreadable must not produce a file that LOOKS like a complete backup —
+    // battle docs are irreconstructible, so "complete" is a promise the file could not keep.
+    _setBackendForTests({ put: async () => {}, del: async () => {}, all: async () => { throw new Error('store unreachable'); } });
+    const file = await buildTownExport(w);
+    assert.strictEqual(file.memoriesIncomplete, true, 'a failed memory read produced a file claiming completeness');
+    _setBackendForTests({
+        put: async (k, v) => { memRows.set(k, v); },
+        del: async (k) => { memRows.delete(k); },
+        all: async () => [...memRows.entries()].sort(([a], [b]) => (a < b ? -1 : 1)),
+    });
+    const r = parseTownFile(JSON.parse(JSON.stringify(file)), (x) => World.fromSave(x));
+    assert.strictEqual(r.ok, true, 'a partial file must still import its town');
+    assert.strictEqual(r.memoriesIncomplete, true, 'the partial flag must survive parsing');
 });
 
 console.log(`\n${passes} passed, ${failures} failed`);

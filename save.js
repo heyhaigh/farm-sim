@@ -9,7 +9,7 @@
 // plain visit resumes the last-played town. Everything here is best-effort: a storage
 // failure must NEVER take down the game — worst case the town simply starts fresh.
 
-import { townMemoryRows, replaceTownMemoryRows } from './memory-store.js';
+import { townMemoryRows, replaceTownMemoryRows, validateTownMemoryRows } from './memory-store.js';
 
 const DB_NAME = 'ryfarms';
 const DB_VER = 1;
@@ -554,6 +554,7 @@ export async function undoWipe() {
     try {
         const db = await openDb();
         let backupMemories = null;
+        let undoGen = 0;
         return await new Promise((resolve, reject) => {
             const tx = db.transaction(STORE, 'readwrite');
             const store = tx.objectStore(STORE);
@@ -579,7 +580,7 @@ export async function undoWipe() {
                 // whatever was last wiped), so the generation is read NESTED here rather than up front. That is
                 // legal and still atomic: the transaction stays active while its requests are outstanding.
                 const rGen = store.get(genKey(snap.seed));
-                rGen.onsuccess = () => { store.put((rGen.result || 0) + 1, genKey(snap.seed)); };
+                rGen.onsuccess = () => { undoGen = (rGen.result || 0) + 1; store.put(undoGen, genKey(snap.seed)); };
                 store.put(latest && latest.seed === snap.seed ? latest
                     : { seed: snap.seed, day: snap.day, season: snap.season, year: snap.year, savedAt: Date.now() }, 'latest');
                 if (slice) store.put(applyKeyed(rWorld.result || { towns: {}, encounters: [] }, slice, snap.seed), WORLD_KEY);
@@ -595,7 +596,7 @@ export async function undoWipe() {
             // has no `memories` field and is untouched. Not atomic with the slot (different db), so a
             // failure here leaves the town restored with stale rows — warned, never fatal.
             if (restoredSeed != null && backupMemories) {
-                try { await replaceTownMemoryRows(restoredSeed, backupMemories); }
+                try { await replaceTownMemoryRows(restoredSeed, backupMemories, undoGen); }
                 catch (err) { console.warn('ry-farms: undo restored the town but not its memory rows', err); }
             }
             return restoredSeed;
@@ -702,7 +703,9 @@ export async function buildTownExport(world) {
     // part of the memory portal permanently. A failed read degrades to a file without memories
     // rather than no file: the town itself is the thing being backed up.
     let memories = [];
-    try { memories = await townMemoryRows(world.seed); } catch { /* file still valid without them */ }
+    let memoriesIncomplete = false;
+    try { memories = await townMemoryRows(world.seed); }
+    catch { memoriesIncomplete = true; }   // battle docs are irreconstructible — a file without them is PARTIAL, and says so
     return {
         format: 'propagate-town',
         formatV: 1,
@@ -713,6 +716,9 @@ export async function buildTownExport(world) {
         v: snap.v,
         snap: encodeSnapshot(snap),
         memories: encodeSnapshot(memories),
+        // Disclosed rather than silent (Codex #121 r2): the UI warns on export, and import SKIPS the
+        // memory replacement for a partial file — the rows already on the device beat installing none.
+        memoriesIncomplete,
     };
 }
 
@@ -756,10 +762,17 @@ export function parseTownFile(parsed, hydrate) {
     if (hydrated && typeof hydrated.seed === 'number' && hydrated.seed !== snap.seed) {
         return { ok: false, error: 'town hydrates under a different seed' };
     }
-    let memories = [];
-    try { memories = decodeSnapshot(parsed.memories) || []; } catch { memories = []; }   // absent/corrupt memories never block the town
-    if (!Array.isArray(memories)) memories = [];
-    return { ok: true, snap, memories };
+    // ABSENCE is legal (a hand-trimmed file imports its town and leaves the device's rows alone);
+    // malformed PRESENCE is refused whole (Codex #121 r2) — a corrupt memories field used to decode
+    // to [] and the import then deleted the slot's rows and installed nothing.
+    let memories = null;
+    if (parsed.memories !== undefined) {
+        try { memories = decodeSnapshot(parsed.memories); }
+        catch (err) { return { ok: false, error: `unreadable memories: ${err.message}` }; }
+        const mv = validateTownMemoryRows(snap.seed, memories);
+        if (!mv.ok) return { ok: false, error: mv.error };
+    }
+    return { ok: true, snap, memories, memoriesIncomplete: parsed.memoriesIncomplete === true };
 }
 
 export async function importTownFile(parsed, hydrate) {
@@ -768,6 +781,7 @@ export async function importTownFile(parsed, hydrate) {
     const snap = p.snap;
     const seed = snap.seed;
     let replacedFlag = false;
+    let newGen = 0;
     // The seed's memory rows have no occupant identity (Codex #121): without this, a different town
     // imported onto the same seed keeps exposing the displaced town's lives through the portal.
     // Read the displaced rows BEFORE the transaction so they ride the backup object.
@@ -778,11 +792,12 @@ export async function importTownFile(parsed, hydrate) {
         await new Promise((resolve, reject) => {
             const tx = db.transaction(STORE, 'readwrite');
             const store = tx.objectStore(STORE);
-            let gen = 0, existing, latest;
+            let gen = 0, existing, latest, oldBackup;
             replacedFlag = false;
             const rGen = store.get(genKey(seed)); rGen.onsuccess = () => { gen = rGen.result || 0; };
             const rSnap = store.get('town:' + seed); rSnap.onsuccess = () => { existing = rSnap.result; };
             const rLatest = store.get('latest'); rLatest.onsuccess = () => { latest = rLatest.result; };
+            const rBk = store.get('backup:wipe'); rBk.onsuccess = () => { oldBackup = rBk.result; };
             const rWorld = store.get(WORLD_KEY);
             rWorld.onsuccess = () => {
                 const index = rWorld.result || { towns: {}, encounters: [] };
@@ -790,13 +805,22 @@ export async function importTownFile(parsed, hydrate) {
                 if (existing) {
                     replacedFlag = true;
                     store.put({ seed, snap: existing, latest, slice: sliceKeyed(index, seed), memories: displacedMemories }, 'backup:wipe');
+                } else if (oldBackup && oldBackup.seed === seed) {
+                    // EMPTY-slot import over a same-seed backup (Codex #121 r2): wipe town A, import
+                    // town B onto the seed, undoWipe — snapshot A came back wearing B's memories,
+                    // because the wipe-era backup has no memories field and this import replaces the
+                    // orphaned rows underneath it. The backup's coherence window closed when the
+                    // import claimed the slot; supersede it. A DIFFERENT seed's backup is untouched —
+                    // its town's rows are not the ones being replaced.
+                    store.delete('backup:wipe');
                 }
                 // the imported town's index summary is unknown until its first save — a stale slice is
                 // the danger COMPATIBILITY.md documents, so prune rather than carry it
                 pruneKeyed(index, seed);
                 store.put(index, WORLD_KEY);
                 store.put(snap, 'town:' + seed);
-                store.put(gen + 1, genKey(seed));                  // occupancy changed: supersede every live tab
+                newGen = gen + 1;
+                store.put(newGen, genKey(seed));                   // occupancy changed: supersede every live tab
                 store.put({ seed, day: snap.day || 1, season: snap.season, year: snap.year, savedAt: Date.now() }, 'latest');
             };
             tx.oncomplete = () => resolve();
@@ -805,9 +829,16 @@ export async function importTownFile(parsed, hydrate) {
         });
         // The slot committed; now the memory rows. A different database, so not atomic with the slot
         // — the failure mode is an imported town with stale rows, surfaced rather than silent.
+        // One memory-db transaction, fenced with the new slot generation so a stale tab's
+        // storePayload cannot revert the rows (#memfence). Skipped for a file with no or partial
+        // memories: the rows already on the device beat installing none. Not atomic with the slot
+        // (different database); a failure is an imported town with stale rows, SURFACED — the UI
+        // must not present it as a complete import.
         let memoryError = null;
-        try { await replaceTownMemoryRows(seed, p.memories); }
-        catch (err) { memoryError = String(err && err.message || 'memory rows not replaced'); }
+        if (p.memories !== null && !p.memoriesIncomplete) {
+            try { await replaceTownMemoryRows(seed, p.memories, newGen); }
+            catch (err) { memoryError = String(err && err.message || 'memory rows not replaced'); }
+        }
         return { ok: true, seed, replaced: replacedFlag, memoryError };
     } catch (err) {
         return { ok: false, error: `storage write failed: ${err && err.message}` };

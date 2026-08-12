@@ -71,8 +71,23 @@ let backend = {
         const kq = s.getAllKeys(), vq = s.getAll();
         return () => kq.result.map((k, i) => [k, vq.result[i]]);
     }),
+    // one transaction, acknowledged at tx.oncomplete like every other write here (IDB law #1)
+    replaceTown: (delKeys, puts) => idbTx('readwrite', s => {
+        for (const k of delKeys) s.delete(k);
+        for (const [k, v] of puts) s.put(v, k);
+    }),
 };
 export function _setBackendForTests(b) { backend = b; }   // tests inject a Map-based fake
+
+// One readwrite transaction for a whole-town replacement (Codex #121 r2): per-op transactions let a
+// quota failure mid-delete leave a PARTIALLY replaced set — one old life surviving among the new
+// town's rows was reproduced. A backend without replaceTown (test fakes) falls back to per-op, which
+// keeps the fakes simple; the production backend below is atomic.
+async function backendReplace(delKeys, puts) {
+    if (typeof backend.replaceTown === 'function') return backend.replaceTown(delKeys, puts);
+    for (const k of delKeys) await backend.del(k);
+    for (const [k, v] of puts) await backend.put(k, v);
+}
 
 // ---------------------------------------------------------------------------
 // Write half — accepts the SAME body shapes /api/memory-writeback accepts, so the
@@ -95,6 +110,11 @@ async function evict(prefix, cap, protect = new Set()) {
 export async function storePayload(body) {
     if (!body || body.townSeed == null) return null;
     const townSeed = String(body.townSeed);
+    // #memfence — a writer below the floor is a STALE TAB: an import (or its undo) has replaced this
+    // seed's rows under a newer slot generation, and this writer's world predates that. Refusing here
+    // is what makes the town-slot CAS and the memory store agree about who the occupant is.
+    const floor = await memFloor(townSeed);
+    if (floor > 0 && (body.gen || 0) < floor) return { written: 0, stale: true };
     const now = Date.now();
     try {
         const persisted = [];
@@ -310,9 +330,33 @@ export async function localGraphTowns() {
 // Everything in this store that belongs to one town. Battle docs are keyed by raid id, so ownership
 // for those is the document's own townSeed.
 function ownsRow(townSeed, key, value) {
+    // Key AND document (Codex #121 r2): ownership by key prefix alone let an imported
+    // `life:<target>:9` carry `townSeed: 999999` inside the document, and the portal exposed it
+    // under town 999999 — the key said one owner, the document claimed another, and the graph reader
+    // believes documents. The row's own identity must agree with the key, its kind must match its
+    // prefix, and its payload must have the minimum shape the reader dereferences — a null life
+    // makes the graph fail closed to empty.
     const s = String(townSeed), k = String(key);
-    return k.startsWith(`life:${s}:`) || k === `town:${s}` || k === `invent:${s}`
-        || (k.startsWith('battle:') && String(value?.townSeed) === s);
+    if (!value || typeof value !== 'object' || String(value.townSeed) !== s) return false;
+    if (k.startsWith(`life:${s}:`)) return value.kind === 'life' && !!value.life && typeof value.life === 'object'
+        && k === `life:${s}:${value.life.seed}`;   // the farmer seed in the key is the one in the document
+    if (k === `town:${s}`) return value.kind === 'town' && Array.isArray(value.history);
+    if (k === `invent:${s}`) return value.kind === 'invent' && Array.isArray(value.inventions);
+    if (k.startsWith('battle:')) return value.kind === 'battle' && !!value.battle && typeof value.battle === 'object'
+        && k === `battle:${String(value.battle.rid)}`;
+    return false;
+}
+
+// Refusal-side twin of the write filter: parseTownFile calls this so a file carrying ANY row that
+// fails ownership is refused whole at parse time, where the UI can say so — silently dropping rows
+// on write would import a town while quietly shedding parts of its memory.
+export function validateTownMemoryRows(townSeed, rows) {
+    if (!Array.isArray(rows)) return { ok: false, error: 'memories are not a list' };
+    for (const entry of rows) {
+        if (!Array.isArray(entry) || entry.length !== 2) return { ok: false, error: 'malformed memory row' };
+        if (!ownsRow(townSeed, entry[0], entry[1])) return { ok: false, error: `memory row does not belong to this town (${String(entry[0]).slice(0, 40)})` };
+    }
+    return { ok: true };
 }
 
 export async function townMemoryRows(townSeed) {
@@ -323,12 +367,26 @@ export async function townMemoryRows(townSeed) {
 // predicate. A crafted file must not be able to write keys into another town's rows (a life for a
 // different seed, a battle claiming a different townSeed): a row that does not belong to this town
 // is dropped, not written.
-export async function replaceTownMemoryRows(townSeed, rows) {
-    for (const [k] of await townMemoryRows(townSeed)) await backend.del(k);
-    let wrote = 0;
+export async function replaceTownMemoryRows(townSeed, rows, fenceGen) {
+    const delKeys = (await townMemoryRows(townSeed)).map(([k]) => String(k));
+    const puts = [];
     for (const [k, v] of (Array.isArray(rows) ? rows : [])) {
-        if (!ownsRow(townSeed, k, v)) continue;
-        await backend.put(String(k), v); wrote++;
+        if (!ownsRow(townSeed, k, v)) continue;   // defense in depth; parse already refused bad files
+        puts.push([String(k), v]);
     }
-    return wrote;
+    // #memfence (Codex #121 r2): the floor that makes the replacement STICK. Ordinary storePayload
+    // writes had no generation fence, so a stale tab still holding the displaced town could persist
+    // and overwrite the imported rows — reproduced as NEW reverting to STALE. The floor is the slot
+    // generation the replacement was written under; every writer below it is refused.
+    if (Number.isFinite(fenceGen)) puts.push([`memgen:${String(townSeed)}`, { gen: fenceGen }]);
+    await backendReplace(delKeys, puts);
+    return puts.length - (Number.isFinite(fenceGen) ? 1 : 0);
+}
+
+async function memFloor(townSeed) {
+    try {
+        const rows = await backend.all();
+        const hit = rows.find(([k]) => String(k) === `memgen:${String(townSeed)}`);
+        return hit ? (hit[1]?.gen || 0) : 0;
+    } catch { return 0; }
 }

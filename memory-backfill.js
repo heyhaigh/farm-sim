@@ -47,13 +47,13 @@ async function claimTown(w) {
     if (haveKeys === null) return false;                              // store refused — claim nothing
     const missing = w.farmers.filter(f => !haveKeys.has(String(f.sheet.seed))).map(lifeOf);
     if (missing.length) {
-        const wrote = await storePayload({ town, townSeed: w.seed, rev, farmers: missing });
+        const wrote = await storePayload({ town, townSeed: w.seed, gen: w._gen || 0, rev, farmers: missing });
         if (!wrote || !wrote.written) return false;                   // partial rows are upserts; no marker -> full retry next boot
     }
     const h = townHistoryOf(w);
-    if (h) { const r = await storePayload({ town, townSeed: w.seed, rev, townHistory: h }); if (!r || !r.written) return false; }
+    if (h) { const r = await storePayload({ town, townSeed: w.seed, gen: w._gen || 0, rev, townHistory: h }); if (!r || !r.written) return false; }
     const inv = inventionsOf(w);
-    if (inv) { const r = await storePayload({ town, townSeed: w.seed, rev, townInventions: inv }); if (!r || !r.written) return false; }
+    if (inv) { const r = await storePayload({ town, townSeed: w.seed, gen: w._gen || 0, rev, townInventions: inv }); if (!r || !r.written) return false; }
     return setBackfillMarker(w.seed);                                 // claimed ONLY now
 }
 
@@ -99,7 +99,7 @@ export async function backfillMemory({ maxTowns = MAX_TOWNS_PER_BOOT, io = {}, a
             if (haveKeys !== null) {
                 const missing = activeWorld.farmers.filter(f => !haveKeys.has(String(f.sheet.seed))).map(lifeOf);
                 if (missing.length) {
-                    const wrote = await storePayload({ town: activeWorld.name || 'PROPAGATE', townSeed: activeWorld.seed, rev: activeWorld._rev || activeWorld.day || 0, farmers: missing });
+                    const wrote = await storePayload({ town: activeWorld.name || 'PROPAGATE', townSeed: activeWorld.seed, gen: activeWorld._gen || 0, rev: activeWorld._rev || activeWorld.day || 0, farmers: missing });
                     if (wrote && wrote.written) done++;
                 }
             }
