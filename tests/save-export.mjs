@@ -11,7 +11,7 @@
 import assert from 'node:assert';
 import { World } from '../farm.js';
 import { encodeSnapshot, decodeSnapshot, buildTownExport, importTownFile, parseTownFile } from '../save.js';
-import { _setBackendForTests, townMemoryRows, replaceTownMemoryRows, validateTownMemoryRows, storePayload } from '../memory-store.js';
+import { _setBackendForTests, clearTownMemoryRows, setBackfillMarker } from '../memory-store.js';
 
 // memory rows ride the export now — a Map-backed fake, keys sorted like real IDB (LEARNINGS: fakes
 // must mirror real semantics)
@@ -226,147 +226,53 @@ await check('corrupt multi-byte typed arrays are REFUSED, not silently truncated
     assert.ok(threw, '3 bytes decoded as Uint16Array without complaint');
 });
 
-await check('memory rows ride the export and REPLACE the seed\'s rows on import (Codex #121 repro)', async () => {
-    // The reproduced bug: a different town imported onto the same seed kept exposing the displaced
-    // town\'s lives. Stage OLD_* rows for the seed, import a file carrying NEW_* rows, and the
-    // portal must show only NEW_*.
-    memRows.clear();
-    memRows.set(`life:${w.seed}:111`, { kind: 'life', townSeed: w.seed, life: { seed: 111, name: 'OLD_RESIDENT' } });
-    memRows.set(`town:${w.seed}`, { kind: 'town', townSeed: w.seed, history: ['OLD_HISTORY'] });
-    memRows.set('battle:r77', { kind: 'battle', townSeed: w.seed, battle: { rid: 'r77', tale: 'OLD_BATTLE' } });
-    memRows.set('life:424242:5', { kind: 'life', townSeed: 424242, life: { name: 'NEIGHBOUR — MUST SURVIVE' } });
-
-    const exported = await buildTownExport(w);   // carries the OLD rows (they are the seed's rows right now)
-    const carried = decodeSnapshot(JSON.parse(JSON.stringify(exported)).memories);
-    assert.strictEqual(carried.length, 3, `expected 3 town rows in the file, got ${carried.length}`);
-    assert.ok(!JSON.stringify(carried).includes('NEIGHBOUR'), 'another town\'s row rode the export');
-
-    // simulate the import-side replacement directly (the IDB slot write cannot run in Node):
-    // stage DIFFERENT rows as the displaced occupant — one at a key the file also carries, and one
-    // at a key it does NOT. The second is the one that matters: a replacement that only overwrites
-    // (never deletes) leaves it behind, and a first version of this case used only shared keys, so
-    // exactly that mutation escaped.
-    memRows.set(`life:${w.seed}:111`, { kind: 'life', townSeed: w.seed, life: { seed: 111, name: 'DISPLACED_RESIDENT' } });
-    memRows.set(`life:${w.seed}:222`, { kind: 'life', townSeed: w.seed, life: { seed: 222, name: 'EXTRA_RESIDENT' } });
-    const wrote = await replaceTownMemoryRows(w.seed, carried);
-    assert.strictEqual(wrote, 3);
-    const after = await townMemoryRows(w.seed);
-    const dump = JSON.stringify(after);
-    assert.ok(dump.includes('OLD_RESIDENT') && !dump.includes('DISPLACED_RESIDENT'),
-        'the displaced town\'s rows survived the import');
-    assert.ok(!dump.includes('EXTRA_RESIDENT'),
-        'a displaced row at a key the file does not carry survived — replacement is overwriting, not replacing');
-    assert.ok(memRows.has('life:424242:5'), 'replacement deleted another town\'s rows');
-});
-
-await check('a crafted file cannot write rows into ANOTHER town\'s memories', async () => {
-    memRows.clear();
-    const wrote = await replaceTownMemoryRows(w.seed, [
-        [`life:${w.seed}:9`, { kind: 'life', townSeed: w.seed, life: { seed: 9, name: 'LEGIT' } }],
-        ['life:999999:1', { kind: 'life', townSeed: 999999, life: { name: 'FOREIGN' } }],
-        ['battle:rX', { kind: 'battle', townSeed: 999999, battle: { tale: 'FOREIGN BATTLE' } }],
-        ['latest', { evil: true }],
-    ]);
-    assert.strictEqual(wrote, 1, `wrote ${wrote} rows — the ownership filter is leaking`);
-    assert.ok(!memRows.has('life:999999:1') && !memRows.has('battle:rX') && !memRows.has('latest'));
-});
-
-await check('a memory row whose DOCUMENT claims another town refuses the whole file (Codex r2)', async () => {
-    // Reproduced: life:<target>:9 carrying townSeed 999999 inside the document — the key said one
-    // owner, the document another, and the portal believed the document.
-    const base = await buildTownExport(w);
-    const file = JSON.parse(JSON.stringify(base));
-    const rows = decodeSnapshot(file.memories);
-    rows.push([`life:${w.seed}:13`, { kind: 'life', townSeed: 999999, life: { seed: 13, name: 'SMUGGLED' } }]);
-    file.memories = encodeSnapshot(rows);
+await check('a dev-era file WITH a memories field still imports its town (field ignored)', async () => {
+    // The transport was deleted (Codex #121 r3: three rounds, ten findings, structural root cause —
+    // two databases cannot share a transaction). Files never shipped, but a dev-era one must not
+    // brick: its memories field is ignored, and import clears the seed's rows regardless.
+    const file = JSON.parse(JSON.stringify(await buildTownExport(w)));
+    file.memories = { $: 'FUTURE_MEMORY_TAG' };   // even corrupt — it is not read at all
     const r = parseTownFile(file, (x) => World.fromSave(x));
-    assert.strictEqual(r.ok, false, 'a document claiming another town was accepted');
+    assert.strictEqual(r.ok, true, `a memories field blocked the town: ${r.error}`);
 });
 
-await check('corrupt memories REFUSE the file; ABSENT memories import the town alone (Codex r2)', async () => {
-    const base = await buildTownExport(w);
-    // present-but-corrupt: an unknown future tag — used to become [] and DELETE the slot's rows
-    const bad = JSON.parse(JSON.stringify(base));
-    bad.memories = { $: 'FUTURE_MEMORY_TAG' };
-    assert.strictEqual(parseTownFile(bad, (x) => World.fromSave(x)).ok, false, 'corrupt memories were accepted as empty');
-    // absent: legal, and parse says "leave the device rows alone" via memories: null
-    const trimmed = JSON.parse(JSON.stringify(base));
-    delete trimmed.memories; delete trimmed.memoriesIncomplete;
-    const r = parseTownFile(trimmed, (x) => World.fromSave(x));
-    assert.strictEqual(r.ok, true);
-    assert.strictEqual(r.memories, null, 'absence must be distinguishable from an empty list');
-});
-
-await check('#memfence: a stale tab cannot revert imported memory rows', async () => {
-    // Reproduced by Codex: replace a life with NEW under the import, then an ordinary stale
-    // storePayload put STALE back. The floor written by the replacement refuses writers below it.
-    memRows.clear();
-    await replaceTownMemoryRows(w.seed, [
-        [`life:${w.seed}:1`, { kind: 'life', townSeed: w.seed, life: { seed: 1, name: 'NEW' } }],
-    ], 5);   // the import wrote generation 5
-    const stale = await storePayload({ town: 'OLD TAB', townSeed: w.seed, gen: 4, rev: 9,
-        farmers: [{ seed: 1, name: 'STALE' }] });
-    assert.ok(stale && stale.stale === true && !stale.written, `a gen-4 writer got past a gen-5 floor: ${JSON.stringify(stale)}`);
-    assert.ok(JSON.stringify([...memRows.values()]).includes('NEW'), 'the imported row was reverted');
-    // ...and the CURRENT session (at or above the floor) still writes — else the fence bricks the store
-    const live = await storePayload({ town: 'LIVE', townSeed: w.seed, gen: 5, rev: 10,
-        farmers: [{ seed: 1, name: 'LIVE_UPDATE' }] });
-    assert.ok(live && live.written > 0, `the live writer was refused by its own floor: ${JSON.stringify(live)}`);
-});
-
-await check('the fence row itself never rides an export', async () => {
-    // memgen is a fence, not a document — exporting it would carry one town's floor into another
-    // browser's store.
-    const rows = await townMemoryRows(w.seed);
-    assert.ok(!rows.some(([k]) => String(k).startsWith('memgen:')), 'the fence rode the export');
-});
-
-await check('replacement is ALL-OR-NOTHING when the backend is atomic (Codex r2)', async () => {
-    // Reproduced: per-op transactions let a quota failure mid-delete leave one old life among the
-    // new rows. With an atomic backend, a failure must leave the store untouched.
-    const atomicStore = new Map([[`life:${w.seed}:1`, { kind: 'life', townSeed: w.seed, life: { seed: 1, name: 'BEFORE' } }]]);
-    let fail = true;
-    _setBackendForTests({
-        put: async () => { throw new Error('direct put unused here'); },
-        del: async () => { throw new Error('direct del unused here'); },
-        all: async () => [...atomicStore.entries()].sort(([a], [b]) => (a < b ? -1 : 1)),
-        replaceTown: async (delKeys, puts) => {
-            if (fail) throw new Error('quota');
-            for (const k of delKeys) atomicStore.delete(k);
-            for (const [k, v] of puts) atomicStore.set(k, v);
-        },
-    });
-    await assert.rejects(() => replaceTownMemoryRows(w.seed, [
-        [`life:${w.seed}:2`, { kind: 'life', townSeed: w.seed, life: { seed: 2, name: 'AFTER' } }],
-    ], 7));
-    assert.ok(atomicStore.has(`life:${w.seed}:1`), 'a failed atomic replacement still deleted rows');
-    fail = false;
-    await replaceTownMemoryRows(w.seed, [
-        [`life:${w.seed}:2`, { kind: 'life', townSeed: w.seed, life: { seed: 2, name: 'AFTER' } }],
-    ], 7);
-    assert.ok(!atomicStore.has(`life:${w.seed}:1`) && atomicStore.has(`life:${w.seed}:2`));
-    // restore the shared fake for any later case
-    _setBackendForTests({
-        put: async (k, v) => { memRows.set(k, v); },
-        del: async (k) => { memRows.delete(k); },
-        all: async () => [...memRows.entries()].sort(([a], [b]) => (a < b ? -1 : 1)),
-    });
-});
-
-await check('a PARTIAL export is disclosed, and its import leaves the device rows alone', async () => {
-    // The memory store being unreadable must not produce a file that LOOKS like a complete backup —
-    // battle docs are irreconstructible, so "complete" is a promise the file could not keep.
-    _setBackendForTests({ put: async () => {}, del: async () => {}, all: async () => { throw new Error('store unreachable'); } });
+await check('the export carries NO memories field — snapshot-only is a decision, not an accident', async () => {
     const file = await buildTownExport(w);
-    assert.strictEqual(file.memoriesIncomplete, true, 'a failed memory read produced a file claiming completeness');
-    _setBackendForTests({
-        put: async (k, v) => { memRows.set(k, v); },
-        del: async (k) => { memRows.delete(k); },
-        all: async () => [...memRows.entries()].sort(([a], [b]) => (a < b ? -1 : 1)),
-    });
-    const r = parseTownFile(JSON.parse(JSON.stringify(file)), (x) => World.fromSave(x));
-    assert.strictEqual(r.ok, true, 'a partial file must still import its town');
-    assert.strictEqual(r.memoriesIncomplete, true, 'the partial flag must survive parsing');
+    assert.ok(!('memories' in file) && !('memoriesIncomplete' in file),
+        'the deleted transport is still emitting fields');
+});
+
+await check('clear-on-import removes the seed\'s rows, its backfill marker, and NOTHING else', async () => {
+    // The identity fix in its simplified form: the imported town must not wear the displaced town\'s
+    // lives, and the old completion marker must not suppress the new occupant\'s backfill sweep.
+    memRows.clear();
+    memRows.set(`life:${w.seed}:111`, { kind: 'life', townSeed: w.seed, life: { seed: 111, name: 'DISPLACED' } });
+    memRows.set(`town:${w.seed}`, { kind: 'town', townSeed: w.seed, history: { manager: 'OLD' } });
+    memRows.set(`invent:${w.seed}`, { kind: 'invent', townSeed: w.seed, inventions: { recipes: [] } });
+    memRows.set('battle:r9', { kind: 'battle', townSeed: w.seed, battle: { rid: 'r9', tale: 'OURS' } });
+    await setBackfillMarker(w.seed);
+    // the neighbours that must SURVIVE
+    memRows.set('life:424242:5', { kind: 'life', townSeed: 424242, life: { seed: 5, name: 'NEIGHBOUR' } });
+    memRows.set('battle:r10', { kind: 'battle', townSeed: 424242, battle: { rid: 'r10', tale: 'THEIRS' } });
+    memRows.set('backfill:424242', { kind: 'backfill', townSeed: '424242' });
+
+    const n = await clearTownMemoryRows(w.seed);
+    assert.strictEqual(n, 5, `cleared ${n} rows, expected 5 (life, town, invent, battle, marker)`);
+    const left = [...memRows.keys()].sort();
+    assert.deepStrictEqual(left, ['backfill:424242', 'battle:r10', 'life:424242:5'],
+        `wrong survivors: ${left}`);
+});
+
+await check('the real production shapes are cleared — history and inventions are OBJECTS, not arrays', async () => {
+    // The r3 P1: a validator required Array.isArray(history) while the writer stores
+    // {manager, history, wars...} — a fixture invented the shape and the transport silently skipped
+    // every real town-history row. The clear predicate keys on the KEY for owned singletons, so the
+    // document shape cannot exclude a row — this case pins that with writer-shaped documents.
+    memRows.clear();
+    memRows.set(`town:${w.seed}`, { kind: 'town', townSeed: w.seed, history: { manager: 'Signal', wars: [], history: [] } });
+    memRows.set(`invent:${w.seed}`, { kind: 'invent', townSeed: w.seed, inventions: { recipes: [{ id: 'knot' }] } });
+    const n = await clearTownMemoryRows(w.seed);
+    assert.strictEqual(n, 2, `writer-shaped rows were not cleared (${n} of 2) — the shape-validator bug again`);
 });
 
 console.log(`\n${passes} passed, ${failures} failed`);

@@ -7351,9 +7351,7 @@ out.addEventListener('pointerup', (e) => {
                 a.download = `propagate-${stamp}.json`;
                 a.click();
                 setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-                saveportNote = file.memoriesIncomplete
-                    ? { text: 'DOWNLOADED - MEMORIES COULD NOT BE INCLUDED', until: performance.now() + 7000 }
-                    : { text: 'TOWN FILE DOWNLOADED', until: performance.now() + 4000 };
+                saveportNote = { text: 'DOWNLOADED - MEMORIES REGROW ON IMPORT, BATTLE TALES STAY', until: performance.now() + 6000 };
             }).catch(() => { saveportNote = { text: 'EXPORT FAILED', until: performance.now() + 5000 }; });
             return;
         }
@@ -7368,11 +7366,12 @@ out.addEventListener('pointerup', (e) => {
                     if (!r.ok) { saveportNote = { text: `IMPORT REFUSED: ${String(r.error || '').toUpperCase().slice(0, 34)}`, until: performance.now() + 8000 }; return; }
                     // this tab's world is superseded (the import bumped the generation, so its own
                     // saves now fail the CAS by design) — reboot into the imported town.
-                    // A memory failure is NOT a complete import (Codex #121 r2): the town landed but
-                    // its memory rows did not, so say so and give the reader a beat to see it.
-                    const partial = !!r.memoryError;
-                    saveportNote = { text: partial ? 'TOWN IMPORTED - MEMORIES DID NOT TRANSFER' : 'IMPORTED - RELOADING...', until: performance.now() + 60000 };
-                    setTimeout(() => location.reload(), partial ? 2600 : 400);
+                    // Clear-on-import: the town travels, memories REGROW from it on this device
+                    // (battle tales are display-derived and stay behind — disclosed, not silent). A
+                    // failed clear means the old occupant's rows linger until backfill; say so.
+                    const uncleared = !!r.memoryError;
+                    saveportNote = { text: uncleared ? 'IMPORTED - OLD MEMORIES LINGER UNTIL THEY REGROW' : 'IMPORTED - MEMORIES WILL REGROW HERE', until: performance.now() + 60000 };
+                    setTimeout(() => location.reload(), uncleared ? 2600 : 1400);
                 }).catch(() => { saveportNote = { text: 'IMPORT FAILED', until: performance.now() + 6000 }; });
                 return;
             }

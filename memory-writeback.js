@@ -158,7 +158,7 @@ export async function persistTownHistory(world, isCurrent = () => true) {
 
     historyInflight = true;
     try {
-        const body = { town: world.name || 'PROPAGATE', townSeed: world.seed, gen: world._gen || 0, rev: world._rev || world.day || 0, townHistory: townHistoryOf(world) };
+        const body = { town: world.name || 'PROPAGATE', townSeed: world.seed, rev: world._rev || world.day || 0, townHistory: townHistoryOf(world) };
         const local = await storePayload(body);          // #local-memory the browser store is the authority
         echoToServer(body);                              // best-effort echo for a self-hosted SuperMemory
         if (!isCurrent()) return false;
@@ -227,7 +227,7 @@ export async function persistLives(world, isCurrent = () => true) {
 
     inflight = true;
     try {
-        const body = { town: world.name || 'PROPAGATE', townSeed: world.seed, gen: world._gen || 0, rev: world._rev || world.day || 0, farmers: pending.map(p => lifeOf(p.f)) };
+        const body = { town: world.name || 'PROPAGATE', townSeed: world.seed, rev: world._rev || world.day || 0, farmers: pending.map(p => lifeOf(p.f)) };
         const local = await storePayload(body);          // #local-memory the browser store is the authority
         echoToServer(body);                              // best-effort echo for a self-hosted SuperMemory
         if (!isCurrent()) return 0;                          // town was reset mid-write
@@ -259,7 +259,7 @@ export async function persistBattle(world, battle) {
     battlesSent.add(battle.rid);   // one shot per raid — a failed write is a lost tale, not a retry storm
     battleInflight = true;
     try {
-        const body = { town: world.name || 'PROPAGATE', townSeed: world.seed, gen: world._gen || 0, rev: world._rev || world.day || 0, battle };
+        const body = { town: world.name || 'PROPAGATE', townSeed: world.seed, rev: world._rev || world.day || 0, battle };
         const local = await storePayload(body);          // #local-memory the browser store is the authority
         echoToServer(body);                              // best-effort echo for a self-hosted SuperMemory
         return !!(local && local.written);               // the inscription card now fires for EVERY player
