@@ -386,7 +386,7 @@ async function saveportRunImport() {
             return;
         }
     } catch { /* unreadable — the in-transaction expectGen below is the backstop */ }
-    importTownFile(parsed, (snap) => World.fromSave(snap), { expectGen: freshGen ?? undefined }).then((r) => {
+    importTownFile(parsed, (snap) => World.fromSave(snap), { expectGen: freshGen ?? undefined, expectEmpty: !pend.occupied }).then((r) => {
         if (!r.ok) {
             saveportNote = { text: r.slotChanged ? 'THE SAVE SLOT CHANGED - PICK THE FILE AGAIN' : `IMPORT REFUSED: ${String(r.error || '').toUpperCase().slice(0, 34)}`, until: performance.now() + 8000 };
             return;
@@ -7367,15 +7367,16 @@ out.addEventListener('pointerup', (e) => {
     // #START the launch menu owns every click while it's up: a button acts, anything else is swallowed
     if (startScreen) {
         const H = startHits || {};
-        if (H.sound && inRect(p, H.sound)) { menuMuted = !menuMuted; audio.ensure(); audio.setMuted(menuMuted); if (pendingImport) disarmImport(); return; }   // #START universal mute; a non-rung click disarms a pending confirm (Codex #122)
+        if (H.sound && inRect(p, H.sound)) { menuMuted = !menuMuted; audio.ensure(); audio.setMuted(menuMuted); disarmImport(); return; }   // #START universal mute; UNCONDITIONAL disarm — a selection still reading (f.text/occupancy) must not arm after this click (Codex #122 r2)
         if (startPage === 'title') {
             if (H.importFile && inRect(p, H.importFile)) {
                 if (pendingImport) { saveportRunImport(); } else { saveportOpenChooser(); }
                 return;
             }
-            // any OTHER title click disarms a pending confirm — leaving it armed would let a later
-            // unrelated click on the rung read as consent (the same trap the settings token closes)
-            if (pendingImport) disarmImport();
+            // any OTHER title click disarms UNCONDITIONALLY (Codex #122 r2): pendingImport is null
+            // while f.text() and the occupancy reads are still in flight, so a conditional disarm
+            // left importPickGen unchanged and the stale selection armed AFTER the click.
+            disarmImport();
             if (H.continue && inRect(p, H.continue)) { location.search = '?play=1'; return; }   // #continue resume the latest town via the tested boot path
             if (H.start && inRect(p, H.start)) { startPage = 'choose'; return; }     // → the choose screen
             if (H.view && inRect(p, H.view)) { startScreen = false; audio.ensure(); audio.setMenuMode(false); audio.setMuted(false); return; }   // dismiss → spectate the town behind (this click is a gesture: unlock the audio ctx + lift the menu mute so game audio — chops, music — plays)

@@ -782,6 +782,11 @@ export async function importTownFile(parsed, hydrate, opts = {}) {
     // expectGen binds the confirmation to the slot version the player was actually shown; a
     // mismatch aborts INSIDE the transaction, where the read is authoritative.
     const expectGen = Number.isFinite(opts.expectGen) ? opts.expectGen : null;
+    // expectEmpty completes the token (Codex #122 r2): claiming an EMPTY slot is deliberately a
+    // no-bump transition (COMPATIBILITY.md), so another tab's FIRST save can occupy the slot while
+    // gen === expectGen still holds — the generation alone cannot prove the slot stayed empty. When
+    // the player confirmed the empty-slot wording, the transaction must also see it empty.
+    const expectEmpty = opts.expectEmpty === true;
     let genMismatch = false;
     try {
         const db = await openDb();
@@ -799,6 +804,7 @@ export async function importTownFile(parsed, hydrate, opts = {}) {
             const rWorld = store.get(WORLD_KEY);
             rWorld.onsuccess = () => {
                 if (expectGen !== null && gen !== expectGen) { genMismatch = true; return; }   // slot changed since the player confirmed — write NOTHING
+                if (expectEmpty && existing) { genMismatch = true; return; }                     // confirmed-empty slot got CLAIMED (no-bump first save) — write NOTHING
                 const index = rWorld.result || { towns: {}, encounters: [] };
                 // preserve what the slot held, exactly as wipeTown does — one coherent undoable object
                 if (existing) {
