@@ -9213,7 +9213,10 @@ function drawStartScreen() {
             // once-marker is localStorage, per seed, stamped at arm (the memory-intro precedent:
             // a crashed tab costs the greeting, accepted). If localStorage itself fails (private
             // mode) the greeting may repeat — accepted over never greeting at all.
-            if (bootParams.get('pc') != null) {
+            // !noPersistReason (Codex #123 r2): an UNSAVED boot (failed slot observation /
+            // quarantine) must not spend the marker — the phantom session would greet, and the
+            // genuine durable founding after storage recovers would then arrive in silence.
+            if (bootParams.get('pc') != null && !noPersistReason) {
                 let pcSeen = false;
                 try {
                     const k = 'ryfarms-postcard-' + world.seed;

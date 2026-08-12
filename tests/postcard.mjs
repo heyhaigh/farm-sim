@@ -90,13 +90,28 @@ const ok = (name) => { passed++; console.log(`  ok - ${name}`); };
 }
 {
     // The helper only guarantees agreement if BOTH sides consume it. main.js cannot be imported
-    // headless, so this is a source-level pin (the llm-chokepoint precedent): the boot must call
-    // queryTown and must not keep a duplicate coercion of its own.
+    // headless, so this is a source-level pin (the llm-chokepoint precedent). Codex #123 r2: pin
+    // CONSUMPTION, not helper presence — a boot that calls queryTown but computes worldSeed from
+    // its own `bootParams.get('seed')` read passes a presence check while diverging. So: the two
+    // identity assignments must consume the helper's result, and every direct value-read of the
+    // identity params is banned outright (presence checks like `has('seed')` stay legitimate —
+    // they route, they don't name). False failures from harmless refactors are the accepted cost.
     const mainSrc = fs.readFileSync(new URL('../main.js', import.meta.url), 'utf8');
     assert.ok(mainSrc.includes('queryTown(bootParams)'), 'the boot consumes the shared helper');
+    assert.ok(mainSrc.includes('const worldSeed = townQ.hasSeed ? townQ.seed'), 'worldSeed is assigned FROM the helper result');
+    assert.ok(mainSrc.includes('const bootCulture = townQ.culture'), 'bootCulture is assigned FROM the helper result');
+    assert.ok(!/bootParams\.get\('seed'\)/.test(mainSrc), 'no direct seed value read survives in the boot');
+    assert.ok(!/bootParams\.(get|has)\('orc'\)|bootParams\.get\('culture'\)/.test(mainSrc), 'no direct culture read survives in the boot');
     assert.ok(!/parseInt\(\s*urlSeed/.test(mainSrc), 'no duplicate seed coercion survives in the boot');
-    assert.ok(!/bootParams\.get\('orc'\)/.test(mainSrc), 'no duplicate culture reading survives in the boot');
-    ok('main.js boot routes through queryTown — no divergent duplicate to drift');
+    ok('main.js boot CONSUMES queryTown (assignments pinned, direct identity reads banned)');
+}
+{
+    // Codex #123 r2-1 — the arrival marker is durable state; an UNSAVED boot must not spend it.
+    // Same source-pin trade-off as above: exact-predicate, false-failure over silent-pass.
+    const mainSrc = fs.readFileSync(new URL('../main.js', import.meta.url), 'utf8');
+    assert.ok(mainSrc.includes("bootParams.get('pc') != null && !noPersistReason"),
+        'the postcard arrival gates on a persisting session');
+    ok('an unsaved boot cannot spend the postcard marker');
 }
 
 // ---- injectOgTags: against the file production actually serves ------------------------------
