@@ -336,10 +336,16 @@ const disarmImport = () => { pendingImport = null; importPickGen++; };
 // saveportRunImport. `occupied` drives the disclosure: battle tales are only LOST when a town at
 // that seed is being replaced, and warning a fresh browser about losing nothing is a false scare.
 function saveportOpenChooser() {
+    // A NEW chooser supersedes the old one FIRST (Codex #122 r3): while chooser A awaits f.text()
+    // and the occupancy reads, pendingImport is still null and the rung looks idle — so chooser B
+    // could open under the SAME token, and whichever read finished last replaced the pending file,
+    // possibly between the last paint and the confirming click. Advancing the token here means at
+    // most one selection is ever authorized: the newest.
+    disarmImport();
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.json,application/json';
-    const myGen = importPickGen;   // a close between pick and read invalidates this selection
+    const myGen = importPickGen;   // any close OR newer chooser invalidates this selection
     input.onchange = () => {
         const f = input.files && input.files[0];
         if (!f) return;
