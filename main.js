@@ -7475,7 +7475,9 @@ out.addEventListener('pointerup', (e) => {
 
     // #legibility Slice 2 — the WHISPER widget (bottom-left): open from the minimized button, and while open
     // handle its own chat interactions (minimize, [NAME v] picker, input focus) so it works off the roster.
-    if (CHAT_BTN.w && inRect(p, CHAT_BTN)) { chatWidgetOpen = true; audio.ensure(); return; }
+    // Opening the widget IS the intent to type (owner) — hand over the caret immediately, same
+    // focus call the entry-row click makes, so no second tap is ever needed.
+    if (CHAT_BTN.w && inRect(p, CHAT_BTN)) { chatWidgetOpen = true; audio.ensure(); focusChatInput(); return; }
     if (chatWidgetOpen && CHAT_PANEL.w && inRect(p, CHAT_PANEL)) {
         if (CHAT_CLOSE.w && inRect(p, CHAT_CLOSE)) { chatWidgetOpen = false; chatDropdownOpen = false; blurChatInput(); return; }
         if (chatDropdownOpen) {
