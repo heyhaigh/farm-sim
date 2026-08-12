@@ -9612,13 +9612,21 @@ export class Farmer {
         // distinct chronicle verb, the seed fulfilled, and the O2 warmth channel fed. Display +
         // additive state only; no rng.
         if (u.origin === 'inspiration') {
-            const c = this.conscience;
+            // THE SPROUT MOMENT (owner: not at dawn — when it serves them). This is the first
+            // instant the self-sown want became a deed, so everything visible lands here: the
+            // spoken phrase, the journal, the chronicle, the took-root credit, the telemetry.
+            const w = this.world, c = this.conscience;
             const sd = c.seeds && c.seeds[kind];
-            const ph = sd && sd.phrase ? `"${String(sd.phrase).toUpperCase().slice(0, 38)}" - ` : '';
-            this.say(`${ph}I SAID I WOULD.`, '#c8b060');
+            const phRaw = sd && sd.phrase;
+            const ph = phRaw ? `"${String(phRaw).toUpperCase().slice(0, 38)}"... ` : '';
+            this.say(ph ? `${ph}THE THOUGHT KEPT RETURNING. TODAY I ANSWER IT.` : (GERM_LINE[kind] || 'THAT THOUGHT AGAIN. TODAY I ANSWER IT.'), '#c8b060');
             this.sparkle = Math.max(this.sparkle, 1);
+            this.remember('lesson', `The thought kept returning${phRaw ? ` - "${phRaw}"` : ''}. Today I gave in to it.`, null, 0.8);
             this.world.addChronicle('whisper', `${shortName(this)} followed a thought that had taken root and ${URGE_HEEDED_VERB[kind] || 'saw it through'}.`,
                 this, null, '#c8b060', { tier: 'callout', tone: 'triumph', why: 'a thought of their own' });
+            c.rooted = c.rooted || {};
+            c.rooted[kind] = w.day;                             // the notebook's credit: it BECAME a deed today
+            w._germEvent = { kind, day: w.day, farmerSeed: this.sheet.seed };   // telemetry pickup (main.js), off-sim
             if (sd) delete c.seeds[kind];                       // fulfilled — the seed became the deed
             c.warmth = Math.min(3, (c.warmth || 0) + 1);        // O2 — it bore fruit; the voice earns a little trust
             return;
@@ -9812,18 +9820,17 @@ export class Farmer {
     // The sprout: a normal urge with origin 'inspiration'. Deliberately NOT via #plantUrge — a
     // self-sown urge must not spend the farmer's daily heed count (item 11); the decide loop
     // treats it like any want, and every beat downstream branches on the origin.
+    //
+    // SILENT by design (owner, 2026-08-12): a dawn announcement felt scripted — "too linear".
+    // The dawn roll only decides that today the thought CAN win; the visible sprout moment is the
+    // ACT itself (#heededWhisper's inspiration branch), whenever the decide loop finds it serves
+    // them. Until then the urge quietly tilts their choices, exactly like a thought you have not
+    // yet admitted you are going to act on.
     #germinate(kind, s) {
         const w = this.world, c = this.conscience;
         c.urge = { kind, target: s.target || null, weight: URGE_WEIGHT, expiresDay: w.day + 1, condition: null, armed: true, origin: 'inspiration' };
         s.sprouted = w.day;
         s.w = SEED_FLOOR * 2;   // dormant, not forgotten: phrase/target survive; acted -> deleted, lapsed -> re-armed
-        c.rooted = c.rooted || {};
-        c.rooted[kind] = w.day;                                    // powers the whisper-log "took root" marker
-        const ph = s.phrase ? `"${String(s.phrase).toUpperCase().slice(0, 38)}"` : null;
-        this.say(ph ? `${ph}... TODAY I SEE ABOUT IT.` : (GERM_LINE[kind] || 'THAT THOUGHT AGAIN. TODAY I SEE ABOUT IT.'), '#c8b060');
-        this.remember('lesson', `The thought kept returning${s.phrase ? ` - "${s.phrase}"` : ''}. Today I gave in to it.`, null, 0.8);
-        w.addLog(`${shortName(this)} woke set on a thought of their own`, '#c8b060');
-        w._germEvent = { kind, day: w.day, farmerSeed: this.sheet.seed };   // display/telemetry pickup (main.js), off-sim
     }
 
     // Plant (or replace) the single active urge and spend a daily heed. A BARGAIN starts

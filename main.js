@@ -5456,17 +5456,21 @@ function drawSheet(f) {
             {
                 const seeds = f.sheet.conscience?.seeds;
                 if (seeds) {
-                    let bk = null;
-                    for (const k of Object.keys(seeds)) if (!bk || seeds[k].w > seeds[bk].w) bk = k;
+                    // a STIRRING seed (sprouted, its self-sown urge live, act pending) outranks
+                    // the strongest — it is the one whose story is happening right now
+                    const cc = f.sheet.conscience;
+                    const stirring = Object.keys(seeds).find(k => seeds[k].sprouted && cc.urge && cc.urge.origin === 'inspiration' && cc.urge.kind === k && world.day <= cc.urge.expiresDay);
+                    let bk = stirring || null;
+                    if (!bk) for (const k of Object.keys(seeds)) if (!bk || seeds[k].w > seeds[bk].w) bk = k;
                     if (bk) {
                         const s = seeds[bk];
-                        const st = seedStage(s, world.day);
+                        const st = stirring ? 'stirring' : seedStage(s, world.day);
                         // the farmer's own remembered phrasing of the whisper when it exists (C2 —
                         // the same words they'll speak if it ever germinates); kind/target otherwise
                         const what = s.phrase ? `'${String(s.phrase).slice(0, 24)}'`
                             : (s.target ? `${bk} (${String(s.target).split(' ')[0]})` : bk);
-                        const word = st === 'fresh' ? 'PLANTED' : st === 'turning' ? 'TAKING ROOT' : 'FADING';
-                        for (const ln of wrapText(`A SEED: ${what.toUpperCase()} - ${word}`, 34)) { drawText(ctx, ln, IX + 2, y, st === 'fading' ? '#8a8f9c' : '#c8b060'); y += 7; }
+                        const word = st === 'stirring' ? 'STIRRING' : st === 'fresh' ? 'PLANTED' : st === 'turning' ? 'TAKING ROOT' : 'FADING';
+                        for (const ln of wrapText(`A SEED: ${what.toUpperCase()} - ${word}`, 34)) { drawText(ctx, ln, IX + 2, y, st === 'fading' ? '#8a8f9c' : st === 'stirring' ? '#7dd069' : '#c8b060'); y += 7; }
                     }
                 }
             }
@@ -5812,6 +5816,10 @@ function drawConscienceChat(x, y, w, h) {
     // farmer's animalese as it lands. Progress advances only while the panel is drawn (dt-capped),
     // so a minimized widget holds the line rather than letting it silently catch up; the first word
     // lands with the reply so there is never an empty beat after the "..." shimmer.
+    // #inspiration — the newest QUESTION exchange per kind carries the seed's stateful line
+    // (computed before the render loop that reads it)
+    const lastQuestionFor = {};
+    for (const e of c.log) if (e.who !== 'voice' && e.verdict === 'QUESTION' && e.kind) lastQuestionFor[e.kind] = e;
     let revealEntry = null, revealText = '';
     if (chatReveal && chatReveal.c === c) {
         const last = c.log[c.log.length - 1];
@@ -5849,11 +5857,22 @@ function drawConscienceChat(x, y, w, h) {
         const prefix = isVoice ? '> ' : (e.verdict === 'QUESTION' ? '* ' : '  ');
         const wrapped = wrapLine(prefix + (e === revealEntry ? revealText : e.text), maxChars);
         wrapped.forEach((ln, i) => lines.push({ text: (i === 0 ? ln : '  ' + ln), col }));
-        // #inspiration C2 — the out-of-fiction credit in the player's own notebook: the QUESTION
-        // exchange whose seed later germinated gets its "took root" line. The town never salutes
-        // the whisperer; the notebook just updates.
-        if (!isVoice && e.verdict === 'QUESTION' && e.kind && c.rooted && c.rooted[e.kind] != null && c.rooted[e.kind] >= (e.day ?? 0)) {
-            lines.push({ text: `  * TOOK ROOT DAY ${c.rooted[e.kind]}`, col: '#c8b060' });
+        // #inspiration C2 (owner: the loop must not feel hidden) — a STATEFUL seed line in the
+        // transcript itself, under the newest QUESTION exchange per kind, reflecting the ledger's
+        // live truth: green while the seed lives (planted -> taking hold -> fading), gold once it
+        // took root. Derived, never stored — the capped log and the LLM history stay clean — and
+        // it waits for the reveal to finish so the reply lands before its consequence.
+        if (!isVoice && e.verdict === 'QUESTION' && e.kind && e === lastQuestionFor[e.kind] && e !== revealEntry) {
+            const rootedDay = c.rooted && c.rooted[e.kind];
+            const seed = c.seeds && c.seeds[e.kind];
+            if (rootedDay != null && rootedDay >= (e.day ?? 0)) {
+                lines.push({ text: `  * TOOK ROOT DAY ${rootedDay}`, col: age >= 1 ? '#6a6f7c' : '#c8b060' });
+            } else if (seed) {
+                const stirring = seed.sprouted && c.urge && c.urge.origin === 'inspiration' && c.urge.kind === e.kind && world.day <= c.urge.expiresDay;
+                const st = stirring ? 'stirring' : seedStage(seed, world.day);
+                const txt = st === 'stirring' ? '* THE SEED IS STIRRING' : st === 'fresh' ? '* A SEED IS PLANTED' : st === 'turning' ? '* THE SEED IS TAKING HOLD' : '* THE SEED IS FADING';
+                lines.push({ text: '  ' + txt, col: age >= 1 ? '#6a6f7c' : '#7dd069' });
+            }
         }
     }
     if (chatThinking) lines.push({ text: '  ' + '.'.repeat(1 + (Math.floor(Date.now() / 300) % 3)), col: '#7dd069' });

@@ -202,7 +202,7 @@ function walkDawns(w, farmers, days, each) {
     return false;
 }
 
-// ---- 8 · germination fires, as the farmer's own act ------------------------------------------
+// ---- 8 · germination is SILENT at dawn; the theater waits for the act ------------------------
 {
     const w = boot(424242);
     const f = w.farmers[0];
@@ -210,14 +210,34 @@ function walkDawns(w, farmers, days, each) {
     const s = ripen(f, 'explore', { phrase: 'explore past the northern fog' });
     const hit = walkDawns(w, [f], 40, () => f.sheet.conscience.urge?.origin === 'inspiration');
     assert.ok(hit, 'a ripe seed on a curious mind germinated within 40 dawns');
-    const u = f.sheet.conscience.urge;
-    assert.equal(u.kind, 'explore');
+    const c = f.sheet.conscience;
+    assert.equal(c.urge.kind, 'explore');
     assert.ok(s.sprouted, 'seed marked sprouted (dormant, not forgotten)');
     assert.ok(s.phrase, 'the phrase survives germination');
-    assert.equal(f.sheet.conscience.rooted.explore, w.day, 'rooted[kind] powers the took-root marker');
-    assert.ok(w._germEvent && w._germEvent.kind === 'explore', 'the telemetry event was stamped');
-    assert.ok((f.bubble?.lines || []).join(' ').includes('EXPLORE PAST THE NORTHERN FOG'), 'the farmer SPEAKS the abbreviated whisper');
-    ok('germination: self-sown urge, dormant seed, rooted marker, spoken phrase');
+    // owner (2026-08-12): a dawn announcement is "too scripted" — the sprout moment is the ACT.
+    // At dawn: the urge exists and quietly tilts; no credit, no telemetry, no sprout speech.
+    assert.ok(!c.rooted || c.rooted.explore == null, 'no took-root credit at dawn');
+    assert.ok(!w._germEvent, 'no telemetry at dawn');
+    assert.ok(!(f.bubble?.lines || []).join(' ').includes('TODAY I ANSWER IT'), 'no sprout speech at dawn (the reminder musing may whisper, the sprout may not)');
+    ok('germination is silent: the urge tilts quietly until the act finds its moment');
+}
+
+// ---- 8b · the sprout MOMENT is the act — when it serves them ---------------------------------
+{
+    const w = boot(565656);
+    const f = w.farmers[0];
+    const c = f.conscience;
+    c.seeds = { rest: { w: 0.3, firstDay: w.day - 3, day: w.day, target: null, sprouted: w.day, phrase: 'rest those weary bones' } };
+    c.urge = { kind: 'rest', target: null, weight: 0.07, expiresDay: w.day + 1, condition: null, armed: true, origin: 'inspiration' };
+    f.energy = 0.05;   // spent — the decide loop will route to rest of its own accord
+    let acted = false;
+    for (let i = 0; i < 6000 && !acted; i++) { w.tick(1 / 30); acted = !!(c.rooted && c.rooted.rest != null); }
+    assert.ok(acted, 'the act happened mid-day, chosen by the decide loop');
+    assert.ok((f.bubble?.lines || []).join(' ').includes('REST THOSE WEARY BONES'), 'the sprout moment speaks the phrase AT the act');
+    assert.ok(!c.seeds.rest, 'the seed became the deed');
+    assert.equal(c.warmth, 1, 'O2 warmth fed at the act');
+    assert.ok(w._germEvent && w._germEvent.kind === 'rest', 'telemetry stamped at the act');
+    ok('the sprout moment is the act: phrase, credit, warmth, telemetry all land when it serves them');
 }
 
 // ---- 9 · the gates: pressure, kind coverage, visit target ------------------------------------
