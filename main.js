@@ -5845,11 +5845,24 @@ function drawConscienceChat(x, y, w, h) {
             else { revealEntry = last; revealText = wordsAll.slice(0, count).join(' '); }
         } else if (!last || last.who !== 'voice') chatReveal = null;   // log moved on, or the entry aged past today — stand down (only an armed-and-awaiting 'voice' tail keeps it)
     }
-    for (const e of c.log) {
+    // #inspiration (Codex #124 r2 P1) — the age-2 fade removed the QUESTION exchange at EXACTLY
+    // GERM_MIN_AGE, so the original exchange could show PLANTED and TAKING HOLD but never
+    // STIRRING, FADING or TOOK ROOT: the payoff aged out before it could arrive. A seed-anchor
+    // exchange (the newest QUESTION per kind) now lives as long as its STORY does — while the
+    // seed exists, and for two days after it takes root — and its paired voice line stays with it.
+    const storyAlive = (e) => {
+        if (e.who === 'voice' || e.verdict !== 'QUESTION' || !e.kind || e !== lastQuestionFor[e.kind]) return false;
+        if (c.seeds && c.seeds[e.kind]) return true;                       // planted/turning/stirring/fading — still living
+        return e.rooted != null && world.day - e.rooted < 2;               // took root — linger two days, then rest
+    };
+    for (let ei = 0; ei < c.log.length; ei++) {
+        const e = c.log[ei];
         // thoughts FADE: yesterday's dim, older than that leave the panel entirely (the stored log keeps
         // its 40-entry cap for the LLM's memory — this is display hygiene, not amnesia)
         const age = world.day - (e.day ?? world.day);
-        if (age >= 2) continue;
+        const next = c.log[ei + 1];
+        const anchored = storyAlive(e) || (e.who === 'voice' && next && storyAlive(next));   // keep the question with its reply
+        if (age >= 2 && !anchored) continue;
         const isVoice = e.who === 'voice';
         const col = age >= 1 ? '#6a6f7c' : (isVoice ? '#c8b060' : '#c8ccd8');   // gold = your thought, white = their reply, grey = yesterday
         // #inspiration — a QUESTION reply is the seed verdict: mark it in the player's own log
@@ -5865,14 +5878,16 @@ function drawConscienceChat(x, y, w, h) {
         if (!isVoice && e.verdict === 'QUESTION' && e.kind && e === lastQuestionFor[e.kind] && e !== revealEntry) {
             // e.rooted is stamped on the EXACT entry at the sprout moment (Codex #124 P2 — a
             // kind+day lookup let a later same-day QUESTION inherit an earlier sprout's credit)
+            // the status dims by ITS OWN freshness, never the exchange's age — an anchored old
+            // exchange is exactly where TOOK ROOT lands, and it must land gold
             const seed = c.seeds && c.seeds[e.kind];
             if (e.rooted != null) {
-                lines.push({ text: `  * TOOK ROOT DAY ${e.rooted}`, col: age >= 1 ? '#6a6f7c' : '#c8b060' });
+                lines.push({ text: `  * TOOK ROOT DAY ${e.rooted}`, col: world.day - e.rooted >= 1 ? '#6a6f7c' : '#c8b060' });
             } else if (seed) {
                 const stirring = seed.sprouted && c.urge && c.urge.origin === 'inspiration' && c.urge.kind === e.kind && world.day <= c.urge.expiresDay;
                 const st = stirring ? 'stirring' : seedStage(seed, world.day);
                 const txt = st === 'stirring' ? '* THE SEED IS STIRRING' : st === 'fresh' ? '* A SEED IS PLANTED' : st === 'turning' ? '* THE SEED IS TAKING HOLD' : '* THE SEED IS FADING';
-                lines.push({ text: '  ' + txt, col: age >= 1 ? '#6a6f7c' : '#7dd069' });
+                lines.push({ text: '  ' + txt, col: st === 'fading' ? '#8a8f9c' : '#7dd069' });
             }
         }
     }
