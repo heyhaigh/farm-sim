@@ -484,6 +484,48 @@ function fsInspiration() {
     ok('took-root credit is entry-exact - no same-day inheritance');
 }
 
+// ---- 13h · the log cap evicts complete exchanges (Codex #124 r3) -----------------------------
+{
+    const { whisper } = await import('../conscience.js');
+    const w = boot(626262);
+    const f = w.farmers[3];
+    const c = f.conscience;
+    c.log = [];
+    for (let i = 0; i < 20; i++) {
+        c.log.push({ who: 'voice', text: 'q' + i, day: w.day });
+        c.log.push({ who: 'ry', text: 'a' + i, day: w.day, verdict: 'DISMISS', kind: 'chop' });
+    }
+    // the split is TRANSIENT — the reply's push heals the head, so the contract is only
+    // observable on the single voice push (the async-wait window Codex described)
+    const { logLine } = await import('../conscience.js');
+    logLine(c, 'voice', 'the new whisper', w.day);
+    assert.equal(c.log.length, 39, 'the head PAIR was evicted together (single-shift leaves 40)');
+    assert.equal(c.log[0].who, 'voice', 'no orphaned reply at the head during the wait');
+    logLine(c, 'ry', 'the reply', w.day, 'DISMISS', 'chop');
+    assert.equal(c.log.length, 40, 'the exchange completed within the cap');
+    await whisper(w, f, 'go chop some wood for the pile', () => {});
+    assert.ok(c.log.length <= 40, 'cap holds through a real exchange');
+    assert.equal(c.log[0].who, 'voice', 'the head stays a whole exchange');
+    ok('the 40-cap evicts complete pairs, never half an exchange (single-push observed)');
+}
+
+// ---- 13i · refused sprouts stand down; frozen anchors hold (Codex #124 r3) — source pins ------
+{
+    const farmSrc = fsInspiration();
+    const at = farmSrc.indexOf('REFUSED self-sown watch');
+    assert.ok(at > 0, 'the refusal branch carries its fix');
+    const refuse = farmSrc.slice(at, at + 700);
+    assert.ok(/delete rs\.sprouted/.test(refuse) && /cc\.urge = null/.test(refuse),
+        'a manager-refused sprout clears NOW and re-arms its seed (no two-day STIRRING ghost)');
+    const mainSrc = fs.readFileSync(new URL('../main.js', import.meta.url), 'utf8');
+    assert.equal((mainSrc.match(/!c\.urge\.resolved|!cc\.urge\.resolved/g) || []).length, 2,
+        'both STIRRING predicates (transcript + detail card) exclude resolved urges');
+    assert.ok(mainSrc.includes('chatFreeze = { c: f.conscience'), 'the pre-verdict freeze is armed at submit');
+    assert.ok(/seedFor = \(k\) => \(c\.seeds && c\.seeds\[k\]\) \|\| \(chatFreeze/.test(mainSrc),
+        'the transcript reads seeds through the freeze - a DEFY cannot vanish the anchor mid-reveal');
+    ok('refusal stand-down + reveal-order freeze pinned at source');
+}
+
 // ---- 14 · a pending sprout never eats the player's town cap (item 11) ------------------------
 {
     const w = boot(313131);

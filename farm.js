@@ -10873,6 +10873,16 @@ export class Farmer {
                     { tier: 'callout', tone: 'triumph', why: 'the Manager heeded the whisper and posted a watch' });
             } else {
                 u.resolved = true;
+                // #inspiration (Codex #124 r3) — a REFUSED self-sown watch is OVER: the decide
+                // loop will never pursue it again, so a lingering urge only makes the panels call
+                // a dead sprout STIRRING for two days. Clear it now and re-arm the seed — the
+                // thought survives the refusal and may find another day.
+                if (u.origin === 'inspiration') {
+                    const cc = this.conscience;
+                    const rs = cc.seeds && cc.seeds.watch;
+                    if (rs) delete rs.sprouted;
+                    cc.urge = null;
+                }
                 mgr.say(w.culture === 'orc' ? 'WE HAVE A WATCH. BACK TO WORK.' : "WE'VE A WATCH ALREADY. BACK TO YOUR FIELD.", '#c8b088');
                 this.sayAfter(mgr.speechReadTime('WE') + 0.3, 'AS YOU SAY.', '#c8b088');
                 w.addChronicle('whisper', `${shortName(this)} asked to stand watch, but ${shortName(mgr)} kept the current watch and turned them back.`, this, mgr, '#c8b088',

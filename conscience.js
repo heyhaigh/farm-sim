@@ -447,9 +447,19 @@ export async function whisper(world, farmer, message, save) {
     return { verdict, kind, target, reply: line, reason: outcome.reason };
 }
 
-function logLine(c, who, text, day, verdict, kind) {
+// Exported for the test harness (the seedDeposit precedent): the pair-eviction contract is only
+// observable on a SINGLE push — in a full exchange the reply's push coincidentally heals the head,
+// so no post-hoc assertion can distinguish it (a mutation proved exactly that escape).
+export function logLine(c, who, text, day, verdict, kind) {
     // kind rides reply rows (#inspiration slice 2) so the panel can mark the QUESTION exchange
     // whose seed later took root. Additive; old entries without it simply never match.
     c.log.push(verdict ? { who, text, day, verdict, ...(kind ? { kind } : {}) } : { who, text, day });
-    while (c.log.length > 40) c.log.shift();
+    // Codex #124 r3 — evict COMPLETE exchanges, never half of one: shifting single rows split an
+    // anchored voice/QUESTION pair (the voice evicted while the new whisper awaited its reply,
+    // then the reply's push evicted the anchor while its seed lived). When the head is a
+    // voice+reply pair, both go together.
+    while (c.log.length > 40) {
+        const pair = c.log[0].who === 'voice' && c.log[1] && c.log[1].who !== 'voice';
+        c.log.splice(0, pair ? 2 : 1);
+    }
 }

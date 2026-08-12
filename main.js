@@ -112,6 +112,11 @@ const storedFx = (k, list, dflt) => { try { const v = localStorage.getItem('ryf.
 let whisperKeyFx = storedFx('keyfx', KEY_VARIANTS, DEFAULT_KEY_VARIANT);
 let whisperVoiceFx = storedFx('voicefx', VOICE_VARIANTS, DEFAULT_VOICE_VARIANT);
 let chatReveal = null;            // #whisper-voice { c, text, progress, spoken, voice, last } — the newest reply writing itself out
+// #inspiration (Codex #124 r3) — the pre-verdict seed snapshot, held from SUBMIT until the reply
+// reveal finishes: conscienceCheck can DEFY-delete a seed seconds before the reply arrives, and
+// the anchored exchange must not vanish while the panel still shows the pending shimmer — the
+// farmer's words land before their consequence.
+let chatFreeze = null;            // { c, seeds }
 let chatDropdownOpen = false;     // the "switch farmer" picker is expanded over the list
 let chatDropRows = [];            // { farmer, y0, y1 } hit regions for the open dropdown
 let chatEntryRect = null;         // screen-px rect of the entry row (for click-to-focus + input overlay)
@@ -5459,7 +5464,7 @@ function drawSheet(f) {
                     // a STIRRING seed (sprouted, its self-sown urge live, act pending) outranks
                     // the strongest — it is the one whose story is happening right now
                     const cc = f.sheet.conscience;
-                    const stirring = Object.keys(seeds).find(k => seeds[k].sprouted && cc.urge && cc.urge.origin === 'inspiration' && cc.urge.kind === k && world.day <= cc.urge.expiresDay);
+                    const stirring = Object.keys(seeds).find(k => seeds[k].sprouted && cc.urge && cc.urge.origin === 'inspiration' && cc.urge.kind === k && !cc.urge.resolved && world.day <= cc.urge.expiresDay);   // !resolved (Codex #124 r3)
                     let bk = stirring || null;
                     if (!bk) for (const k of Object.keys(seeds)) if (!bk || seeds[k].w > seeds[bk].w) bk = k;
                     if (bk) {
@@ -5841,18 +5846,21 @@ function drawConscienceChat(x, y, w, h) {
                 if (chatReveal.progress >= tAcc) count = i + 1; else break;
             }
             while (chatReveal.spoken < count) { if (whisperVoiceFx !== 'off') audio.speakWord(chatReveal.voice, wordsAll[chatReveal.spoken], whisperVoiceFx); chatReveal.spoken++; }
-            if (count >= wordsAll.length) chatReveal = null;   // fully out — render plain from here on
+            if (count >= wordsAll.length) { chatReveal = null; chatFreeze = null; }   // fully out — render plain, release the frozen anchors
             else { revealEntry = last; revealText = wordsAll.slice(0, count).join(' '); }
-        } else if (!last || last.who !== 'voice') chatReveal = null;   // log moved on, or the entry aged past today — stand down (only an armed-and-awaiting 'voice' tail keeps it)
+        } else if (!last || last.who !== 'voice') { chatReveal = null; chatFreeze = null; }   // log moved on, or the entry aged past today — stand down (only an armed-and-awaiting 'voice' tail keeps it)
     }
     // #inspiration (Codex #124 r2 P1) — the age-2 fade removed the QUESTION exchange at EXACTLY
     // GERM_MIN_AGE, so the original exchange could show PLANTED and TAKING HOLD but never
     // STIRRING, FADING or TOOK ROOT: the payoff aged out before it could arrive. A seed-anchor
     // exchange (the newest QUESTION per kind) now lives as long as its STORY does — while the
     // seed exists, and for two days after it takes root — and its paired voice line stays with it.
+    // seed lookup that honors the pre-verdict freeze: while a reply is pending/revealing, a seed
+    // the verdict just destroyed still anchors and still shows its pre-verdict stage
+    const seedFor = (k) => (c.seeds && c.seeds[k]) || (chatFreeze && chatFreeze.c === c && chatFreeze.seeds[k]) || null;
     const storyAlive = (e) => {
         if (e.who === 'voice' || e.verdict !== 'QUESTION' || !e.kind || e !== lastQuestionFor[e.kind]) return false;
-        if (c.seeds && c.seeds[e.kind]) return true;                       // planted/turning/stirring/fading — still living
+        if (seedFor(e.kind)) return true;                                  // planted/turning/stirring/fading — still living (or frozen mid-reveal)
         return e.rooted != null && world.day - e.rooted < 2;               // took root — linger two days, then rest
     };
     for (let ei = 0; ei < c.log.length; ei++) {
@@ -5880,11 +5888,11 @@ function drawConscienceChat(x, y, w, h) {
             // kind+day lookup let a later same-day QUESTION inherit an earlier sprout's credit)
             // the status dims by ITS OWN freshness, never the exchange's age — an anchored old
             // exchange is exactly where TOOK ROOT lands, and it must land gold
-            const seed = c.seeds && c.seeds[e.kind];
+            const seed = seedFor(e.kind);
             if (e.rooted != null) {
                 lines.push({ text: `  * TOOK ROOT DAY ${e.rooted}`, col: world.day - e.rooted >= 1 ? '#6a6f7c' : '#c8b060' });
             } else if (seed) {
-                const stirring = seed.sprouted && c.urge && c.urge.origin === 'inspiration' && c.urge.kind === e.kind && world.day <= c.urge.expiresDay;
+                const stirring = seed.sprouted && c.urge && c.urge.origin === 'inspiration' && c.urge.kind === e.kind && !c.urge.resolved && world.day <= c.urge.expiresDay;   // !resolved: a refused sprout is not stirring (Codex #124 r3)
                 const st = stirring ? 'stirring' : seedStage(seed, world.day);
                 const txt = st === 'stirring' ? '* THE SEED IS STIRRING' : st === 'fresh' ? '* A SEED IS PLANTED' : st === 'turning' ? '* THE SEED IS TAKING HOLD' : '* THE SEED IS FADING';
                 lines.push({ text: '  ' + txt, col: st === 'fading' ? '#8a8f9c' : '#7dd069' });
@@ -6012,6 +6020,7 @@ async function submitWhisper() {
         // crossing in between would otherwise save the DESTINATION town and lose the whisper on the source.
         const w = world;
         chatScroll = 0;   // a new exchange snaps the transcript to the newest line
+        chatFreeze = { c: f.conscience, seeds: structuredClone(f.conscience.seeds || {}) };   // hold the pre-verdict anchors through the reveal
         // #funnel — the whisper is the game's only verb, so "did they ever use it" is the funnel's
         // hinge step. Fired on SEND, not on reply: a whisper that 429s into the fallback template
         // is still the player having used the verb, and gating on a successful LLM round-trip would
@@ -6037,6 +6046,7 @@ async function submitWhisper() {
     } finally {
         chatThinking = false;
         chatScroll = 0;
+        if (!chatReveal) chatFreeze = null;   // no reveal to protect — release the pre-verdict anchors now
     }
 }
 
