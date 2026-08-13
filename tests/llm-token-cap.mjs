@@ -798,6 +798,33 @@ await check('P1-1: refused formats cannot inflate the upstream request count', a
     assert.ok(fetches <= 26, `${fetches} upstream requests against a 26/minute ceiling`);
 });
 
+await check('the ledger reconciles to the PROVIDER\'S bill, not the reservation (2026-08-13)', async () => {
+    // The owner-found disconnect: the reservation (chars/4 + full maxTokens) sat in the window
+    // forever while Groq's console read far lower — the budget starved callers the provider would
+    // happily have served. A 200 carrying usage.total_tokens must replace the reserved cost.
+    globalThis.fetch = async () => ({
+        ok: true, status: 200, text: async () => '',
+        json: async () => ({ usage: { prompt_tokens: 100, completion_tokens: 23, total_tokens: 123 },
+            choices: [{ message: { content: '{"ok":true}' } }] }),
+    });
+    process.env.RY_FARMS_TOKEN_BUDGET = '1000000';
+    process.env.RY_FARMS_LLM_MODELS = 'm';
+    const { callLLM } = freshState();
+    await callLLM({ system: 'x'.repeat(4000), user: 'y'.repeat(4000), schema: SCHEMA, maxTokens: 320 });
+    const spend = globalThis.__ryFarmsLlmState.budget.spend;
+    assert.strictEqual(spend.length, 1, 'one ledger entry');
+    assert.strictEqual(spend[0].cost, 123,
+        `ledger holds the provider's 123, not the ~2320 reservation (got ${spend[0].cost})`);
+
+    // ...and a response WITHOUT usage keeps the conservative estimate
+    globalThis.fetch = async () => ({
+        ok: true, status: 200, text: async () => '',
+        json: async () => ({ choices: [{ message: { content: '{"ok":true}' } }] }),
+    });
+    await callLLM({ system: 'x'.repeat(4000), user: 'y'.repeat(4000), schema: SCHEMA, maxTokens: 320 });
+    assert.ok(spend[1].cost >= 2000, `no usage -> the estimate stands (got ${spend[1].cost})`);
+});
+
 // ---- report ------------------------------------------------------------------------------------
 console.log(`\n${passes} passed, ${failures} failed`);
 if (failures) {

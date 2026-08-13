@@ -553,9 +553,21 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
                             // fallback was never asked (Codex #116 P1). Reasoning models returning
                             // empty content has already happened once in this migration, which is
                             // exactly the shape this now survives.
+                            const rawBody = await r.json();
+                            // #tokenbudget RECONCILE TO ACTUALS (owner-found disconnect, 2026-08-13):
+                            // the reservation charges chars/4 + FULL maxTokens, but Groq bills the
+                            // real usage it reports on every response — so the budget was starving
+                            // callers while the Groq console sat clean (canned replies at ~2 whispers/
+                            // min against a meter reading far under the ceiling). The estimate remains
+                            // the ADMISSION price; the ledger keeps the PROVIDER'S bill. Failures keep
+                            // the conservative estimate; an actual LARGER than the estimate (reasoning
+                            // bursts) is kept too — the window mirrors Groq's in both directions.
+                            const actual = rawBody && rawBody.usage && Number.isFinite(rawBody.usage.total_tokens)
+                                ? rawBody.usage.total_tokens : 0;
+                            if (actual > 0) attemptEntry.cost = actual;
                             let out;
                             try {
-                                out = parseJson(extractContent(await r.json()));
+                                out = parseJson(extractContent(rawBody));
                             } catch (parseErr) {
                                 lastErr = parseErr;
                                 if (!lastModel) { tryNextModel = true; break; }
