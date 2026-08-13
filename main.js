@@ -9004,11 +9004,14 @@ function drawStartScreen() {
         const titleBottom = drawTitleArt(cx, GH * 0.13, Math.min(GW - 48, 300));
         // the title frame carries transparent padding below the letters — tuck the tagline up into it so it
         // sits beneath the animation (but not jammed against the vines).
+        // #version — tagline + version centered as ONE unit (centering the tagline alone left the
+        // pair visibly off-center once the version hung off its right). Version stays the dim one.
         const tag = 'A world that remembers itself';
-        const tagX = Math.round(cx - textWidth(tag) / 2);
+        const tagGap = 6;
+        const unitW = textWidth(tag) + tagGap + textWidth(VERSION);
+        const tagX = Math.round(cx - unitW / 2);
         drawText(ctx, tag.toUpperCase(), tagX, titleBottom - 8, '#9aa0b4');
-        // #version — quiet, to the tagline's right; bumped automatically by tools/ship.sh on every prod push
-        drawText(ctx, VERSION.toUpperCase(), tagX + textWidth(tag) + 6, titleBottom - 8, '#5a5f6c');
+        drawText(ctx, VERSION.toUpperCase(), tagX + textWidth(tag) + tagGap, titleBottom - 8, '#5a5f6c');
 
         // PRIMARY: the gold ▶ with the gently BLINKING arrow. When this browser holds a played town, the
         // primary is CONTINUE — <TOWN> (#continue: a returning player's path back used to be spectate a
