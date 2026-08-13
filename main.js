@@ -6011,7 +6011,11 @@ async function submitWhisper() {
     const el = chatInputEl;
     if (!f || !el) return;
     const text = el.value.trim();
-    if (!text || chatThinking) return;
+    // `|| chatReveal` (Codex #124 r4): chatThinking clears when the request RETURNS, but the
+    // reply may still be writing itself out — a second Enter mid-reveal overwrote chatFreeze
+    // with post-verdict state and cut the first reveal short. While the farmer is speaking,
+    // Enter waits its turn (the typed text stays in the box).
+    if (!text || chatThinking || chatReveal) return;
     el.value = '';
     chatThinking = true;
     chatScroll = 0;   // snap to newest

@@ -349,7 +349,14 @@ function walkDawns(w, farmers, days, each) {
     assert.ok(c.seeds.hunt.w > 1, 'the interruption re-deposited the strongest residue');
     assert.ok(!c.seeds.hunt.sprouted, 'sprouted cleared - the thought may sprout again (item 16)');
     assert.equal(c.seeds.hunt.phrase, 'hunt the ridge', 'the phrase survived the whole cycle');
-    ok('a sprout swallowed by the days re-arms instead of dying');
+    // Codex #124 r4's probed invariant, inverted: "re-armed" must mean GERMINABLE — the redeposit
+    // puts the seed back over the ripe bar, so it can actually sprout a second time. (No weight
+    // topping here on purpose: a dormancy-only mutation leaves w=0.30 and this walk then never
+    // sprouts — the behavioral catch depends on the redeposit's own weight.)
+    f.sheet.personality.curiosity = 1.0;
+    const again = walkDawns(w, [f], 20, () => c.urge?.origin === 'inspiration');
+    assert.ok(again, 'the re-armed seed sprouted a second time (zero candidacies would mean re-armed in name only)');
+    ok('a sprout swallowed by the days re-arms instead of dying - and can sprout again');
 }
 
 // ---- 13b · nothing sprouts before GERM_MIN_AGE (fast local pin; the rates harness re-proves it)
@@ -515,15 +522,19 @@ function fsInspiration() {
     const at = farmSrc.indexOf('REFUSED self-sown watch');
     assert.ok(at > 0, 'the refusal branch carries its fix');
     const refuse = farmSrc.slice(at, at + 700);
-    assert.ok(/delete rs\.sprouted/.test(refuse) && /cc\.urge = null/.test(refuse),
-        'a manager-refused sprout clears NOW and re-arms its seed (no two-day STIRRING ghost)');
+    assert.ok(/#reseedFromUrge\(u\)/.test(refuse) && /urge = null/.test(refuse),
+        'a manager-refused sprout REDEPOSITS through the shared reseed (r4: dormancy-clearing alone left w=0.30 under the 0.60 ripe bar) and clears now');
+    // the shared reseed is the LAPSE mechanism (behaviorally proven in test 13) — refusal reuses it
+    assert.ok(/#reseedFromUrge\(c\.urge\)/.test(farmSrc), 'the lapse path uses the same shared reseed (one mechanism, no drift)');
     const mainSrc = fs.readFileSync(new URL('../main.js', import.meta.url), 'utf8');
     assert.equal((mainSrc.match(/!c\.urge\.resolved|!cc\.urge\.resolved/g) || []).length, 2,
         'both STIRRING predicates (transcript + detail card) exclude resolved urges');
     assert.ok(mainSrc.includes('chatFreeze = { c: f.conscience'), 'the pre-verdict freeze is armed at submit');
     assert.ok(/seedFor = \(k\) => \(c\.seeds && c\.seeds\[k\]\) \|\| \(chatFreeze/.test(mainSrc),
         'the transcript reads seeds through the freeze - a DEFY cannot vanish the anchor mid-reveal');
-    ok('refusal stand-down + reveal-order freeze pinned at source');
+    assert.ok(mainSrc.includes('if (!text || chatThinking || chatReveal) return;'),
+        'a second whisper cannot submit mid-reveal (r4: it overwrote the freeze with post-verdict state)');
+    ok('refusal stand-down + reveal-order freeze + mid-reveal submit guard pinned at source');
 }
 
 // ---- 14 · a pending sprout never eats the player's town cap (item 11) ------------------------

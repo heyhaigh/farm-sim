@@ -9808,6 +9808,17 @@ export class Farmer {
     // as germCandidate; does nothing a whisperless world could ever reach.
     germinateNow(cand) { this.#germinate(cand.kind, cand.seed); }
 
+    // A sprout that ENDED without becoming a deed (lapsed to the days, refused by the manager)
+    // leaves the strongest residue and may sprout again. One mechanism for both endings —
+    // Codex #124 r4: the refusal path deleted `sprouted` alone, but a germinated seed sits at
+    // SEED_FLOOR*2 (0.30), below GERM_RIPE_W (0.60): dormancy-clearing without the redeposit
+    // re-armed it in name only, and a 20-dawn probe showed zero candidacies before it faded.
+    #reseedFromUrge(u) {
+        this.#plantSeed(u.kind, u.target, SEED_LAPSED);
+        const rs = this.conscience.seeds && this.conscience.seeds[u.kind];
+        if (rs) delete rs.sprouted;
+    }
+
     // THE SPROUT MOMENT (owner: not at dawn — when it serves them). The first instant a
     // self-sown want became a deed: the spoken phrase, journal, chronicle, took-root credit
     // (stamped on the EXACT log entry, Codex #124 P2 — a same-day later QUESTION must not
@@ -10878,10 +10889,8 @@ export class Farmer {
                 // a dead sprout STIRRING for two days. Clear it now and re-arm the seed — the
                 // thought survives the refusal and may find another day.
                 if (u.origin === 'inspiration') {
-                    const cc = this.conscience;
-                    const rs = cc.seeds && cc.seeds.watch;
-                    if (rs) delete rs.sprouted;
-                    cc.urge = null;
+                    this.#reseedFromUrge(u);   // the SEED_LAPSED redeposit, not dormancy-clearing alone (r4)
+                    this.conscience.urge = null;
                 }
                 mgr.say(w.culture === 'orc' ? 'WE HAVE A WATCH. BACK TO WORK.' : "WE'VE A WATCH ALREADY. BACK TO YOUR FIELD.", '#c8b088');
                 this.sayAfter(mgr.speechReadTime('WE') + 0.3, 'AS YOU SAY.', '#c8b088');
@@ -11497,11 +11506,7 @@ export class Farmer {
                 // used to leave nothing; now the thought survives the interruption as a seed —
                 // and a lapsed SPROUT re-arms (sprouted cleared), so an interrupted germination
                 // may sprout again rather than dying to a raid week (item 16).
-                if (!c.urge.acted) {
-                    this.#plantSeed(c.urge.kind, c.urge.target, SEED_LAPSED);
-                    const rs = c.seeds && c.seeds[c.urge.kind];
-                    if (rs) delete rs.sprouted;
-                }
+                if (!c.urge.acted) this.#reseedFromUrge(c.urge);
                 c.urge = null;
             }
             // #inspiration — seeds fade nightly: volatile minds faster, curious minds hold longer.
