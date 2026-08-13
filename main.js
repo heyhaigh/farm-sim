@@ -6011,11 +6011,12 @@ async function submitWhisper() {
     const el = chatInputEl;
     if (!f || !el) return;
     const text = el.value.trim();
-    // `|| chatReveal` (Codex #124 r4): chatThinking clears when the request RETURNS, but the
-    // reply may still be writing itself out — a second Enter mid-reveal overwrote chatFreeze
-    // with post-verdict state and cut the first reveal short. While the farmer is speaking,
-    // Enter waits its turn (the typed text stays in the box).
-    if (!text || chatThinking || chatReveal) return;
+    // Codex #124 r4+r5: while THIS farmer's reply is still writing out, Enter waits its turn
+    // (a second submit overwrote chatFreeze with post-verdict state and cut the reveal short).
+    // SCOPED to the active farmer's own reveal (r5 P1): a reveal orphaned by a farmer or town
+    // switch pauses forever — as a global lock it disabled whispering until reload. An orphaned
+    // reveal resumes if its farmer is selected again, and the town-lens reset clears it outright.
+    if (!text || chatThinking || (chatReveal && chatReveal.c === f.conscience)) return;
     el.value = '';
     chatThinking = true;
     chatScroll = 0;   // snap to newest
@@ -7396,6 +7397,7 @@ function resetTownLenses() {
     faceoff = null; faceoffSeenEvent = null;
     _battleWatch = null; pendingInscription = null; simAccumulator = 0;   // #Codex36 P1-1: no cross-town battle finalization, fresh sim clock
     chatFarmer = null; chatWidgetOpen = false; chatDropdownOpen = false; blurChatInput();
+    chatReveal = null; chatFreeze = null;   // Codex #124 r5 — a town transition orphans a paused reveal forever; clear it (and its freeze) with the lens
     momentQueue.length = 0; calloutQueue.length = 0; activeMoment = null; activeCallout = null; momentsPrimed = false;
     chronReadTotal = world._chronTotal || 0; lastChronLen = -1; recapSeq = -1;
     sawCongregating = null;   // #firstwatch re-observe the new town before edge-detecting

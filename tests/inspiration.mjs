@@ -532,9 +532,11 @@ function fsInspiration() {
     assert.ok(mainSrc.includes('chatFreeze = { c: f.conscience'), 'the pre-verdict freeze is armed at submit');
     assert.ok(/seedFor = \(k\) => \(c\.seeds && c\.seeds\[k\]\) \|\| \(chatFreeze/.test(mainSrc),
         'the transcript reads seeds through the freeze - a DEFY cannot vanish the anchor mid-reveal');
-    assert.ok(mainSrc.includes('if (!text || chatThinking || chatReveal) return;'),
-        'a second whisper cannot submit mid-reveal (r4: it overwrote the freeze with post-verdict state)');
-    ok('refusal stand-down + reveal-order freeze + mid-reveal submit guard pinned at source');
+    assert.ok(mainSrc.includes('if (!text || chatThinking || (chatReveal && chatReveal.c === f.conscience)) return;'),
+        'the mid-reveal submit guard is SCOPED to the active farmer (r5 P1: a global lock let an orphaned reveal disable whispering until reload)');
+    assert.ok(/chatReveal = null; chatFreeze = null;.*town transition/.test(mainSrc),
+        'the town-lens reset clears the reveal and its freeze (an orphaned reveal can never clear itself)');
+    ok('refusal stand-down + reveal-order freeze + scoped submit guard + lens-reset clear pinned at source');
 }
 
 // ---- 14 · a pending sprout never eats the player's town cap (item 11) ------------------------
