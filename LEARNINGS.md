@@ -251,6 +251,44 @@ never sends stage 2", and a one-request calibration that promptly disproved half
 
 ---
 
+## The inspiration arc (2026-08-12/13, Codex #124 — six rounds, 13 findings)
+
+- **A self-imposed throttle must reconcile with the provider's meter.** The token budget charged
+  `chars/4 + FULL maxTokens` per call and never read the `usage` object Groq returns on every 200 —
+  so players got canned fallbacks while the Groq console sat clean (~40-60% of the window was
+  phantom reservation). The estimate is the ADMISSION price; the ledger keeps the provider's bill
+  (`_llm.js` reconciliation + llm-token-cap's mutation-caught case). The owner's "logs look clean
+  but I'm throttled" is the exact signature.
+- **Test the transient, not the healed end-state.** Single-row log eviction orphaned an anchored
+  voice/reply pair only DURING the async wait — the reply's push healed the head, so broken and
+  fixed code produced byte-identical final states and the mutation escaped a whole-exchange test.
+  Pin the contract on the single step where the window exists (export the helper if that is what
+  it takes).
+- **Arbitration bugs hide on single-candidate days.** A walk-until-first-success test lands on
+  days where only ONE candidate fired — first-wins and keyed-priority agree there, and the
+  order-dependence mutation escaped. ENGINEER the contested case from the keyed rolls (a
+  both-succeed dawn), the same lesson as the monument twin-worlds.
+- **Day-1 fixtures make `day - 1` timestamps FALSY.** `sprouted: w.day - 1` on a boot-day world is
+  `0`, so `!sprouted` asserts pass vacuously in both directions. Start time-stamped fixtures past
+  day 1.
+- **An LLM fills temporal holes.** The whisper snapshot carried day/season/weather but no
+  time-of-day → "just a quiet night" at DAY 56 AFTERNOON. Every clock the player can SEE must be
+  in the payload — and named in the prompt ("a farmer in the afternoon never speaks of night").
+- **"Re-armed" means every gate input restored, not the flag cleared.** A refused sprout had
+  `sprouted` deleted but its weight sat at 0.30 under the 0.60 ripe bar — re-armed in name only
+  (20 dawns, zero candidacies). Restoring eligibility means restoring EVERY precondition, and the
+  test is "does it actually happen again?" — walked to a second sprout, no weight-topping.
+- **Global UI locks keyed to transient state must be scoped and cleared at context switches.**
+  The reveal submit-lock outlived its farmer (reveals only advance while rendered); a town
+  transition orphaned it and the whisper box died until reload. Scope the lock by its owner
+  object; clear it at the lens reset.
+- **The reviewer must echo the reviewed sha** — the SECOND stale-review incident (#124 r2 reviewed
+  the pre-fix tree; six of its seven findings were already fixed). The directive preamble now
+  REQUIRES the sha echo; verify it before acting on any report.
+- **Prompt-side contracts ride the server's NAMED fields.** The conscience api rebuilds its user
+  JSON explicitly — a client payload addition is silently dropped unless threaded by name (the
+  code-seat's "passes through" was about validation, not prompt inclusion; caught live).
+
 ## Feature / UX patterns
 
 - **Canvas `<video>` has no automatic poster.** `drawImage(video)` with `readyState < 2` draws
