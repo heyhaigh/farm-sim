@@ -30,6 +30,7 @@ import { whisper, whisperLog } from './conscience.js';
 import { cultureWord } from './culture.js';   // #3.1 orc-vs-human display copy
 import { track, trackOnce, resetFunnel } from './analytics.js';   // #funnel display-side GA4 events
 import { buildPostcard, queryTown } from './postcard.js';   // #postcard the share link + copy line, and THE ?seed/?orc reading (off-sim)
+import { VERSION } from './version.js';   // #version shown on the title screen; bumped by tools/ship.sh per prod push
 import { voiceOf, wordDelay, KEY_VARIANTS, VOICE_VARIANTS, DEFAULT_KEY_VARIANT, DEFAULT_VOICE_VARIANT } from './whisper-fx.js';   // #whisper-fx key pops + animalese
 import { revealLine, DEFAULT_VARIANT } from './speech-anim.js';   // #bubble-reveal how a spoken line arrives
 
@@ -9004,7 +9005,10 @@ function drawStartScreen() {
         // the title frame carries transparent padding below the letters — tuck the tagline up into it so it
         // sits beneath the animation (but not jammed against the vines).
         const tag = 'A world that remembers itself';
-        drawText(ctx, tag.toUpperCase(), Math.round(cx - textWidth(tag) / 2), titleBottom - 8, '#9aa0b4');
+        const tagX = Math.round(cx - textWidth(tag) / 2);
+        drawText(ctx, tag.toUpperCase(), tagX, titleBottom - 8, '#9aa0b4');
+        // #version — quiet, to the tagline's right; bumped automatically by tools/ship.sh on every prod push
+        drawText(ctx, VERSION.toUpperCase(), tagX + textWidth(tag) + 6, titleBottom - 8, '#5a5f6c');
 
         // PRIMARY: the gold ▶ with the gently BLINKING arrow. When this browser holds a played town, the
         // primary is CONTINUE — <TOWN> (#continue: a returning player's path back used to be spectate a

@@ -1,5 +1,11 @@
 # INSPIRATION — whispers that leave an impression (design, post-council)
 
+> **STATUS (2026-08-12): ALL THREE SLICES BUILT** — slice 1 (seeds, `3e57365`), slice 2
+> (germination, `72e00bc`), slice 3 (the voiced white-bear, `9d5e96d`). Awaiting the single
+> Codex #124 gate over the whole feature. Remaining by design: **O1 creative reinterpretation**
+> needs its own design conversation (URGE_KINDS has no adjacency graph — inventing one is an
+> owner decision, not an extension).
+
 Owner ask (2026-08-12): a whisper should leave an impression the way our own thoughts do — acted on,
 ignored, or ignored *for now* until the returning thought wins, by personality. Must be (1) more
 obvious in the response and (2) potentially connected to real actions.

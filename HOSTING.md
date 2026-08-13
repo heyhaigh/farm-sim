@@ -20,6 +20,11 @@ Dockerfiles never diverge. The private repo carries the art and is what Railway 
 
 ## Deploying a change
 
+> **The canonical path is `tools/ship.sh`** — it refuses a dirty tree, runs the compat guard,
+> bumps the version (patch per push — the owner's rule; `minor`/`major` args for era changes),
+> commits it, and then runs exactly the flow below with every assertion. `--dry-run` previews.
+> The manual steps remain documented here as what the script does (and as the fallback).
+
 > ### ⚠️ `git push origin main` does NOT push what you are working on
 >
 > It pushes the local **`main` ref**, whatever branch happens to be checked out. This has already cost a
