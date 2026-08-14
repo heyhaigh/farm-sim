@@ -59,6 +59,7 @@ review.diff
 # shipped outcome of this work; these are the workings behind it.
 scratch_td/
 sprites.html
+click_sound_compare.html
 coop_scene_compare.html
 structures_before_after.html
 topdown_styles_compare.html
