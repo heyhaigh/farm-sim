@@ -7611,7 +7611,10 @@ out.addEventListener('pointerup', (e) => {
         // on the same seed). Clipboard API first; the execCommand textarea is the no-permission
         // fallback (we are inside the user gesture here, which is all execCommand needs).
         if (settingsHits.shareBtn && inRect(p, settingsHits.shareBtn)) {
-            const card = buildPostcard({ seed: world.seed, name: world.name, day: world.day, year: world.year, culture: world.culture, origin: location.origin });
+            // #Codex125-1 NO origin override: buildPostcard's default is the CANONICAL PUBLIC_ORIGIN.
+            // Passing location.origin had a player on the legacy host mint legacy links, perpetuating
+            // the old front door — the link a postcard carries is the game's address, not the sharer's.
+            const card = buildPostcard({ seed: world.seed, name: world.name, day: world.day, year: world.year, culture: world.culture });
             const copied = () => {
                 saveportNote = { text: 'POSTCARD COPIED - PASTE IT TO A FRIEND', until: performance.now() + 6000 };
                 track('postcard_copied', { seed: world.seed });
@@ -9422,12 +9425,20 @@ function drawStartScreen() {
         const awaySec = (Date.now() - lastSavedAt) / 1000;
         const AWAY_MIN_SEC = 1800, AWAY_CAP_SIM_SEC = 2 * (DAY_LENGTH + NIGHT_LENGTH);
         if (awaySec >= AWAY_MIN_SEC) {
+            // #Codex125-3 the visibility flag is wired to its listener LATER in boot, and farm.js
+            // treats undefined as VISIBLE — so catch-up ticks could issue an LLM chat request for a
+            // speech bubble no one will ever see (and from a background-restored tab, in violation
+            // of the hidden-tab guard). Catch-up is dormant time: force the flag for the loop's
+            // duration, then hand the REAL state to the listener era below. Display-only either way
+            // (tryLlmChat draws no rng, writes no sim state), so determinism is untouched.
+            world._tabHidden = true;
             const simSec = Math.min(awaySec, AWAY_CAP_SIM_SEC);
             // Capture the new beats by IDENTITY, not index: the chronicle caps at 240 via shift()
             // (farm.js addChronicle), so on a mature town — exactly this feature's audience — an
             // index anchor slides and slice(prevLen) returns [] while the town's eventful days vanish.
             const fromDay = world.day, before = new Set(world.chronicle), t0 = performance.now();
             for (let n = Math.floor(simSec / FIXED_DT); n > 0; n--) world.tick(FIXED_DT);
+            world._tabHidden = document.hidden;   // #Codex125-3 catch-up done — the real visibility takes over
             awayReport = { awaySec, days: world.day - fromDay, beats: world.chronicle.filter(e => !before.has(e)) };
             console.log(`ry-farms: away catch-up — ${Math.round(simSec)}s of sim (${awayReport.days} day(s), ${awayReport.beats.length} beats) in ${Math.round(performance.now() - t0)}ms`);
             track('away_catchup', { seed: world.seed, away_sec: Math.round(awaySec), sim_days: awayReport.days, beats: awayReport.beats.length });
