@@ -263,7 +263,7 @@ function cursorIsHot(worldTooltip) {
     if (!selected && inRect(m, MINIMAP)) return true;
     if (rosterOpen) { for (const r of rosterRows) if (m.y >= r.y0 && m.y < r.y1) return true; }
     // #credits — the settings panel's CraftPix link (and its other buttons) wear the gold glove
-    if (settingsOpen && settingsHits) { for (const k of ['close', 'music', 'sfx', 'portalBtn', 'shareBtn', 'craftpix']) if (settingsHits[k] && inRect(m, settingsHits[k])) return true; }
+    if (settingsOpen && settingsHits) { for (const k of ['close', 'music', 'sfx', 'portalBtn', 'shareBtn', 'creator', 'craftpix']) if (settingsHits[k] && inRect(m, settingsHits[k])) return true; }
     if (chronOpen) { for (const r of chronRows) if (m.y >= r.y0 && m.y < r.y1) return true; }
     return !!worldTooltip;   // hovering a building/farmer/merchant that shows a tooltip
 }
@@ -4667,7 +4667,7 @@ function foundNewTown(culture) {
 // Settings menu — New Town + music/SFX volume. Opened by the top-bar gear cog.
 // ---------------------------------------------------------------------------
 function drawSettings() {
-    const PW = Math.min(GW - 24, 240), PH = ADMIN_BOOTH ? 242 : 158;   // +26 town-file row, +18 share row   // the booth rows only exist under ?admin=1; coach line removed
+    const PW = Math.min(GW - 24, 240), PH = ADMIN_BOOTH ? 254 : 170;   // +26 town-file row, +18 share row, +12 creator credit   // the booth rows only exist under ?admin=1; coach line removed
     const PX = Math.floor((GW - PW) / 2), PY = Math.floor((GH - PH) / 2) - 6;
     ctx.fillStyle = 'rgba(6,7,11,0.72)'; ctx.fillRect(0, 18, GW, GH - 18);
     uiPanel(PX, PY, PW, PH);
@@ -4752,17 +4752,34 @@ function drawSettings() {
         drawText(ctx, note, IX, PY + 136, pendingImport ? '#e0a850' : '#5a5f6c');
     }
 
+    // #credits — the creator's mark (owner, 2026-08-14): Propagate is made by Ryan Haigh, and this
+    // is the game's one outbound pointer back to the portfolio. Same prefix-caption + link-tail
+    // pattern as the sprite credit below, one step brighter — it is the primary credit. The URL
+    // carries UTM params so the portfolio's GA sees the game as the source. Applies to both
+    // domains by construction (it is code, not host config — see AGENTS.md "Two domains, one game").
+    {
+        const mPrefix = 'MADE BY ';
+        const mLink = 'RYAN HAIGH - HEYHAIGH.AI';
+        const mpw = textWidth(mPrefix), mlw = textWidth(mLink);
+        const kb = { x: IX + mpw, y: PY + 141, w: mlw + 2, h: 9 };
+        const mhov = inRect(mouse, kb);
+        drawText(ctx, mPrefix, IX, PY + 143, '#8a8f9c');
+        drawText(ctx, mLink, IX + mpw, PY + 143, mhov ? '#9ad0e0' : '#c8ccd8');
+        ctx.fillStyle = mhov ? '#9ad0e0' : '#3a3f4c'; ctx.fillRect(IX + mpw, PY + 149, mlw, 1);   // underline: only the link
+        settingsHits.creator = kb;
+    }
+
     // #credits — CraftPix character sprites (licence: deployed-game use OK). Click opens their pack page.
     {
         // owner: only the "CRAFTPIX.NET" tail is the link — the prefix is plain caption text
         const cPrefix = 'CERTAIN SPRITES ARE CREATED BY ';
         const cLink = 'CRAFTPIX.NET';
         const pw2 = textWidth(cPrefix), lw = textWidth(cLink);
-        const cb = { x: IX + pw2, y: PY + 141, w: lw + 2, h: 9 };
+        const cb = { x: IX + pw2, y: PY + 150, w: lw + 2, h: 9 };
         const chov = inRect(mouse, cb);
-        drawText(ctx, cPrefix, IX, PY + 143, '#5a5f6c');
-        drawText(ctx, cLink, IX + pw2, PY + 143, chov ? '#9ad0e0' : '#8a8f9c');
-        ctx.fillStyle = chov ? '#9ad0e0' : '#3a3f4c'; ctx.fillRect(IX + pw2, PY + 149, lw, 1);   // underline: only the link
+        drawText(ctx, cPrefix, IX, PY + 152, '#5a5f6c');
+        drawText(ctx, cLink, IX + pw2, PY + 152, chov ? '#9ad0e0' : '#8a8f9c');
+        ctx.fillStyle = chov ? '#9ad0e0' : '#3a3f4c'; ctx.fillRect(IX + pw2, PY + 158, lw, 1);   // underline: only the link
         settingsHits.craftpix = cb;
     }
 
@@ -4771,7 +4788,7 @@ function drawSettings() {
     // #adminbooth ?admin=1 only — see the flag's comment at module scope.
     if (ADMIN_BOOTH) {
         const rh = world.rehearsal;
-        drawText(ctx, 'ADMIN - REHEARSALS (GHOST RUNS, NOTHING RECORDED)', IX, PY + 156, '#8a6fae');
+        drawText(ctx, 'ADMIN - REHEARSALS (GHOST RUNS, NOTHING RECORDED)', IX, PY + 168, '#8a6fae');
         const admRow = (y, key, live, liveLabel, idleLabel) => {
             const b = { x: IX, y, w: PW - 16, h: 14 };
             ctx.fillStyle = live ? '#2e2410' : '#141824'; ctx.fillRect(b.x, b.y, b.w, b.h);
@@ -4780,12 +4797,12 @@ function drawSettings() {
             drawText(ctx, label, b.x + Math.floor((b.w - textWidth(label)) / 2), b.y + 4, live ? '#f0c860' : '#9ab8e8');
             settingsHits[key] = b;
         };
-        admRow(PY + 166, 'admRaid', rh && rh.kind === 'raid', 'RAID REHEARSAL LIVE - CANCEL', 'STAGE A RAID');
-        admRow(PY + 184, 'admVote', rh && rh.kind === 'election', 'VOTE REHEARSAL LIVE - CANCEL', 'STAGE THE VOTE');
-        admRow(PY + 202, 'admSortie', rh && rh.kind === 'sortie', 'WAR PARTY LIVE - CANCEL', 'STAGE A WAR PARTY');   // #counteroffensive
+        admRow(PY + 178, 'admRaid', rh && rh.kind === 'raid', 'RAID REHEARSAL LIVE - CANCEL', 'STAGE A RAID');
+        admRow(PY + 196, 'admVote', rh && rh.kind === 'election', 'VOTE REHEARSAL LIVE - CANCEL', 'STAGE THE VOTE');
+        admRow(PY + 214, 'admSortie', rh && rh.kind === 'sortie', 'WAR PARTY LIVE - CANCEL', 'STAGE A WAR PARTY');   // #counteroffensive
 
         // #Codex38 P2-5: the booth REFUSES to stage over a real raid — say so, instead of silently closing
-        if (adminNote && performance.now() < adminNote.until) drawText(ctx, adminNote.text, IX, PY + 218, '#e0a850');
+        if (adminNote && performance.now() < adminNote.until) drawText(ctx, adminNote.text, IX, PY + 230, '#e0a850');
     }
     // (the "ESC OR CLICK OUTSIDE TO CLOSE" coach line is gone — owner call, the affordance is universal)
     settingsHits.panel = { x: PX, y: PY, w: PW, h: PH };
@@ -7634,6 +7651,11 @@ out.addEventListener('pointerup', (e) => {
             return;
         }
         // #credits — the CraftPix attribution link
+        if (settingsHits.creator && inRect(p, settingsHits.creator)) {
+            track('creator_link', { seed: world.seed });   // #funnel the game -> portfolio traffic loop, measured on both ends (UTM below is the portfolio's side)
+            window.open('https://heyhaigh.ai/?utm_source=propagate&utm_medium=game&utm_campaign=credits', '_blank', 'noopener');
+            return;
+        }
         if (settingsHits.craftpix && inRect(p, settingsHits.craftpix)) {
             window.open('https://craftpix.net/freebies/free-swordsman-1-3-level-pixel-top-down-sprite-character-pack/', '_blank', 'noopener');
             return;

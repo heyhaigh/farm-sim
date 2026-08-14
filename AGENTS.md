@@ -31,6 +31,20 @@ There is a test that catches all of those. Run it.
 **[HOSTING.md](HOSTING.md)** — how the live site is built and deployed, and the one thing that bites: a new
 sprite added here does **not** reach production on its own.
 
+**Two domains, one game (2026-08-14).** Production answers on **`propagate.world`** (canonical) and
+**`propagate.heyhaigh.ai`** (permanent fallback). Every change applies to BOTH — automatically, because one
+Railway service serves both and `tools/ship.sh` refuses to report success unless both hosts answer the new
+revision. The rules that keep it that way:
+
+- **Never redirect the old host to the new one.** IndexedDB is origin-scoped; a redirect strands every town
+  saved under the old origin. The fallback is a first-class play surface forever.
+- **Never write host-conditional behavior** (`if (location.host === …)`) that makes the game differ between
+  the two. The only host-aware constants are `LIVE_HOSTS` in analytics.js (lists BOTH) and `PUBLIC_ORIGIN`
+  in postcard.js (the CANONICAL host — outbound links and OG tags brand the front door, never the host the
+  player happens to be on; Codex #125 caught exactly this leak).
+- A change that names a domain anywhere (markup, llms.txt, served docs) names the canonical one, with the
+  fallback mentioned only as "also valid" where that helps.
+
 ## 3. House conventions
 
 - **No build step.** Pure ES modules, Canvas 2D, one WebGL post-process. Do not add a bundler.
