@@ -1523,6 +1523,16 @@ export class World {
         }
     }
 
+    // #94.2 — see the bonesV note in fromSave. Grid-scan order = deterministic keep priority.
+    #dedupeBones() {
+        const kept = [];
+        for (let j = 0; j < GRID; j++) for (let i = 0; i < GRID; i++) {
+            if (this.get(i, j) !== T.BONES) continue;
+            if (kept.some(s => Math.hypot(s.i - i, s.j - j) < 14)) { this.set(i, j, T.GRASS); continue; }
+            kept.push({ i, j });
+        }
+    }
+
     #countTiles(i, j, tile, radius) {
         let n = 0;
         for (let y = j - radius; y <= j + radius; y++) {
@@ -2936,6 +2946,7 @@ export class World {
         const snap = {
             v: World.SAVE_VERSION, seed: this.seed, name: this.name, culture: this.culture, lineageRoot: this.lineageRoot,
             yardV: 1,   // #farmyard facilities live in the farmstead cluster; pre-yard saves reflow once on load
+            bonesV: 1,  // #94.2 skeletons keep a 14-tile berth; pre-berth saves dedupe once on load
             rememberedTowns: (this.rememberedTowns || []).map(t => ({ seed: t.seed, name: t.name })),   // #lineage the prior towns souls hail from
             _rev: this._rev || 0,   // Codex #22.1 monotonic save revision (CAS in saveTown rejects a stale overwrite)
             inboxApplied: (this._inboxApplied || []).slice(-200),   // #reconciliation exactly-once inbox ledger
@@ -3364,6 +3375,14 @@ export class World {
         // #farmyard one-time migration: pre-yard saves scattered facilities mid-field with crops flush
         // around them (player screenshots) — walk them home to the house cluster, then re-knit the fields.
         if (!d.yardV) for (const p of this.plots) this.#reflowFacilities(p);
+        // #94.2 bonesV — pre-berth saves scattered up to 8 skeletons with no mutual distance, and the
+        // full-scale art made close pairs overlap into one tangle (owner rule: they must never overlap).
+        // One-shot on-load dedupe, the yardV pattern: scan-order first skeleton in a crowded pair keeps
+        // its ground, later ones within 14 tiles (the SAME berth #scatterBones now enforces at
+        // generation) return to GRASS. Deterministic (pure tile scan, no rng); bonesV:1 rides every
+        // save after, so it never re-runs. Distance rule ONLY — a legacy town keeps its landmark
+        // COUNT (its watchers have seen those bones; only the tangles go).
+        if (!d.bonesV && this.culture === 'orc') this.#dedupeBones();
         this.updateLeader();
         this.#recomputeTownTraits();
     }
