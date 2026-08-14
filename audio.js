@@ -513,11 +513,15 @@ class FarmAudio {
             o.connect(g); g.connect(out); o.start(t); o.stop(t + dur + 0.02);
         };
         if (kind === 'confirm') { blip(t0, 880, 880, 0.055, 0.16); blip(t0 + 0.06, 1318.5, 1318.5, 0.09, 0.15); }   // A5 → E6
-        // #ui-click modal flavors (owner: a flat tick everywhere reads repetitive) — same triangle
-        // family, inflected: OPEN glides up C6→E6, CLOSE glides down C6→G5, generic stays flat C6.
-        else if (kind === 'open') blip(t0, 1046.5, 1318.5, 0.08, 0.17, 'triangle');
-        else if (kind === 'close') blip(t0, 1046.5, 784, 0.09, 0.16, 'triangle');
-        else blip(t0, 1046.5, 1046.5, 0.08, 0.17, 'triangle');   // triangle pluck, C6 — owner's pick from the compare page (variant E)
+        // #ui-click IN-GAME (throughMix) = the DOUBLE-TICK family, owner's pick after a live A/B
+        // against the triangle glides (compare-page F — two ~25ms square ticks, mechanical). The
+        // same inflection logic colors it: generic = high→low pair, OPEN = rising pair, CLOSE =
+        // falling-further pair. The START SCREEN (throughMix=false) keeps its own picks: the
+        // triangle pluck tick + the GB confirm rise above.
+        else if (throughMix && kind === 'open') { blip(t0, 1500, 1500, 0.025, 0.1); blip(t0 + 0.04, 2100, 2100, 0.028, 0.1); }
+        else if (throughMix && kind === 'close') { blip(t0, 1800, 1800, 0.025, 0.1); blip(t0 + 0.04, 1100, 1100, 0.03, 0.1); }
+        else if (throughMix) { blip(t0, 2000, 2000, 0.025, 0.09); blip(t0 + 0.04, 1500, 1500, 0.025, 0.085); }
+        else blip(t0, 1046.5, 1046.5, 0.08, 0.17, 'triangle');   // menu tick: triangle pluck, C6 — owner's pick (compare variant E)
     }
 
     // #98 Moments — a short musical STING for a profound beat. triumph = bright ascending arpeggio;
