@@ -3730,14 +3730,23 @@ function drawFarmer(f, sx, sy) {
 // structure), so words are never occluded by a building/silo the farmer stands behind. Runs in its own pass
 // after the sort loop; `sx` is the farmer's screen-x from that pass and `f._by` the sprite-top anchor it stashed.
 function drawFarmerBubble(f, sx) {
-    const py = f._by;
+    let py = f._by;
     if (py == null) return;
+    // #bubble-steady (owner: the plate "shakes aggressively" under camera-follow) — the follow cam
+    // tracks the farmer's interpolated position, so the sprite's screen anchor dithers sub-pixel and
+    // the floor-rounding below flipped the whole plate ±1px every frame. Hysteresis on the anchor:
+    // sub-2px wobble holds the previous anchor; real movement (a walking farmer covers more per
+    // frame) passes straight through, so the bubble still tracks.
+    if (f._bubAx != null && Math.abs(f._bubAx - sx) < 2 && Math.abs(f._bubAy - py) < 2) { sx = f._bubAx; py = f._bubAy; }
+    else { f._bubAx = sx; f._bubAy = py; }
 
     // #legibility Slice 1 — the SOURCE MEMORY surfacing at a charged beat: a distinct GOLD "memory" bubble (the
     // mid-tier register between an ambient saying and a screen-stopping grand modal) — the farmer's woven line
-    // + a "GROWN FROM {title}" receipt, so the watcher sees a real memory surface. Fades in/out; held ~5.5s.
+    // + a short "GROWN FROM {NAME}'S MEMORY" receipt. (Owner: the FULL quoted title made the plate
+    // screen-wide and unruly — the attribution names the soul, the sheet's FROM MEMORY holds the title.)
     if (f.memoryEcho && f.state !== 'sleep') {
-        const me = f.memoryEcho, lines = wrapText(me.line, 24), attr = `GROWN FROM "${me.title.toUpperCase()}"`;
+        const me = f.memoryEcho, lines = wrapText(me.line, 24);
+        const attr = `GROWN FROM ${(f.sheet.name.split(' ')[0] || 'A').toUpperCase()}'S MEMORY`;
         const aw = textWidth(attr), lw = Math.max(aw, ...lines.map(l => textWidth(l)));
         const w = lw + 8, h = lines.length * 6 + 11, bx = Math.floor(sx - w / 2), by = py - 9 - h;
         const fade = Math.min(1, (me.t0 - me.t) / 0.4) * Math.min(1, me.t / 0.7);
