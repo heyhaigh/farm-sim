@@ -9154,6 +9154,7 @@ function drawStartScreen() {
     _bootIsOrc = bootCulture === 'orc';
 
     let resumed = false, quarantined = null;
+    let lastSavedAt = null;   // #away wall-clock stamp of the snapshot we resumed from (null: pre-#away save)
     // WHY this session may not persist — a specific reason, not a boolean. One flag drove four different
     // causes and told the player the same (wrong) story for three of them: that their town "could not be
     // opened OR moved aside", when in two cases it was never opened and in one we refused on purpose.
@@ -9220,7 +9221,7 @@ function drawStartScreen() {
         } else if (!saved) {
             foundGen = st.gen;   // observed EMPTY at this generation — that is the pair a rev-0 claim needs
         } else {
-            try { world = World.fromSave(saved); resumed = true; foundGen = st.gen; }
+            try { world = World.fromSave(saved); resumed = true; foundGen = st.gen; lastSavedAt = Number(saved.savedAt) || null; }
             catch (err) {
                 // A save this build cannot read is PRESERVED, not buried. Founding a fresh town over it used
                 // to destroy a played town on the next autosave — and, because saveTown is a compare-and-set
@@ -9404,6 +9405,33 @@ function drawStartScreen() {
         }
     } catch (err) { console.warn('ry-farms: inbox consume failed', err); }
 
+    // #away — THE TOWN LIVES WHILE YOU'RE AWAY (council 2026-08-01, EVOLVE #2): on resume, run the elapsed
+    // real time forward through the deterministic sim — one away-second is one sim-second, capped at TWO
+    // sim-days — so "PREVIOUSLY ON" becomes a true episode (what actually happened) instead of a replay of
+    // beats the player already saw. This runs BEFORE world._live is set, so the whole stretch lands via the
+    // hardened DORMANT path (raids resolve, votes read, seeds sprout — identical watched or dormant), and
+    // BEFORE the first scanMoments frame, which primes this new history as already-seen — the only surfaces
+    // are this card and the chronicle, never a toast gauntlet. Skipped for spectators (the menu backdrop must
+    // not advance the real town it mirrors; the played resume does the catching up) and for non-persisting
+    // sessions (a session that cannot save must not fabricate days it can never record — the inbox's law).
+    // The threshold (30 min) keeps an F5 or a coffee break from racing the town ahead; any real absence —
+    // an overnight, a Memory-Saver tab discard — triggers it. Cost is measured, not guessed: a headless
+    // sim-day ran 120–200ms on prod (2026-08-14), so the capped catch-up stays under ~half a second of boot.
+    let awayReport = null;
+    if (resumed && !world._spectator && !world._persistenceDisabled && lastSavedAt) {
+        const awaySec = (Date.now() - lastSavedAt) / 1000;
+        const AWAY_MIN_SEC = 1800, AWAY_CAP_SIM_SEC = 2 * (DAY_LENGTH + NIGHT_LENGTH);
+        if (awaySec >= AWAY_MIN_SEC) {
+            const simSec = Math.min(awaySec, AWAY_CAP_SIM_SEC);
+            const fromDay = world.day, chronLen = world.chronicle.length, t0 = performance.now();
+            for (let n = Math.floor(simSec / FIXED_DT); n > 0; n--) world.tick(FIXED_DT);
+            awayReport = { awaySec, days: world.day - fromDay, beats: world.chronicle.slice(chronLen) };
+            console.log(`ry-farms: away catch-up — ${Math.round(simSec)}s of sim (${awayReport.days} day(s), ${awayReport.beats.length} beats) in ${Math.round(performance.now() - t0)}ms`);
+            track('away_catchup', { seed: world.seed, away_sec: Math.round(awaySec), sim_days: awayReport.days, beats: awayReport.beats.length });
+            saveTown(world);   // lock the episode in — the card must describe days that durably happened
+        }
+    }
+
     // #108 from here on this town is the WATCHED one: a cross-town raid that ARRIVES during live play stages a
     // visible warband + alarm (see World.#spawnRaid). Set AFTER the on-load inbox consume, so a raid that landed
     // while the town was dormant stays a "PREVIOUSLY ON" line rather than ambushing the player on resume.
@@ -9411,12 +9439,23 @@ function drawStartScreen() {
     world._live = !world._spectator;
 
     if (resumed) {
-        lastSavedDay = world.day;   // don't immediately re-save what we just loaded
+        lastSavedDay = world.day;   // don't immediately re-save what we just loaded (post-catch-up day: the explicit #away save above already persisted it)
         world.addLog(`Welcome back - day ${world.day}, year ${world.year} (seed ${world.seed})`, '#7dd069');
-        resumeCard = {
-            day: world.day, season: world.season, year: world.year, shownAt: 0,
-            beats: world.chronicle.slice(-5).map(c => ({ text: c.text, color: c.color, day: c.day })),
-        };
+        if (awayReport && awayReport.days > 0) {
+            // #away a TRUE episode: headline how long the town lived, then the beats it wrote while unwatched
+            // (chronicle order, latest last). A quiet stretch still says it lived — that IS the story.
+            const a = awayReport.awaySec;
+            const awayTxt = a >= 172800 ? `${Math.round(a / 86400)} days` : a >= 7200 ? `${Math.round(a / 3600)} hours` : `${Math.max(30, Math.round(a / 60))} minutes`;
+            const beats = [{ text: `You were gone ${awayTxt} - the town lived ${awayReport.days} more day${awayReport.days > 1 ? 's' : ''} without you.`, color: '#9ad0e0', day: world.day }];
+            if (awayReport.beats.length) beats.push(...awayReport.beats.slice(-6).map(c => ({ text: c.text, color: c.color, day: c.day })));
+            else beats.push({ text: 'Quiet days - the fields were tended and nothing broke.', color: '#c8ccd8', day: world.day });
+            resumeCard = { day: world.day, season: world.season, year: world.year, shownAt: 0, beats };
+        } else {
+            resumeCard = {
+                day: world.day, season: world.season, year: world.year, shownAt: 0,
+                beats: world.chronicle.slice(-5).map(c => ({ text: c.text, color: c.color, day: c.day })),
+            };
+        }
     } else {
         lastSavedDay = world.day;
         world.addLog(`Propagate — seed ${world.seed}`, '#5a6672');   // the LIVE seed (Codex #57-3)

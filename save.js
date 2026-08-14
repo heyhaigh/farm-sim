@@ -84,6 +84,10 @@ export async function saveTown(world) {
     if (world._persistenceDisabled) return null;
     try {
         const data = world.serialize();               // data._rev = world._rev
+        // #away — WHEN this snapshot was written, stamped here in the storage layer (the sim never touches
+        // wall-clock time; determinism). The resume path reads it to run the town's away-time forward.
+        // Optional by design: pre-#away saves and imported town files simply lack it and skip catch-up once.
+        data.savedAt = Date.now();
         const key = 'town:' + world.seed, myRev = data._rev || 0, myGen = world._gen || 0;
         const db = await openDb();
         const outcome = await new Promise((resolve, reject) => {
