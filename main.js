@@ -9423,9 +9423,12 @@ function drawStartScreen() {
         const AWAY_MIN_SEC = 1800, AWAY_CAP_SIM_SEC = 2 * (DAY_LENGTH + NIGHT_LENGTH);
         if (awaySec >= AWAY_MIN_SEC) {
             const simSec = Math.min(awaySec, AWAY_CAP_SIM_SEC);
-            const fromDay = world.day, chronLen = world.chronicle.length, t0 = performance.now();
+            // Capture the new beats by IDENTITY, not index: the chronicle caps at 240 via shift()
+            // (farm.js addChronicle), so on a mature town — exactly this feature's audience — an
+            // index anchor slides and slice(prevLen) returns [] while the town's eventful days vanish.
+            const fromDay = world.day, before = new Set(world.chronicle), t0 = performance.now();
             for (let n = Math.floor(simSec / FIXED_DT); n > 0; n--) world.tick(FIXED_DT);
-            awayReport = { awaySec, days: world.day - fromDay, beats: world.chronicle.slice(chronLen) };
+            awayReport = { awaySec, days: world.day - fromDay, beats: world.chronicle.filter(e => !before.has(e)) };
             console.log(`ry-farms: away catch-up — ${Math.round(simSec)}s of sim (${awayReport.days} day(s), ${awayReport.beats.length} beats) in ${Math.round(performance.now() - t0)}ms`);
             track('away_catchup', { seed: world.seed, away_sec: Math.round(awaySec), sim_days: awayReport.days, beats: awayReport.beats.length });
             saveTown(world);   // lock the episode in — the card must describe days that durably happened
