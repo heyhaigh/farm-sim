@@ -143,6 +143,24 @@ let followMode = false;           // camera tracks followTarget (F/crosshair tog
 let specTarget = null;            // #START launch-page spectator camera: the townsfolk it's drifting between
 let specNextSwitch = 0;           // wall-clock ms for the next spectator-camera target rotation
 let menuMuted = true;             // #START the start-screen volume button state (starts muted; click to hear the theme)
+let menuMuteTouched = false;      // #ui-click has the player EXPLICITLY set the speaker? (the default boot mute is politeness, not chosen silence)
+let menuNavLock = false;          // #ui-click one navigation per menu life — the confirm blip's grace window must not double-book
+// #ui-click the start screen's retro blips, policy included: a blip plays even under the DEFAULT
+// boot mute — it answers the player's own click, which is not autoplay — but stops the moment the
+// player explicitly mutes via the speaker. audio.uiClick routes around the master mute for exactly
+// this split; the suppression decision lives here where menuMuted's two meanings are visible.
+// WRAPPED (like funnelTick): a sound must never break a button. The one real failure seen — a
+// stale-cached audio.js without uiClick during QA — killed the START button outright; any throw
+// here (blocked AudioContext, whatever) must cost the blip, not the click.
+function menuClick(kind) { if (menuMuted && menuMuteTouched) return; try { audio.uiClick(kind); } catch (err) { console.warn('ry-farms: menu blip failed', err); } }
+// The committing buttons NAVIGATE, which would cut the confirm blip off mid-note — give it a 150ms
+// grace before the URL changes (imperceptible next to the seconds-long boot that follows).
+function menuNavigate(search) {
+    if (menuNavLock) return; menuNavLock = true;
+    if (menuMuted && menuMuteTouched) { location.search = search; return; }   // silence chosen: no blip, no delay
+    try { audio.uiClick('confirm'); } catch (err) { console.warn('ry-farms: menu blip failed', err); location.search = search; return; }   // a broken blip must not cost the navigation — go now
+    setTimeout(() => { location.search = search; }, 150);
+}
 let followTarget = null;          // the farmer being trailed — independent of the open card, so closing
                                   // the sheet (X) keeps following; only F / Esc / a pan stops it
 // #firstwatch Following is the game's most useful camera verb and nothing teaches it. The DAY-1 founding
@@ -4667,7 +4685,7 @@ function foundNewTown(culture) {
 // Settings menu — New Town + music/SFX volume. Opened by the top-bar gear cog.
 // ---------------------------------------------------------------------------
 function drawSettings() {
-    const PW = Math.min(GW - 24, 240), PH = ADMIN_BOOTH ? 254 : 170;   // +26 town-file row, +18 share row, +12 creator credit   // the booth rows only exist under ?admin=1; coach line removed
+    const PW = Math.min(GW - 24, 240), PH = ADMIN_BOOTH ? 266 : 182;   // +26 town-file row, +18 share row, +24 credits section (divider + two rows)   // the booth rows only exist under ?admin=1; coach line removed
     const PX = Math.floor((GW - PW) / 2), PY = Math.floor((GH - PH) / 2) - 6;
     ctx.fillStyle = 'rgba(6,7,11,0.72)'; ctx.fillRect(0, 18, GW, GH - 18);
     uiPanel(PX, PY, PW, PH);
@@ -4752,20 +4770,22 @@ function drawSettings() {
         drawText(ctx, note, IX, PY + 136, pendingImport ? '#e0a850' : '#5a5f6c');
     }
 
-    // #credits — the creator's mark (owner, 2026-08-14): Propagate is made by Ryan Haigh, and this
-    // is the game's one outbound pointer back to the portfolio. Same prefix-caption + link-tail
-    // pattern as the sprite credit below, one step brighter — it is the primary credit. The URL
-    // carries UTM params so the portfolio's GA sees the game as the source. Applies to both
+    // #credits — the CREDITS SECTION opens with the same divider the other sections use (owner:
+    // the town-file note and the credit read jumbled without it), then the creator's mark: Propagate
+    // is made by Ryan Haigh, and this is the game's one outbound pointer back to the portfolio.
+    // Owner: only the URL is the hyperlink — the name is plain caption text (like the CraftPix row).
+    // The URL carries UTM params so the portfolio's GA sees the game as the source. Applies to both
     // domains by construction (it is code, not host config — see AGENTS.md "Two domains, one game").
+    ctx.fillStyle = '#20242f'; ctx.fillRect(PX + 4, PY + 148, PW - 8, 1);   // section divider before the credits
     {
-        const mPrefix = 'MADE BY ';
-        const mLink = 'RYAN HAIGH - HEYHAIGH.AI';
+        const mPrefix = 'MADE BY RYAN HAIGH - ';
+        const mLink = 'HEYHAIGH.AI';
         const mpw = textWidth(mPrefix), mlw = textWidth(mLink);
-        const kb = { x: IX + mpw, y: PY + 141, w: mlw + 2, h: 9 };
+        const kb = { x: IX + mpw, y: PY + 152, w: mlw + 2, h: 9 };
         const mhov = inRect(mouse, kb);
-        drawText(ctx, mPrefix, IX, PY + 143, '#8a8f9c');
-        drawText(ctx, mLink, IX + mpw, PY + 143, mhov ? '#9ad0e0' : '#c8ccd8');
-        ctx.fillStyle = mhov ? '#9ad0e0' : '#3a3f4c'; ctx.fillRect(IX + mpw, PY + 149, mlw, 1);   // underline: only the link
+        drawText(ctx, mPrefix, IX, PY + 154, '#8a8f9c');
+        drawText(ctx, mLink, IX + mpw, PY + 154, mhov ? '#9ad0e0' : '#c8ccd8');
+        ctx.fillStyle = mhov ? '#9ad0e0' : '#3a3f4c'; ctx.fillRect(IX + mpw, PY + 160, mlw, 1);   // underline: only the link
         settingsHits.creator = kb;
     }
 
@@ -4775,11 +4795,11 @@ function drawSettings() {
         const cPrefix = 'CERTAIN SPRITES ARE CREATED BY ';
         const cLink = 'CRAFTPIX.NET';
         const pw2 = textWidth(cPrefix), lw = textWidth(cLink);
-        const cb = { x: IX + pw2, y: PY + 150, w: lw + 2, h: 9 };
+        const cb = { x: IX + pw2, y: PY + 161, w: lw + 2, h: 9 };
         const chov = inRect(mouse, cb);
-        drawText(ctx, cPrefix, IX, PY + 152, '#5a5f6c');
-        drawText(ctx, cLink, IX + pw2, PY + 152, chov ? '#9ad0e0' : '#8a8f9c');
-        ctx.fillStyle = chov ? '#9ad0e0' : '#3a3f4c'; ctx.fillRect(IX + pw2, PY + 158, lw, 1);   // underline: only the link
+        drawText(ctx, cPrefix, IX, PY + 163, '#5a5f6c');
+        drawText(ctx, cLink, IX + pw2, PY + 163, chov ? '#9ad0e0' : '#8a8f9c');
+        ctx.fillStyle = chov ? '#9ad0e0' : '#3a3f4c'; ctx.fillRect(IX + pw2, PY + 169, lw, 1);   // underline: only the link
         settingsHits.craftpix = cb;
     }
 
@@ -4788,7 +4808,7 @@ function drawSettings() {
     // #adminbooth ?admin=1 only — see the flag's comment at module scope.
     if (ADMIN_BOOTH) {
         const rh = world.rehearsal;
-        drawText(ctx, 'ADMIN - REHEARSALS (GHOST RUNS, NOTHING RECORDED)', IX, PY + 168, '#8a6fae');
+        drawText(ctx, 'ADMIN - REHEARSALS (GHOST RUNS, NOTHING RECORDED)', IX, PY + 180, '#8a6fae');
         const admRow = (y, key, live, liveLabel, idleLabel) => {
             const b = { x: IX, y, w: PW - 16, h: 14 };
             ctx.fillStyle = live ? '#2e2410' : '#141824'; ctx.fillRect(b.x, b.y, b.w, b.h);
@@ -4797,12 +4817,12 @@ function drawSettings() {
             drawText(ctx, label, b.x + Math.floor((b.w - textWidth(label)) / 2), b.y + 4, live ? '#f0c860' : '#9ab8e8');
             settingsHits[key] = b;
         };
-        admRow(PY + 178, 'admRaid', rh && rh.kind === 'raid', 'RAID REHEARSAL LIVE - CANCEL', 'STAGE A RAID');
-        admRow(PY + 196, 'admVote', rh && rh.kind === 'election', 'VOTE REHEARSAL LIVE - CANCEL', 'STAGE THE VOTE');
-        admRow(PY + 214, 'admSortie', rh && rh.kind === 'sortie', 'WAR PARTY LIVE - CANCEL', 'STAGE A WAR PARTY');   // #counteroffensive
+        admRow(PY + 190, 'admRaid', rh && rh.kind === 'raid', 'RAID REHEARSAL LIVE - CANCEL', 'STAGE A RAID');
+        admRow(PY + 208, 'admVote', rh && rh.kind === 'election', 'VOTE REHEARSAL LIVE - CANCEL', 'STAGE THE VOTE');
+        admRow(PY + 226, 'admSortie', rh && rh.kind === 'sortie', 'WAR PARTY LIVE - CANCEL', 'STAGE A WAR PARTY');   // #counteroffensive
 
         // #Codex38 P2-5: the booth REFUSES to stage over a real raid — say so, instead of silently closing
-        if (adminNote && performance.now() < adminNote.until) drawText(ctx, adminNote.text, IX, PY + 230, '#e0a850');
+        if (adminNote && performance.now() < adminNote.until) drawText(ctx, adminNote.text, IX, PY + 242, '#e0a850');
     }
     // (the "ESC OR CLICK OUTSIDE TO CLOSE" coach line is gone — owner call, the affordance is universal)
     settingsHits.panel = { x: PX, y: PY, w: PW, h: PH };
@@ -7539,9 +7559,10 @@ out.addEventListener('pointerup', (e) => {
     // #START the launch menu owns every click while it's up: a button acts, anything else is swallowed
     if (startScreen) {
         const H = startHits || {};
-        if (H.sound && inRect(p, H.sound)) { menuMuted = !menuMuted; audio.ensure(); audio.setMuted(menuMuted); disarmImport(); return; }   // #START universal mute; UNCONDITIONAL disarm — a selection still reading (f.text/occupancy) must not arm after this click (Codex #122 r2)
+        if (H.sound && inRect(p, H.sound)) { menuMuted = !menuMuted; menuMuteTouched = true; audio.ensure(); audio.setMuted(menuMuted); if (!menuMuted) menuClick('tick'); disarmImport(); return; }   // #START universal mute; UNCONDITIONAL disarm — a selection still reading (f.text/occupancy) must not arm after this click (Codex #122 r2). #ui-click a tick on UNMUTE confirms sound is back; muting earns silence, not a blip
         if (startPage === 'title') {
             if (H.importFile && inRect(p, H.importFile)) {
+                menuClick('tick');
                 if (pendingImport) { saveportRunImport(); } else { saveportOpenChooser(); }
                 return;
             }
@@ -7549,14 +7570,14 @@ out.addEventListener('pointerup', (e) => {
             // while f.text() and the occupancy reads are still in flight, so a conditional disarm
             // left importPickGen unchanged and the stale selection armed AFTER the click.
             disarmImport();
-            if (H.continue && inRect(p, H.continue)) { location.search = '?play=1'; return; }   // #continue resume the latest town via the tested boot path
-            if (H.start && inRect(p, H.start)) { startPage = 'choose'; return; }     // → the choose screen
-            if (H.view && inRect(p, H.view)) { startScreen = false; audio.ensure(); audio.setMenuMode(false); audio.setMuted(false); return; }   // dismiss → spectate the town behind (this click is a gesture: unlock the audio ctx + lift the menu mute so game audio — chops, music — plays)
+            if (H.continue && inRect(p, H.continue)) { menuNavigate('?play=1'); return; }   // #continue resume the latest town via the tested boot path (#ui-click: blip, then the 150ms nav grace)
+            if (H.start && inRect(p, H.start)) { menuClick('confirm'); startPage = 'choose'; return; }     // → the choose screen
+            if (H.view && inRect(p, H.view)) { menuClick('tick'); startScreen = false; audio.ensure(); audio.setMenuMode(false); audio.setMuted(false); return; }   // dismiss → spectate the town behind (this click is a gesture: unlock the audio ctx + lift the menu mute so game audio — chops, music — plays)
         } else {
-            if (H.human && inRect(p, H.human)) { location.search = '?fresh=1'; return; }
-            if (H.orc && inRect(p, H.orc)) { location.search = '?fresh=1&orc=1'; return; }
-            if (H.view && inRect(p, H.view)) { startScreen = false; audio.ensure(); audio.setMenuMode(false); audio.setMuted(false); return; }   // dismiss → spectate the town behind (this click is a gesture: unlock the audio ctx + lift the menu mute so game audio — chops, music — plays)
-            if (H.back && inRect(p, H.back)) { startPage = 'title'; return; }         // ‹ back to the title screen
+            if (H.human && inRect(p, H.human)) { menuNavigate('?fresh=1'); return; }
+            if (H.orc && inRect(p, H.orc)) { menuNavigate('?fresh=1&orc=1'); return; }
+            if (H.view && inRect(p, H.view)) { menuClick('tick'); startScreen = false; audio.ensure(); audio.setMenuMode(false); audio.setMuted(false); return; }   // dismiss → spectate the town behind (this click is a gesture: unlock the audio ctx + lift the menu mute so game audio — chops, music — plays)
+            if (H.back && inRect(p, H.back)) { menuClick('tick'); startPage = 'title'; return; }         // ‹ back to the title screen
         }
         return;
     }
