@@ -50,7 +50,7 @@ export function drawText(ctx, str, x, y, color, scale = 1) {
     let cx = Math.round(x); const yy = Math.round(y);
     // fold typographic characters the 3x5 font lacks onto plain equivalents (em/en-dash -> hyphen,
     // curly quotes -> straight, ellipsis -> "...") so a stray "—" never shows up as a "?" over a head
-    const norm = String(str).toUpperCase().replace(/[—–]/g, '-').replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/…/g, '...');
+    const norm = String(str).toUpperCase().replace(/[—–]/g, '-').replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/…/g, '...').replace(/↔/g, '<>');   // ↔ (barter speech) has no glyph — '<>' reads as the exchange (Codex #127)
     for (const raw of norm) {
         const glyph = FONT[raw] || FONT['?'];
         for (let i = 0; i < 15; i++) {

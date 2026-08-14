@@ -1748,10 +1748,12 @@ function wildSpec(i, j, t, season) {
             const img = pickLoadedImage(orcRockyImg, ORC_BONE_NAMES, i, j, 61);
             if (!img) return null;
             const { w, h } = wildDims(img);
-            // depth -1 = the GROUND layer (with the forage plants): the bones lie FLAT on the sand, so a
-            // farmer, a fence, a crop row in front must always paint over them — the old -0.4 mid-depth
-            // let the ribs ride above farmland (owner's z-order report). anchor low for the flat sprawl.
-            return { img, w, h, anchor: 0.55, depth: -1 };
+            // depth -1e5: TRUE ground layer. The sort key is baseY (tile BOTTOM) + depth, and a farmer's
+            // key sits ~7px above its tile bottom — so -1 still painted the skeleton AFTER a same-row
+            // farmer (Codex #127 P2: the ribs could cover a farmer on an adjacent clear tile). The bones
+            // lie FLAT on the sand with nothing beneath them but cached terrain, so they sort before
+            // EVERY actor/structure outright rather than competing within the row.
+            return { img, w, h, anchor: 0.55, depth: -1e5 };
         }
         // T.STUMP falls through to the shared stump art below (a chopped remnant reads fine either way)
     }
@@ -3733,12 +3735,14 @@ function drawFarmerBubble(f, sx) {
     let py = f._by;
     if (py == null) return;
     // #bubble-steady (owner: the plate "shakes aggressively" under camera-follow) — the follow cam
-    // tracks the farmer's interpolated position, so the sprite's screen anchor dithers sub-pixel and
-    // the floor-rounding below flipped the whole plate ±1px every frame. Hysteresis on the anchor:
-    // sub-2px wobble holds the previous anchor; real movement (a walking farmer covers more per
-    // frame) passes straight through, so the bubble still tracks.
-    if (f._bubAx != null && Math.abs(f._bubAx - sx) < 2 && Math.abs(f._bubAy - py) < 2) { sx = f._bubAx; py = f._bubAy; }
-    else { f._bubAx = sx; f._bubAy = py; }
+    // tracks the farmer's interpolated position, so the screen anchor dithers sub-pixel and the
+    // floor-rounding below flipped the plate ±1px every frame. ROUNDED-ANCHOR hysteresis at a 1px
+    // threshold: the stored anchor is a whole pixel; sub-1px dither around it holds (kills the
+    // shake), and a walking farmer's accumulating motion re-rounds every ~2-3 frames — clean 1px
+    // steps. (Codex #127 P2: the first cut's 2px threshold quantized ordinary walking into
+    // 6-frame stalls and 2.4px snaps; the threshold must sit BELOW the per-step gait.)
+    if (f._bubAx != null && Math.abs(sx - f._bubAx) < 1 && Math.abs(py - f._bubAy) < 1) { sx = f._bubAx; py = f._bubAy; }
+    else { f._bubAx = sx = Math.round(sx); f._bubAy = py = Math.round(py); }
 
     // #legibility Slice 1 — the SOURCE MEMORY surfacing at a charged beat: a distinct GOLD "memory" bubble (the
     // mid-tier register between an ambient saying and a screen-stopping grand modal) — the farmer's woven line
@@ -5742,7 +5746,12 @@ function drawRoster() {
         const isLeader = world.leader === f;
         // #roster-hover same affordance as the whisper dropdown (owner): the row under the pointer
         // fills, so it's plain WHICH farmer a click will select. Selection's green fill outranks it.
-        const hot = mouse.y >= ry && mouse.y < ry + rowH && mouse.x > PX + 2 && mouse.x < PX + PW - 2;
+        // #roster-hover Codex #127 P3: hover, fill, and CLICK share ONE geometry — the same x-band
+        // the click test uses (rv.x..rv.x+rv.w == PX..PX+PW) and a y-range CLAMPED to the visible
+        // body, so a half-clipped row can neither glow past the frame nor differ from what a click
+        // would select. The clamped y0/y1 are pushed as the hit region below for the same reason.
+        const cy0 = Math.max(ry, bodyTop), cy1 = Math.min(ry + rowH, bodyBot + 1);
+        const hot = mouse.y >= cy0 && mouse.y < cy1 && mouse.x > PX && mouse.x < PX + PW;
         if (selected === f) { ctx.fillStyle = 'rgba(125,208,105,0.16)'; ctx.fillRect(PX + 2, ry - 1, PW - 4, rowH); }
         else if (hot) { ctx.fillStyle = 'rgba(255,255,255,0.10)'; ctx.fillRect(PX + 2, ry - 1, PW - 4, rowH); }
         // health-tinted name; leader gets a star. Hover brightens only the DEFAULT tint — the
@@ -5758,7 +5767,7 @@ function drawRoster() {
             drawText(ctx, String(s.stats[st]).padStart(2), Math.floor(colStats + i * statW), ry + 1, '#c8ccd8');
         });
         drawText(ctx, String(s.cropsHarvested || 0), PX + PW - 22, ry + 1, '#e8c860');
-        rosterRows.push({ farmer: f, y0: ry, y1: ry + rowH });
+        if (cy1 > cy0) rosterRows.push({ farmer: f, y0: cy0, y1: cy1 - 1 });   // clamped to the visible body (Codex #127 P3)
     });
     ctx.restore();
 
