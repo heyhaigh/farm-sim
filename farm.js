@@ -1504,15 +1504,21 @@ export class World {
     // NO harvest/chop/mine target list, so they're pure decor a farmer walks around and can never remove.
     // Positional tileRand (never the sequential rng stream) + culture-gated, so human towns are byte-identical.
     #scatterBones() {
-        let placed = 0; const MAX = 8;
+        // #94.2 (owner) — a skeleton is a RARE SURPRISE you cross paths with, not set dressing:
+        // cap 3 per town (was 8), a fourfold-rarer roll, further off the settled core, a wider
+        // clear pad for the now-FULL-SCALE sprite, and skeletons keep a wide berth from each
+        // other so two never read as one boneyard. Generation-time only: existing towns' chunks
+        // are saved and keep their placed bones; only new towns roll under these odds.
+        let placed = 0; const MAX = 3; const spots = [];
         for (let j = FOREST_BORDER; j < GRID - FOREST_BORDER && placed < MAX; j++) {
             for (let i = FOREST_BORDER; i < GRID - FOREST_BORDER && placed < MAX; i++) {
                 if (this.get(i, j) !== T.GRASS) continue;
-                if (Math.hypot(i - CENTER, j - CENTER) < 20) continue;   // out in the wastes, off the settled core
-                if (tileRand(i, j, this.seed + 61) >= 0.004) continue;   // very rare
-                let clear = true;   // needs a clear 3x3 so the big skeleton doesn't sit atop scenery
-                for (let dy = -1; dy <= 1 && clear; dy++) for (let dx = -1; dx <= 1; dx++) if (this.get(i + dx, j + dy) !== T.GRASS) { clear = false; break; }
-                if (clear) { this.set(i, j, T.BONES); placed++; }
+                if (Math.hypot(i - CENTER, j - CENTER) < 24) continue;   // out in the wastes, off the settled core
+                if (tileRand(i, j, this.seed + 61) >= 0.001) continue;   // a rare surprise
+                if (spots.some(s => Math.hypot(s.i - i, s.j - j) < 14)) continue;   // never a boneyard
+                let clear = true;   // needs a clear 5x5 so the full-scale skeleton doesn't sit atop scenery
+                for (let dy = -2; dy <= 2 && clear; dy++) for (let dx = -2; dx <= 2; dx++) if (this.get(i + dx, j + dy) !== T.GRASS) { clear = false; break; }
+                if (clear) { this.set(i, j, T.BONES); spots.push({ i, j }); placed++; }
             }
         }
     }
@@ -4699,6 +4705,12 @@ export class World {
         }
         const blockers = [...this.wells, this.sign, this.board, ...this.structures, this.project?.site, ...this.coops.map(c => c.site)].filter(Boolean);
         for (const b of blockers) if (Math.abs(b.i - i) <= 1 && Math.abs(b.j - j) <= 1) return 'blocked';
+        // #94.2 dragon bones command a 2-tile berth (owner): the skeleton sprite spans far beyond its
+        // single anchor tile at full scale, and a fence through a dragon's ribs breaks the illusion.
+        // Same proximity pattern as the structure blockers above; the tile itself was already refused
+        // below (not GRASS), this keeps the FIELDS from pressing against it.
+        for (let dj = -2; dj <= 2; dj++) for (let di = -2; di <= 2; di++)
+            if (this.get(i + di, j + dj) === T.BONES) return 'blocked';
         const t = this.get(i, j);
         if (t === T.TREE || t === T.STUMP) return 'tree';
         if (t === T.GRASS || t === T.WHEAT || t === T.FLOWER) return 'clear';

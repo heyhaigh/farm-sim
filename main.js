@@ -1744,11 +1744,14 @@ function wildSpec(i, j, t, season) {
             const { w, h } = wildDims(img);
             return { img, w, h, anchor: 0.86, depth: -0.25 };
         }
-        if (t === T.BONES) {   // rare dragon skeleton — scaled to ~half so the 256px full sheet reads as a landmark, not a wall
+        if (t === T.BONES) {   // rare dragon skeleton — FULL asset scale (owner: match the trees/buildings; it's a landmark)
             const img = pickLoadedImage(orcRockyImg, ORC_BONE_NAMES, i, j, 61);
             if (!img) return null;
             const { w, h } = wildDims(img);
-            return { img, w: Math.round(w * 0.5), h: Math.round(h * 0.5), anchor: 0.62, depth: -0.4 };
+            // depth -1 = the GROUND layer (with the forage plants): the bones lie FLAT on the sand, so a
+            // farmer, a fence, a crop row in front must always paint over them — the old -0.4 mid-depth
+            // let the ribs ride above farmland (owner's z-order report). anchor low for the flat sprawl.
+            return { img, w, h, anchor: 0.55, depth: -1 };
         }
         // T.STUMP falls through to the shared stump art below (a chopped remnant reads fine either way)
     }
@@ -5623,6 +5626,7 @@ function drawSheet(f) {
 // ---------------------------------------------------------------------------
 
 let rosterRows = [];              // { farmer, y0, y1 } hit regions (screen px)
+let rosterHoverTip = null;        // #roster-hover { text, color } — set by the hovered sick/downed row, drawn post-clip, cleared same frame
 let rosterView = null;            // { x, y, w, h, bodyTop, bodyBot, rowH, maxScroll }
 let rosterTab = 0;                // 0 PLAYER STATS (the cast stat list), 1 ROLES (civic offices — moved out of Chronicle)
 let rosterTabHits = null;         // [{ x, y, w, h, tab }] roster tab-chip rects (game px)
@@ -5737,6 +5741,9 @@ function drawRoster() {
         const nameCol = f.downed ? '#e0703c' : f.health === 'sick' ? '#e07868' : f.tired ? '#e0a03c' : (hot ? '#ffffff' : '#e8ecf5');
         const nm = (isLeader ? '*' : '') + s.name;
         drawText(ctx, nm.slice(0, 16), colName, ry + 1, nameCol);
+        // #roster-hover (owner) — a sick/downed row explains its tint under the pointer (drawn after
+        // the clip so the chip can't be cut off at the body edge)
+        if (hot && (f.downed || f.health === 'sick')) rosterHoverTip = { text: f.downed ? 'DOWNED - RECOVERING' : 'SICK - NEEDS REST', color: f.downed ? '#e0703c' : '#e07868' };
         drawText(ctx, String(s.level), colLv, ry + 1, '#7dd069');
         STAT_NAMES.forEach((st, i) => {
             drawText(ctx, String(s.stats[st]).padStart(2), Math.floor(colStats + i * statW), ry + 1, '#c8ccd8');
@@ -5755,6 +5762,15 @@ function drawRoster() {
         ctx.fillRect(PX + PW - 3, bodyTop, 2, trackH);
         ctx.fillStyle = '#7dd069';
         ctx.fillRect(PX + PW - 3, Math.floor(thumbY), 2, Math.floor(thumbH));
+    }
+    // #roster-hover the health chip rides the cursor, above the clip + scrollbar; cleared each frame
+    if (rosterHoverTip) {
+        const tw = textWidth(rosterHoverTip.text) + 8;
+        const tx = Math.min(mouse.x + 8, PX + PW - tw - 2), ty = Math.min(mouse.y + 8, bodyBot - 10);
+        ctx.fillStyle = 'rgba(10,12,20,0.95)'; ctx.fillRect(tx, ty, tw, 11);
+        ctx.strokeStyle = rosterHoverTip.color; ctx.strokeRect(tx + 0.5, ty + 0.5, tw - 1, 10);
+        drawText(ctx, rosterHoverTip.text, tx + 4, ty + 3, rosterHoverTip.color);
+        rosterHoverTip = null;
     }
     // (the conscience chat moved to the standalone bottom-left whisper widget — see drawChatWidget)
 }
