@@ -1,0 +1,8 @@
+# Propagate — https://propagate.world (also served, unredirected, at https://propagate.heyhaigh.ai)
+# Every crawler is welcome here, AI answer engines included (GPTBot, OAI-SearchBot, ClaudeBot,
+# PerplexityBot, Google-Extended, CCBot and kin). Structured context for LLMs lives at /llms.txt.
+
+User-agent: *
+Allow: /
+
+Sitemap: https://propagate.world/sitemap.xml

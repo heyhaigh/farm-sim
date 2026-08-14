@@ -32,7 +32,7 @@ FROM node:24-alpine
 WORKDIR /app
 
 # entry points, the title image, every game module, the server, and the api handlers
-COPY index.html memory-graph.html propagate-title-anim2.png og-image.png llms.txt favicon.ico apple-touch-icon.png ./
+COPY index.html memory-graph.html propagate-title-anim2.png og-image.png llms.txt robots.txt sitemap.xml favicon.ico apple-touch-icon.png ./
 COPY *.js ./
 COPY server.mjs ./
 COPY api/ ./api/

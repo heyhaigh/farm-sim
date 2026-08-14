@@ -149,13 +149,21 @@ http.createServer(async (req, res) => {
         return;
     }
 
-    // /llms.txt — context for AI crawlers (the llms.txt convention). Served by EXACT NAME, deliberately
-    // not by adding .txt to the MIME allowlist: that map doubles as the serve allowlist, and opening the
-    // whole extension would hand over any stray .txt that reached the deploy directory.
-    if (url.pathname === '/llms.txt') {
-        fs.readFile(path.join(ROOT, 'llms.txt'), (err, buf) => {
+    // Crawler-facing root files, served by EXACT NAME — deliberately not by adding .txt/.xml to the
+    // MIME allowlist: that map doubles as the serve allowlist, and opening a whole extension would
+    // hand over any stray file that reached the deploy directory. llms.txt is context for AI answer
+    // engines (the llms.txt convention); robots.txt welcomes their crawlers; sitemap.xml is the
+    // durable index signal for the propagate.world Search Console property (#geo, 2026-08-14).
+    const NAMED_ROOT = {
+        '/llms.txt': ['llms.txt', 'text/plain; charset=utf-8'],
+        '/robots.txt': ['robots.txt', 'text/plain; charset=utf-8'],
+        '/sitemap.xml': ['sitemap.xml', 'application/xml; charset=utf-8'],
+    };
+    if (NAMED_ROOT[url.pathname]) {
+        const [file, type] = NAMED_ROOT[url.pathname];
+        fs.readFile(path.join(ROOT, file), (err, buf) => {
             if (err) { res.writeHead(404); res.end('not found'); return; }
-            res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-cache' });
+            res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-cache' });
             res.end(buf);
         });
         return;
