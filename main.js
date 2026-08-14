@@ -167,15 +167,18 @@ function menuNavigate(search) {
 // Through the MIX (uiClick 2nd arg): in the town the tick is an SFX like any chop — the SOUND FX
 // toggle and the top-bar mute govern it (only the start screen's blips bypass, where the speaker is
 // music-only by owner call).
-let uiTickArmed = false;
+let uiTickArmed = false, uiTickKind = 'tick';
 function armUiTick() {
-    uiTickArmed = true;
+    uiTickArmed = true; uiTickKind = 'tick';
     queueMicrotask(() => {
         if (!uiTickArmed) return;
         uiTickArmed = false;
-        try { audio.uiClick('tick', true); } catch (err) { console.warn('ry-farms: ui tick failed', err); }
+        try { audio.uiClick(uiTickKind, true); } catch (err) { console.warn('ry-farms: ui tick failed', err); }
     });
 }
+// A branch that OPENS or CLOSES a modal inflects the pending tick (owner: uptick/downtick so the
+// panels don't sound like every other button). Call before the branch returns; no-op if disarmed.
+function uiTickAs(kind) { uiTickKind = kind; }
 let followTarget = null;          // the farmer being trailed — independent of the open card, so closing
                                   // the sheet (X) keeps following; only F / Esc / a pan stops it
 // #firstwatch Following is the game's most useful camera verb and nothing teaches it. The DAY-1 founding
@@ -7602,22 +7605,23 @@ out.addEventListener('pointerup', (e) => {
 
     // the "previously on" catch-up card swallows the first click (any click dismisses it)
     if (memoryIntro) {   // #memory-intro the reveal owns the click; the resume card stays for the NEXT click
+        uiTickAs('close');   // #ui-click every path below dismisses the reveal
         const mh = memoryIntro.hits || {};
         if (mh.view && inRect(p, mh.view)) { window.open('/memory-graph.html', '_blank', 'noopener'); dismissMemoryIntro(); return; }
         if ((mh.cont && inRect(p, mh.cont)) || (mh.close && inRect(p, mh.close))) { dismissMemoryIntro(); return; }
         dismissMemoryIntro(); return;   // click anywhere dismisses, like the cards
     }
-    if (resumeCard) { resumeCard = null; return; }
+    if (resumeCard) { uiTickAs('close'); resumeCard = null; return; }
     // #faceoff the post-raid VS card swallows a click too (dismiss and return to the aftermath)
-    if (faceoff) { faceoff = null; return; }
+    if (faceoff) { uiTickAs('close'); faceoff = null; return; }
 
     // #legibility Slice 2 — the WHISPER widget (bottom-left): open from the minimized button, and while open
     // handle its own chat interactions (minimize, [NAME v] picker, input focus) so it works off the roster.
     // Opening the widget IS the intent to type (owner) — hand over the caret immediately, same
     // focus call the entry-row click makes, so no second tap is ever needed.
-    if (CHAT_BTN.w && inRect(p, CHAT_BTN)) { chatWidgetOpen = true; audio.ensure(); focusChatInput(); return; }
+    if (CHAT_BTN.w && inRect(p, CHAT_BTN)) { uiTickAs('open'); chatWidgetOpen = true; audio.ensure(); focusChatInput(); return; }
     if (chatWidgetOpen && CHAT_PANEL.w && inRect(p, CHAT_PANEL)) {
-        if (CHAT_CLOSE.w && inRect(p, CHAT_CLOSE)) { chatWidgetOpen = false; chatDropdownOpen = false; blurChatInput(); return; }
+        if (CHAT_CLOSE.w && inRect(p, CHAT_CLOSE)) { uiTickAs('close'); chatWidgetOpen = false; chatDropdownOpen = false; blurChatInput(); return; }
         if (chatDropdownOpen) {
             for (const row of chatDropRows) if (p.y >= row.y0 && p.y <= row.y1 && p.x >= row.x0 && p.x <= row.x1) { chatFarmer = row.farmer; chatScroll = 0; chatDropdownOpen = false; return; }
             chatDropdownOpen = false; return;
@@ -7630,10 +7634,10 @@ out.addEventListener('pointerup', (e) => {
     // sound quick-mute (stays on the top bar)
     if (inRect(p, SND_BTN)) { audio.ensure(); audio.toggle(); return; }
     // settings cog: open/close the menu (New Town + volume)
-    if (SETTINGS_BTN.w && inRect(p, SETTINGS_BTN)) { audio.ensure(); settingsOpen = !settingsOpen; disarmImport(); if (settingsOpen) { rosterOpen = chronOpen = boardOpen = false; blurChatInput(); localLifeCount().then(n => { localMemoryCount = n; }).catch(() => {}); } return; }
+    if (SETTINGS_BTN.w && inRect(p, SETTINGS_BTN)) { audio.ensure(); settingsOpen = !settingsOpen; uiTickAs(settingsOpen ? 'open' : 'close'); disarmImport(); if (settingsOpen) { rosterOpen = chronOpen = boardOpen = false; blurChatInput(); localLifeCount().then(n => { localMemoryCount = n; }).catch(() => {}); } return; }
     // settings menu interactions
     if (settingsOpen && settingsHits) {
-        if (inRect(p, settingsHits.close)) { settingsOpen = false; disarmImport(); return; }
+        if (inRect(p, settingsHits.close)) { uiTickAs('close'); settingsOpen = false; disarmImport(); return; }
         if (inRect(p, settingsHits.music)) { audio.ensure(); audio.toggleMusic(); return; }
         if (inRect(p, settingsHits.sfx)) { audio.ensure(); audio.toggleSfx(); return; }
         if (inRect(p, settingsHits.musicSlider)) { audio.setMusicVolume((p.x - settingsHits.musicSlider.x) / settingsHits.musicSlider.w); return; }
@@ -7720,12 +7724,12 @@ out.addEventListener('pointerup', (e) => {
             else adminNote = { text: 'A REAL RAID IS UNDER WAY - WAR PARTY HELD', until: performance.now() + 3000 };
             return;
         }
-        if (!inRect(p, settingsHits.panel)) { settingsOpen = false; disarmImport(); return; }   // click outside closes
+        if (!inRect(p, settingsHits.panel)) { uiTickAs('close'); settingsOpen = false; disarmImport(); return; }   // click outside closes
         return;   // click inside the panel, no-op
     }
-    if (inRect(p, ROSTER_BTN)) { rosterOpen = !rosterOpen; if (rosterOpen) { boardOpen = false; chronOpen = false; closeWorldMap(); } else { chatDropdownOpen = false; blurChatInput(); } return; }
-    if (CHRON_BTN.w && inRect(p, CHRON_BTN)) { chronOpen = !chronOpen; if (chronOpen) { boardOpen = false; rosterOpen = false; closeWorldMap(); chronScroll = 0; blurChatInput(); chronTownWide = !(followMode && followTarget && world.farmers.includes(followTarget)); } return; }
-    if (WORLD_BTN.w && inRect(p, WORLD_BTN)) { if (worldMapOpen) closeWorldMap(); else openWorldMap(); return; }
+    if (inRect(p, ROSTER_BTN)) { rosterOpen = !rosterOpen; uiTickAs(rosterOpen ? 'open' : 'close'); if (rosterOpen) { boardOpen = false; chronOpen = false; closeWorldMap(); } else { chatDropdownOpen = false; blurChatInput(); } return; }
+    if (CHRON_BTN.w && inRect(p, CHRON_BTN)) { chronOpen = !chronOpen; uiTickAs(chronOpen ? 'open' : 'close'); if (chronOpen) { boardOpen = false; rosterOpen = false; closeWorldMap(); chronScroll = 0; blurChatInput(); chronTownWide = !(followMode && followTarget && world.farmers.includes(followTarget)); } return; }
+    if (WORLD_BTN.w && inRect(p, WORLD_BTN)) { if (worldMapOpen) { uiTickAs('close'); closeWorldMap(); } else { uiTickAs('open'); openWorldMap(); } return; }
 
     // world-map overlay (modal): X / click-outside closes; a town node selects it; VISIT switches active town
     if (worldMapOpen) {
@@ -7770,7 +7774,7 @@ out.addEventListener('pointerup', (e) => {
             // rect made a click on the title bar (above the body, e.g. "TALES OF THE WILDS") read as "outside".
             const cp = chronPanel || cv;
             if ((p.x > cp.x + cp.w - 14 && p.y < cp.y + 14) ||
-                p.x < cp.x || p.x > cp.x + cp.w || p.y < cp.y || p.y > cp.y + cp.h) { chronOpen = false; return; }
+                p.x < cp.x || p.x > cp.x + cp.w || p.y < cp.y || p.y > cp.y + cp.h) { uiTickAs('close'); chronOpen = false; return; }
             for (const row of chronRows) {
                 if (p.y >= row.y0 && p.y <= row.y1 && p.x > cv.x && p.x < cv.x + cv.w) {
                     const f = row.farmerSeed != null ? world.farmers.find(x => x.sheet.seed === row.farmerSeed) : null;
@@ -7786,11 +7790,11 @@ out.addEventListener('pointerup', (e) => {
     }
 
     // board toggle button (only when the board has been built)
-    if (!BOARD_BTN.hidden && inRect(p, BOARD_BTN)) { boardOpen = !boardOpen; if (boardOpen) { selected = null; rosterOpen = false; chronOpen = false; closeWorldMap(); boardScroll = 0; } return; }
+    if (!BOARD_BTN.hidden && inRect(p, BOARD_BTN)) { boardOpen = !boardOpen; uiTickAs(boardOpen ? 'open' : 'close'); if (boardOpen) { selected = null; rosterOpen = false; chronOpen = false; closeWorldMap(); boardScroll = 0; } return; }
 
     // board panel interactions (X or click-outside closes; clicks inside are consumed)
     if (boardOpen) {
-        if (inRect(p, BOARD_CLOSE) || !inRect(p, BOARD_RECT)) boardOpen = false;
+        if (inRect(p, BOARD_CLOSE) || !inRect(p, BOARD_RECT)) { uiTickAs('close'); boardOpen = false; }
         return;
     }
 
@@ -7808,13 +7812,13 @@ out.addEventListener('pointerup', (e) => {
         if (rv) {
             // close X / click well outside the panel
             if ((p.x > rv.x + rv.w - 14 && p.y < rv.y + 12) ||
-                p.x < rv.x || p.x > rv.x + rv.w || p.y < rv.y || p.y > rv.y + rv.h) { rosterOpen = false; return; }
+                p.x < rv.x || p.x > rv.x + rv.w || p.y < rv.y || p.y > rv.y + rv.h) { uiTickAs('close'); rosterOpen = false; return; }
             // tab chips: PLAYER STATS / ROLES
             if (rosterTabHits) { for (const t of rosterTabHits) if (inRect(p, t)) { rosterTab = t.tab; rosterScroll = 0; return; } }
             // list rows: open that farmer's detail sheet AND follow them (roster select + follow are one action)
             for (const row of rosterRows) {
                 if (p.y >= row.y0 && p.y <= row.y1 && p.x > rv.x && p.x < rv.x + rv.w) {
-                    selected = row.farmer; sheetScroll = 0; sheetTab = 0; rosterOpen = false;
+                    uiTickAs('open'); selected = row.farmer; sheetScroll = 0; sheetTab = 0; rosterOpen = false;
                     followMode = true; followTarget = row.farmer; funnelFollow();
                     return;
                 }
@@ -7831,7 +7835,7 @@ out.addEventListener('pointerup', (e) => {
         return;
     }
     // closing the card is just dismissing visual noise — it does NOT stop following (only F/Esc/pan do)
-    if (selected && inRect(p, SHEET_CLOSE)) { selected = null; selectedSlotKey = null; return; }
+    if (selected && inRect(p, SHEET_CLOSE)) { uiTickAs('close'); selected = null; selectedSlotKey = null; return; }
     // tab bar: switch view (reset scroll so the new view starts at the top)
     if (selected) { for (const tb of SHEET_TABS) if (inRect(p, tb)) { if (sheetTab !== tb.tab) { sheetTab = tb.tab; sheetScroll = 0; selectedSlotKey = null; } return; } }
     if (selected && MEM_PREV.w && inRect(p, MEM_PREV)) { sheetMemPage = Math.max(0, sheetMemPage - 1); return; }

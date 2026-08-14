@@ -513,6 +513,10 @@ class FarmAudio {
             o.connect(g); g.connect(out); o.start(t); o.stop(t + dur + 0.02);
         };
         if (kind === 'confirm') { blip(t0, 880, 880, 0.055, 0.16); blip(t0 + 0.06, 1318.5, 1318.5, 0.09, 0.15); }   // A5 → E6
+        // #ui-click modal flavors (owner: a flat tick everywhere reads repetitive) — same triangle
+        // family, inflected: OPEN glides up C6→E6, CLOSE glides down C6→G5, generic stays flat C6.
+        else if (kind === 'open') blip(t0, 1046.5, 1318.5, 0.08, 0.17, 'triangle');
+        else if (kind === 'close') blip(t0, 1046.5, 784, 0.09, 0.16, 'triangle');
         else blip(t0, 1046.5, 1046.5, 0.08, 0.17, 'triangle');   // triangle pluck, C6 — owner's pick from the compare page (variant E)
     }
 
