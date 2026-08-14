@@ -530,6 +530,42 @@ class FarmAudio {
         if (!this.ctx || !this.enabled) return;
         this.ensure();
         const t0 = this.ctx.currentTime + 0.02;
+        // #rare-find 'magic' — the fantastical sting for a wild rare find (owner ask: the OUT PAST
+        // THE FOG spotlight should sound magical, not merely triumphant). Three layers: a quick
+        // pentatonic harp-gliss ascent (triangle, each note ringing), an accented final bell with
+        // slow vibrato, and a high sparkle bed (bandpassed noise swell). Rare + ceremonial, so it
+        // is allowed to be longer (~1.6s tail) and softer-edged than the arpeggio stings below.
+        if (tone === 'magic') {
+            const gliss = [523.25, 587.33, 659.25, 783.99, 880, 1046.5];   // C5 pentatonic rise → C6
+            gliss.forEach((f, i) => {
+                const t = t0 + i * 0.055;
+                const o = this.ctx.createOscillator(); o.type = 'triangle'; o.frequency.value = f;
+                const g = this.ctx.createGain();
+                g.gain.setValueAtTime(0.0001, t);
+                g.gain.linearRampToValueAtTime(i === gliss.length - 1 ? 0.11 : 0.075, t + 0.012);
+                g.gain.exponentialRampToValueAtTime(0.0001, t + (i === gliss.length - 1 ? 1.4 : 0.55));
+                if (i === gliss.length - 1) {   // the landing note shimmers: slow vibrato on the bell
+                    const v = this.ctx.createOscillator(); v.frequency.value = 5.5;
+                    const vg = this.ctx.createGain(); vg.gain.value = 6;
+                    v.connect(vg); vg.connect(o.frequency); v.start(t); v.stop(t + 1.5);
+                }
+                o.connect(g); g.connect(this.sfxBus); o.start(t); o.stop(t + 1.6);
+            });
+            const oct = this.ctx.createOscillator(); oct.type = 'sine'; oct.frequency.value = 2093;   // C7 halo over the landing
+            const og = this.ctx.createGain();
+            og.gain.setValueAtTime(0.0001, t0 + 0.28);
+            og.gain.linearRampToValueAtTime(0.035, t0 + 0.34);
+            og.gain.exponentialRampToValueAtTime(0.0001, t0 + 1.5);
+            oct.connect(og); og.connect(this.sfxBus); oct.start(t0 + 0.28); oct.stop(t0 + 1.6);
+            const spark = this.ctx.createBufferSource(); spark.buffer = this.#noiseBuffer(1.2);
+            const bp = this.ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 6200; bp.Q.value = 1.6;
+            const sg = this.ctx.createGain();
+            sg.gain.setValueAtTime(0.0001, t0);
+            sg.gain.linearRampToValueAtTime(0.028, t0 + 0.3);
+            sg.gain.exponentialRampToValueAtTime(0.0001, t0 + 1.2);
+            spark.connect(bp); bp.connect(sg); sg.connect(this.sfxBus); spark.start(t0); spark.stop(t0 + 1.25);
+            return;
+        }
         // note sets (Hz). triumph rises through a major chord; somber falls a minor third; neutral a gentle,
         // warm two-note lift (the frequent callout banners — chicks hatched etc. — so it's soft + unobtrusive).
         const notes = tone === 'somber' ? [[392.0, 0], [311.1, 0.16]]

@@ -6966,7 +6966,9 @@ function drawMoments() {
     if (!activeMoment && momentQueue.length) {
         const e = momentQueue.shift();
         activeMoment = { e, shownAt: nowMs };
-        try { audio.moment(e.tone || 'triumph'); } catch { /* audio not ready */ }
+        // #rare-find a wild find (crystal/relic/emberbloom — OUT PAST THE FOG) gets the MAGICAL
+        // sting (owner ask); every other grand beat keeps its tone-driven arpeggio.
+        try { audio.moment(e.kind === 'find' ? 'magic' : (e.tone || 'triumph')); } catch { /* audio not ready */ }
     } else if (!activeMoment && !activeCallout && !momentQueue.length && !calloutQueue.length && pendingInscription) {   // #Codex37 P1-1: the LAST toast finishes before the Inscription takes the stage
         // #inscription LAST in the aftermath order (debrief -> counterfactual -> grand card -> THIS): the
         // town visibly sets the battle down in its memory — the write-receipt, shown only once the
