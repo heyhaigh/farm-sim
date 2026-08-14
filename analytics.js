@@ -11,7 +11,7 @@
 // GA is configured for the live site only. localhost, a LAN address, a preview host and a
 // file:// open all stay DARK — the funnel is worthless if it is half QA traffic, and this is the
 // same posture the update nudge takes (main.js: no /api/build locally, so the badge never lights).
-const LIVE_HOSTS = ['propagate.heyhaigh.ai'];
+const LIVE_HOSTS = ['propagate.heyhaigh.ai', 'propagate.world'];   // #domain both real origins count — the old host stays live as the no-redirect fallback
 
 // One localStorage key per once-only event. Prefixed so a player clearing "ryfarms-" keys clears
 // the funnel ledger along with everything else, rather than being permanently marked.

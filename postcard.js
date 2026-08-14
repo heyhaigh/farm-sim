@@ -8,7 +8,10 @@
 
 import { generateTownName } from './farm.js';
 
-const PUBLIC_ORIGIN = 'https://propagate.heyhaigh.ai';   // matches index.html's static og:url
+// #domain propagate.world is the canonical front door (2026-08-14); propagate.heyhaigh.ai stays
+// live forever as the fallback — IndexedDB is origin-scoped, so redirecting it would strand every
+// existing town. Postcards mint links on the canonical origin; old shared links keep working.
+const PUBLIC_ORIGIN = 'https://propagate.world';   // matches index.html's static og:url
 
 // The ONE reading of a query's town identity — seed and culture. The boot (main.js) and the OG
 // preview (postcardMeta) MUST agree byte-for-byte, because a preview that names a different town

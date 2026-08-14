@@ -57,13 +57,13 @@ const ok = (name) => { passed++; console.log(`  ok - ${name}`); };
     const humanName = generateTownName(424242, 'human');
     assert.equal(human.title, `${humanName} — Propagate`);
     assert.ok(human.description.includes(humanName), 'description names the town');
-    assert.equal(human.url, 'https://propagate.heyhaigh.ai/?seed=424242');
+    assert.equal(human.url, 'https://propagate.world/?seed=424242');
 
     const orc = postcardMeta(new URLSearchParams('seed=424242&orc=1'));
     const orcName = generateTownName(424242, 'orc');
     assert.notEqual(orcName, humanName, 'seed 424242 must distinguish the cultures or this pin is vacuous');
     assert.equal(orc.title, `${orcName} — Propagate`);
-    assert.equal(orc.url, 'https://propagate.heyhaigh.ai/?seed=424242&orc=1');
+    assert.equal(orc.url, 'https://propagate.world/?seed=424242&orc=1');
     ok('meta names the exact town the boot would found, per culture');
 }
 {
