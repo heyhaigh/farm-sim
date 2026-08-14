@@ -7632,14 +7632,18 @@ out.addEventListener('pointerup', (e) => {
     }
 
     // sound quick-mute (stays on the top bar)
-    if (inRect(p, SND_BTN)) { audio.ensure(); audio.toggle(); return; }
+    // #ui-click MUTING EARNS SILENCE: the tick schedules BEFORE the master ramp starts, so the very
+    // click that mutes the game would audibly beep — which reads as "clicks survive the mute" (owner
+    // hit exactly this). Disarm on the mute direction; the unmute click keeps its tick as the
+    // "sound is back" proof (it rides the rising ramp).
+    if (inRect(p, SND_BTN)) { audio.ensure(); if (!audio.toggle()) uiTickArmed = false; return; }
     // settings cog: open/close the menu (New Town + volume)
     if (SETTINGS_BTN.w && inRect(p, SETTINGS_BTN)) { audio.ensure(); settingsOpen = !settingsOpen; uiTickAs(settingsOpen ? 'open' : 'close'); disarmImport(); if (settingsOpen) { rosterOpen = chronOpen = boardOpen = false; blurChatInput(); localLifeCount().then(n => { localMemoryCount = n; }).catch(() => {}); } return; }
     // settings menu interactions
     if (settingsOpen && settingsHits) {
         if (inRect(p, settingsHits.close)) { uiTickAs('close'); settingsOpen = false; disarmImport(); return; }
         if (inRect(p, settingsHits.music)) { audio.ensure(); audio.toggleMusic(); return; }
-        if (inRect(p, settingsHits.sfx)) { audio.ensure(); audio.toggleSfx(); return; }
+        if (inRect(p, settingsHits.sfx)) { audio.ensure(); if (!audio.toggleSfx()) uiTickArmed = false; return; }   // #ui-click muting earns silence (same rule as SND_BTN — the tick would beat the bus decay)
         if (inRect(p, settingsHits.musicSlider)) { audio.setMusicVolume((p.x - settingsHits.musicSlider.x) / settingsHits.musicSlider.w); return; }
         if (inRect(p, settingsHits.sfxSlider)) { audio.setSfxVolume((p.x - settingsHits.sfxSlider.x) / settingsHits.sfxSlider.w); return; }
         if (inRect(p, settingsHits.portalBtn)) { window.open('/memory-graph.html', '_blank', 'noopener'); return; }
