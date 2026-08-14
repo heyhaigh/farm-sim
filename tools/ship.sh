@@ -74,11 +74,16 @@ DEPLOY_REV=$(git rev-parse HEAD)
 git push -q origin main
 echo "deploy: $DEPLOY_REV pushed — Railway is building"
 
-# 4. assert it is actually LIVE (the image states its own revision; a poll past ~5min = failed build)
+# 4. assert it is actually LIVE on BOTH hosts (the image states its own revision; a poll past
+# ~5min = failed build). One Railway service serves both, but the hostname bindings are separate
+# edge state — a ship that leaves propagate.world dark must not report success (Codex #125).
 for i in $(seq 1 40); do
     LIVE=$(curl -s --max-time 10 https://propagate.heyhaigh.ai/api/build | sed 's/.*"rev":"\([^"]*\)".*/\1/')
-    if [ "$LIVE" = "$DEPLOY_REV" ]; then echo "LIVE: $NEXT on $DEPLOY_REV ($((i * 15 - 15))s)"; exit 0; fi
+    LIVE_WORLD=$(curl -s --max-time 10 https://propagate.world/api/build | sed 's/.*"rev":"\([^"]*\)".*/\1/')
+    if [ "$LIVE" = "$DEPLOY_REV" ] && [ "$LIVE_WORLD" = "$DEPLOY_REV" ]; then
+        echo "LIVE on both hosts: $NEXT on $DEPLOY_REV ($((i * 15 - 15))s)"; exit 0
+    fi
     sleep 15
 done
-echo "NEVER went live — check Railway build logs" >&2
+echo "NEVER went live on both hosts (heyhaigh=$LIVE world=$LIVE_WORLD, want $DEPLOY_REV) — check Railway build logs / hostname bindings" >&2
 exit 1
