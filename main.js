@@ -168,12 +168,16 @@ function menuNavigate(search) {
 // toggle and the top-bar mute govern it (only the start screen's blips bypass, where the speaker is
 // music-only by owner call).
 let uiTickArmed = false, uiTickKind = 'tick';
+// #ui-click the immediate form, for controls consumed on POINTERDOWN (the grand-Moment dismiss,
+// the callout X, the update pill) — they return before pointerup ever arms, so they tick directly
+// (Codex #126 P3-2). Same wrap discipline: a sound must never break the control.
+function uiTickNow(kind) { try { audio.uiClick(kind, true); } catch (err) { console.warn('ry-farms: ui tick failed', err); } }
 function armUiTick() {
     uiTickArmed = true; uiTickKind = 'tick';
     queueMicrotask(() => {
         if (!uiTickArmed) return;
         uiTickArmed = false;
-        try { audio.uiClick(uiTickKind, true); } catch (err) { console.warn('ry-farms: ui tick failed', err); }
+        uiTickNow(uiTickKind);
     });
 }
 // A branch that OPENS or CLOSES a modal inflects the pending tick (owner: uptick/downtick so the
@@ -7505,12 +7509,13 @@ out.addEventListener('pointerdown', (e) => {
     // world-pan arming) and a >4px drag made pointerup return before the reveal's own dismiss.
     if (memoryIntro) { mouse.panStart = null; mouse.dragging = false; return; }
     // #98 a grand Moment spotlight eats the next click (dismiss it, don't fall through to world/pan)
-    if (activeMoment && MOMENTS_HIT.w) { activeMoment = null; mouse.panStart = null; return; }
+    if (activeMoment && MOMENTS_HIT.w) { uiTickNow('close'); activeMoment = null; mouse.panStart = null; return; }   // #ui-click consumed on pointerdown — tick directly (Codex #126 P3-2)
     // #callout the X on a discovery toast dismisses it (only the X — clicking the bar itself falls through)
-    if (activeCallout && CALLOUT_CLOSE.w && inRect(p, CALLOUT_CLOSE)) { activeCallout = null; mouse.panStart = null; return; }
+    if (activeCallout && CALLOUT_CLOSE.w && inRect(p, CALLOUT_CLOSE)) { uiTickNow('close'); activeCallout = null; mouse.panStart = null; return; }   // #ui-click same — pointerdown-consumed
     // #update-nudge — click the pill: save first, then reload into the new build (reload proceeds even if
     // the save path rejects — the tab-hide handler is the second net, and a retired town has nothing to save)
     if (UPDATE_NUDGE.w && inRect(p, UPDATE_NUDGE) && !_updateReloading) {
+        uiTickNow('confirm');   // #ui-click pointerdown-consumed; the save-then-reload leaves it time to sound
         _updateReloading = true;
         const go = () => location.reload();
         if (world && !world._retired && !world._persistenceDisabled) saveTown(world).then(go, go);
@@ -7628,7 +7633,7 @@ out.addEventListener('pointerup', (e) => {
         }
         if (chatNameHit && p.x >= chatNameHit.x0 && p.x <= chatNameHit.x1 && p.y >= chatNameHit.y0 && p.y <= chatNameHit.y1) { chatDropdownOpen = !chatDropdownOpen; return; }
         if (chatEntryRect && p.x >= chatEntryRect.x0 && p.x <= chatEntryRect.x1 && p.y >= chatEntryRect.y0 && p.y <= chatEntryRect.y1) { focusChatInput(); return; }
-        blurChatInput(); return;   // a click elsewhere in the widget is consumed (never falls through to world)
+        uiTickArmed = false; blurChatInput(); return;   // a click elsewhere in the widget is consumed (never falls through to world) — dead space, no tick (Codex #126 P3-1)
     }
 
     // sound quick-mute (stays on the top bar)
@@ -7729,7 +7734,7 @@ out.addEventListener('pointerup', (e) => {
             return;
         }
         if (!inRect(p, settingsHits.panel)) { uiTickAs('close'); settingsOpen = false; disarmImport(); return; }   // click outside closes
-        return;   // click inside the panel, no-op
+        uiTickArmed = false; return;   // click inside the panel, no-op — dead space earns no tick (Codex #126 P3-1)
     }
     if (inRect(p, ROSTER_BTN)) { rosterOpen = !rosterOpen; uiTickAs(rosterOpen ? 'open' : 'close'); if (rosterOpen) { boardOpen = false; chronOpen = false; closeWorldMap(); } else { chatDropdownOpen = false; blurChatInput(); } return; }
     if (CHRON_BTN.w && inRect(p, CHRON_BTN)) { chronOpen = !chronOpen; uiTickAs(chronOpen ? 'open' : 'close'); if (chronOpen) { boardOpen = false; rosterOpen = false; closeWorldMap(); chronScroll = 0; blurChatInput(); chronTownWide = !(followMode && followTarget && world.farmers.includes(followTarget)); } return; }
@@ -7790,7 +7795,7 @@ out.addEventListener('pointerup', (e) => {
                 }
             }
         }
-        return;
+        uiTickArmed = false; return;   // inside the panel, no control hit: consumed dead space, no tick (Codex #126 P3-1)
     }
 
     // board toggle button (only when the board has been built)
@@ -7799,6 +7804,7 @@ out.addEventListener('pointerup', (e) => {
     // board panel interactions (X or click-outside closes; clicks inside are consumed)
     if (boardOpen) {
         if (inRect(p, BOARD_CLOSE) || !inRect(p, BOARD_RECT)) { uiTickAs('close'); boardOpen = false; }
+        else uiTickArmed = false;   // inside the board, not the X: consumed dead space, no tick (Codex #126 P3-1)
         return;
     }
 
@@ -7828,7 +7834,7 @@ out.addEventListener('pointerup', (e) => {
                 }
             }
         }
-        return;
+        uiTickArmed = false; return;   // inside the panel, no control hit: consumed dead space, no tick (Codex #126 P3-1)
     }
 
     // detail card: X closes it; clicks anywhere inside it are consumed. Checked BEFORE the
