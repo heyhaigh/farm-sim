@@ -5441,7 +5441,7 @@ function drawSheet(f) {
             for (const m of entries) {
                 const col = m.strength > 0.8 ? '#c8ccd8' : m.strength > 0.45 ? '#8a8fa0' : '#5a5f6e';
                 drawText(ctx, `d${m.day}`, IX, y, MEM_KIND_COLORS[m.kind] || SHEET_LABEL);
-                for (const line of wrapText(m.text, 27).slice(0, 2)) { drawText(ctx, line, IX + 17, y, col); y += 7; }
+                for (const line of wrapText(m.text, 27)) { drawText(ctx, line, IX + 17, y, col); y += 7; }   // FULL text (owner: memories must not cut off) — the body scrolls, the flow absorbs the height
                 y += 1;
             }
             if (pages > 1) {
@@ -5463,7 +5463,7 @@ function drawSheet(f) {
         } else { y = sectionBand(IX, y, IW, 'MEMORIES (0)'); drawText(ctx, 'no memories yet', IX + 2, y, SHEET_LABEL); y += 8; }
 
         drawText(ctx, 'FROM MEMORY', IX, y, SHEET_LABEL); y += 7;
-        for (const line of wrapText(s.memory.title, 32).slice(0, 3)) { drawText(ctx, line, IX + 2, y, '#8a9ade'); y += 7; }
+        for (const line of wrapText(s.memory.title, 32)) { drawText(ctx, line, IX + 2, y, '#8a9ade'); y += 7; }   // FULL source title, same rule as the journal above
         y += 5;
     } else if (sheetTab === 2) {
         // ===== TIES: every meaningful relationship (strongest first) + overheard gossip =====
@@ -5727,9 +5727,14 @@ function drawRoster() {
         if (ry + rowH < bodyTop || ry > bodyBot) return;   // off-screen
         const s = f.sheet;
         const isLeader = world.leader === f;
+        // #roster-hover same affordance as the whisper dropdown (owner): the row under the pointer
+        // fills, so it's plain WHICH farmer a click will select. Selection's green fill outranks it.
+        const hot = mouse.y >= ry && mouse.y < ry + rowH && mouse.x > PX + 2 && mouse.x < PX + PW - 2;
         if (selected === f) { ctx.fillStyle = 'rgba(125,208,105,0.16)'; ctx.fillRect(PX + 2, ry - 1, PW - 4, rowH); }
-        // health-tinted name; leader gets a star
-        const nameCol = f.downed ? '#e0703c' : f.health === 'sick' ? '#e07868' : f.tired ? '#e0a03c' : '#e8ecf5';
+        else if (hot) { ctx.fillStyle = 'rgba(255,255,255,0.10)'; ctx.fillRect(PX + 2, ry - 1, PW - 4, rowH); }
+        // health-tinted name; leader gets a star. Hover brightens only the DEFAULT tint — the
+        // downed/sick/tired colors carry information and stay put under the pointer.
+        const nameCol = f.downed ? '#e0703c' : f.health === 'sick' ? '#e07868' : f.tired ? '#e0a03c' : (hot ? '#ffffff' : '#e8ecf5');
         const nm = (isLeader ? '*' : '') + s.name;
         drawText(ctx, nm.slice(0, 16), colName, ry + 1, nameCol);
         drawText(ctx, String(s.level), colLv, ry + 1, '#7dd069');
