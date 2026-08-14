@@ -484,12 +484,15 @@ class FarmAudio {
     // #ui-click — retro menu blips for the start screen's buttons (owner, 2026-08-14).
     // 'tick' = a single NES-style cursor blip (secondary buttons: back, spectate, import, unmute);
     // 'confirm' = a two-note Game-Boy-style rise (the committing buttons: continue, start, human/orc).
-    // Routed around the MASTER mute on purpose: the launch menu boots politely muted so the THEME
-    // doesn't autoplay, but a 50ms square blip in direct answer to the player's own click is not
-    // autoplay — it's the button talking back. The policy line stays in main.js: once the player
-    // EXPLICITLY mutes via the menu speaker, it stops calling this at all. The bus level rides
-    // sfxVol at creation so the blips sit with the rest of the mix.
-    uiClick(kind = 'tick') {
+    // Routed around the MASTER mute on purpose: the menu speaker governs the MUSIC only (owner
+    // call), and the launch menu boots muted so the theme doesn't autoplay — but a 50ms blip in
+    // direct answer to the player's own click is not autoplay, it's the button talking back, and
+    // it plays whatever the speaker says. The bus level rides sfxVol at creation so the blips sit
+    // with the rest of the mix.
+    // `throughMix` (in-game buttons): route through sfxBus instead — in the town, the tick is an
+    // SFX like any chop, so the SOUND FX toggle/slider and the top-bar mute govern it. Only the
+    // START SCREEN's blips bypass the mix (the menu speaker is music-only there, owner call).
+    uiClick(kind = 'tick', throughMix = false) {
         this.ensure();                 // the click IS the gesture — safe to create/resume the ctx here
         if (!this.ctx) return;
         if (!this.uiBus) {
@@ -497,19 +500,20 @@ class FarmAudio {
             this.uiBus.gain.value = 0.55 * this.sfxVol;
             this.uiBus.connect(this.ctx.destination);   // NOT this.master — see the mute note above
         }
+        const out = throughMix && this.sfxBus ? this.sfxBus : this.uiBus;
         const t0 = this.ctx.currentTime + 0.01;
-        const blip = (t, f0, f1, dur, peak) => {
-            const o = this.ctx.createOscillator(); o.type = 'square';
+        const blip = (t, f0, f1, dur, peak, type = 'square') => {
+            const o = this.ctx.createOscillator(); o.type = type;
             o.frequency.setValueAtTime(f0, t);
             if (f1 !== f0) o.frequency.exponentialRampToValueAtTime(f1, t + dur);
             const g = this.ctx.createGain();
             g.gain.setValueAtTime(0.0001, t);
             g.gain.linearRampToValueAtTime(peak, t + 0.004);
             g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-            o.connect(g); g.connect(this.uiBus); o.start(t); o.stop(t + dur + 0.02);
+            o.connect(g); g.connect(out); o.start(t); o.stop(t + dur + 0.02);
         };
         if (kind === 'confirm') { blip(t0, 880, 880, 0.055, 0.16); blip(t0 + 0.06, 1318.5, 1318.5, 0.09, 0.15); }   // A5 → E6
-        else blip(t0, 1800, 1400, 0.045, 0.14);   // short falling cursor tick
+        else blip(t0, 1046.5, 1046.5, 0.08, 0.17, 'triangle');   // triangle pluck, C6 — owner's pick from the compare page (variant E)
     }
 
     // #98 Moments — a short musical STING for a profound beat. triumph = bright ascending arpeggio;

@@ -143,23 +143,38 @@ let followMode = false;           // camera tracks followTarget (F/crosshair tog
 let specTarget = null;            // #START launch-page spectator camera: the townsfolk it's drifting between
 let specNextSwitch = 0;           // wall-clock ms for the next spectator-camera target rotation
 let menuMuted = true;             // #START the start-screen volume button state (starts muted; click to hear the theme)
-let menuMuteTouched = false;      // #ui-click has the player EXPLICITLY set the speaker? (the default boot mute is politeness, not chosen silence)
 let menuNavLock = false;          // #ui-click one navigation per menu life — the confirm blip's grace window must not double-book
-// #ui-click the start screen's retro blips, policy included: a blip plays even under the DEFAULT
-// boot mute — it answers the player's own click, which is not autoplay — but stops the moment the
-// player explicitly mutes via the speaker. audio.uiClick routes around the master mute for exactly
-// this split; the suppression decision lives here where menuMuted's two meanings are visible.
+// #ui-click the start screen's retro blips. The menu speaker governs the MUSIC only (owner call —
+// a first cut suppressed blips after an explicit mute, and it read as the buttons going dead):
+// blips ALWAYS answer a click, which is why audio.uiClick routes around the master mute.
 // WRAPPED (like funnelTick): a sound must never break a button. The one real failure seen — a
 // stale-cached audio.js without uiClick during QA — killed the START button outright; any throw
 // here (blocked AudioContext, whatever) must cost the blip, not the click.
-function menuClick(kind) { if (menuMuted && menuMuteTouched) return; try { audio.uiClick(kind); } catch (err) { console.warn('ry-farms: menu blip failed', err); } }
+function menuClick(kind) { try { audio.uiClick(kind); } catch (err) { console.warn('ry-farms: menu blip failed', err); } }
 // The committing buttons NAVIGATE, which would cut the confirm blip off mid-note — give it a 150ms
 // grace before the URL changes (imperceptible next to the seconds-long boot that follows).
 function menuNavigate(search) {
     if (menuNavLock) return; menuNavLock = true;
-    if (menuMuted && menuMuteTouched) { location.search = search; return; }   // silence chosen: no blip, no delay
     try { audio.uiClick('confirm'); } catch (err) { console.warn('ry-farms: menu blip failed', err); location.search = search; return; }   // a broken blip must not cost the navigation — go now
     setTimeout(() => { location.search = search; }, 150);
+}
+// #ui-click IN-GAME, every UI button ticks (owner) — but not drags (the wasDrag guard returns before
+// this arms), not the minimap, and not world clicks (farmers, buildings, ground). Rather than tag
+// ~50 dispatch branches, the ARM/DISARM shape keys off the handler's own structure: every UI branch
+// RETURNS before the world section. Arm on entering the in-game dispatch; the world section disarms;
+// the microtask runs after the handler finishes and ticks only if a UI branch consumed the click.
+// A UI branch added later is covered automatically — the invariant is the section boundary, not a list.
+// Through the MIX (uiClick 2nd arg): in the town the tick is an SFX like any chop — the SOUND FX
+// toggle and the top-bar mute govern it (only the start screen's blips bypass, where the speaker is
+// music-only by owner call).
+let uiTickArmed = false;
+function armUiTick() {
+    uiTickArmed = true;
+    queueMicrotask(() => {
+        if (!uiTickArmed) return;
+        uiTickArmed = false;
+        try { audio.uiClick('tick', true); } catch (err) { console.warn('ry-farms: ui tick failed', err); }
+    });
 }
 let followTarget = null;          // the farmer being trailed — independent of the open card, so closing
                                   // the sheet (X) keeps following; only F / Esc / a pan stops it
@@ -7559,7 +7574,7 @@ out.addEventListener('pointerup', (e) => {
     // #START the launch menu owns every click while it's up: a button acts, anything else is swallowed
     if (startScreen) {
         const H = startHits || {};
-        if (H.sound && inRect(p, H.sound)) { menuMuted = !menuMuted; menuMuteTouched = true; audio.ensure(); audio.setMuted(menuMuted); if (!menuMuted) menuClick('tick'); disarmImport(); return; }   // #START universal mute; UNCONDITIONAL disarm — a selection still reading (f.text/occupancy) must not arm after this click (Codex #122 r2). #ui-click a tick on UNMUTE confirms sound is back; muting earns silence, not a blip
+        if (H.sound && inRect(p, H.sound)) { menuMuted = !menuMuted; audio.ensure(); audio.setMuted(menuMuted); menuClick('tick'); disarmImport(); return; }   // #START the speaker governs the MUSIC only (owner); UNCONDITIONAL disarm — a selection still reading (f.text/occupancy) must not arm after this click (Codex #122 r2). #ui-click the toggle blips like any other button
         if (startPage === 'title') {
             if (H.importFile && inRect(p, H.importFile)) {
                 menuClick('tick');
@@ -7581,6 +7596,9 @@ out.addEventListener('pointerup', (e) => {
         }
         return;
     }
+
+    // #ui-click from here down is the IN-GAME dispatch: arm the tick; the world section disarms it.
+    armUiTick();
 
     // the "previously on" catch-up card swallows the first click (any click dismisses it)
     if (memoryIntro) {   // #memory-intro the reveal owns the click; the resume card stays for the NEXT click
@@ -7832,6 +7850,11 @@ out.addEventListener('pointerup', (e) => {
         if (idx >= 0) { const next = arr[(idx + dir + arr.length) % arr.length]; followTarget = next; if (selected) { selected = next; sheetScroll = 0; selectedSlotKey = null; } }
         return;
     }
+
+    // #ui-click WORLD SECTION — no ticks from here down (owner: the minimap and world clicks stay
+    // silent). Everything above returned if it consumed the click, so reaching this line means the
+    // click is headed for the map, a building, a farmer, or the ground.
+    uiTickArmed = false;
 
     // minimap: jump the camera (only interactive when visible — hidden under the card).
     // The map is a camera-following WINDOW now, so clicks map through its center.
