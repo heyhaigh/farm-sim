@@ -21,7 +21,7 @@
 
 import assert from 'node:assert';
 import {
-    revealLine, revealDuration, wordSecFor, shownCount, words,
+    revealLine, revealDuration, wordSecFor, wordArrivals, shownCount, words,
     DEFAULT_VARIANT, DEFAULT_FADE, DEFAULT_GLIDE, DEFAULT_FADE_SEC, REVEAL_FRAC,
 } from '../speech-anim.js';
 import { textWidth } from '../pixel.js';
@@ -106,6 +106,11 @@ check('A3b the fitting DOES protect a synthetic over-long line (the guarantee, n
     for (const long of SYNTHETIC_LONG) {
         const natural = revealDuration(long, CHAR_SEC, 0);
         if (natural <= LINE_SEC) continue;   // not long enough to demonstrate anything
+        // 2026-08-14 cadence: per-word completes at the LAST WORD'S START position, so a sample
+        // whose last arrival fits the budget can no longer demonstrate truncation — skip it, the
+        // longer sample still exercises the guarantee (this keeps the test non-vacuous, not green-washed).
+        const lastArrival = wordArrivals(long, CHAR_SEC, 0)[words(long).length - 1];
+        if (lastArrival <= LINE_SEC) continue;
         assert.ok(shownCount(DEFAULT_VARIANT, long, LINE_SEC, CHAR_SEC, 0) < long.length,
             'precondition: unfitted, this line should truncate');
         assert.strictEqual(shownCount(DEFAULT_VARIANT, long, LINE_SEC, CHAR_SEC, LINE_SEC), long.length,
@@ -134,34 +139,43 @@ check('A4 a line that fits keeps its natural pace (fitting must not slow short l
 
 // ---- B/C. cadence ----------------------------------------------------------
 
-check('B  the last word lands exactly at the end of the reveal window', () => {
+check('B  the last word arrives at its TYPEWRITER position — never after the window', () => {
+    // REVISED with the 2026-08-14 cadence decision: the old contract pinned the last arrival to
+    // the very end of the window, which on a two-word line turned the whole budget into one pause
+    // (the "repeated word" report). Arrivals now follow the letter reveal's positions; the last
+    // word lands at start_last * eff — inside the window — and the residue is DWELL.
     for (const line of SAMPLES) {
-        const n = words(line).length;
-        if (n < 2) continue;
+        const ws = words(line);
+        if (ws.length < 2) continue;
         const dur = revealDuration(line, CHAR_SEC, LINE_SEC);
-        const justBefore = shownCount(DEFAULT_VARIANT, line, dur - 0.005, CHAR_SEC, LINE_SEC);
-        const at = shownCount(DEFAULT_VARIANT, line, dur + 0.005, CHAR_SEC, LINE_SEC);
-        assert.ok(justBefore < line.length, `${JSON.stringify(line)}: finished EARLY — before the window closed`);
-        assert.strictEqual(at, line.length, `${JSON.stringify(line)}: had not finished when the window closed`);
+        const arr = wordArrivals(line, CHAR_SEC, LINE_SEC);
+        const expectLast = ws[ws.length - 1].start * (dur / line.length);
+        assert.ok(Math.abs(arr[arr.length - 1] - expectLast) < 1e-9, `${JSON.stringify(line)}: last arrival off its typewriter position`);
+        assert.ok(arr[arr.length - 1] < dur, `${JSON.stringify(line)}: last word arrived after the window`);
+        const at = shownCount(DEFAULT_VARIANT, line, arr[arr.length - 1] + 0.001, CHAR_SEC, LINE_SEC);
+        assert.strictEqual(at, line.length, `${JSON.stringify(line)}: line incomplete after the last arrival`);
     }
 });
 
-check('C  every word gets the same time on screen (no double-length first word)', () => {
+check('C  the cadence is the LETTER cadence, chunked — gaps proportional to word length', () => {
+    // REVISED with the 2026-08-14 decision: even spacing was the /(n-1) scheme's property; the
+    // letter contract gives each word time proportional to its length, so the gap BEFORE word k
+    // must equal (start_k - start_{k-1}) * eff. Word 1 is present from the first frame, arrivals
+    // strictly increase, and NO gap may degenerate toward the whole window (the two-word bug).
     for (const line of SAMPLES) {
-        const n = words(line).length;
-        if (n < 3) continue;
-        const wordSec = wordSecFor(line, CHAR_SEC, LINE_SEC);
-        const appear = [];
-        let prev = 0;
-        for (let t = 0; t <= LINE_SEC; t += 0.001) {
-            const k = Math.min(n, Math.floor(t / wordSec) + 1);
-            if (k > prev) { appear.push(t); prev = k; }
+        const ws = words(line);
+        if (ws.length < 2) continue;
+        const dur = revealDuration(line, CHAR_SEC, LINE_SEC);
+        const eff = dur / line.length;
+        const arr = wordArrivals(line, CHAR_SEC, LINE_SEC);
+        assert.strictEqual(arr.length, ws.length, `${JSON.stringify(line)}: arrival per word`);
+        assert.ok(arr[0] < 1e-9, 'word 1 should be present from the first frame');
+        for (let i = 1; i < arr.length; i++) {
+            const gap = arr[i] - arr[i - 1], expect = (ws[i].start - ws[i - 1].start) * eff;
+            assert.ok(gap > 0, `${JSON.stringify(line)}: arrivals must strictly increase`);
+            assert.ok(Math.abs(gap - expect) < 1e-9, `${JSON.stringify(line)}: gap ${i} is ${gap.toFixed(3)}s, letter contract says ${expect.toFixed(3)}s`);
+            assert.ok(gap < dur * 0.75, `${JSON.stringify(line)}: a single gap ate ${(gap / dur * 100).toFixed(0)}% of the window — the degenerate pause is back`);
         }
-        assert.strictEqual(appear.length, n, `${JSON.stringify(line)}: ${appear.length} arrivals for ${n} words`);
-        assert.ok(appear[0] < 0.002, 'word 1 should be present from the first frame');
-        const gaps = appear.slice(1).map((v, i) => v - appear[i]);
-        const spread = Math.max(...gaps) - Math.min(...gaps);
-        assert.ok(spread < 0.004, `${JSON.stringify(line)}: uneven cadence, gap spread ${spread.toFixed(3)}s`);
     }
 });
 
@@ -170,8 +184,9 @@ check('C  every word gets the same time on screen (no double-length first word)'
 check('D  the newest word fades while earlier words stay fully opaque', () => {
     const line = SAMPLES.find(l => words(l).length >= 3) || SAMPLES[0];
     const plateW = textWidth(line) + 4;
-    const wordSec = wordSecFor(line, CHAR_SEC, LINE_SEC);
-    const mid = 2 * wordSec + Math.min(DEFAULT_FADE_SEC, wordSec) * 0.4;   // partway into word 3
+    const arr = wordArrivals(line, CHAR_SEC, LINE_SEC);
+    const gap3 = (arr[3] !== undefined ? arr[3] : arr[2] + DEFAULT_FADE_SEC) - arr[2];
+    const mid = arr[2] + Math.min(DEFAULT_FADE_SEC, gap3) * 0.4;   // partway into word 3 (typewriter arrivals)
     const r = revealLine(DEFAULT_VARIANT, line, mid, { plateW, charSec: CHAR_SEC, lineSec: LINE_SEC });
     assert.strictEqual(r.segments.length, 3, 'expected exactly 3 words revealed');
     assert.ok(r.segments[0].alpha === 1 && r.segments[1].alpha === 1, 'earlier words must be opaque');

@@ -101,13 +101,26 @@ export function revealDuration(line, charSec, lineSec) {
     return Math.min(natural, lineSec * REVEAL_FRAC);
 }
 
-// Word i (1-based) arrives at (i-1)*wordSec, so word 1 is on screen at t=0 and word n arrives
-// exactly at revealDuration. Dividing by (n-1) — NOT n — is what puts the last arrival there.
+// WORD ARRIVALS FOLLOW THE TYPEWRITER (owner, 2026-08-14). The old cadence divided the reveal
+// budget by (n-1) so the LAST word landed exactly at revealDuration — an elegant invariant with a
+// degenerate case that shipped: on a TWO-WORD line the entire budget became ONE pause. "DRIVING"
+// sat alone for the full 0.51s before "SUNFLOWER" arrived, and the owner read it as a finished
+// line followed by a repeat. The old letter baseline never had this: its timing was CONTINUOUS,
+// proportional to the text.
 //
-// Both neighbouring forms are wrong, and both were shipped here before this comment existed:
-//   /n with k = floor(t/wordSec)+1  → completes one whole interval EARLY (~14% faster than letters)
-//   /n with k = max(1, floor(...))  → completes on time, but word 1 lingers for TWO intervals while
-//                                     every other word gets one, which reads as a hitch at the start
+// So word k now arrives when the letter reveal would REACH its first character:
+//     arrival(k) = ws[k].start * (revealDuration / line.length)
+// Word 1 is on screen at t=0; gaps are proportional to the preceding word's length (the letter
+// contract, chunked); a two-word line's pause is ~0.24s, not the whole window; and the last word
+// arrives EARLY relative to the old scheme — the residue becomes extra DWELL, which is where a
+// line is actually read. Nothing ever arrives after revealDuration.
+export function wordArrivals(line, charSec, lineSec) {
+    const ws = words(line);
+    const eff = revealDuration(line, charSec, lineSec) / Math.max(1, line.length);
+    return ws.map(w => w.start * eff);
+}
+// DEPRECATED — the /(n-1) cadence this returned is no longer used by the reveal (see wordArrivals
+// above for why). Kept exported so external probes comparing old-vs-new keep compiling.
 export function wordSecFor(line, charSec, lineSec) {
     const n = words(line).length;
     const dur = revealDuration(line, charSec, lineSec);
@@ -121,10 +134,11 @@ export function shownCount(variant, line, lineElapsed, charSec, lineSec) {
     if (variant === 'word-left' || variant === 'word-center') {
         const ends = wordEnds(line);
         if (!ends.length) return line.length;
-        // Word 1 at t=0, word i at (i-1)*wordSec. Correct ONLY because wordSecFor divides by
-        // (n-1); see the note there for the two wrong forms this went through.
-        const n = Math.floor(lineElapsed / wordSecFor(line, charSec, lineSec)) + 1;
-        return ends[Math.min(ends.length - 1, Math.max(0, n - 1))];
+        // typewriter-continuous arrivals — see wordArrivals
+        const arr = wordArrivals(line, charSec, lineSec);
+        let n = 1;
+        while (n < arr.length && lineElapsed >= arr[n] - 1e-9) n++;
+        return ends[n - 1];
     }
     // Letter variants are fitted the same way, so the baseline stops truncating too.
     const eff = revealDuration(line, charSec, lineSec) / Math.max(1, line.length);
@@ -169,14 +183,17 @@ export function revealLine(variant, line, lineElapsed, opts = {}) {
     const ws = words(line);
     if (!ws.length) return { segments: [], caretX: null, done: true };
 
-    const wordSec = wordSecFor(line, charSec, lineSec);
-    const k = Math.min(ws.length, Math.floor(lineElapsed / wordSec) + 1);   // words revealed
+    const arr = wordArrivals(line, charSec, lineSec);
+    let k = 1;   // words revealed — typewriter-continuous arrivals (see wordArrivals)
+    while (k < ws.length && lineElapsed >= arr[k] - 1e-9) k++;
     const newest = ws[k - 1];
 
-    // Progress of the NEWEST word through its fade window. Clamped so a fadeSec longer than the
-    // word cadence cannot leave a word permanently translucent.
-    const span = Math.max(1e-4, Math.min(fadeSec, wordSec));
-    const raw = (lineElapsed - (k - 1) * wordSec) / span;
+    // Progress of the NEWEST word through its fade window. Clamped to the gap before the NEXT
+    // arrival so a fadeSec longer than a short gap cannot leave a word translucent when its
+    // successor lands.
+    const nextGap = k < ws.length ? arr[k] - arr[k - 1] : fadeSec;
+    const span = Math.max(1e-4, Math.min(fadeSec, nextGap));
+    const raw = (lineElapsed - arr[k - 1]) / span;
     const p = ease(Math.max(0, Math.min(1, raw)));
 
     // Centring: interpolate between where the block sat with k-1 words and where it sits with k.
