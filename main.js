@@ -3454,11 +3454,16 @@ function drawFarmer(f, sx, sy) {
                              : (Math.floor(f.animTime * (f.state === 'flee' ? 11 : 7)) % 2 ? frames.walk1 : frames.walk2);
             }
         }
-        // #chop the woodcutter's swing: felling a tree (chop) and grubbing the stump (break) now SWING THE
+        // #chop the woodcutter's swing: felling a tree (chop) and grubbing the stump (break) SWING THE
         // BLADE on the same attack cycle a duel uses — a real overhand chop, not the old up/down bounce.
         // Looped at the sustained-melee cadence; falls through to the labour beat if the attack/battle sheets
         // haven't loaded yet (orc: cyc('attack'); human: the tinted body+head+SWORD composite).
-        if (!frame && (f.state === 'chop' || f.state === 'break')) {
+        // #chop-own-land (owner): the swing is for WILD woodcutting only. Clearing a tree/stump INSIDE
+        // your own fences is farm labour, and the orc attack sheet's baked slash-streak read as combat
+        // over the crops — so on-plot chop/break falls through to the labour beat (hoe), both cultures,
+        // one rule. Display-only; the standing tile is the proxy for where the work is.
+        const onOwnLand = f.plot && f.plot.cells && f.plot.cells.has(Math.floor(f.pos.i) + ',' + Math.floor(f.pos.j));
+        if (!frame && !onOwnLand && (f.state === 'chop' || f.state === 'break')) {
             const atk = isOrc ? cyc('attack') : (bat() ? bat().atk : null);
             frame = loop(atk, 10);
             if (frame) swordBaked = true;   // #Codex-VS BOTH cultures: the attack frame already holds the blade/axe → suppress the hoe (null cold-load frame still falls through to the hoe pose)
@@ -3751,16 +3756,26 @@ function drawFarmerBubble(f, sx) {
     if (f.memoryEcho && f.state !== 'sleep') {
         const me = f.memoryEcho, lines = wrapText(me.line, 24);
         const attr = `GROWN FROM ${(f.sheet.name.split(' ')[0] || 'A').toUpperCase()}'S MEMORY`;
+        // #thought-icon (owner pick + layout): 1-bit pack icon — picker index 43, and packEmote is
+        // 1-BASED (heart=1), so n=44. The icon is the LEFTMOST element, vertically centered on the
+        // whole text LOCKUP (thought lines + attribution treated as one block); the lockup is
+        // left-aligned — lines and attribution share the same left edge — with a 4px gap after
+        // the icon.
+        const ico = packEmote(44, 10, '#f0d88a');
+        const icoW = ico ? 16 : 0;   // 10px icon + 6px gap to the lockup (owner: breathing room)
         const aw = textWidth(attr), lw = Math.max(aw, ...lines.map(l => textWidth(l)));
-        const w = lw + 8, h = lines.length * 6 + 11, bx = Math.floor(sx - w / 2), by = py - 9 - h;
+        const lockupH = lines.length * 6 + 7;   // the lines + the attribution row, as one block
+        const w = 5 + icoW + lw + 5, h = lockupH + 6, bx = Math.floor(sx - w / 2), by = py - 9 - h;
         const fade = Math.min(1, (me.t0 - me.t) / 0.4) * Math.min(1, me.t / 0.7);
         ctx.save(); ctx.globalAlpha = fade;
         ctx.fillStyle = 'rgba(240,208,120,0.15)'; ctx.fillRect(bx - 2, by - 2, w + 4, h + 4);   // soft gold glow
         ctx.fillStyle = 'rgba(20,16,10,0.93)'; ctx.fillRect(bx, by, w, h);
         ctx.fillStyle = '#c9a45a'; ctx.fillRect(bx, by, w, 1); ctx.fillRect(bx, by + h - 1, w, 1);   // gold rules
+        if (ico) ctx.drawImage(ico, bx + 5, by + 3 + Math.floor((lockupH - 10) / 2));
+        const textX = bx + 5 + icoW;
         let ty = by + 3;
-        for (const ln of lines) { drawText(ctx, ln, bx + 4, ty, '#f0d88a'); ty += 6; }
-        drawText(ctx, attr, Math.floor(sx - aw / 2), ty + 1, '#9a835a');
+        for (const ln of lines) { drawText(ctx, ln, textX, ty, '#f0d88a'); ty += 6; }
+        drawText(ctx, attr, textX, ty + 1, '#9a835a');
         ctx.restore();
     }
 
