@@ -66,6 +66,11 @@ tell which one actually fixed it. Row 1 attributes the cause; row 2 picks the cu
 <h3>3 · SANITY CHECK <span>— the chosen treatment against the old baseline, and the one-word stress case</span></h3>
 <div class="grid" id="row3"></div>
 
+<h3>4 · THE TWO-WORD LINE <span>— owner report 2026-08-14: "DRIVING SUNFLOWER" read as the word repeating.
+Word-center's first word sits alone CENTERED, then snaps ~20px left when word two lands. Three candidate
+treatments; watch page one of the planting thought.</span></h3>
+<div class="grid" id="row4"></div>
+
 <p class="foot" id="foot"></p>
 
 <script type="module">
@@ -86,6 +91,7 @@ const RAW = [
   ['Long thought',     'I have carried water to the far field since the first light and my arms know it.'],
   ['Many short lines', 'Rain. Again. The seed will keep. It has to.'],
   ['Name-heavy',       'Grull says the fence line held. Mera disagrees. Loudly.'],
+  ['THE REPORTED LINE', 'DRIVING SUNFLOWER INTO THE DIRT'],
 ];
 const SAYINGS = RAW.map(([name, text]) => [name, F.wrapWords(text)]);
 // UNWRAPPED stress case — cannot occur in the game; present only to exercise the fitting guarantee.
@@ -108,9 +114,9 @@ SAYINGS.forEach(([n], i) => els.saying.add(new Option(n, String(i))));
 // Each cell pins a variant + option set. `dyn` lets a cell read the live fade slider.
 const SPECS = [
   ['row1', 'word-center', { fade:false, glide:false }, 'NEITHER',    'the raw reveal — the staccato as originally reported'],
-  ['row1', 'word-center', { fade:true,  glide:false }, 'FADE ONLY',  'CHOSEN — alpha softened, centring left crisp', true],
+  ['row1', 'word-center', { fade:true,  glide:false }, 'FADE ONLY',  'the 08-06 pick — superseded 08-14 (see row 4)'],
   ['row1', 'word-center', { fade:false, glide:true  }, 'GLIDE ONLY', 'the centring shift eased, no fade'],
-  ['row1', 'word-center', { fade:true,  glide:true  }, 'FADE + GLIDE', 'both — the owner found the glide read as extra motion'],
+  ['row1', 'word-center', { fade:true,  glide:true  }, 'FADE + GLIDE', 'CHOSEN 08-14 — the two-word snap reversed the glide call', true],
 
   ['row2', 'word-center', { fade:true, glide:false, curve:'linear' }, 'LINEAR',      'null hypothesis — constant rate, no easing'],
   ['row2', 'word-center', { fade:true, glide:false, curve:'quad'   }, 'EASE-OUT QUAD',   'gentlest settle'],
@@ -118,7 +124,11 @@ const SPECS = [
   ['row2', 'word-center', { fade:true, glide:false, curve:'sine'   }, 'EASE-OUT SINE',   'most linear of the eased curves'],
 
   ['row3', 'type-left',   { }, 'OLD BASELINE',  'per letter, left to right — what shipped before today'],
-  ['row3', 'word-center', { fade:true, glide:false }, 'CHOSEN + FADE', 'the shipping treatment: per word, centred, fade only', true],
+  ['row3', 'word-center', { fade:true, glide:true }, 'SHIPPING NOW', 'per word, centred, fade + glide, clipped to the plate', true],
+
+  ['row4', 'word-center', { fade:true, glide:false }, 'CURRENT',       'per word, centred — the artifact as reported'],
+  ['row4', 'type-center', { },                        'HYBRID (≤2 WORDS → PER LETTER)', 'what the hybrid rule would show for this line — letters grow from centre, no snap'],
+  ['row4', 'word-center', { fade:true, glide:true  }, 'GLIDE ON',      'CHOSEN 08-14 — eased shift, masked to the container', true],
 ];
 
 const cells = SPECS.map(([row, variant, opts, tag, note, pick]) => {
@@ -181,10 +191,12 @@ function draw(dt) {
       fade: c.opts.fade !== undefined ? c.opts.fade : true,
       glide: c.opts.glide !== undefined ? c.opts.glide : true,
     });
+    ctx.save(); ctx.beginPath(); ctx.rect(bx, by, plateW, 9); ctx.clip();   // #glide-mask — same clip the game applies
     for (const s of r.segments) {
       ctx.globalAlpha = s.alpha;
       drawText(ctx, s.text, bx + s.x, by + 2, '#f0d88a');
     }
+    ctx.restore();
     ctx.globalAlpha = 1;
     if (r.caretX !== null && (Math.floor(t * 8) % 2)) {
       ctx.fillStyle = '#f0d88a'; ctx.fillRect(bx + r.caretX, by + 2, 1, 5);

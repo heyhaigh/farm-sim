@@ -204,7 +204,7 @@ check('E  the reveal is time-pure — same t always yields the same frame', () =
 check('F  the shipped defaults are the owner-chosen treatment', () => {
     assert.strictEqual(DEFAULT_VARIANT, 'word-center', 'per word, centred');
     assert.strictEqual(DEFAULT_FADE, true, 'fade on');
-    assert.strictEqual(DEFAULT_GLIDE, false, 'glide OFF — the owner preferred the centring crisp');
+    assert.strictEqual(DEFAULT_GLIDE, true, 'glide ON — reversed 2026-08-14: the un-glided centring snap made a two-word line read as a repeated word; renderers clip to the plate');
 });
 
 check('G  centre variants carry no caret; the left-anchored baseline still does', () => {

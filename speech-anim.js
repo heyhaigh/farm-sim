@@ -47,12 +47,14 @@ export const CURVES = {
 export const DEFAULT_CURVE = 'cubic';
 export const DEFAULT_FADE_SEC = 0.11;
 
-// DECIDED (owner, 2026-08-06): FADE ONLY. The centring glide was rendered alongside it and the
-// owner preferred the text without it — the sideways ease read as extra motion rather than as
-// smoothing. Kept in the module (and in the harness) because it costs nothing and the judgement
-// could reverse; it is simply off by default.
+// DECIDED (owner, 2026-08-06): fade only — the glide read as extra motion.
+// REVERSED (owner, 2026-08-14): GLIDE ON. New evidence: on a TWO-WORD line ("DRIVING SUNFLOWER")
+// the un-glided centring jump made the first word read as repeating across lines — judged in the
+// harness's row 4 against the current treatment and a per-letter hybrid; glide won. One
+// obligation comes with it: mid-glide, an arriving word can extend past the pre-sized plate, so
+// RENDERERS MUST CLIP the segments to the plate rect (drawFarmerBubble and the harness both do).
 export const DEFAULT_FADE = true;
-export const DEFAULT_GLIDE = false;
+export const DEFAULT_GLIDE = true;
 
 // KNOWN TRADE-OFF of per-word granularity, found by testing rather than by argument: a ONE-WORD
 // line has nothing to reveal progressively — it pops fully formed while the letter variants still

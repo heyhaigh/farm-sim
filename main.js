@@ -3806,10 +3806,14 @@ function drawFarmerBubble(f, sx) {
         ctx.fillRect(bx, by, w, 9);
         const lineElapsed = elapsed - idx * lineSec;
         const rv = revealLine(DEFAULT_VARIANT, line, lineElapsed, { plateW: w, charSec, lineSec });
+        // #glide-mask (owner, with the 2026-08-14 glide reversal): mid-glide an arriving word can
+        // extend past the pre-sized plate — everything is CLIPPED to the container.
+        ctx.save(); ctx.beginPath(); ctx.rect(bx, by, w, 9); ctx.clip();
         for (const seg of rv.segments) {
             ctx.globalAlpha = seg.alpha;
             drawText(ctx, seg.text, bx + seg.x, by + 2, b.color);
         }
+        ctx.restore();
         ctx.globalAlpha = 1;   // MUST reset — every later draw in this frame would inherit the fade
         if (rv.caretX !== null && (Math.floor(elapsed * 8) % 2)) {   // left-anchored variants only
             ctx.fillStyle = b.color; ctx.fillRect(bx + rv.caretX, by + 2, 1, 5);
