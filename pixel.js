@@ -43,14 +43,20 @@ const FONT = {
     '[': '110100100100110', ']': '011001001001011',   // the raid marquee's [W] hint rendered as ?W? without these
 };
 
+// fold typographic characters the 3x5 font lacks onto plain equivalents (em/en-dash -> hyphen,
+// curly quotes -> straight, ellipsis -> "...", ↔ -> '<>') so a stray "—" never shows up as a "?"
+// over a head. ONE helper shared by drawText AND textWidth (Codex #127 P3: the folds that change
+// LENGTH — ↔ and … — made textWidth under-measure, so centered barter text spilled its plate).
+function normText(str) {
+    return String(str).toUpperCase().replace(/[—–]/g, '-').replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/…/g, '...').replace(/↔/g, '<>');
+}
+
 export function drawText(ctx, str, x, y, color, scale = 1) {
     ctx.fillStyle = color;
     // snap to integer source pixels so glyphs never land on a half-pixel (which the browser would
     // anti-alias into a blur — the cause of the shimmer when a panel is scrolled by a fractional amount)
     let cx = Math.round(x); const yy = Math.round(y);
-    // fold typographic characters the 3x5 font lacks onto plain equivalents (em/en-dash -> hyphen,
-    // curly quotes -> straight, ellipsis -> "...") so a stray "—" never shows up as a "?" over a head
-    const norm = String(str).toUpperCase().replace(/[—–]/g, '-').replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/…/g, '...').replace(/↔/g, '<>');   // ↔ (barter speech) has no glyph — '<>' reads as the exchange (Codex #127)
+    const norm = normText(str);
     for (const raw of norm) {
         const glyph = FONT[raw] || FONT['?'];
         for (let i = 0; i < 15; i++) {
@@ -64,7 +70,7 @@ export function drawText(ctx, str, x, y, color, scale = 1) {
 }
 
 export function textWidth(str, scale = 1) {
-    return String(str).length * 4 * scale - scale;
+    return normText(str).length * 4 * scale - scale;   // measure what drawText will actually draw
 }
 
 // ---------------------------------------------------------------------------

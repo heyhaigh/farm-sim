@@ -5767,7 +5767,7 @@ function drawRoster() {
             drawText(ctx, String(s.stats[st]).padStart(2), Math.floor(colStats + i * statW), ry + 1, '#c8ccd8');
         });
         drawText(ctx, String(s.cropsHarvested || 0), PX + PW - 22, ry + 1, '#e8c860');
-        if (cy1 > cy0) rosterRows.push({ farmer: f, y0: cy0, y1: cy1 - 1 });   // clamped to the visible body (Codex #127 P3)
+        if (cy1 > cy0) rosterRows.push({ farmer: f, y0: cy0, y1: cy1 });   // clamped to the visible body; HALF-OPEN — the click test uses < y1, matching hover exactly (Codex #127 r2 P3)
     });
     ctx.restore();
 
@@ -7868,7 +7868,7 @@ out.addEventListener('pointerup', (e) => {
             if (rosterTabHits) { for (const t of rosterTabHits) if (inRect(p, t)) { rosterTab = t.tab; rosterScroll = 0; return; } }
             // list rows: open that farmer's detail sheet AND follow them (roster select + follow are one action)
             for (const row of rosterRows) {
-                if (p.y >= row.y0 && p.y <= row.y1 && p.x > rv.x && p.x < rv.x + rv.w) {
+                if (p.y >= row.y0 && p.y < row.y1 && p.x > rv.x && p.x < rv.x + rv.w) {   // HALF-OPEN y, the same interval hover paints (Codex #127 r2 P3: a fractional pointer at the last half-pixel highlighted but couldn't click)
                     uiTickAs('open'); selected = row.farmer; sheetScroll = 0; sheetTab = 0; rosterOpen = false;
                     followMode = true; followTarget = row.farmer; funnelFollow();
                     return;
