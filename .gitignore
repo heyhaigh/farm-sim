@@ -59,6 +59,7 @@ review.diff
 # shipped outcome of this work; these are the workings behind it.
 scratch_td/
 sprites.html
+bubble_steady_compare.html
 click_sound_compare.html
 rare_find_sound_compare.html
 coop_scene_compare.html
