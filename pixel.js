@@ -47,7 +47,9 @@ const FONT = {
 // curly quotes -> straight, ellipsis -> "...", ↔ -> '<>') so a stray "—" never shows up as a "?"
 // over a head. ONE helper shared by drawText AND textWidth (Codex #127 P3: the folds that change
 // LENGTH — ↔ and … — made textWidth under-measure, so centered barter text spilled its plate).
-function normText(str) {
+// EXPORTED (Codex #128 P3): speech-anim canonicalizes lines through this same fold before word
+// parsing, so segment offsets, timing, drawing, and measuring all describe ONE string.
+export function normText(str) {
     return String(str).toUpperCase().replace(/[—–]/g, '-').replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/…/g, '...').replace(/↔/g, '<>');
 }
 

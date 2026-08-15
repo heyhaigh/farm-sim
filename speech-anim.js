@@ -24,7 +24,19 @@
 // `fade` softens (1) and `glide` softens (2); they are independent so the harness can attribute the
 // improvement rather than guess.
 
-import { textWidth } from './pixel.js';
+import { textWidth, normText } from './pixel.js';
+
+// CANONICALIZE AT THE DOOR (Codex #128, both P3s). Two contract gaps shared one root: this module
+// parsed words and placed segments on the RAW string while drawText/textWidth operate on the
+// NORMALIZED one. (1) A mid-line length-changing glyph — 'A… B', 'A↔B C' — desynced segment x
+// offsets from the drawn glyph advances. (2) Surrounding whitespace broke the contract outright:
+// 'Rain. ' could never reach done (last word ends before line.length) and ' A B' delayed word 1
+// past t=0. So every public function folds + trims its line FIRST: after canon, every character
+// is exactly one glyph, offsets*4 are true pixel advances, and the ends/length arithmetic closes.
+// Idempotent (canon(canon(x)) === canon(x)), so callers passing pre-normalized text lose nothing.
+// Production (wrapWords) never emits these shapes today — this is the module honoring its own
+// exported contract, not a live-bug fix.
+const canon = s => normText(String(s)).trim();
 
 export const VARIANTS = [
     { id: 'type-left',   label: 'PER LETTER · LEFT',   note: 'the pre-2026-08-06 baseline' },
@@ -96,6 +108,7 @@ export const REVEAL_FRAC = 0.6;
 // In practice the cap (lineSec * REVEAL_FRAC = 0.51s) binds slightly on the longest wrapped lines —
 // a full 18-char line reveals in 0.51s rather than 0.54s. That is the entire live effect.
 export function revealDuration(line, charSec, lineSec) {
+    line = canon(line);
     const natural = line.length * charSec;
     if (!lineSec) return natural;                 // no line budget supplied: caller owns the timing
     return Math.min(natural, lineSec * REVEAL_FRAC);
@@ -115,6 +128,7 @@ export function revealDuration(line, charSec, lineSec) {
 // arrives EARLY relative to the old scheme — the residue becomes extra DWELL, which is where a
 // line is actually read. Nothing ever arrives after revealDuration.
 export function wordArrivals(line, charSec, lineSec) {
+    line = canon(line);
     const ws = words(line);
     const eff = revealDuration(line, charSec, lineSec) / Math.max(1, line.length);
     return ws.map(w => w.start * eff);
@@ -122,6 +136,7 @@ export function wordArrivals(line, charSec, lineSec) {
 // DEPRECATED — the /(n-1) cadence this returned is no longer used by the reveal (see wordArrivals
 // above for why). Kept exported so external probes comparing old-vs-new keep compiling.
 export function wordSecFor(line, charSec, lineSec) {
+    line = canon(line);
     const n = words(line).length;
     const dur = revealDuration(line, charSec, lineSec);
     if (n <= 1) return Math.max(1e-4, dur);
@@ -130,6 +145,7 @@ export function wordSecFor(line, charSec, lineSec) {
 
 // How many characters of `line` are visible at `lineElapsed` seconds.
 export function shownCount(variant, line, lineElapsed, charSec, lineSec) {
+    line = canon(line);
     if (!line) return 0;
     if (variant === 'word-left' || variant === 'word-center') {
         const ends = wordEnds(line);
@@ -156,6 +172,7 @@ export function shownCount(variant, line, lineElapsed, charSec, lineSec) {
 // Returns { segments, caretX, done }. Each segment is { text, x, alpha } with x relative to the
 // plate's LEFT edge — the caller draws each one and never has to know about the reveal's shape.
 export function revealLine(variant, line, lineElapsed, opts = {}) {
+    line = canon(line);   // see CANONICALIZE AT THE DOOR — offsets below are canon-space
     const {
         plateW = 0, charSec = 0.03, pad = 2, lineSec = 0,
         fade = DEFAULT_FADE, glide = DEFAULT_GLIDE,

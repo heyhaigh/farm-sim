@@ -238,6 +238,29 @@ check('H  an empty or whitespace line degrades quietly', () => {
     }
 });
 
+check('H2 surrounding whitespace is canonicalized — the contract COMPLETES (Codex #128 P3)', () => {
+    // 'Rain. ' used to stay done:false forever (last word ended at 5, line.length 6); ' A B'
+    // delayed word 1 past t=0. canon() trims at the door, so both close.
+    const trailing = revealLine(DEFAULT_VARIANT, 'Rain. ', 10, { plateW: 40, charSec: CHAR_SEC, lineSec: LINE_SEC });
+    assert.strictEqual(trailing.done, true, "'Rain. ' must reach done");
+    const arr = wordArrivals(' A B', CHAR_SEC, LINE_SEC);
+    assert.ok(arr[0] < 1e-9, "' A B': word 1 must arrive at t=0 despite the leading space");
+    const leading = revealLine(DEFAULT_VARIANT, ' A B', 10, { plateW: 40, charSec: CHAR_SEC, lineSec: LINE_SEC });
+    assert.strictEqual(leading.done, true, "' A B' must reach done");
+});
+
+check('H3 length-changing glyphs keep segment offsets on the DRAWN string (Codex #128 P3)', () => {
+    // 'A… B' normalizes to 'A... B': the raw offset put B four pixels inside the ellipsis. After
+    // canon, segment x deltas are canon-offset * 4 — exactly the renderer's per-glyph advance.
+    const r = revealLine(DEFAULT_VARIANT, 'A… B', 10, { plateW: 60, charSec: CHAR_SEC, lineSec: LINE_SEC });
+    assert.strictEqual(r.done, true, 'must complete');
+    assert.strictEqual(r.segments.length, 2, 'two words');
+    assert.strictEqual(r.segments[0].text, 'A...', 'first word is the NORMALIZED form');
+    assert.strictEqual(r.segments[1].x - r.segments[0].x, 5 * 4, "'B' starts 5 canon glyphs after 'A...' — space included");
+    const arrow = revealLine(DEFAULT_VARIANT, 'A↔B C', 10, { plateW: 60, charSec: CHAR_SEC, lineSec: LINE_SEC });
+    assert.strictEqual(arrow.segments[1].x - arrow.segments[0].x, 5 * 4, "'C' starts after the EXPANDED 'A<>B' plus its space");
+});
+
 // ---- report ----------------------------------------------------------------
 
 console.log(`\n${passes} passed, ${failures} failed`);
