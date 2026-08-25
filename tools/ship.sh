@@ -28,6 +28,9 @@ fi
 # 0b. the half-second guard that catches save-breaking changes
 node tests/compat.mjs > /dev/null || { echo 'REFUSED: tests/compat.mjs failed' >&2; exit 1; }
 
+# 0c. the public discovery contract: canonical URL, metadata, entity graph, crawler files, and redirect
+node tests/seo.mjs > /dev/null || { echo 'REFUSED: tests/seo.mjs failed' >&2; exit 1; }
+
 # 1. bump the version (patch by default) in version.js
 NEXT=$(SHIP_DRY="${DRY}" node -e "
 const fs = require('fs');

@@ -16,13 +16,14 @@ whose town is a non-persisting backdrop.
 `window.RYFARMS` is the debug surface: `world`, `speed(n)`, `saveNow()`, `peekSave()`, `restoreSave()`,
 `demoFaceoff()`, `demoRaid()`, `goTo(i,j)`, `wipeSave()`, `undoWipe()`.
 
-## The suite — fifteen files, all `node tests/<name>.mjs`
+## The suite — all `node tests/<name>.mjs`
 
 Run them all before pushing. Several protect properties that no amount of care at the call site will.
 
 | file | protects | speed |
 |---|---|---|
 | **`compat.mjs`** | **save compatibility** — terrain generation, the per-tile hash families (sim *and* render), the order of every save-referenced table, and the migration chain | 0.5s |
+| **`seo.mjs`** | **public discovery contract** — canonical URL, metadata, entity graph, crawler files, and `/index.html` canonicalization | fast |
 | `determinism.mjs` | the #1 invariant: same seed ⇒ byte-identical town, twice. Four pinned digests + a save round-trip | ~90s |
 | `paddock.mjs` | facilities, ponds and footprints — what `determinism.mjs` structurally cannot reach, because facilities gate on house tier and no farm reaches one inside its 30-day window | ~30s |
 | `worldindex-bounds.mjs` | the world index stays bounded and prunes correctly | fast |

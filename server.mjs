@@ -169,6 +169,14 @@ http.createServer(async (req, res) => {
         return;
     }
 
+    // One document, one indexable URL. Preserve the query string (including postcard seeds) and the
+    // current host: the legacy host remains a first-class origin because its IndexedDB saves cannot move.
+    if (url.pathname === '/index.html') {
+        res.writeHead(308, { 'Location': `/${url.search}`, 'Cache-Control': 'no-cache' });
+        res.end();
+        return;
+    }
+
     const apiRel = API_ROUTES[url.pathname];
     // #freequota PER-IP FAIR SHARE for the LLM-backed endpoints. The model provider is a shared FREE tier
     // (~14.4k requests/day): _llm.js's global budget stops runaway totals, but without this one enthusiastic
@@ -219,7 +227,7 @@ http.createServer(async (req, res) => {
     // run. Served without a validator on purpose — the variant differs per query and the plain page's
     // size+mtime ETag would collide across seeds; these are scraper/click-through hits, a full 200 is
     // fine. Any failure falls through to the untouched static page.
-    if (url.searchParams.has('seed') && (url.pathname === '/' || url.pathname === '/index.html')) {
+    if (url.searchParams.has('seed') && url.pathname === '/') {
         try {
             const { postcardMeta, injectOgTags } = await postcardModule();
             const meta = postcardMeta(url.searchParams);

@@ -45,6 +45,13 @@ revision. The rules that keep it that way:
 - A change that names a domain anywhere (markup, llms.txt, served docs) names the canonical one, with the
   fallback mentioned only as "also valid" where that helps.
 
+**Search and answer-engine contract.** The game is canvas-first, so `index.html`, `robots.txt`,
+`sitemap.xml`, and `llms.txt` are the durable explanation of what Propagate is. Keep their facts aligned
+with the game rather than manufacturing keyword-led copy. The canonical entity is
+`https://propagate.world/#game`, created by `https://heyhaigh.ai/#person`; the fallback host remains playable
+but must not enter the sitemap or become canonical. Run `node tests/seo.mjs` after changing the entry page,
+server routing, public description, creator identity, or crawler-facing files.
+
 ## 3. House conventions
 
 - **No build step.** Pure ES modules, Canvas 2D, one WebGL post-process. Do not add a bundler.

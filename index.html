@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="Propagate — a free procedural, AI-driven farm simulation in your browser. Autonomous farmers with rolled stats and real personalities till, bond, barter, hold elections, and stand watch against orc raids under a CRT glow. A world that remembers itself.">
-    <title>Propagate | heyhaigh.ai</title>
+    <title>Propagate: Procedural AI Farm Simulation Game | Ryan Haigh</title>
 
     <!-- Share cards (iMessage, X, Slack, Discord…). Absolute URLs — crawlers resolve nothing. -->
     <meta property="og:type" content="website">
@@ -37,34 +37,66 @@
     <script type="application/ld+json">
 {
     "@context": "https://schema.org",
-    "@type": "VideoGame",
-    "name": "Propagate",
-    "alternateName": ["Propagate game", "Propagate farm sim"],
-    "datePublished": "2026-07-30",
-    "url": "https://propagate.world/",
-    "sameAs": ["https://propagate.heyhaigh.ai/"],
-    "isAccessibleForFree": true,
-    "image": "https://propagate.world/og-image.png",
-    "description": "A procedural, AI-driven farm simulation where every farmer is an autonomous agent with rolled stats and a real personality. They till, bond, barter, invent recipes, hold elections, and stand watch against orc raids under a CRT glow \u2014 and the town persists in your browser and remembers itself between visits.",
-    "keywords": "procedural generation, AI-driven simulation, agent-based simulation, farming sim, farm simulation game, autonomous NPCs, pixel art, CRT shader, browser game, god game, emergent gameplay",
-    "genre": [
-        "Simulation",
-        "Farming",
-        "God game"
-    ],
-    "playMode": "SinglePlayer",
-    "gamePlatform": "Web browser",
-    "operatingSystem": "Any desktop or tablet browser",
-    "author": {
-        "@type": "Person",
-        "name": "Ryan Haigh",
-        "url": "https://heyhaigh.ai"
-    },
-    "offers": {
-        "@type": "Offer",
-        "price": "0",
-        "priceCurrency": "USD"
-    }
+    "@graph": [
+        {
+            "@type": "WebSite",
+            "@id": "https://propagate.world/#website",
+            "url": "https://propagate.world/",
+            "name": "Propagate",
+            "publisher": { "@id": "https://heyhaigh.ai/#person" }
+        },
+        {
+            "@type": "WebPage",
+            "@id": "https://propagate.world/#webpage",
+            "url": "https://propagate.world/",
+            "name": "Propagate: Procedural AI Farm Simulation Game",
+            "description": "A free procedural, agent-based farm simulation in your browser where autonomous farmers build a town that persists and remembers its own history.",
+            "isPartOf": { "@id": "https://propagate.world/#website" },
+            "about": { "@id": "https://propagate.world/#game" },
+            "inLanguage": "en"
+        },
+        {
+            "@type": "Person",
+            "@id": "https://heyhaigh.ai/#person",
+            "name": "Ryan Haigh",
+            "url": "https://heyhaigh.ai/",
+            "sameAs": [
+                "https://www.linkedin.com/in/ryhaigh/",
+                "https://github.com/heyhaigh",
+                "https://x.com/heyhaigh"
+            ]
+        },
+        {
+            "@type": "VideoGame",
+            "@id": "https://propagate.world/#game",
+            "name": "Propagate",
+            "alternateName": ["Propagate game", "Propagate farm sim"],
+            "datePublished": "2026-07-30",
+            "url": "https://propagate.world/",
+            "sameAs": ["https://propagate.heyhaigh.ai/"],
+            "mainEntityOfPage": { "@id": "https://propagate.world/#webpage" },
+            "isAccessibleForFree": true,
+            "image": "https://propagate.world/og-image.png",
+            "description": "A procedural, AI-driven farm simulation where every farmer is an autonomous agent with rolled stats and a real personality. They till, bond, barter, invent recipes, hold elections, and stand watch against orc raids under a CRT glow \u2014 and the town persists in your browser and remembers itself between visits.",
+            "keywords": "procedural generation, AI-driven simulation, agent-based simulation, farming sim, farm simulation game, autonomous NPCs, pixel art, CRT shader, browser game, god game, emergent gameplay",
+            "genre": [
+                "Simulation",
+                "Farming",
+                "God game"
+            ],
+            "playMode": "SinglePlayer",
+            "gamePlatform": "Web browser",
+            "operatingSystem": "Any desktop or tablet browser",
+            "inLanguage": "en",
+            "creator": { "@id": "https://heyhaigh.ai/#person" },
+            "author": { "@id": "https://heyhaigh.ai/#person" },
+            "offers": {
+                "@type": "Offer",
+                "price": "0",
+                "priceCurrency": "USD"
+            }
+        }
+    ]
 }
     </script>
     <script type="application/ld+json">
