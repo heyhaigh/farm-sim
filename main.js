@@ -8927,6 +8927,7 @@ function frame(now) {
     crt.render(t);   // Codex #44 P2 — the CRT does full-color; the old per-season DMG palette feed was inert (removed)
     if (!firstPlayableFramePresented) {
         firstPlayableFramePresented = true;
+        document.documentElement.classList.remove('game-booting');
         document.documentElement.classList.add('game-live');
     }
 }
@@ -9273,6 +9274,10 @@ function drawStartScreen() {
         return;
     }
 
+    // The lightweight DOM poster covers only the module-download gap. From here the exact original loader
+    // takes over: settling CRT snow, the real shader, art-progress cells, shimmer and memory-source captions.
+    document.documentElement.classList.remove('game-loading');
+    document.documentElement.classList.add('game-booting');
     requestAnimationFrame(frame);
     loadAssetArt();
 

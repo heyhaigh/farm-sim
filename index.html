@@ -284,6 +284,9 @@
         }
         html.entry-game:not(.game-live) #entry-poster,
         html.entry-mobile #entry-poster { display: flex; }
+        /* main.js raises this only after its full module graph is executable and immediately before it starts
+           the original CRT boot loop. The poster owns the network gap; the real tuning animation owns boot. */
+        html.entry-game.game-booting #entry-poster { display: none; }
         html.entry-game #entry-poster .desktop-entry { display: block; }
         html.entry-mobile #entry-poster img { width: min(600px, 94vw); }
         html.entry-mobile #entry-poster .desktop-entry { display: none; }

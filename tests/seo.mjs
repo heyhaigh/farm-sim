@@ -14,6 +14,7 @@ import { spawn } from 'node:child_process';
 const ROOT = new URL('../', import.meta.url);
 const read = (name) => fs.readFileSync(new URL(name, ROOT), 'utf8');
 const html = read('index.html');
+const main = read('main.js');
 const robots = read('robots.txt');
 const sitemap = read('sitemap.xml');
 const llms = read('llms.txt');
@@ -36,6 +37,8 @@ assert.match(html, /if \(HAS_PLAY_INTENT\) loadGame\(\);/);
 assert.match(html, /window\.addEventListener\('pointermove', loadGame/);
 assert.match(html, /@keyframes entry-scan/);
 assert.match(html, /document\.documentElement\.classList\.add\('game-loading'\)/);
+assert.match(html, /html\.entry-game\.game-booting #entry-poster \{ display: none; \}/);
+assert.match(main, /classList\.add\('game-booting'\);\s*requestAnimationFrame\(frame\)/);
 ok('the entry has a DOM LCP candidate and defers the game until desktop intent');
 
 const scripts = [...html.matchAll(/<script type="application\/ld\+json">\s*([\s\S]*?)\s*<\/script>/g)]
