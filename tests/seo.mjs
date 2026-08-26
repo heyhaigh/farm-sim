@@ -27,6 +27,12 @@ assert.match(html, /<link rel="canonical" href="https:\/\/propagate\.world\/">/)
 assert.equal((html.match(/<h1\b/g) || []).length, 1, 'the document must carry one semantic H1');
 ok('title, description, canonical, and one H1 identify the game');
 
+assert.match(html, /<main id="game-shell">/);
+assert.match(html, /<img src="\/og-image\.png"[^>]*fetchpriority="high"[^>]*>/);
+assert.doesNotMatch(html, /<script[^>]+src="https:\/\/www\.googletagmanager\.com/);
+assert.doesNotMatch(html, /mobile-gate\.js/);
+ok('the entry has a DOM LCP candidate and phones load neither GA nor the WebGL gate');
+
 const scripts = [...html.matchAll(/<script type="application\/ld\+json">\s*([\s\S]*?)\s*<\/script>/g)]
     .map((match) => JSON.parse(match[1]));
 const nodes = scripts.flatMap((script) => script['@graph'] || [script]);
@@ -48,7 +54,8 @@ assert.equal((sitemap.match(/<loc>/g) || []).length, 1);
 assert.match(sitemap, /<loc>https:\/\/propagate\.world\/<\/loc>/);
 assert.doesNotMatch(sitemap, /<changefreq>/);
 assert.match(llms, /^# Propagate$/m);
-assert.match(llms, /Ryan Haigh \(https:\/\/heyhaigh\.ai\)/);
+assert.match(llms, /\[Ryan Haigh\]\(https:\/\/heyhaigh\.ai\/\)/);
+assert.match(llms, /\[propagate\.world\]\(https:\/\/propagate\.world\/\)/);
 assert.match(llms, /It does NOT call large language\s+models during play/);
 ok('robots, sitemap, and llms.txt agree on canonical identity and facts');
 

@@ -67,6 +67,7 @@ resize();
 // ---------------------------------------------------------------------------
 
 let world = null;
+let firstPlayableFramePresented = false;
 let memories = [];
 let lineagePool = [];       // #1.1 past farmers a reachable store remembers — heirs may be grown from them
 let memorySource = 'offline';
@@ -8924,6 +8925,10 @@ function frame(now) {
     if (mouse.x >= 0 && !mouse.noCursor) drawCursor(mouse.x, mouse.y, mouse.dragging || cursorIsHot(worldHover) || startHovering());
 
     crt.render(t);   // Codex #44 P2 — the CRT does full-color; the old per-season DMG palette feed was inert (removed)
+    if (!firstPlayableFramePresented) {
+        firstPlayableFramePresented = true;
+        document.documentElement.classList.add('game-live');
+    }
 }
 
 // boot / loading screen: the CRT tunes in (heavy static settling to near-black), then a 64-bit pixel

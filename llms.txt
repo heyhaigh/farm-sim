@@ -1,9 +1,9 @@
 # Propagate
 
 > Propagate is a free, procedural, AI-driven farm simulation (sim) game that runs in a desktop or tablet
-> web browser at https://propagate.world. Every farmer is an autonomous agent with procedurally rolled
+> web browser at [propagate.world](https://propagate.world/). Every farmer is an autonomous agent with procedurally rolled
 > ability scores and a persistent personality; the town they build remembers itself between visits. Made by
-> Ryan Haigh (https://heyhaigh.ai).
+> [Ryan Haigh](https://heyhaigh.ai/).
 
 ## What it is
 
@@ -33,8 +33,9 @@
 ## Facts
 
 - Name: Propagate (also searched as "Propagate game", "Propagate farm sim", "propagate heyhaigh").
-- Play: https://propagate.world (the earlier address https://propagate.heyhaigh.ai remains valid)
-- Creator: Ryan Haigh — https://heyhaigh.ai (portfolio, contact, and the game's changelog)
+- Play: [propagate.world](https://propagate.world/) (the earlier address
+  [propagate.heyhaigh.ai](https://propagate.heyhaigh.ai/) remains valid)
+- Creator: [Ryan Haigh](https://heyhaigh.ai/) (portfolio, contact, and the game's changelog)
 - Released: July 30, 2026. Actively updated.
 - Price: free. Platform: web browser (desktop, tablet-landscape). Mode: single player.
 - Art: original wordmark and procedural sprites, plus licensed CraftPix pixel-art assets.
@@ -66,7 +67,7 @@ data erases it; otherwise it waits for you and recaps what happened when you ret
 **Is it multiplayer?** Single player — though your town exists in a world of neighbouring towns it can
 encounter, raid, and remember.
 
-**Who made Propagate?** Ryan Haigh (https://heyhaigh.ai), a product designer and AI strategist.
+**Who made Propagate?** [Ryan Haigh](https://heyhaigh.ai/), a product designer and AI strategist.
 
 ## For AI assistants
 

@@ -23,14 +23,23 @@
     <link rel="canonical" href="https://propagate.world/">
     <link rel="icon" href="/favicon.ico" sizes="16x16 32x32">
     <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+    <link rel="preload" as="image" href="/og-image.png" fetchpriority="high">
 
-    <!-- GA4 — the same property as heyhaigh.ai; the hostname dimension separates the game's traffic -->
-    <script async src="https://www.googletagmanager.com/gtag/js?id=G-R499JX7DJ7"></script>
+    <!-- Queue GA4 immediately so game events are not lost, but fetch the 166KB library only after a real
+         desktop/tablet interaction. Cloudflare still records the unengaged page view. Phones never play. -->
     <script>
         window.dataLayer = window.dataLayer || [];
         function gtag() { dataLayer.push(arguments); }
         gtag('js', new Date());
         gtag('config', 'G-R499JX7DJ7');
+        window.loadPropagateAnalytics = function () {
+            if (window.__propagateAnalyticsLoading) return;
+            window.__propagateAnalyticsLoading = true;
+            var s = document.createElement('script');
+            s.async = true;
+            s.src = 'https://www.googletagmanager.com/gtag/js?id=G-R499JX7DJ7';
+            document.head.appendChild(s);
+        };
     </script>
 
     <!-- Structured data: tells crawlers this is a playable browser game, not a mystery canvas -->
@@ -162,14 +171,14 @@
             cursor: crosshair;
             touch-action: none;
         }
-        /* The gate is the ONLY thing a phone ever sees, so it has to be in the game's language rather than a
-           plain web page — same near-black, same phosphor green (#7dd069), same gold (#f0d060), scanlines and
-           a slow flicker standing in for the CRT shader the canvas would have applied. Pure CSS on purpose:
-           main.js returns before it renders anything on mobile, so nothing here can rely on the game. */
-        #mobile-gate {
+        /* A real DOM image gives browsers an LCP candidate while the canvas game boots. The same lightweight
+           surface is the complete phone experience: phones do not spend their main thread running a 60fps
+           WebGL loop merely to say that play requires a larger device. */
+        #entry-poster {
             display: none;
             position: fixed;
             inset: 0;
+            flex-direction: column;
             align-items: center;
             justify-content: center;
             background: radial-gradient(ellipse at center, #0b1410 0%, #05070a 70%);
@@ -181,11 +190,10 @@
             text-align: center;
             text-transform: uppercase;
             padding: 28px;
-            z-index: 9999;
+            z-index: 9998;
             overflow: hidden;
         }
-        /* scanlines + a corner vignette: the two cheapest cues that read as "this is that CRT" */
-        #mobile-gate::before {
+        #entry-poster::before {
             content: '';
             position: absolute;
             inset: 0;
@@ -196,44 +204,37 @@
             animation: gate-flicker 5.5s steps(2, end) infinite;
         }
         @keyframes gate-flicker { 0%, 96% { opacity: 1; } 97% { opacity: 0.86; } 100% { opacity: 1; } }
-        @media (prefers-reduced-motion: reduce) { #mobile-gate::before { animation: none; } }
-
-        #mobile-gate .gate-inner { position: relative; max-width: 24ch; }
-        /* the wordmark, with the CRT's chromatic fringing faked in text-shadow */
-        #mobile-gate .gate-title {
-            display: block;
-            color: #7dd069;
-            font-size: 26px;
-            letter-spacing: 0.3em;
-            margin-bottom: 22px;
-            text-shadow: -1px 0 rgba(255,64,64,0.55), 1px 0 rgba(64,160,255,0.55), 0 0 14px rgba(125,208,105,0.45);
+        @media (prefers-reduced-motion: reduce) { #entry-poster::before { animation: none; } }
+        #entry-poster img {
+            position: relative;
+            width: min(900px, 92vw);
+            height: auto;
+            max-height: 72svh;
+            object-fit: contain;
+            image-rendering: pixelated;
         }
-        #mobile-gate strong {
+        #entry-poster .mobile-message { display: none; position: relative; margin-top: 20px; }
+        #entry-poster strong {
             display: block;
             color: #f0d060;
             font-size: 17px;
             letter-spacing: 0.18em;
             margin-bottom: 14px;
         }
-        #mobile-gate .gate-note {
-            display: block;
-            margin-top: 22px;
-            color: #6a6f7c;
-            font-size: 12px;
-            letter-spacing: 0.1em;
-        }
+        html.entry-game:not(.game-live) #entry-poster,
+        html.entry-mobile #entry-poster { display: flex; }
+        html.entry-mobile #entry-poster img { width: min(600px, 94vw); }
+        html.entry-mobile #entry-poster .mobile-message { display: block; }
         /* Mobile styling keys off `entry-mobile`, stamped ONCE by the entry chooser below — NOT off a live
            media query. A live query re-evaluates mid-session: a 2-in-1 shedding its keyboard mid-game would
            have flipped `pointer-events: none` onto a running game's canvas (every input handler attaches
-           there, so the game goes deaf) and, since the load timer arms `gate-fallback` on every visit, laid
-           the plain-text notice over a live town. Which experience a visitor gets is decided once, at load,
-           in one place. This also retires the old rule that the query stay character-identical in three
-           places — it now lives only in the entry chooser and main.js's defence-in-depth guard. */
+           there, so the game goes deaf). Which experience a visitor gets is decided once, at load, in one
+           place. The query now lives only in the entry chooser and main.js's defence-in-depth guard. */
         /* 100svh, not the inherited 100vh: on iOS, vh is the LARGE viewport (browser chrome retracted), so
            the canvas extended behind the bottom bar and a mathematically-centred composition sat visibly low.
            svh is the small viewport — always fully on screen. Browsers without svh ignore the declaration and
            keep the base 100vh, which is exactly the old behaviour. */
-        html.entry-mobile #tv { pointer-events: none; touch-action: none; height: 100svh; }
+        html.entry-mobile #tv { display: none; pointer-events: none; touch-action: none; height: 100svh; }
 
         /* TABLET: the browser must not hijack touches on the canvas (scroll/zoom gestures fire
            pointercancel mid-pan without this) — the game owns every finger on it */
@@ -286,9 +287,6 @@
         html.entry-tablet.rotate-block #rotate-gate { display: flex; }
         /* no touches reach a game that should not be played this way up */
         html.entry-tablet.rotate-block #tv { pointer-events: none; }
-        /* The plain-text block is only a fallback for "the gate never rendered". The inline script below
-           arms it on a timer; the canvas gate normally sets `gate-live` long before that. */
-        html.entry-mobile.gate-fallback:not(.gate-live) #mobile-gate { display: flex; }
     </style>
 </head>
 <body>
@@ -315,24 +313,25 @@
         otherwise it waits and recaps what happened while you were away. Is it multiplayer? Single player,
         in a world of neighbouring towns your town can encounter, raid, and remember.</p>
     </header>
-    <canvas id="tv"></canvas>
-    <div id="rotate-gate" role="status">
-        <div class="rg-inner">
-            <strong>Flip horizontally</strong>
-            <div class="rg-note">Game supported in landscape orientation.</div>
+    <main id="game-shell">
+        <canvas id="tv"></canvas>
+        <div id="entry-poster" role="status">
+            <img src="/og-image.png" width="1200" height="630" fetchpriority="high" alt="Propagate — A world that remembers itself">
+            <div class="mobile-message">
+                <strong>Desktop only</strong>
+                Try on a different device.
+            </div>
         </div>
-    </div>
-    <div id="mobile-gate" role="status">
-        <div class="gate-inner">
-            <span class="gate-title">Propagate</span>
-            <strong>Desktop only</strong>
-            Try on a different device.
-                    </div>
-    </div>
+        <div id="rotate-gate" role="status">
+            <div class="rg-inner">
+                <strong>Flip horizontally</strong>
+                <div class="rg-note">Game supported in landscape orientation.</div>
+            </div>
+        </div>
+    </main>
     <script>
-        // ONE entry or the other, never both. A phone loading main.js would execute its whole module scope —
-        // measured at 96 image requests and ~2MB of art on production, plus the entire sim graph — to show a
-        // static notice. mobile-gate.js pulls in crt.js, pixel.js and the one title sheet instead.
+        // Phones stop at the DOM poster above. A phone loading main.js would execute its whole module scope —
+        // measured at 96 image requests and ~2MB of art on production — for a device that cannot play.
         // The query must stay character-identical to the guard in main.js (its only other copy).
         // Codex #62-1 — `hover`/`pointer` describe only the PRIMARY pointer, so a touch-first laptop
         // matches them despite having a trackpad; `any-hover`/`any-pointer` exempt any machine with a
@@ -349,6 +348,7 @@
             // (detached keyboard, unplugged mouse) cannot disturb a running game. Orientation is the one
             // thing that stays live, via the CSS orientation query on #rotate-gate.
             if (MOBILE) document.documentElement.classList.add('entry-mobile');
+            else document.documentElement.classList.add('entry-game');
             if (TABLET) {
                 document.documentElement.classList.add('entry-tablet');
                 // #Codex67-2 the rotate gate arms only when the window is portrait-shaped AND effectively
@@ -364,22 +364,22 @@
                 window.addEventListener('orientationchange', applyRot);
                 applyRot();
             }
-            // Desktop loses the preload scanner's head start once the entry is chosen in script rather than
-            // written in markup, so hand it back explicitly. Skipped on the gate path, which does not want it.
+            // Desktop/tablet loses the preload scanner's head start once the entry is chosen in script rather
+            // than written in markup, so hand it back explicitly. Phones load no simulation JavaScript.
             if (!MOBILE) {
                 var l = document.createElement('link');
                 l.rel = 'modulepreload'; l.href = './main.js';
                 document.head.appendChild(l);
-            }
-            var s = document.createElement('script');
-            s.type = 'module';
-            s.src = MOBILE ? './mobile-gate.js' : './main.js';
-            document.head.appendChild(s);
+                var s = document.createElement('script');
+                s.type = 'module';
+                s.src = './main.js';
+                document.head.appendChild(s);
 
-            // If the chosen entry never arrives (offline, blocked, a bad deploy) a phone would sit on black
-            // forever. Reveal the plain-text notice only in that case: the gate adds `gate-live` after its
-            // FIRST SUCCESSFUL FRAME, so on any healthy load this lands on a rule that no longer matches.
-            setTimeout(function () { document.documentElement.classList.add('gate-fallback'); }, 6000);
+                // Engaged visits keep the existing GA4 funnel. The library download cannot compete with
+                // the first paint, title art, or simulation boot, and the queued gtag calls flush on load.
+                window.addEventListener('pointerdown', window.loadPropagateAnalytics, { once: true, passive: true });
+                window.addEventListener('keydown', window.loadPropagateAnalytics, { once: true });
+            }
         })();
     </script>
 </body>
