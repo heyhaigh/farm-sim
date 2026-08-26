@@ -214,6 +214,22 @@
             image-rendering: pixelated;
         }
         #entry-poster .mobile-message { display: none; position: relative; margin-top: 20px; }
+        #entry-poster .desktop-entry { display: none; position: relative; margin-top: 12px; }
+        #entry-start {
+            appearance: none;
+            border: 1px solid #f0d060;
+            background: rgba(240, 208, 96, 0.08);
+            color: #f0d060;
+            font: inherit;
+            letter-spacing: 0.18em;
+            line-height: 1;
+            padding: 12px 18px;
+            text-transform: uppercase;
+            cursor: pointer;
+        }
+        #entry-start:hover,
+        #entry-start:focus-visible { background: #f0d060; color: #05070a; outline: none; }
+        #entry-start:disabled { border-color: #6a6f7c; background: transparent; color: #9aa0b4; cursor: wait; }
         #entry-poster strong {
             display: block;
             color: #f0d060;
@@ -223,7 +239,9 @@
         }
         html.entry-game:not(.game-live) #entry-poster,
         html.entry-mobile #entry-poster { display: flex; }
+        html.entry-game #entry-poster .desktop-entry { display: block; }
         html.entry-mobile #entry-poster img { width: min(600px, 94vw); }
+        html.entry-mobile #entry-poster .desktop-entry { display: none; }
         html.entry-mobile #entry-poster .mobile-message { display: block; }
         /* Mobile styling keys off `entry-mobile`, stamped ONCE by the entry chooser below — NOT off a live
            media query. A live query re-evaluates mid-session: a 2-in-1 shedding its keyboard mid-game would
@@ -315,9 +333,12 @@
     </header>
     <main id="game-shell">
         <canvas id="tv"></canvas>
-        <div id="entry-poster" role="status">
+        <div id="entry-poster">
             <img src="/og-image.png" width="1200" height="630" fetchpriority="high" alt="Propagate — A world that remembers itself">
-            <div class="mobile-message">
+            <div class="desktop-entry">
+                <button id="entry-start" type="button">Enter Propagate</button>
+            </div>
+            <div class="mobile-message" role="status">
                 <strong>Desktop only</strong>
                 Try on a different device.
             </div>
@@ -364,16 +385,31 @@
                 window.addEventListener('orientationchange', applyRot);
                 applyRot();
             }
-            // Desktop/tablet loses the preload scanner's head start once the entry is chosen in script rather
-            // than written in markup, so hand it back explicitly. Phones load no simulation JavaScript.
+            // A plain landing page is a launch surface, not an active simulation. Loading the throwaway
+            // spectator town immediately spent ~34s of throttled main-thread work beneath the title screen.
+            // Wait for player intent; direct play/resume/share URLs still boot immediately.
             if (!MOBILE) {
-                var l = document.createElement('link');
-                l.rel = 'modulepreload'; l.href = './main.js';
-                document.head.appendChild(l);
-                var s = document.createElement('script');
-                s.type = 'module';
-                s.src = './main.js';
-                document.head.appendChild(s);
+                var gameLoading = false;
+                var startButton = document.getElementById('entry-start');
+                var loadGame = function () {
+                    if (gameLoading) return;
+                    gameLoading = true;
+                    if (startButton) { startButton.disabled = true; startButton.textContent = 'Tuning in...'; }
+                    var s = document.createElement('script');
+                    s.type = 'module';
+                    s.src = './main.js';
+                    document.head.appendChild(s);
+                };
+                var params = new URLSearchParams(location.search);
+                var HAS_PLAY_INTENT = params.has('seed') || params.has('fresh') || params.has('play');
+                if (HAS_PLAY_INTENT) loadGame();
+                else {
+                    // Pointer movement preserves the old near-immediate desktop arrival without making the
+                    // unengaged page run a game forever. The real button is the keyboard/touch fallback.
+                    window.addEventListener('pointermove', loadGame, { once: true, passive: true });
+                    window.addEventListener('keydown', loadGame, { once: true });
+                    if (startButton) startButton.addEventListener('click', loadGame, { once: true });
+                }
 
                 // Engaged visits keep the existing GA4 funnel. The library download cannot compete with
                 // the first paint, title art, or simulation boot, and the queued gtag calls flush on load.
