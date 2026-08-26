@@ -44,6 +44,9 @@ let GW = 400, GH = 300;
 const [game, ctx] = makeCanvas(GW, GH);
 
 const out = document.getElementById('tv');
+// A cold plain visit may already be drawing the isolated CRT tune-in while this module graph downloads.
+// Stop that loop before taking ownership of the same output canvas; bootT0 below preserves its clock.
+if (window.__propagateEntryLoader) window.__propagateEntryLoader.stop();
 const crt = new CRT(out, game);
 out.style.cursor = 'none';   // the OS pointer is replaced by an in-world pixel hand (drawCursor)
 
@@ -92,7 +95,7 @@ function memoryCaption() {
 }
 const usedMemoryIds = new Set();
 let selected = null;
-let bootT0 = null;   // #Codex-VS first-boot-frame timestamp (seconds) → refresh-rate-independent boot timing
+let bootT0 = Number(window.__propagateEntryBootT0) || null;   // preserve the isolated entry loader's clock when present
 let booted = false;
 let startScreen = false;                            // #START the launch menu is up (drawn into the canvas, CRT-shaded)
 let startPage = 'title';                            // 'title' (Start Game / View) → 'choose' (human / orc / view / back)

@@ -446,6 +446,13 @@
             if (!MOBILE) {
                 var gameLoading = false;
                 var startButton = document.getElementById('entry-start');
+                var entryLoaderReady = null;
+                var appendGameModule = function () {
+                    var s = document.createElement('script');
+                    s.type = 'module';
+                    s.src = './main.js';
+                    document.head.appendChild(s);
+                };
                 var loadGame = function () {
                     if (gameLoading) return;
                     gameLoading = true;
@@ -455,15 +462,19 @@
                         var action = startButton.querySelector('.entry-action');
                         if (action) action.textContent = 'Tuning in';
                     }
-                    var s = document.createElement('script');
-                    s.type = 'module';
-                    s.src = './main.js';
-                    document.head.appendChild(s);
+                    if (entryLoaderReady) entryLoaderReady.then(function (loader) {
+                        if (loader) loader.start();
+                        appendGameModule();
+                    });
+                    else appendGameModule();
                 };
                 var params = new URLSearchParams(location.search);
                 var HAS_PLAY_INTENT = params.has('seed') || params.has('fresh') || params.has('play');
                 if (HAS_PLAY_INTENT) loadGame();
                 else {
+                    // Fetch the tiny original-CRT entry point ahead of intent, but do not create WebGL or
+                    // schedule a frame until engagement. PageSpeed gets bytes only; the player gets motion.
+                    entryLoaderReady = import('./entry-crt.js').catch(function () { return null; });
                     // Pointer movement preserves the old near-immediate desktop arrival without making the
                     // unengaged page run a game forever. The real button is the keyboard/touch fallback.
                     window.addEventListener('pointermove', loadGame, { once: true, passive: true });

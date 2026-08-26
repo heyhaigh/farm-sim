@@ -35,10 +35,12 @@ assert.doesNotMatch(html, /<script[^>]+src="https:\/\/www\.googletagmanager\.com
 assert.doesNotMatch(html, /mobile-gate\.js/);
 assert.match(html, /if \(HAS_PLAY_INTENT\) loadGame\(\);/);
 assert.match(html, /window\.addEventListener\('pointermove', loadGame/);
+assert.match(html, /import\('\.\/entry-crt\.js'\)/);
 assert.match(html, /@keyframes entry-scan/);
 assert.match(html, /document\.documentElement\.classList\.add\('game-loading'\)/);
 assert.match(html, /html\.entry-game\.game-booting #entry-poster \{ display: none; \}/);
 assert.match(main, /classList\.add\('game-booting'\);\s*requestAnimationFrame\(frame\)/);
+assert.match(main, /__propagateEntryLoader\) window\.__propagateEntryLoader\.stop\(\)/);
 ok('the entry has a DOM LCP candidate and defers the game until desktop intent');
 
 const scripts = [...html.matchAll(/<script type="application\/ld\+json">\s*([\s\S]*?)\s*<\/script>/g)]
