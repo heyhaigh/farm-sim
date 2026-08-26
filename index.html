@@ -199,27 +199,12 @@
             inset: 0;
             pointer-events: none;
             background:
-                repeating-linear-gradient(180deg, rgba(0,0,0,0.55) 0 2px, rgba(0,0,0,0) 2px 4px),
-                radial-gradient(ellipse at center, rgba(0,0,0,0) 55%, rgba(0,0,0,0.75) 100%);
-            animation: gate-flicker 5.5s steps(2, end) infinite;
+                repeating-linear-gradient(180deg, rgba(0,0,0,0.2) 0 1px, rgba(0,0,0,0) 1px 4px),
+                radial-gradient(ellipse at center, rgba(0,0,0,0) 60%, rgba(0,0,0,0.42) 100%);
+            animation: gate-flicker 7.5s steps(2, end) infinite;
             z-index: 3;
         }
-        #entry-poster::after {
-            content: '';
-            position: absolute;
-            left: 0;
-            right: 0;
-            top: -24%;
-            height: 24%;
-            pointer-events: none;
-            background: linear-gradient(180deg, transparent, rgba(125,208,105,0.02) 42%, rgba(190,255,205,0.13) 50%, rgba(125,208,105,0.025) 58%, transparent);
-            transform: translate3d(0, -20%, 0);
-            animation: entry-scan 3.2s linear infinite;
-            will-change: transform;
-            z-index: 4;
-        }
-        @keyframes gate-flicker { 0%, 96% { opacity: 1; } 97% { opacity: 0.86; } 100% { opacity: 1; } }
-        @keyframes entry-scan { to { transform: translate3d(0, 520%, 0); } }
+        @keyframes gate-flicker { 0%, 97% { opacity: 1; } 98% { opacity: 0.94; } 100% { opacity: 1; } }
         @keyframes entry-signal {
             0%, 87%, 91%, 100% { transform: translate3d(0, 0, 0); }
             88% { transform: translate3d(2px, 0, 0) scaleX(1.003); }
@@ -257,7 +242,6 @@
         html.entry-game.game-loading:not(.game-live) #entry-poster .entry-static { animation: entry-tuning 0.9s steps(1, end) infinite; }
         #entry-poster .mobile-live-art { display: none; }
         html.game-loading #entry-poster::before { animation-duration: 1.1s; }
-        html.game-loading #entry-poster::after { animation-duration: 1.25s; }
         #entry-poster .mobile-message { display: none; position: relative; margin-top: 20px; }
         #entry-poster .desktop-entry { display: none; position: relative; margin-top: 12px; }
         #entry-start {
@@ -314,6 +298,13 @@
             height: auto;
             image-rendering: pixelated;
         }
+        html.entry-mobile .mobile-tagline,
+        html.entry-mobile #entry-poster .mobile-message {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-weight: 600;
+            letter-spacing: clamp(0.16em, 1.2vw, 0.34em);
+            line-height: 1.25;
+        }
         html.entry-mobile .mobile-tagline {
             position: absolute;
             left: 4%;
@@ -321,18 +312,26 @@
             top: 79.5%;
             color: #aeb3c1;
             font-size: clamp(8px, 2.35vw, 14px);
-            font-weight: 600;
-            letter-spacing: clamp(0.16em, 1.2vw, 0.34em);
-            line-height: 1.25;
             white-space: nowrap;
         }
         html.entry-mobile.mobile-animation-ready #entry-poster .entry-static { opacity: 0; }
         html.entry-mobile.mobile-animation-ready #entry-poster .mobile-live-art { opacity: 1; }
         html.entry-mobile #entry-poster .desktop-entry { display: none; }
-        html.entry-mobile #entry-poster .mobile-message { display: block; z-index: 5; }
+        html.entry-mobile #entry-poster .mobile-message {
+            display: block;
+            z-index: 2;
+            color: #aeb3c1;
+            font-size: clamp(9px, 2.35vw, 14px);
+        }
+        html.entry-mobile #entry-poster .mobile-message strong {
+            font: inherit;
+            letter-spacing: inherit;
+            color: #f0d060;
+            margin-bottom: 16px;
+        }
+        html.entry-mobile #entry-poster .mobile-message span { display: block; }
         @media (prefers-reduced-motion: reduce) {
             #entry-poster::before,
-            #entry-poster::after,
             html.entry-game:not(.game-live) #entry-poster .entry-static,
             html.game-loading #entry-start,
             html.game-loading #entry-start .entry-dots span { animation: none; }
@@ -442,7 +441,7 @@
             </div>
             <div class="mobile-message" role="status">
                 <strong>Desktop only</strong>
-                Load on a different device.
+                <span>Load on a different device</span>
             </div>
         </div>
         <div id="rotate-gate" role="status">
