@@ -29,11 +29,13 @@ ok('title, description, canonical, and one H1 identify the game');
 
 assert.match(html, /<main id="game-shell">/);
 assert.match(html, /<img src="\/og-image\.png"[^>]*fetchpriority="high"[^>]*>/);
-assert.match(html, /<button id="entry-start" type="button">Enter Propagate<\/button>/);
+assert.match(html, /<button id="entry-start" type="button"><span class="entry-action">Enter Propagate<\/span>/);
 assert.doesNotMatch(html, /<script[^>]+src="https:\/\/www\.googletagmanager\.com/);
 assert.doesNotMatch(html, /mobile-gate\.js/);
 assert.match(html, /if \(HAS_PLAY_INTENT\) loadGame\(\);/);
 assert.match(html, /window\.addEventListener\('pointermove', loadGame/);
+assert.match(html, /@keyframes entry-scan/);
+assert.match(html, /document\.documentElement\.classList\.add\('game-loading'\)/);
 ok('the entry has a DOM LCP candidate and defers the game until desktop intent');
 
 const scripts = [...html.matchAll(/<script type="application\/ld\+json">\s*([\s\S]*?)\s*<\/script>/g)]

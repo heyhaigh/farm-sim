@@ -202,9 +202,38 @@
                 repeating-linear-gradient(180deg, rgba(0,0,0,0.55) 0 2px, rgba(0,0,0,0) 2px 4px),
                 radial-gradient(ellipse at center, rgba(0,0,0,0) 55%, rgba(0,0,0,0.75) 100%);
             animation: gate-flicker 5.5s steps(2, end) infinite;
+            z-index: 3;
+        }
+        #entry-poster::after {
+            content: '';
+            position: absolute;
+            left: 0;
+            right: 0;
+            top: -24%;
+            height: 24%;
+            pointer-events: none;
+            background: linear-gradient(180deg, transparent, rgba(125,208,105,0.02) 42%, rgba(190,255,205,0.13) 50%, rgba(125,208,105,0.025) 58%, transparent);
+            transform: translate3d(0, -20%, 0);
+            animation: entry-scan 3.2s linear infinite;
+            will-change: transform;
+            z-index: 4;
         }
         @keyframes gate-flicker { 0%, 96% { opacity: 1; } 97% { opacity: 0.86; } 100% { opacity: 1; } }
-        @media (prefers-reduced-motion: reduce) { #entry-poster::before { animation: none; } }
+        @keyframes entry-scan { to { transform: translate3d(0, 520%, 0); } }
+        @keyframes entry-signal {
+            0%, 87%, 91%, 100% { transform: translate3d(0, 0, 0); }
+            88% { transform: translate3d(2px, 0, 0) scaleX(1.003); }
+            89% { transform: translate3d(-3px, 1px, 0) scaleX(0.998); }
+            90% { transform: translate3d(1px, -1px, 0); }
+        }
+        @keyframes entry-tuning {
+            0%, 72%, 100% { transform: translate3d(0, 0, 0); }
+            74% { transform: translate3d(-2px, 0, 0); }
+            76% { transform: translate3d(2px, 1px, 0); }
+            78% { transform: translate3d(0, -1px, 0); }
+        }
+        @keyframes entry-dot { 0%, 24% { opacity: 0.18; } 25%, 100% { opacity: 1; } }
+        @keyframes entry-button-pulse { 0%, 100% { box-shadow: 0 0 0 rgba(125,208,105,0); } 50% { box-shadow: 0 0 12px rgba(125,208,105,0.24); } }
         #entry-poster img {
             position: relative;
             width: min(900px, 92vw);
@@ -213,6 +242,14 @@
             object-fit: contain;
             image-rendering: pixelated;
         }
+        html.entry-game:not(.game-live) #entry-poster img {
+            animation: entry-signal 4.8s steps(1, end) infinite;
+            transform-origin: center;
+            will-change: transform;
+        }
+        html.entry-game.game-loading:not(.game-live) #entry-poster img { animation: entry-tuning 0.9s steps(1, end) infinite; }
+        html.game-loading #entry-poster::before { animation-duration: 1.1s; }
+        html.game-loading #entry-poster::after { animation-duration: 1.25s; }
         #entry-poster .mobile-message { display: none; position: relative; margin-top: 20px; }
         #entry-poster .desktop-entry { display: none; position: relative; margin-top: 12px; }
         #entry-start {
@@ -226,10 +263,18 @@
             padding: 12px 18px;
             text-transform: uppercase;
             cursor: pointer;
+            position: relative;
+            z-index: 5;
         }
         #entry-start:hover,
         #entry-start:focus-visible { background: #f0d060; color: #05070a; outline: none; }
-        #entry-start:disabled { border-color: #6a6f7c; background: transparent; color: #9aa0b4; cursor: wait; }
+        #entry-start:disabled { border-color: #7dd069; background: rgba(125,208,105,0.05); color: #a8e890; cursor: wait; }
+        #entry-start .entry-dots { display: none; min-width: 1.5em; text-align: left; }
+        html.game-loading #entry-start { animation: entry-button-pulse 1.1s steps(2, end) infinite; }
+        html.game-loading #entry-start .entry-dots { display: inline-block; }
+        html.game-loading #entry-start .entry-dots span { animation: entry-dot 1.05s steps(1, end) infinite; }
+        html.game-loading #entry-start .entry-dots span:nth-child(2) { animation-delay: 0.18s; }
+        html.game-loading #entry-start .entry-dots span:nth-child(3) { animation-delay: 0.36s; }
         #entry-poster strong {
             display: block;
             color: #f0d060;
@@ -243,6 +288,13 @@
         html.entry-mobile #entry-poster img { width: min(600px, 94vw); }
         html.entry-mobile #entry-poster .desktop-entry { display: none; }
         html.entry-mobile #entry-poster .mobile-message { display: block; }
+        @media (prefers-reduced-motion: reduce) {
+            #entry-poster::before,
+            #entry-poster::after,
+            html.entry-game:not(.game-live) #entry-poster img,
+            html.game-loading #entry-start,
+            html.game-loading #entry-start .entry-dots span { animation: none; }
+        }
         /* Mobile styling keys off `entry-mobile`, stamped ONCE by the entry chooser below — NOT off a live
            media query. A live query re-evaluates mid-session: a 2-in-1 shedding its keyboard mid-game would
            have flipped `pointer-events: none` onto a running game's canvas (every input handler attaches
@@ -336,7 +388,7 @@
         <div id="entry-poster">
             <img src="/og-image.png" width="1200" height="630" fetchpriority="high" alt="Propagate — A world that remembers itself">
             <div class="desktop-entry">
-                <button id="entry-start" type="button">Enter Propagate</button>
+                <button id="entry-start" type="button"><span class="entry-action">Enter Propagate</span><span class="entry-dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span></button>
             </div>
             <div class="mobile-message" role="status">
                 <strong>Desktop only</strong>
@@ -394,7 +446,12 @@
                 var loadGame = function () {
                     if (gameLoading) return;
                     gameLoading = true;
-                    if (startButton) { startButton.disabled = true; startButton.textContent = 'Tuning in...'; }
+                    document.documentElement.classList.add('game-loading');
+                    if (startButton) {
+                        startButton.disabled = true;
+                        var action = startButton.querySelector('.entry-action');
+                        if (action) action.textContent = 'Tuning in';
+                    }
                     var s = document.createElement('script');
                     s.type = 'module';
                     s.src = './main.js';
