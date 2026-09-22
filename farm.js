@@ -2721,6 +2721,7 @@ export class World {
         if (!cfg?.enabled || typeof fetch !== 'function') return false;
         if (this._tabHidden) return false;   // #101 a backgrounded tab makes no network chat calls (belt-and-braces to the visibility guard on the writeback loops)
         if (cfg.inflight >= 1 || this.time < cfg.disabledUntil) return false;
+        if (Date.now() < (cfg.retryAfterAt || 0)) return false; // provider limits use real time, not fast-forward time
         if (this.time - cfg.lastAt < LLM_CHAT_REQUEST_COOLDOWN) return false;
         cfg.inflight++;
         cfg.lastAt = this.time;
@@ -2739,6 +2740,12 @@ export class World {
                 body: JSON.stringify({ context: this.#chatPayload(speaker, listener, ctx) }),
                 signal: controller.signal,
             });
+            if (res.status === 429 || res.status === 503) {
+                const seconds = Number(res.headers?.get('Retry-After'));
+                // A bounded real-time pause also covers older servers without the header.
+                const delay = Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds, 300) : 60;
+                cfg.retryAfterAt = Date.now() + delay * 1000;
+            }
             if (!res.ok) {
                 const err = new Error(`chat endpoint ${res.status}`);
                 err.status = res.status;
