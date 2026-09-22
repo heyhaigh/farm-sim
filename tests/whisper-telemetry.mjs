@@ -75,9 +75,9 @@ function captureLog(fn) {
 }
 
 async function tripLimiter(path) {
-    for (let i = 0; i < 60; i++) {
+    for (let i = 0; i < 130; i++) {
         const r = await post(path, { stage: 'classify', message: 'x' });
-        if (r.status === 503 && String((await r.json()).error || '').includes('rate limited')) return true;
+        if (r.status === 429 && String((await r.json()).error || '').includes('rate limited')) return true;
     }
     return false;
 }
@@ -120,7 +120,8 @@ check('a throttled CHAT request does not count as a whisper failure', () => {
 });
 
 // --- 2. under-counting AND emission ------------------------------------------------------------
-// The limiter is already open, so this conscience request is rejected the same way.
+// Player requests have their own allowance; fill it independently before testing rejection.
+assert.ok(await tripLimiter('/api/ry-farms-conscience'), 'player limiter must also be reachable');
 reset();
 const consLogs = [];
 {
@@ -132,7 +133,7 @@ const consLogs = [];
 const afterCons = snap();
 
 check('a throttled WHISPER request is recorded, so the denominator stays honest', () => {
-    assert.strictEqual(consRes.status, 503, 'expected the limiter to reject this request');
+    assert.strictEqual(consRes.status, 429, 'expected the limiter to reject this request');
     assert.strictEqual(afterCons.unattributed.fail, 1,
         'a locally throttled whisper went unrecorded — the hit-rate would overstate itself');
     assert.strictEqual(afterCons.reasons['rate-limited-local'], 1,
@@ -146,8 +147,8 @@ check('...and it EMITS a telemetry line, because stdout is the only sink there i
 });
 
 check('the rejection still returns the fallback shape the client already handles', () => {
-    assert.strictEqual(consRes.status, 503);
-    assert.strictEqual(consRes.headers.get('retry-after'), '600');
+    assert.strictEqual(consRes.status, 429);
+    assert.ok(Number(consRes.headers.get('retry-after')) > 0 && Number(consRes.headers.get('retry-after')) <= 600);
 });
 
 // --- 3. the REAL formatter --------------------------------------------------------------------

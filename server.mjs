@@ -40,22 +40,15 @@ try {
 // #freequota the endpoints that reach the model (everything else — knowledge-graph, writeback — is exempt)
 const LLM_ROUTES = new Set(['/api/ry-farms-chat', '/api/ry-farms-dm', '/api/ry-farms-conscience',
     '/api/ry-farms-congregation', '/api/ry-farms-raid-council', '/api/ry-farms-invent']);
-// Two windows per IP: a burst window (40 per 10 minutes — a whisper costs 2 requests, chat 1 per message,
-// so this is ~20 whispers or 40 chat turns in ten minutes, generous for a human) and a daily cap (400).
-const LLM_IP_BURST = 40, LLM_IP_BURST_MS = 10 * 60_000;
-const LLM_IP_DAY = 400, LLM_IP_DAY_MS = 24 * 60 * 60_000;
-const _llmIp = new Map();   // ip -> { b: count, bStart, d: count, dStart }
-function takeLlmToken(ip) {
-    const now = Date.now();
-    let e = _llmIp.get(ip);
-    if (!e) { e = { b: 0, bStart: now, d: 0, dStart: now }; _llmIp.set(ip, e); }
-    if (now - e.bStart > LLM_IP_BURST_MS) { e.b = 0; e.bStart = now; }
-    if (now - e.dStart > LLM_IP_DAY_MS) { e.d = 0; e.dStart = now; }
-    if (e.b >= LLM_IP_BURST || e.d >= LLM_IP_DAY) return false;
-    e.b++; e.d++;
-    // bounded memory: prune stale entries once the table grows past a few thousand IPs
-    if (_llmIp.size > 5000) for (const [k, v] of _llmIp) { if (now - v.dStart > LLM_IP_DAY_MS) _llmIp.delete(k); }
-    return true;
+const { clientIP, localRequest, readJSON, RequestLimits } = require('./api/_request-guards.js');
+const requestLimits = new RequestLimits();
+const LOCAL_ROUTES = new Set(['/api/knowledge-graph', '/api/memory-graph', '/api/memory-writeback']);
+function rejectRequest(req, res, status, retry) {
+    res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store',
+        'Connection': 'close', ...(retry ? { 'Retry-After': String(retry) } : {}) });
+    res.end(JSON.stringify({ fallback: true, error: status === 429 ? 'rate limited - offline fallback' : 'request refused' }));
+    // Flush the response, then stop receiving an oversized or deliberately stalled upload.
+    res.on('finish', () => req.destroy());
 }
 
 const API_ROUTES = {
@@ -130,7 +123,9 @@ function gzipFor(file, key, data) {
 }
 
 http.createServer(async (req, res) => {
-    const url = new URL(req.url, `http://localhost:${PORT}`);
+    let url;
+    try { url = new URL(req.url, `http://localhost:${PORT}`); }
+    catch { rejectRequest(req, res, 400); return; }
 
     // #buildrev WHICH BUILD IS THIS? Codex #64-2: the release check used to be `curl main.js | wc -c`, which
     // prints a number and exits 0 whatever it finds — it cannot fail, two different revisions of equal size
@@ -178,46 +173,41 @@ http.createServer(async (req, res) => {
     }
 
     const apiRel = API_ROUTES[url.pathname];
-    // #freequota PER-IP FAIR SHARE for the LLM-backed endpoints. The model provider is a shared FREE tier
-    // (~14.4k requests/day): _llm.js's global budget stops runaway totals, but without this one enthusiastic
-    // player could drink the whole town's daily quota. A rejected request returns the exact fallback shape
-    // every client already handles — the player gets the offline keyword/template behaviour, not an error.
-    // In-process Maps are fine: Railway runs one instance, and a restart forgiving the counters is acceptable.
-    if (apiRel && LLM_ROUTES.has(url.pathname)) {
-        const ip = req.headers['cf-connecting-ip']
-            || String(req.headers['x-forwarded-for'] || '').split(',')[0].trim()
-            || req.socket.remoteAddress || 'unknown';
-        if (!takeLlmToken(ip)) {
-            // #funnel (Codex #98 P1-2, corrected in #99 P1-1) — this rejection never reaches the
-            // conscience handler, so without recording it a locally throttled whisper is missing
-            // from the hit/fallback denominator and the LLM-hit rate reads higher than it is.
-            //
-            // ONLY the conscience route. The limiter guards six LLM routes; counting chat, DM,
-            // congregation, raid-council and invention throttles as whisper failures was the
-            // opposite error — a telemetry channel contaminated by five unrelated endpoints.
-            //
-            // The stage (classify vs reply) is unknowable without parsing a body we deliberately do
-            // not parse on a rejection path, so it lands in 'unattributed' — a legitimate attempt
-            // the player did not get, counted toward the headline rate.
-            //
-            // Through the SHARED recorder, not by touching the counters directly (Codex #100 P1-1).
-            // Railway stdout is the only telemetry sink there is: incrementing a global without
-            // running the throttled emitter meant a burst of throttled whispers followed by quiet —
-            // or a restart — disappeared entirely. Recording and emitting are one operation.
-            if (url.pathname === '/api/ry-farms-conscience') {
-                require('./api/_whisper-telemetry.js').noteWhisper('unattributed', false, 'rate-limited-local');
-            }
-            res.writeHead(503, { 'Content-Type': 'application/json', 'Retry-After': '600' });
-            res.end(JSON.stringify({ fallback: true, error: 'rate limited - offline fallback' }));
-            return;
-        }
+    if (apiRel && LOCAL_ROUTES.has(url.pathname) && !localRequest(req)) {
+        if (url.pathname === '/api/memory-writeback') { rejectRequest(req, res, 403); return; }
+        // Public play uses embedded/local-browser memories, never the developer's private store.
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify(url.pathname === '/api/knowledge-graph'
+            ? { documents: [], lineage: [], source: 'offline' }
+            : { towns: [], farmers: [], links: [], source: 'offline' }));
+        return;
     }
     if (apiRel) {
-        try { const api = loadHandler(apiRel); await api(req, res); }
-        catch (err) {
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ fallback: true, error: err?.message || 'handler crashed' }));
-        }
+        let permit;
+        try {
+            if (LLM_ROUTES.has(url.pathname)) {
+                if (req.method !== 'POST') { rejectRequest(req, res, 405); return; }
+                permit = requestLimits.acquire(clientIP(req), url.pathname === '/api/ry-farms-conscience' ? 'interactive' : 'background');
+                if (!permit.release) {
+                    if (url.pathname === '/api/ry-farms-conscience') {
+                        require('./api/_whisper-telemetry.js').noteWhisper('unattributed', false, 'rate-limited-local');
+                    }
+                    rejectRequest(req, res, permit.status, permit.retry); return;
+                }
+                try { req.body = await readJSON(req); }
+                catch (error) {
+                    if (url.pathname === '/api/ry-farms-conscience') {
+                        require('./api/_whisper-telemetry.js').noteWhisper('invalid', false, 'bad-body');
+                    }
+                    rejectRequest(req, res, error.status || 400); return;
+                }
+            }
+            const api = loadHandler(apiRel); await api(req, res);
+        } catch (err) {
+            console.error('[api] handler failed', url.pathname, err?.name || 'Error');
+            if (!res.headersSent) rejectRequest(req, res, 500);
+            else res.end();
+        } finally { permit?.release?.(); }
         return;
     }
 
@@ -250,7 +240,10 @@ http.createServer(async (req, res) => {
     // (api keys) and .supermemory/ (auth-secret + personal documents); an over-broad CLI deploy once put
     // that pair on a public URL, and `GET /.supermemory/api-key` answered 200. What gets uploaded must
     // not be the only thing standing between those files and a request.
-    let rel = decodeURIComponent(url.pathname);
+    let rel;
+    try { rel = path.posix.normalize(decodeURIComponent(url.pathname)); }
+    catch { rejectRequest(req, res, 400); return; }
+    if (rel.startsWith('/api/') || rel === '/server.mjs') { res.writeHead(404); res.end('not found'); return; }
     if (rel.endsWith('/')) rel += 'index.html';
 
     // 1. no dotfile segments — kills /.env, /.supermemory/..., /.vercel/..., /.git/... outright
