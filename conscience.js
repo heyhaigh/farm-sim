@@ -267,6 +267,7 @@ function diagLoad() {
 // function names from TypeError messages), which are identifiers from our own source, not content.
 function diagReason(err) {
     if (err?.name === 'AbortError') return `timeout ${TIMEOUT_MS}ms`;
+    if (err?.transport && err.status === 0) return err.reason === 'timeout' ? `timeout ${TIMEOUT_MS}ms` : 'transport: network';
     const m = String(err?.message || '');
     let x;
     if ((x = m.match(/^conscience endpoint (\d{3})$/))) return `http ${x[1]}`;
@@ -315,100 +316,171 @@ export function whisperLog() {
 whisperLog.copy = () => { const t = JSON.stringify(diagLoad(), null, 1); try { navigator.clipboard.writeText(t); } catch { } return t; };
 whisperLog.clear = () => { try { localStorage.removeItem(DIAG_KEY); } catch { } };
 
-let retryAfterAt = 0; // wall-clock backoff; offline replies keep the game responsive
+let retryState = null; // { until, status, reason } — wall-clock, never simulation time
+
+function endpointError(status, reason, retryAt, message = '') {
+    const err = new Error(status ? `conscience endpoint ${status}` : (message || 'conscience network error'));
+    err.transport = true;
+    err.status = status || 0;
+    err.reason = typeof reason === 'string' ? reason : 'unavailable';
+    err.retryAt = retryAt || 0;
+    return err;
+}
+
+function retryDelay(res, data, fallback = 60) {
+    const header = Number(res.headers?.get('Retry-After'));
+    const body = Number(data?.retryAfter);
+    const seconds = Number.isFinite(header) && header > 0 ? header
+        : Number.isFinite(body) && body > 0 ? body : fallback;
+    return Math.min(seconds, 86400) * 1000;
+}
+
 async function postJson(payload) {
-    if (Date.now() < retryAfterAt) throw new Error('rate limited');
+    const now = Date.now();
+    if (retryState && now < retryState.until) {
+        throw endpointError(retryState.status, retryState.reason, retryState.until);
+    }
+    if (retryState) retryState = null;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
     try {
-        const res = await fetch(ENDPOINT, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-            signal: controller.signal,
-        });
-        if (res.status === 429 || res.status === 503) {
-            const seconds = Number(res.headers?.get('Retry-After'));
-            retryAfterAt = Date.now() + (Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds, 86400) : 60) * 1000;
+        let res;
+        try {
+            res = await fetch(ENDPOINT, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+                signal: controller.signal,
+            });
+        } catch (err) {
+            throw endpointError(0, err?.name === 'AbortError' ? 'timeout' : 'unavailable', Date.now() + 15_000,
+                err?.name === 'AbortError' ? 'conscience timeout' : 'conscience network error');
         }
-        if (!res.ok) throw new Error(`conscience endpoint ${res.status}`);
-        const data = await res.json();
-        if (data?.fallback) throw new Error(data.error || 'fallback requested');
+        const data = await res.json().catch(() => null);
+        if (res.status === 429 || res.status === 503) {
+            retryState = {
+                until: Date.now() + retryDelay(res, data),
+                status: res.status,
+                reason: typeof data?.reason === 'string' ? data.reason : 'service_capacity',
+            };
+        }
+        if (!res.ok) {
+            const retryAt = retryState?.until || (res.status >= 500 ? Date.now() + 15_000 : 0);
+            throw endpointError(res.status, data?.reason, retryAt);
+        }
+        if (data?.fallback) {
+            const err = new Error(data.error || 'fallback requested');
+            err.reason = typeof data.reason === 'string' ? data.reason : 'fallback';
+            err.fallback = true;
+            throw err;
+        }
+        retryState = null; // a genuine response is stronger evidence than any stale local cooldown
         return data;
     } finally {
         clearTimeout(timeout);
     }
 }
 
+function shouldDefer(err) {
+    return !!err?.transport && (err.status === 0 || err.status === 429 || err.status === 503 || err.status >= 500);
+}
+
+function noticeForError(err) {
+    const retryAt = Number(err?.retryAt) > Date.now() ? Number(err.retryAt) : Date.now() + 15_000;
+    const reason = typeof err?.reason === 'string' ? err.reason : 'unavailable';
+    return {
+        kind: reason === 'player_quota' ? 'limit' : 'service',
+        reason, retryAt,
+    };
+}
+
+function pendingResult(stage, context, err) {
+    const notice = noticeForError(err);
+    return { pending: { stage, ...context, ...notice }, notice };
+}
+
+function offlineNotice() { return { kind: 'offline', reason: 'fallback', retryAt: 0 }; }
+
+export function formatWhisperWait(ms) {
+    let seconds = Math.max(1, Math.ceil(Number(ms || 0) / 1000));
+    if (seconds < 60) return `${seconds} second${seconds === 1 ? '' : 's'}`;
+    let minutes = Math.ceil(seconds / 60);
+    if (minutes < 60) return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+    const hours = Math.floor(minutes / 60); minutes %= 60;
+    if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'}${minutes ? ` ${minutes} minute${minutes === 1 ? '' : 's'}` : ''}`;
+    const days = Math.floor(hours / 24), remHours = hours % 24;
+    return `${days} day${days === 1 ? '' : 's'}${remHours ? ` ${remHours} hour${remHours === 1 ? '' : 's'}` : ''}`;
+}
+
+export function whisperNoticeText(notice, now = Date.now()) {
+    if (!notice) return '';
+    if (notice.kind === 'offline') return 'CONVERSATION SERVICE OFFLINE - LOCAL REPLY USED - YOU CAN KEEP PLAYING';
+    const wait = Number(notice.retryAt) - now;
+    if (wait <= 0) return 'CONVERSATION READY - PRESS ENTER TO RETRY - YOUR THOUGHT IS KEPT';
+    if (notice.kind === 'limit') return `CONVERSATION LIMIT REACHED - TRY AGAIN IN ${formatWhisperWait(wait)} - YOU CAN KEEP PLAYING`;
+    return `CONVERSATION SERVICE RESTING - TRY AGAIN IN ${formatWhisperWait(wait)} - YOUR THOUGHT IS KEPT`;
+}
+
 // ---- the orchestrator -------------------------------------------------------------------------
 
-// Push one whisper into `farmer`. Records both the player's line and the farmer's reply on
-// farmer.sheet.conscience.log (capped), and returns { verdict, kind, reply } for the UI. `save`
-// is invoked once at the end so the transcript survives a reload. Never throws.
-export async function whisper(world, farmer, message, save) {
-    const text = String(message || '').trim();
-    if (!text || !farmer) return null;
-    const c = farmer.conscience;
-    const names = world.farmers.filter(o => o !== farmer).map(shortNameOf);
+function saveWhisper(save) { if (typeof save === 'function') { try { save(); } catch { /* best effort */ } } }
 
-    logLine(c, 'voice', text, world.day);
-
-    // stage 1: classify (LLM, else keyword)
-    let cls;
-    const t0 = Date.now();
-    try {
-        cls = await postJson({ stage: 'classify', message: text, names, recent: c.log.slice(-4).map(e => ({ who: e.who, text: String(e.text).slice(0, 90) })) });
-        // SHAPE AND PROTOCOL before success (Codex #120, both rounds): an HTTP 200 `{}` used to read
-        // as an LLM "none", and {kind:'bogus-kind', target:{}} passed a strings-only check and rode
-        // into conscienceCheck. The enums are the contract; anything outside them is a failed stage.
-        // ALL THREE fields, unconditionally (Codex #120 r3): the != null guards accepted
-        // {kind:'rest'} alone as an LLM success with target/tone silently defaulted downstream.
-        // The real producer always returns all three — classify_normalize ends
-        // `return { kind, target, tone }` — so requiring them rejects nothing the server sends.
-        if (!cls || !KINDS.includes(cls.kind) || !TONES.includes(cls.tone)
-            || typeof cls.target !== 'string') throw new Error('malformed classify response');
-        // ...and target SEMANTICS, not just its type (Codex #120 r4). The producer's own
-        // classify_normalize only ever returns a target that is a canonical current-townsperson
-        // name on a visit, and '' on everything else — a match failure collapses the kind to
-        // 'none'. So any other combination is not a defensive edge case, it is a response the
-        // server cannot produce: {kind:'visit', target:'<anything>'} rode through as an LLM
-        // success and out of whisper() unchanged.
-        if (cls.kind === 'visit' ? !names.includes(cls.target) : cls.target !== '')
-            throw new Error('malformed classify response');
-        diagRecord('classify', true, `kind=${cls.kind || 'none'}`, Date.now() - t0);
-    } catch (err) {
-        diagRecord('classify', false, diagReason(err), Date.now() - t0);
-        cls = offlineClassify(text, names);
-    }
-    // #classify-backstop — the 8B sometimes whiffs plainly actionable thoughts to "none" ("go chop some
-    // wood"). The keyword map is high-precision on action verbs, so when it finds a kind and the model
-    // found none, trust the keywords. STRICT mode: the bare-name→visit last resort stays off here, so a
-    // smalltalk mention of a neighbour is never promoted to a visit over the model's judgement.
-    if ((cls.kind || 'none') === 'none') {
+function checkedClassify(cls, text, names) {
+    // Shape, enums, and target semantics are the protocol. A malformed 200 may use the local
+    // interpreter, but a transport pause must never silently turn into a character decision.
+    if (!cls || !KINDS.includes(cls.kind) || !TONES.includes(cls.tone) || typeof cls.target !== 'string')
+        throw new Error('malformed classify response');
+    if (cls.kind === 'visit' ? !names.includes(cls.target) : cls.target !== '')
+        throw new Error('malformed classify response');
+    if (cls.kind === 'none') {
         const kw = offlineClassify(text, names, true);
-        if (kw.kind !== 'none') cls = kw;
+        if (kw.kind !== 'none') return kw;
     }
+    return cls;
+}
+
+async function finishReply(world, farmer, state, save) {
+    const c = farmer.conscience;
+    let line, usedOffline = false;
+    const t1 = Date.now();
+    try {
+        const r = await postJson(state.payload);
+        if (typeof r.line !== 'string' || !r.line.trim()) throw new Error('malformed reply response');
+        line = r.line;
+        diagRecord('reply', true, `verdict=${state.verdict}`, Date.now() - t1);
+    } catch (err) {
+        diagRecord('reply', false, diagReason(err), Date.now() - t1);
+        if (shouldDefer(err)) {
+            saveWhisper(save); // voice + deterministic outcome already happened; keep both, add no fake reply
+            return pendingResult('reply', state, err);
+        }
+        line = offlineReply(state.verdict, farmer, state.seedInfo?.stage, state.outcomeReason);
+        usedOffline = true;
+    }
+
+    const entry = logLine(c, 'ry', line, world.day, state.verdict, state.kind);
+    if (usedOffline && entry) entry.offline = true;
+    saveWhisper(save);
+    return {
+        verdict: state.verdict, kind: state.kind, target: state.target,
+        reply: line, reason: state.outcomeReason,
+        notice: usedOffline ? offlineNotice() : (state.baseNotice || null),
+    };
+}
+
+async function applyWhisperOutcome(world, farmer, text, cls, save, baseNotice = null) {
+    const c = farmer.conscience;
     const kind = cls.kind || 'none';
     const target = cls.target || null;
     const tone = cls.tone || 'suggest';
 
-    // stage 2: the sim decides (deterministic — this is the real event)
-    // #inspiration — capture the seed's PRE-check life: DEFY deletes the seed inside the check,
-    // and its reply must speak of the thing just torn out (post-check it no longer exists).
+    // The deterministic verdict happens exactly once. If prose generation pauses after this point,
+    // finishReply returns a reply-only continuation containing this already-decided context.
     const preSeed = farmer.sheet.conscience?.seeds?.[kind];
     const preSnap = preSeed ? { stage: seedStage(preSeed, world.day), firstDay: preSeed.firstDay } : null;
-
     const outcome = farmer.conscienceCheck(kind, target, tone);
     const verdict = outcome.verdict;
-
-    // The reply describes the mind AFTER the verdict — post-check state for everything (a QUESTION
-    // that just planted reads 'fresh'; a re-QUESTION over a survivor reads 'turning') EXCEPT DEFY,
-    // which uses the pre-check snapshot of the seed it destroyed.
     const postSeed = farmer.sheet.conscience?.seeds?.[kind];
-    // #inspiration C2 — stamp the abbreviated whisper onto a seed this whisper planted or fed
-    // (QUESTION only; freshest phrasing wins). Display metadata on a digest-invisible ledger:
-    // the sim's deposit logic stays text-blind, and lapsed-urge seeds (planted sim-side, no text
-    // in reach) simply carry no phrase — their beats fall back to the kind's verb.
     if (verdict === 'QUESTION' && postSeed) {
         const ph = abbreviateWhisper(text);
         if (ph) postSeed.phrase = ph;
@@ -418,39 +490,78 @@ export async function whisper(world, farmer, message, save) {
         : (postSeed ? { stage: seedStage(postSeed, world.day), firstDay: postSeed.firstDay } : null);
     const seedInfo = seedView ? { stage: seedView.stage, days: Math.max(0, world.day - seedView.firstDay) } : null;
 
-    // stage 3: reply (LLM, else template)
-    let line;
-    const t1 = Date.now();
+    let payload;
     try {
-        const r = await postJson({
-            stage: 'reply', verdict, kind, tone,
-            message: text,
+        payload = {
+            stage: 'reply', verdict, kind, tone, message: text,
             character: characterView(farmer),
-            // roll-affecting pressure (day-stable) PLUS today's repeat count, so a nagged reply can
-            // sound more irritated even though the verdict itself is locked for the day.
             pressure: Math.round(((c.pressure[kind] || 0) + Math.max(0, (c.asks?.[kind] || 1) - 1)) * 10) / 10,
-            // #inspiration — how this idea has been sitting in their mind (null = no seed). The
-            // model uses it to colour the reply ("it keeps coming back to me"); a few tokens
-            // against Groq's TPM budget. `reason` carries the verdict's WHY — the slot-policy
-            // QUESTION ('set on their own errand') must read as an occupied mind (Codex #124 P2).
             seed: seedInfo,
             reason: outcome.reason || undefined,
-            // -6 with capped lines, not -12 raw: Groq's free tier meters TOKENS PER MINUTE (6k), and the
-            // fat thread was the main reason rapid whispers 429'd into the breaker and read as "dropped"
             history: c.log.slice(-6).map(e => ({ who: e.who, text: String(e.text).slice(0, 120) })),
             snapshot: snapshotOf(farmer),
-        });
-        if (typeof r.line !== 'string' || !r.line.trim()) throw new Error('malformed reply response');
-        line = r.line;
-        diagRecord('reply', true, `verdict=${verdict}`, Date.now() - t1);
+        };
     } catch (err) {
-        diagRecord('reply', false, diagReason(err), Date.now() - t1);
-        line = offlineReply(verdict, farmer, seedInfo && seedInfo.stage, outcome.reason);
+        // Producer drift is not a recoverable service pause: there is no request to retry. Keep the
+        // deterministic result, mark the local line explicitly, and retain the diagnostic category.
+        diagRecord('reply', false, diagReason(err), 0);
+        const line = offlineReply(verdict, farmer, seedInfo?.stage, outcome.reason);
+        const entry = logLine(c, 'ry', line, world.day, verdict, kind);
+        if (entry) entry.offline = true;
+        saveWhisper(save);
+        return { verdict, kind, target, reply: line, reason: outcome.reason, notice: offlineNotice() };
     }
+    return finishReply(world, farmer, {
+        text, verdict, kind, target, tone, outcomeReason: outcome.reason, seedInfo, payload, baseNotice,
+    }, save);
+}
 
-    logLine(c, 'ry', line, world.day, verdict, kind);
-    if (typeof save === 'function') { try { save(); } catch { /* best effort */ } }
-    return { verdict, kind, target, reply: line, reason: outcome.reason };
+// Push one whisper into `farmer`. A recoverable service pause returns a continuation instead of
+// manufacturing an in-character refusal. `resumeWhisper` finishes only the missing stage.
+export async function whisper(world, farmer, message, save) {
+    const text = String(message || '').trim();
+    if (!text || !farmer) return null;
+    const c = farmer.conscience;
+    const names = world.farmers.filter(o => o !== farmer).map(shortNameOf);
+    logLine(c, 'voice', text, world.day);
+
+    const payload = { stage: 'classify', message: text, names, recent: c.log.slice(-4).map(e => ({ who: e.who, text: String(e.text).slice(0, 90) })) };
+    let cls, baseNotice = null;
+    const t0 = Date.now();
+    try {
+        cls = checkedClassify(await postJson(payload), text, names);
+        diagRecord('classify', true, `kind=${cls.kind || 'none'}`, Date.now() - t0);
+    } catch (err) {
+        diagRecord('classify', false, diagReason(err), Date.now() - t0);
+        if (shouldDefer(err)) {
+            saveWhisper(save); // preserve the visible thought, but apply no verdict yet
+            return pendingResult('classify', { text, payload }, err);
+        }
+        cls = offlineClassify(text, names);
+        baseNotice = offlineNotice();
+    }
+    return applyWhisperOutcome(world, farmer, text, cls, save, baseNotice);
+}
+
+export async function resumeWhisper(world, farmer, pending, save) {
+    if (!world || !farmer || !pending || !pending.stage) return null;
+    if (pending.stage === 'reply') return finishReply(world, farmer, pending, save);
+    if (pending.stage !== 'classify' || pending.used) return null;
+
+    const names = Array.isArray(pending.payload?.names) ? pending.payload.names : [];
+    let cls, baseNotice = null;
+    const t0 = Date.now();
+    try {
+        cls = checkedClassify(await postJson(pending.payload), pending.text, names);
+        diagRecord('classify', true, `kind=${cls.kind || 'none'}`, Date.now() - t0);
+    } catch (err) {
+        diagRecord('classify', false, diagReason(err), Date.now() - t0);
+        if (shouldDefer(err)) return pendingResult('classify', { text: pending.text, payload: pending.payload }, err);
+        cls = offlineClassify(pending.text, names);
+        baseNotice = offlineNotice();
+    }
+    pending.used = true; // classification continuation may apply the verdict once, never twice
+    return applyWhisperOutcome(world, farmer, pending.text, cls, save, baseNotice);
 }
 
 // Exported for the test harness (the seedDeposit precedent): the pair-eviction contract is only
@@ -459,7 +570,8 @@ export async function whisper(world, farmer, message, save) {
 export function logLine(c, who, text, day, verdict, kind) {
     // kind rides reply rows (#inspiration slice 2) so the panel can mark the QUESTION exchange
     // whose seed later took root. Additive; old entries without it simply never match.
-    c.log.push(verdict ? { who, text, day, verdict, ...(kind ? { kind } : {}) } : { who, text, day });
+    const entry = verdict ? { who, text, day, verdict, ...(kind ? { kind } : {}) } : { who, text, day };
+    c.log.push(entry);
     // Codex #124 r3 — evict COMPLETE exchanges, never half of one: shifting single rows split an
     // anchored voice/QUESTION pair (the voice evicted while the new whisper awaited its reply,
     // then the reply's push evicted the anchor while its seed lived). When the head is a
@@ -468,4 +580,5 @@ export function logLine(c, who, text, day, verdict, kind) {
         const pair = c.log[0].who === 'voice' && c.log[1] && c.log[1].who !== 'voice';
         c.log.splice(0, pair ? 2 : 1);
     }
+    return entry;
 }

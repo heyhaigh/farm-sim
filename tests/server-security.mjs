@@ -40,8 +40,19 @@ try {
     }
     assert(limited, 'forged forwarding headers must not bypass quota');
     assert(Number(limited.headers.get('retry-after')) > 0);
-    assert.equal((await limited.json()).fallback, true);
+    const limitedBody = await limited.json();
+    assert.equal(limitedBody.fallback, true);
+    assert.equal(limitedBody.reason, 'background_quota');
     assert.notEqual((await post('/api/ry-farms-conscience', '{"stage":"classify","message":"rest"}')).status, 429, 'player allowance remains available');
+    let playerLimited;
+    for (let i = 0; i < 125; i++) {
+        const r = await post('/api/ry-farms-conscience', '{"stage":"classify","message":"rest"}');
+        if (r.status === 429) { playerLimited = r; break; }
+    }
+    assert(playerLimited, 'the player allowance eventually closes without affecting background accounting');
+    const playerLimitBody = await playerLimited.json();
+    assert.equal(playerLimitBody.reason, 'player_quota');
+    assert(Number(playerLimited.headers.get('retry-after')) > 0);
     assert.equal((await fetch(base + '/%ZZ')).status, 400);
     for (const route of ['/server.mjs', '/api/_llm.js', '//api/_request-guards.js']) assert.equal((await fetch(base + route)).status, 404);
     assert.equal((await fetch(base + '/')).status, 200, 'server survives malformed input');

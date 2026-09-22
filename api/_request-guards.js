@@ -67,10 +67,11 @@ class RequestLimits {
                 for (const [key, value] of this.entries) if (!value.active && now - value.touched >= DAY_MS) this.entries.delete(key);
             }
             // Never evict an active daily allowance: cycling addresses must not reset other counters.
-            if (this.entries.size >= this.capacity) return { status: 503, retry: 60 };
+            if (this.entries.size >= this.capacity) return { status: 503, retry: 60, reason: 'capacity' };
             entry = { active: 0, touched: now, buckets: {} }; this.entries.set(ip, entry);
         }
-        if (entry.active >= 4 || this.active >= 32) return { status: 429, retry: 5 };
+        if (entry.active >= 4) return { status: 429, retry: 5, reason: 'concurrency' };
+        if (this.active >= 32) return { status: 503, retry: 5, reason: 'capacity' };
         const b = entry.buckets[channel] ||= { burst: 0, daily: 0, burstStart: now, dayStart: now };
         if (now - b.burstStart >= BURST_MS) { b.burst = 0; b.burstStart = now; }
         if (now - b.dayStart >= DAY_MS) { b.daily = 0; b.dayStart = now; }
@@ -78,7 +79,7 @@ class RequestLimits {
         let wait = 0;
         if (b.burst >= policy.burst) wait = b.burstStart + BURST_MS - now;
         if (b.daily >= policy.daily) wait = Math.max(wait, b.dayStart + DAY_MS - now);
-        if (wait > 0) return { status: 429, retry: Math.max(1, Math.ceil(wait / 1000)) };
+        if (wait > 0) return { status: 429, retry: Math.max(1, Math.ceil(wait / 1000)), reason: 'quota' };
         b.burst++; b.daily++; entry.touched = now; entry.active++; this.active++;
         let released = false;
         return { release: () => { if (!released) { released = true; entry.active--; this.active--; } } };

@@ -102,8 +102,9 @@ await check('a fallback:true body is recorded as OFFLINE with the reason CATEGOR
     assert.ok(!/exceeded/.test(JSON.stringify(entries)), 'the raw server string must not be quoted');
 });
 
-await check('a transport failure on classify does not mask a healthy reply', async () => {
-    // The independent-stages case from production: classify can fail while reply succeeds.
+await check('a transport failure on classify pauses before any reply or verdict', async () => {
+    // A service failure is not a character interpretation. Hold the thought and retry classification;
+    // do not silently run the keyword path and ask the model to voice a verdict it never classified.
     whisperLog.clear();
     globalThis.fetch = async (_u, opts) => {
         const stage = JSON.parse(opts.body).stage;
@@ -111,8 +112,9 @@ await check('a transport failure on classify does not mask a healthy reply', asy
         return { ok: true, status: 200, json: async () => ({ line: 'Aye.', verdict: 'DISMISS' }) };
     };
     const w = world();
-    await whisper(w, w.farmers[0], 'go get some rest', null);
-    assert.deepStrictEqual(diag().map(e => `${e.stage}:${e.ok}`), ['classify:false', 'reply:true'],
+    const out = await whisper(w, w.farmers[0], 'go get some rest', null);
+    assert.equal(out.pending?.stage, 'classify');
+    assert.deepStrictEqual(diag().map(e => `${e.stage}:${e.ok}`), ['classify:false'],
         `got ${JSON.stringify(diag())}`);
     assert.match(diag()[0].detail, /502/, 'the status should be in the record');
 });
@@ -145,11 +147,14 @@ await check('the buffer caps rather than growing without bound', async () => {
 
 await check('diagnostics failing never breaks the whisper itself', async () => {
     globalThis.localStorage.setItem = () => { throw new Error('QuotaExceededError'); };
-    globalThis.fetch = async () => { throw new Error('down'); };
-    const w = world();
-    const out = await whisper(w, w.farmers[0], 'go get some rest', null);
-    assert.ok(out?.reply, 'the whisper must still answer when localStorage is unavailable');
-    globalThis.localStorage.setItem = (k, v) => { store[k] = String(v); };
+    try {
+        globalThis.fetch = async () => { throw new Error('down'); };
+        const w = world();
+        const out = await whisper(w, w.farmers[0], 'go get some rest', null);
+        assert.equal(out.pending?.stage, 'classify', 'the thought must remain retryable when diagnostics storage is unavailable');
+    } finally {
+        globalThis.localStorage.setItem = (k, v) => { store[k] = String(v); };
+    }
 });
 
 await check('an HTTP 200 with the WRONG SHAPE is recorded OFFLINE, not llm (Codex #120)', async () => {
@@ -273,9 +278,9 @@ await check('"model generated empty reply" is bad-output, not throttled (Codex #
     assert.strictEqual(diag().find(e => e.stage === 'reply')?.detail, 'fallback: throttled');
 });
 
-await check('a marker INSIDE an engine-class message cannot ride the export (Codex #120 r3)', async () => {
-    // The third door: Error.name was allow-listed, but the identifier patterns read err.message —
-    // free text — so a crafted TypeError message carried its marker through the extraction.
+await check('a marker INSIDE a rejected fetch cannot ride the export (Codex #120 r3)', async () => {
+    // A rejected fetch is transport, even when the browser represents it as TypeError. Its free-text
+    // message must not survive into the exportable diagnostic buffer.
     whisperLog.clear();
     globalThis.fetch = async (_u, opts) => {
         const stage = JSON.parse(opts.body).stage;
@@ -286,7 +291,7 @@ await check('a marker INSIDE an engine-class message cannot ride the export (Cod
     await whisper(w, w.farmers[0], 'go get some rest', null);
     const dump = JSON.stringify(diag());
     assert.ok(!/PLAYER_PRIVATE/.test(dump), `message content reached the export: ${dump}`);
-    assert.strictEqual(diag().find(e => e.stage === 'reply')?.detail, 'client-throw: TypeError');
+    assert.strictEqual(diag().find(e => e.stage === 'reply')?.detail, 'transport: network');
 });
 
 await check('{kind} alone is NOT an LLM success — all three protocol fields required (Codex #120 r3)', async () => {

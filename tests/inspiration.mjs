@@ -169,14 +169,18 @@ function findVerdict(w, f, kind, want, { tone = 'suggest', maxDays = 400, target
     assert.ok(abbreviateWhisper('x'.repeat(200)).length <= 42, 'hard cap holds with no word boundary');
     ok('abbreviateWhisper: runway stripped, first clause, word-boundary cap');
 
-    // end-to-end: a QUESTIONed whisper stamps its phrase onto the seed (whisper() runs headless —
-    // its relative-URL fetch throws in Node, which IS the offline path the game guarantees)
+    // end-to-end: a QUESTIONed whisper stamps its phrase onto the seed. An explicitly disabled
+    // service uses the offline interpreter; a transport outage now holds the thought for retry and
+    // intentionally applies no verdict.
     const { whisper } = await import('../conscience.js');
     const w = boot(424243);
     const f = w.farmers[0];
     const rq = findVerdict(w, f, 'explore', 'QUESTION');
     assert.ok(rq, 'found a QUESTION day');
-    await whisper(w, f, 'you should go explore beyond the far horizon', () => {});
+    const oldFetch = globalThis.fetch;
+    globalThis.fetch = async () => ({ ok: true, status: 200, headers: { get: () => null }, json: async () => ({ fallback: true, reason: 'disabled' }) });
+    try { await whisper(w, f, 'you should go explore beyond the far horizon', () => {}); }
+    finally { globalThis.fetch = oldFetch; }
     assert.equal(f.sheet.conscience.seeds.explore.phrase, 'go explore beyond the far horizon',
         'the abbreviated whisper is stamped on the seed at deposit time');
     ok('a QUESTIONed whisper stamps seed.phrase (the words a germination will speak)');
@@ -459,12 +463,16 @@ function fsInspiration() {
     const c = f.conscience;
     c.urge = { kind: 'explore', target: null, weight: 0.07, expiresDay: w.day + 1, condition: null, armed: true, origin: 'inspiration' };
     let line = null;
-    for (let d = 0; d < 120 && !line; d++, w.day += 1) {
-        c.verdictDay = -1; c.verdicts = {}; c.asks = {}; c.urge.expiresDay = w.day + 1;
-        const r = await whisper(w, f, 'go chop some wood for the pile', () => {});
-        if (r && r.reason === 'set on their own errand') line = c.log[c.log.length - 1].text;
-        if (c.seeds) delete c.seeds.chop;   // keep each day's probe independent
-    }
+    const oldFetch = globalThis.fetch;
+    globalThis.fetch = async () => ({ ok: true, status: 200, headers: { get: () => null }, json: async () => ({ fallback: true, reason: 'disabled' }) });
+    try {
+        for (let d = 0; d < 120 && !line; d++, w.day += 1) {
+            c.verdictDay = -1; c.verdicts = {}; c.asks = {}; c.urge.expiresDay = w.day + 1;
+            const r = await whisper(w, f, 'go chop some wood for the pile', () => {});
+            if (r && r.reason === 'set on their own errand') line = c.log[c.log.length - 1].text;
+            if (c.seeds) delete c.seeds.chop;   // keep each day's probe independent
+        }
+    } finally { globalThis.fetch = oldFetch; }
     assert.ok(line, 'found a slot-policy day (a would-be HEED absorbed by the live sprout)');
     assert.ok(/own errand|mind is set|its turn|noted/i.test(line),
         `the reply acknowledges the occupied mind (got: "${line}")`);
@@ -510,7 +518,10 @@ function fsInspiration() {
     assert.equal(c.log[0].who, 'voice', 'no orphaned reply at the head during the wait');
     logLine(c, 'ry', 'the reply', w.day, 'DISMISS', 'chop');
     assert.equal(c.log.length, 40, 'the exchange completed within the cap');
-    await whisper(w, f, 'go chop some wood for the pile', () => {});
+    const oldFetch = globalThis.fetch;
+    globalThis.fetch = async () => ({ ok: true, status: 200, headers: { get: () => null }, json: async () => ({ fallback: true, reason: 'disabled' }) });
+    try { await whisper(w, f, 'go chop some wood for the pile', () => {}); }
+    finally { globalThis.fetch = oldFetch; }
     assert.ok(c.log.length <= 40, 'cap holds through a real exchange');
     assert.equal(c.log[0].who, 'voice', 'the head stays a whole exchange');
     ok('the 40-cap evicts complete pairs, never half an exchange (single-push observed)');

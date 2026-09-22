@@ -20,9 +20,9 @@ let now = 0;
 const limits = new RequestLimits({ now: () => now, capacity: 2 });
 const use = (channel) => { const r = limits.acquire('player', channel); assert.equal(typeof r.release, 'function'); r.release(); r.release(); };
 for (let i = 0; i < 40; i++) use('background');
-assert.equal(limits.acquire('player', 'background').status, 429);
+assert.deepEqual(limits.acquire('player', 'background'), { status: 429, retry: 600, reason: 'quota' });
 for (let i = 0; i < 120; i++) use('interactive');
-assert.equal(limits.acquire('player', 'interactive').retry, 600);
+assert.deepEqual(limits.acquire('player', 'interactive'), { status: 429, retry: 600, reason: 'quota' });
 now = 1000;
 assert.equal(limits.acquire('player', 'interactive').retry, 599);
 for (let window = 1; window < 5; window++) {
@@ -32,17 +32,17 @@ for (let window = 1; window < 5; window++) {
 now = 3_000_000;
 assert.equal(limits.acquire('player', 'interactive').retry, 83_400, 'daily cap survives burst resets');
 let other = limits.acquire('other', 'background'); other.release();
-assert.equal(limits.acquire('third', 'background').status, 503, 'full table fails closed without evicting live quotas');
+assert.equal(limits.acquire('third', 'background').reason, 'capacity', 'full table fails closed without evicting live quotas');
 assert.equal(limits.entries.size, 2);
 now += 86_400_001;
 const third = limits.acquire('third', 'interactive'); third.release();
 const active = Array.from({ length: 4 }, () => limits.acquire('third', 'interactive'));
-assert.equal(limits.acquire('third', 'interactive').status, 429);
+assert.equal(limits.acquire('third', 'interactive').reason, 'concurrency');
 active.forEach(r => r.release());
 assert.equal(limits.active, 0);
 const globalLimit = new RequestLimits();
 const permits = Array.from({ length: 32 }, (_, i) => globalLimit.acquire(String(i), 'interactive'));
-assert.equal(globalLimit.acquire('overflow', 'interactive').status, 429);
+assert.deepEqual(globalLimit.acquire('overflow', 'interactive'), { status: 503, retry: 5, reason: 'capacity' });
 permits.forEach(p => p.release());
 async function body(text, headers = {}, timeout = 1000) {
     const stream = new PassThrough(); stream.headers = headers;

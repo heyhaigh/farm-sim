@@ -43,10 +43,11 @@ const LLM_ROUTES = new Set(['/api/ry-farms-chat', '/api/ry-farms-dm', '/api/ry-f
 const { clientIP, localRequest, readJSON, RequestLimits } = require('./api/_request-guards.js');
 const requestLimits = new RequestLimits();
 const LOCAL_ROUTES = new Set(['/api/knowledge-graph', '/api/memory-graph', '/api/memory-writeback']);
-function rejectRequest(req, res, status, retry) {
+function rejectRequest(req, res, status, retry, reason) {
     res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store',
         'Connection': 'close', ...(retry ? { 'Retry-After': String(retry) } : {}) });
-    res.end(JSON.stringify({ fallback: true, error: status === 429 ? 'rate limited - offline fallback' : 'request refused' }));
+    res.end(JSON.stringify({ fallback: true, error: status === 429 ? 'rate limited - offline fallback' : 'request refused',
+        ...(reason ? { reason } : {}) }));
     // Flush the response, then stop receiving an oversized or deliberately stalled upload.
     res.on('finish', () => req.destroy());
 }
@@ -192,7 +193,12 @@ http.createServer(async (req, res) => {
                     if (url.pathname === '/api/ry-farms-conscience') {
                         require('./api/_whisper-telemetry.js').noteWhisper('unattributed', false, 'rate-limited-local');
                     }
-                    rejectRequest(req, res, permit.status, permit.retry); return;
+                    const reason = permit.reason === 'quota'
+                        ? (url.pathname === '/api/ry-farms-conscience' ? 'player_quota' : 'background_quota')
+                        : permit.reason === 'concurrency'
+                            ? (url.pathname === '/api/ry-farms-conscience' ? 'player_concurrency' : 'background_concurrency')
+                            : 'service_capacity';
+                    rejectRequest(req, res, permit.status, permit.retry, reason); return;
                 }
                 try { req.body = await readJSON(req); }
                 catch (error) {

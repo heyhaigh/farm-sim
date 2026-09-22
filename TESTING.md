@@ -38,6 +38,7 @@ Run them all before pushing. Several protect properties that no amount of care a
 | `gate-layout.mjs` | the **mobile gate's** geometry across real device sizes — the one screen most first-time visitors see, and otherwise unreachable by the suite (it needs a canvas and a matching media query) | fast |
 | `postcard.mjs` | the **share link is the town**: minted URL shape (incl. the `&orc=1` an orc link must carry), seed coercion mirroring the boot, and OG injection against the real `index.html` | fast |
 | `inspiration.mjs` | the **seeds ledger**: QUESTION-only deposits (once per kind/day, target kept), DEFY zeroing, headroom scaling, dawn decay/floor, lapsed-urge residue, old-save guard, and whisper-gating (no seeds headless) | fast |
+| `whisper-retry.mjs` / `whisper-ui.mjs` | conversation pauses preserve the original thought, respect wall-clock Retry-After, retry only the missing stage, never duplicate a verdict, and render one accessible inline status instead of a fake farmer refusal | fast |
 
 ## Reading a failure
 

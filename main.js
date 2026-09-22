@@ -26,7 +26,7 @@ import { requestCongregation, requestElectionScene } from './congregation.js';
 import { requestRaidCouncil, requestRaidDebrief, requestDuelBeat } from './raidcouncil.js';
 import { persistLives, persistTownHistory, persistBattle } from './memory-writeback.js';
 import { enrichInventions, persistTownInventions } from './memory-invent.js';
-import { whisper, whisperLog } from './conscience.js';
+import { whisper, resumeWhisper, whisperLog, whisperNoticeText } from './conscience.js';
 import { cultureWord } from './culture.js';   // #3.1 orc-vs-human display copy
 import { track, trackOnce, resetFunnel } from './analytics.js';   // #funnel display-side GA4 events
 import { buildPostcard, queryTown } from './postcard.js';   // #postcard the share link + copy line, and THE ?seed/?orc reading (off-sim)
@@ -111,6 +111,10 @@ let rosterScroll = 0;
 let chatFarmer = null;            // the farmer currently being whispered to
 let chatScroll = 0;               // history scroll (px), independent of the roster list scroll
 let chatThinking = false;         // awaiting the classify+reply round-trip (shows a "..." shimmer)
+let chatPending = null;           // { w, f, data } — one held thought; retry resumes only its missing stage
+let chatNotice = null;            // completed offline exchange notice; cleared by the next genuine success
+let chatStatusEl = null;          // hidden aria-live mirror of the canvas-only service status
+let chatStatusText = '';
 // #whisper-fx — which key-pop / animalese variant plays (owner-picked via the compare harness or
 // RYFARMS.keySound()/.voiceSound(); persisted per browser; 'off' silences that half).
 const storedFx = (k, list, dflt) => { try { const v = localStorage.getItem('ryf.' + k); return v === 'off' || list.some(x => x.id === v) ? v : dflt; } catch { return dflt; } };
@@ -5909,7 +5913,7 @@ function drawConscienceChat(x, y, w, h) {
     ctx.fillStyle = '#20242f';
     ctx.fillRect(x + 4, y - 1, w - 8, 1);
 
-    if (!f) { drawText(ctx, 'NO ONE TO TALK TO YET', x + 6, y + 6, '#6a6f7c'); return; }
+    if (!f) { syncWhisperStatus(''); drawText(ctx, 'NO ONE TO TALK TO YET', x + 6, y + 6, '#6a6f7c'); return; }
     const c = f.conscience;
 
     // header: INSIDE THE HEAD OF: [NAME v]
@@ -5994,10 +5998,10 @@ function drawConscienceChat(x, y, w, h) {
         const anchored = storyAlive(e) || (e.who === 'voice' && next && storyAlive(next));   // keep the question with its reply
         if (age >= 2 && !anchored) continue;
         const isVoice = e.who === 'voice';
-        const col = age >= 1 ? '#6a6f7c' : (isVoice ? '#c8b060' : '#c8ccd8');   // gold = your thought, white = their reply, grey = yesterday
+        const col = age >= 1 ? '#6a6f7c' : (isVoice ? '#c8b060' : (e.offline ? '#8fa8c0' : '#c8ccd8'));   // blue-grey = explicitly local fallback, never a genuine model voice
         // #inspiration — a QUESTION reply is the seed verdict: mark it in the player's own log
         // (out-of-fiction bookkeeping, adjudication C2) with a small gold sprout glyph.
-        const prefix = isVoice ? '> ' : (e.verdict === 'QUESTION' ? '* ' : '  ');
+        const prefix = isVoice ? '> ' : (e.offline ? '~ ' : (e.verdict === 'QUESTION' ? '* ' : '  '));
         const wrapped = wrapLine(prefix + (e === revealEntry ? revealText : e.text), maxChars);
         wrapped.forEach((ln, i) => lines.push({ text: (i === 0 ? ln : '  ' + ln), col }));
         // #inspiration C2 (owner: the loop must not feel hidden) — a STATEFUL seed line in the
@@ -6021,6 +6025,18 @@ function drawConscienceChat(x, y, w, h) {
             }
         }
     }
+    const activeNotice = chatPending ? chatPending.data : chatNotice;
+    const noticeText = whisperNoticeText(activeNotice);
+    if (noticeText) {
+        const col = activeNotice?.kind === 'limit' ? '#e8c860' : activeNotice?.kind === 'offline' ? '#8fa8c0' : '#a8b7d0';
+        wrapLine('! ' + noticeText, maxChars).forEach((ln, i) => lines.push({ text: i ? '  ' + ln : ln, col }));
+    }
+    const ariaNotice = chatPending && Date.now() < Number(chatPending.data.retryAt || 0)
+        ? (chatPending.data.kind === 'limit'
+            ? 'Conversation limit reached. You can keep playing. The thought is preserved.'
+            : 'Conversation service is resting. You can keep playing. The thought is preserved.')
+        : noticeText;
+    syncWhisperStatus(ariaNotice);
     if (chatThinking) lines.push({ text: '  ' + '.'.repeat(1 + (Math.floor(Date.now() / 300) % 3)), col: '#7dd069' });
 
     const lineH = 7;
@@ -6092,6 +6108,25 @@ function drawChatDropdown(PX, PW, splitY) {
 
 // ---- the hidden DOM input: the real keystroke/IME/paste surface, mirrored onto the canvas ----
 
+function ensureWhisperStatus() {
+    if (chatStatusEl) return chatStatusEl;
+    const el = document.createElement('div');
+    el.setAttribute('role', 'status');
+    el.setAttribute('aria-live', 'polite');
+    el.setAttribute('aria-atomic', 'true');
+    el.style.cssText = 'position:fixed;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;';
+    document.body.appendChild(el);
+    chatStatusEl = el;
+    return el;
+}
+
+function syncWhisperStatus(text) {
+    const next = String(text || '');
+    if (next === chatStatusText) return; // drawConscienceChat runs every frame; announce changes once
+    chatStatusText = next;
+    if (next || chatStatusEl) ensureWhisperStatus().textContent = next;
+}
+
 function ensureChatInput() {
     if (chatInputEl) return chatInputEl;
     const el = document.createElement('input');
@@ -6100,6 +6135,7 @@ function ensureChatInput() {
     el.setAttribute('autocomplete', 'off');
     el.setAttribute('autocorrect', 'off');
     el.setAttribute('spellcheck', 'false');
+    el.setAttribute('aria-label', 'Whisper a thought to the selected farmer');
     // invisible, but real — it captures focus, keys, IME and paste; we render its value ourselves.
     // invisible + click-through (we focus it programmatically from the canvas entry-row click, and
     // render its value ourselves) so it never intercepts pointer events meant for the game/canvas.
@@ -6128,10 +6164,58 @@ function ensureChatInput() {
 function focusChatInput() { ensureChatInput().focus(); }
 function blurChatInput() { if (chatInputEl) chatInputEl.blur(); }
 
+function acceptWhisperResult(r, w, f, el, priorSeedTracked = false) {
+    if (r?.pending) {
+        let seedTracked = priorSeedTracked;
+        if (!seedTracked && r.pending.stage === 'reply' && r.pending.verdict === 'QUESTION') {
+            track('seed_planted', { seed: w.seed, kind: r.pending.kind });
+            seedTracked = true;
+        }
+        chatPending = { w, f, data: r.pending, seedTracked };
+        chatNotice = null;
+        el.readOnly = true; // keep the exact thought visible; Enter becomes reply/classify retry
+        return;
+    }
+
+    chatPending = null;
+    chatNotice = r?.notice || null;
+    el.readOnly = false;
+    el.value = '';
+    if (r?.reply) {
+        chatReveal = {
+            c: f.conscience, text: r.reply, progress: 0, spoken: 0, last: 0,
+            voice: voiceOf(f.sheet.seed, w.culture, f.sheet.personality?.competitiveness ?? 0.5),
+        };
+    }
+    if (!priorSeedTracked && r?.verdict === 'QUESTION') track('seed_planted', { seed: w.seed, kind: r.kind });
+}
+
 async function submitWhisper() {
     const f = activeChatFarmer();
     const el = chatInputEl;
     if (!f || !el) return;
+
+    // A held thought is resumed explicitly, never automatically. Classification retry applies the
+    // verdict once; reply retry only asks for the missing prose and cannot repeat gameplay effects.
+    if (chatPending) {
+        if (chatThinking || Date.now() < Number(chatPending.data.retryAt || 0)) return;
+        const held = chatPending;
+        chatThinking = true;
+        chatScroll = 0;
+        try {
+            const r = await resumeWhisper(held.w, held.f, held.data,
+                () => { if (held.w && !held.w._retired) saveTown(held.w); });
+            acceptWhisperResult(r, held.w, held.f, el, held.seedTracked);
+        } catch (err) {
+            console.warn('ry-farms: whisper retry failed', err);
+        } finally {
+            chatThinking = false;
+            chatScroll = 0;
+            if (!chatReveal && !chatPending) chatFreeze = null;
+        }
+        return;
+    }
+
     const text = el.value.trim();
     // Codex #124 r4+r5: while THIS farmer's reply is still writing out, Enter waits its turn
     // (a second submit overwrote chatFreeze with post-verdict state and cut the reveal short).
@@ -6139,7 +6223,6 @@ async function submitWhisper() {
     // switch pauses forever — as a global lock it disabled whispering until reload. An orphaned
     // reveal resumes if its farmer is selected again, and the town-lens reset clears it outright.
     if (!text || chatThinking || (chatReveal && chatReveal.c === f.conscience)) return;
-    el.value = '';
     chatThinking = true;
     chatScroll = 0;   // snap to newest
     try {
@@ -6157,23 +6240,13 @@ async function submitWhisper() {
         // the player ever founds a real town — whose genuine first whisper then never records.
         if (funnelPlayed()) trackOnce('first_whisper');
         const r = await whisper(w, f, text, () => { if (w && !w._retired) saveTown(w); });   // #Codex37 P1-2: a retired (wiped) town stays wiped
-        // #whisper-voice — arm the write-out: the reply arrives word by word, each word voiced in
-        // the farmer's own animalese pitch (stable per farmer; orcs low and slow). Display-only.
-        if (r && r.reply) {
-            chatReveal = {
-                c: f.conscience, text: r.reply, progress: 0, spoken: 0, last: 0,
-                voice: voiceOf(f.sheet.seed, w.culture, f.sheet.personality?.competitiveness ?? 0.5),
-            };
-        }
-        // #inspiration telemetry — a perception feature's only real test is whether players meet
-        // it; seed_planted per QUESTION verdict (germination adds seed_germinated in slice 2).
-        if (r && r.verdict === 'QUESTION') track('seed_planted', { seed: w.seed, kind: r.kind });
+        acceptWhisperResult(r, w, f, el);
     } catch (err) {
         console.warn('ry-farms: whisper failed', err);
     } finally {
         chatThinking = false;
         chatScroll = 0;
-        if (!chatReveal) chatFreeze = null;   // no reveal to protect — release the pre-verdict anchors now
+        if (!chatReveal && !chatPending) chatFreeze = null;   // a held reply still protects its already-applied verdict
     }
 }
 
@@ -7521,7 +7594,10 @@ function resetTownLenses() {
     faceoff = null; faceoffSeenEvent = null;
     _battleWatch = null; pendingInscription = null; simAccumulator = 0;   // #Codex36 P1-1: no cross-town battle finalization, fresh sim clock
     chatFarmer = null; chatWidgetOpen = false; chatDropdownOpen = false; blurChatInput();
-    chatReveal = null; chatFreeze = null;   // Codex #124 r5 — a town transition orphans a paused reveal forever; clear it (and its freeze) with the lens
+    chatReveal = null; chatFreeze = null; chatPending = null; chatNotice = null; syncWhisperStatus('');   // town transition clears every world-bound chat continuation
+    if (chatInputEl) { chatInputEl.readOnly = false; chatInputEl.value = ''; }
+    // Codex #124 r5 — a town transition orphans a paused reveal forever; clear it (and its freeze)
+    // with the lens. A service continuation also belongs to that retired world and must not cross it.
     momentQueue.length = 0; calloutQueue.length = 0; activeMoment = null; activeCallout = null; momentsPrimed = false;
     chronReadTotal = world._chronTotal || 0; lastChronLen = -1; recapSeq = -1;
     sawCongregating = null;   // #firstwatch re-observe the new town before edge-detecting
