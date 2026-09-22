@@ -154,6 +154,14 @@ If art starts changing often, the real fix is a content hash or `?v=` on asset U
   congregation, raids and inventions share a separate 40 per 10 minutes and 200/day. These are ceilings,
   not guaranteed provider capacity: `_llm.js` retains its existing global request/token budgets and breaker.
   Limits return 429 plus the actual remaining `Retry-After`; offline text keeps play responsive.
+- **Groq conversation capacity (2026-09-22):** the exact Groq `/openai/v1` endpoint with
+  `openai/gpt-oss-120b` / `openai/gpt-oss-20b` uses separate 7,000-token rolling-minute
+  allowances (below the verified 8,000 TPM each). When one model lacks capacity, the next is
+  tried without sending a doomed request. Together they allow up to 14,000 tokens/minute;
+  automatic background work still stops at 3,000 total tokens and the global 26-attempt cap
+  remains. An explicit `RY_FARMS_TOKEN_BUDGET` remains a global override; remove an old
+  `5000` override to use the new default. Other providers/models keep the conservative default.
+  Groq's organization/day quotas still apply; credit balance does not raise throughput limits.
 - **HTTP boundary:** model JSON bodies are capped at 128 KiB (including chunked uploads), with a 10-second
   upload deadline and 4 in-flight requests per IP / 32 per process. Counters retain at most 10,000 IPs;
   a full non-expired table refuses new identities rather than evicting their daily limits. This is a

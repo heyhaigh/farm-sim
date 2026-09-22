@@ -117,3 +117,7 @@ remaining generation failures without logging prompts or raw provider response b
   handler with a mocked provider. Classification can succeed while the reply exhausts capacity; the
   reply returns 429 with a calculated cooldown and recovers after expiry. Also covers request caps,
   circuit recovery, and intentional offline mode. No live provider calls.
+
+- `node tests/llm-model-capacity.mjs`: independent Groq model allowances, concurrent reservations,
+  capacity failover, timed recovery, unchanged background/request caps, unknown-model safety,
+  explicit overrides, and complete two-stage whispers after a 4,804-token starting load. Mocked only.
