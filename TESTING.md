@@ -111,3 +111,8 @@ remaining generation failures without logging prompts or raw provider response b
   Model calls are disabled. Needs localhost sockets.
 - `node tests/whisper-retry.mjs`: real whisper orchestration falls back during Retry-After and resumes
   after wall-clock expiry without dropping the player's transcript.
+
+- `node tests/whisper-budget.mjs`: replays export-shaped shared token usage through the real whisper
+  handler with a mocked provider. Classification can succeed while the reply exhausts capacity; the
+  reply returns 429 with a calculated cooldown and recovers after expiry. Also covers request caps,
+  circuit recovery, and intentional offline mode. No live provider calls.

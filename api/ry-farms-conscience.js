@@ -75,7 +75,7 @@ function parseBody(req) {
     });
 }
 
-const { callLLM } = require('./_llm.js');
+const { callLLM, LLMDisabledError } = require('./_llm.js');
 const { asText } = require('./_text.js');   // #111 P2 type boundary: coercion is not a type check
 
 // ---- stage 1: CLASSIFY ------------------------------------------------------
@@ -282,6 +282,17 @@ module.exports = async function handler(req, res) {
         // identically, and so a test can exercise the REAL ladder instead of a copy of it.
         const reason = bucketReason(msg);
         noteWhisper(stage, false, reason);
+        if (err instanceof LLMDisabledError) {
+            if (err.code === 'budget' || err.code === 'circuit_open') {
+                const retryAfter = err.retryAfter || (err.code === 'budget' ? 60 : 20);
+                res.setHeader('Retry-After', String(retryAfter));
+                return send(res, err.code === 'budget' ? 429 : 503, {
+                    fallback: true, reason: err.code, retryAfter,
+                    error: err.code === 'budget' ? 'AI budget temporarily exhausted' : 'AI temporarily unavailable',
+                });
+            }
+            if (err.code === 'disabled') return send(res, 200, { fallback: true, reason: 'disabled' });
+        }
         return send(res, 500, { fallback: true, error: msg || 'conscience generation failed' });
     }
 };
