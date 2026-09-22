@@ -427,13 +427,17 @@ class LLMDisabledError extends Error {
 }   // typed so callers can suppress permanently, not treat as transient
 
 // Earliest expiry at which THIS request fits both rolling limits. New traffic can extend it.
-function budgetRetryAfter(cost, ceiling, now = Date.now(), spend = _budget.spend) {
+function budgetRetryAfter(cost, ceiling, now = Date.now(), spend = _budget.spend, policy) {
     let tokens = spend.reduce((n, e) => n + e.cost, 0);
     let requests = spend.length;
-    for (const entry of spend) {
+    for (let i = 0; i < spend.length; i++) {
+        const entry = spend[i];
         tokens -= entry.cost;
         requests--;
-        if (requests < BUDGET_MAX && tokens + cost <= ceiling) {
+        const modelFits = !policy?.perModel || policy.models.some(model =>
+            spend.slice(i + 1).filter(e => !e.model || e.model === model)
+                .reduce((n, e) => n + e.cost, 0) + cost <= policy.perModel);
+        if (requests < BUDGET_MAX && tokens + cost <= ceiling && modelFits) {
             return Math.max(1, Math.ceil((entry.at + BUDGET_WINDOW_MS - now) / 1000));
         }
     }
@@ -452,7 +456,7 @@ function capacityPolicy(cfg, chain) {
     const total = groq && !TOKEN_BUDGET_OVERRIDDEN
         ? perModel * models.length : TOKEN_BUDGET_MAX;
     // Added capacity is for player exchanges. Automatic narration gets no larger allowance.
-    return { perModel, total, background: groq ? Math.min(3000, total * BACKGROUND_CEILING) : total * BACKGROUND_CEILING };
+    return { models, perModel, total, background: groq ? Math.min(3000, total * BACKGROUND_CEILING) : total * BACKGROUND_CEILING };
 }
 
 // Call the model and return the parsed JSON object. Throws LLMDisabledError when off/blocked/over-budget/tripped
@@ -485,14 +489,14 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
     // boundary while the comment above it promised a rolling limit — 25 calls at t=59.999s and 26 at
     // t=60.001s were all admitted, 51 inside two milliseconds. One ledger, one window, no edge.
     if (_budget.spend.length >= BUDGET_MAX) {
-        throw new LLMDisabledError(`LLM budget exceeded (${BUDGET_MAX}/${BUDGET_WINDOW_MS / 1000}s)`, 'budget', budgetRetryAfter(cost, ceiling, now));
+        throw new LLMDisabledError(`LLM budget exceeded (${BUDGET_MAX}/${BUDGET_WINDOW_MS / 1000}s)`, 'budget', budgetRetryAfter(cost, ceiling, now, _budget.spend, policy));
     }
 
     // ADMISSION control only — the actual charge happens per upstream attempt below. This refuses
     // work that could never fit the window before any request is made.
     if (spent + cost > ceiling) {
         throw new LLMDisabledError(
-            `LLM token budget exceeded (${spent}+${cost} > ${Math.round(ceiling)} of ${policy.total}/min${priority === 'background' ? ', background' : ''})`, 'budget', budgetRetryAfter(cost, ceiling, now));
+            `LLM token budget exceeded (${spent}+${cost} > ${Math.round(ceiling)} of ${policy.total}/min${priority === 'background' ? ', background' : ''})`, 'budget', budgetRetryAfter(cost, ceiling, now, _budget.spend, policy));
     }
 
     const headers = { 'Content-Type': 'application/json' };
@@ -564,7 +568,7 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
                     const attemptCost = estimateTokens(system, user, askTokens);
                     if (_budget.spend.length >= BUDGET_MAX || spentNow + attemptCost > ceiling) {
                         lastErr = new LLMDisabledError(
-                            `LLM budget exceeded mid-call (${_budget.spend.length} reqs, ${spentNow}+${attemptCost} tokens)`, 'budget', budgetRetryAfter(attemptCost, ceiling, attemptAt));
+                            `LLM budget exceeded mid-call (${_budget.spend.length} reqs, ${spentNow}+${attemptCost} tokens)`, 'budget', budgetRetryAfter(attemptCost, ceiling, attemptAt, _budget.spend, policy));
                         giveUp = true;
                         break;
                     }

@@ -42,6 +42,20 @@ now += 10_000;
 await request(600);
 assert.deepEqual(calls, [primary]);
 console.log('PASS both models full: earliest usable model expiry controls recovery');
+reset();
+state.budget.spend = [
+ { at: now - 50_000, cost: 1000, model: primary },
+ { at: now - 40_000, cost: 1000, model: secondary },
+ { at: now - 10_000, cost: 6000, model: primary },
+ { at: now - 5000, cost: 6000, model: secondary },
+];
+await assert.rejects(request(2000), e => e.code === 'budget' && e.retryAfter === 50);
+assert.equal(calls.length, 0);
+now += 50_000;
+await request(2000);
+assert.deepEqual(calls, [primary]);
+console.log('PASS global cooldown also waits for a single model to have sufficient capacity');
+
 
 reset();
 for (let i = 0; i < 3; i++) await request(1000, 'background');
