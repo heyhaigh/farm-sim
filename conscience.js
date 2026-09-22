@@ -315,7 +315,9 @@ export function whisperLog() {
 whisperLog.copy = () => { const t = JSON.stringify(diagLoad(), null, 1); try { navigator.clipboard.writeText(t); } catch { } return t; };
 whisperLog.clear = () => { try { localStorage.removeItem(DIAG_KEY); } catch { } };
 
+let retryAfterAt = 0; // wall-clock backoff; offline replies keep the game responsive
 async function postJson(payload) {
+    if (Date.now() < retryAfterAt) throw new Error('rate limited');
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
     try {
@@ -325,6 +327,10 @@ async function postJson(payload) {
             body: JSON.stringify(payload),
             signal: controller.signal,
         });
+        if (res.status === 429 || res.status === 503) {
+            const seconds = Number(res.headers?.get('Retry-After'));
+            retryAfterAt = Date.now() + (Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds, 86400) : 60) * 1000;
+        }
         if (!res.ok) throw new Error(`conscience endpoint ${res.status}`);
         const data = await res.json();
         if (data?.fallback) throw new Error(data.error || 'fallback requested');

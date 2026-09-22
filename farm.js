@@ -2743,7 +2743,7 @@ export class World {
             if (res.status === 429 || res.status === 503) {
                 const seconds = Number(res.headers?.get('Retry-After'));
                 // A bounded real-time pause also covers older servers without the header.
-                const delay = Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds, 300) : 60;
+                const delay = Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds, 86400) : 60;
                 cfg.retryAfterAt = Date.now() + delay * 1000;
             }
             if (!res.ok) {

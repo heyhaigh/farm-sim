@@ -101,3 +101,13 @@ open tabs need a reload to pick up the client fix. `/api/memory-writeback` traff
 clients update. Chat 429s now distinguish local budget limits from generation failures; they do
 not mean additional model capacity was added. Server logs tagged `[ry-farms-chat]` classify
 remaining generation failures without logging prompts or raw provider response bodies.
+
+## HTTP abuse protection
+
+- `node tests/request-guards.mjs`: trusted proxy identity, local-only access, byte/deadline limits,
+  independent player/background quotas, daily resets, concurrency, and hard-bounded counter memory.
+- `node tests/server-security.mjs`: real HTTP coverage of every LLM route, chunked uploads, forged
+  forwarding headers, private-memory denial with an upstream spy, and malformed/static-source paths.
+  Model calls are disabled. Needs localhost sockets.
+- `node tests/whisper-retry.mjs`: real whisper orchestration falls back during Retry-After and resumes
+  after wall-clock expiry without dropping the player's transcript.

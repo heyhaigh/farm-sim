@@ -149,10 +149,25 @@ If art starts changing often, the real fix is a content hash or `?v=` on asset U
   impossible; the free quota (~14.4k req/day) just 429s when exhausted and every endpoint falls back to the
   offline keyword/template path. Kill switch: set `RY_FARMS_LLM_OFF=1`. **Never** the personal
   `SUPERMEMORY_URL` / `SUPERMEMORY_API_KEY`, and never a key from an account that has a card on file.
-- **Free-quota fair share:** server.mjs rate-limits the six LLM-backed endpoints per IP (40 per 10 min,
-  400/day) so one player cannot drink the town's shared daily quota; a limited request returns the same
-  `{fallback:true}` shape the clients already handle. _llm.js keeps the global 90-req/min budget, 8s
-  timeouts, and the circuit breaker on top.
+- **Free-quota fair share:** the player whisper endpoint has its own per-IP allowance of 120 requests
+  per 10 minutes and 600/day (normally two requests per whisper: classify + reply). Automatic chat, DM,
+  congregation, raids and inventions share a separate 40 per 10 minutes and 200/day. These are ceilings,
+  not guaranteed provider capacity: `_llm.js` retains its existing global request/token budgets and breaker.
+  Limits return 429 plus the actual remaining `Retry-After`; offline text keeps play responsive.
+- **HTTP boundary:** model JSON bodies are capped at 128 KiB (including chunked uploads), with a 10-second
+  upload deadline and 4 in-flight requests per IP / 32 per process. Counters retain at most 10,000 IPs;
+  a full non-expired table refuses new identities rather than evicting their daily limits. This is a
+  single-instance safeguard; multiple replicas require a shared limiter. Players behind one NAT share
+  these allowances; IPv6 address changes and distributed bots remain limitations of IP-based quotas.
+- **Proxy identity:** on Railway (`RAILWAY_ENVIRONMENT_ID` present), use Railway's overwritten
+  `X-Real-IP`, validated as an IP. Otherwise use the socket peer. Never trust raw caller
+  `CF-Connecting-IP`/`X-Forwarded-For`. Railway documents that its edge derives this visitor IP from
+  Cloudflare only for trusted Cloudflare connections:
+  https://station.railway.com/questions/security-critical-questions-on-edge-prox-8fddd775
+  Revisit this trust boundary before changing hosts or adding another proxy.
+- **Local memory:** production disables all three developer-memory routes regardless of Origin or
+  configured credentials. Reads return empty offline JSON; writes return 403. Development requires
+  a loopback socket, loopback Host, and an absent/loopback Origin. Browser IndexedDB saves are unaffected.
 - `server.mjs` reads `process.env.PORT`; an explicit CLI arg still wins, so `node server.mjs 8123` is
   unchanged locally. Set `PORT` explicitly rather than trusting a default to match the domain's target port —
   a mismatch is a 502 with a perfectly healthy container.
