@@ -6,6 +6,7 @@ import { echoToServer, _setEchoCooldownForTests, _resetEchoForTests } from '../m
 
 let pass = true; const ok = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ FAIL ') + m); if (!c) pass = false; };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+globalThis.location = { hostname: 'localhost' };
 const sent = [];                    // every body fetch actually received, in order
 let mode = 'fail';                  // 'fail' | 'ok' | 'hang'
 let releaseHang = null;             // resolves the hanging fetch

@@ -84,3 +84,20 @@ Three separate versions of `compat.mjs` passed mutation tests they should have f
 at a day where every tree was already mature; a lattice that stepped over a 4-tile ring; a sample too sparse
 to contain a 0.01 slice in a distribution's tail. Each looked like coverage. If a case is genuinely
 untestable, write that down rather than faking it.
+
+## Error-rate regression checks
+
+- `node tests/error-reporting.mjs`: public hosts never enqueue local-only memory echoes; localhost
+  still can. Chat budget limits return 429 with Retry-After, intentional offline mode returns an
+  explicit fallback, and genuine generation failures remain 5xx. A budget refusal during a retry
+  does not trip the provider-failure circuit breaker. All upstream calls are mocked.
+- `node tests/chat-retry.mjs`: an actual chat request receiving 429 pauses for real elapsed time,
+  even if the simulation is fast-forwarded.
+- `node tests/writeback-smoke.mjs`: public-host browser persistence still stores and acknowledges
+  lives, civic records and battles without contacting the local-development backup endpoint.
+
+After deployment, compare new requests by hostname and path, not the rolling 30-day total. Existing
+open tabs need a reload to pick up the client fix. `/api/memory-writeback` traffic should fall as
+clients update. Chat 429s now distinguish local budget limits from generation failures; they do
+not mean additional model capacity was added. Server logs tagged `[ry-farms-chat]` classify
+remaining generation failures without logging prompts or raw provider response bodies.

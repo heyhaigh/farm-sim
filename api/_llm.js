@@ -418,18 +418,20 @@ function parseJson(text) {
     }
 }
 
-class LLMDisabledError extends Error {}   // typed so callers can suppress permanently, not treat as transient
+class LLMDisabledError extends Error {
+    constructor(message, code = 'unavailable') { super(message); this.code = code; }
+}   // typed so callers can suppress permanently, not treat as transient
 
 // Call the model and return the parsed JSON object. Throws LLMDisabledError when off/blocked/over-budget/tripped
 // (callers fall back to procedural). `schema` requests structured output; we degrade json_schema -> json_object.
 async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxTokens = 400, temperature, priority = 'interactive' }) {
     if (typeof fetch !== 'function') throw new LLMDisabledError('fetch unavailable');
     const cfg = resolveLLM();
-    if (cfg.mode === 'off') throw new LLMDisabledError(`LLM off: ${cfg.reason}`);
+    if (cfg.mode === 'off') throw new LLMDisabledError(`LLM off: ${cfg.reason}`, 'disabled');
 
     const now = Date.now();
     // circuit breaker
-    if (now < _breaker.openUntil) throw new LLMDisabledError('LLM circuit breaker open (recent failures)');
+    if (now < _breaker.openUntil) throw new LLMDisabledError('LLM circuit breaker open (recent failures)', 'circuit_open');
     // ROLLING, not a fixed bucket (Codex #107 P1-1). The first version zeroed the whole allowance at
     // a single boundary, so 4,998 tokens at t=59.999s and another 4,998 at t=60.001s both passed —
     // 9,996 reserved inside two milliseconds against a 5,000 ceiling, over the provider's limit and
@@ -445,7 +447,7 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
     // boundary while the comment above it promised a rolling limit — 25 calls at t=59.999s and 26 at
     // t=60.001s were all admitted, 51 inside two milliseconds. One ledger, one window, no edge.
     if (_budget.spend.length >= BUDGET_MAX) {
-        throw new LLMDisabledError(`LLM budget exceeded (${BUDGET_MAX}/${BUDGET_WINDOW_MS / 1000}s)`);
+        throw new LLMDisabledError(`LLM budget exceeded (${BUDGET_MAX}/${BUDGET_WINDOW_MS / 1000}s)`, 'budget');
     }
 
     // ADMISSION control only — the actual charge happens per upstream attempt below. This refuses
@@ -454,7 +456,7 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
     const ceiling = priority === 'background' ? TOKEN_BUDGET_MAX * BACKGROUND_CEILING : TOKEN_BUDGET_MAX;
     if (spent + cost > ceiling) {
         throw new LLMDisabledError(
-            `LLM token budget exceeded (${spent}+${cost} > ${Math.round(ceiling)} of ${TOKEN_BUDGET_MAX}/min${priority === 'background' ? ', background' : ''})`);
+            `LLM token budget exceeded (${spent}+${cost} > ${Math.round(ceiling)} of ${TOKEN_BUDGET_MAX}/min${priority === 'background' ? ', background' : ''})`, 'budget');
     }
 
     const headers = { 'Content-Type': 'application/json' };
@@ -526,7 +528,7 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
                     const attemptCost = estimateTokens(system, user, askTokens);
                     if (_budget.spend.length >= BUDGET_MAX || spentNow + attemptCost > ceiling) {
                         lastErr = new LLMDisabledError(
-                            `LLM budget exceeded mid-call (${_budget.spend.length} reqs, ${spentNow}+${attemptCost} tokens)`);
+                            `LLM budget exceeded mid-call (${_budget.spend.length} reqs, ${spentNow}+${attemptCost} tokens)`, 'budget');
                         giveUp = true;
                         break;
                     }
@@ -711,6 +713,7 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
         throw lastErr || new Error('LLM request failed');
     } catch (err) {
         // a real failure (network/timeout/5xx/bad-json) trips the shared breaker after a few in a row
+        if (err instanceof LLMDisabledError && err.code === 'budget') throw err;
         if (++_breaker.fails >= BREAKER_TRIP) { _breaker.openUntil = Date.now() + BREAKER_COOLDOWN_MS; _breaker.fails = 0; }
         throw err;
     }

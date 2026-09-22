@@ -43,7 +43,7 @@ function parseBody(req) {
     });
 }
 
-const { callLLM } = require('./_llm.js');
+const { callLLM, LLMDisabledError } = require('./_llm.js');
 const { asText } = require('./_text.js');   // #111 P2 type boundary: coercion is not a type check
 
 function normalizeConversation(raw) {
@@ -88,7 +88,7 @@ module.exports = async function handler(req, res) {
     }
     if (req.method !== 'POST') return send(res, 405, { fallback: true, error: 'POST required' });
 
-    if (!process.env.OPENAI_API_KEY && !process.env.OPENAI_BASE_URL) return send(res, 503, { fallback: true, error: 'LLM not configured' });
+    if (!process.env.OPENAI_API_KEY && !process.env.OPENAI_BASE_URL) return send(res, 200, { fallback: true, reason: 'disabled', error: 'LLM not configured' });
     if (typeof fetch !== 'function') return send(res, 501, { fallback: true, error: 'fetch unavailable' });
 
     try {
@@ -133,6 +133,22 @@ module.exports = async function handler(req, res) {
         });
         return send(res, 200, normalizeConversation(raw));
     } catch (err) {
+        if (err instanceof LLMDisabledError) {
+            if (err.code === 'budget') {
+                res.setHeader('Retry-After', '60');
+                return send(res, 429, { fallback: true, reason: 'budget', error: 'AI budget temporarily exhausted' });
+            }
+            if (err.code === 'disabled') return send(res, 200, { fallback: true, reason: 'disabled' });
+            if (err.code === 'circuit_open') {
+                res.setHeader('Retry-After', '20');
+                return send(res, 503, { fallback: true, reason: 'circuit_open' });
+            }
+        }
+        // Never log conversation text, prompts, credentials, or raw provider bodies.
+        const category = err?.name === 'AbortError' ? 'timeout'
+            : /^LLM request failed \(\d{3}\)$/.test(err?.message || '') ? err.message
+            : err?.message === 'model returned empty lines' ? 'empty_dialogue' : 'generation_failed';
+        console.warn('[ry-farms-chat]', category);
         return send(res, 500, { fallback: true, error: err?.message || 'chat generation failed' });
     }
 };

@@ -74,6 +74,10 @@ async function pumpEchoes() {
     } finally { echoPumping = false; }
 }
 export function echoToServer(body) {
+    // The server echo is a localhost-only development feature. Browser persistence
+    // already succeeded before this call; public players must never queue/retry it.
+    const host = globalThis.location?.hostname;
+    if (!['localhost', '127.0.0.1', '[::1]', '::1'].includes(host)) return;
     if (typeof fetch !== 'function' || !body) return;
     const key = echoKey(body);
     echoQueue.set(key, mergeQueued(key, body));

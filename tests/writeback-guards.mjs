@@ -31,6 +31,13 @@ console.log('#24-3 writeback endpoint guards');
     ok(r.sent[0].doc.customId === 'ry-farms:5:1', `customId keyed to real numeric identity (${r.sent[0].doc.customId})`);
     ok(r.sent[0].doc.metadata.rev === '7', `revision stamped (rev=${r.sent[0].doc.metadata.rev})`);
 
+    r = await run({ origin: 'http://[::1]:8013' }, { townSeed: 515151, farmers: [{ seed: 1 }] });
+    ok(r.status === 200 && r.sent.length === 1, 'IPv6 loopback write allowed');
+    for (const host of ['propagate.world', 'propagate.heyhaigh.ai', 'localhost.example.com']) {
+        r = await run({ origin: 'https://' + host }, { townSeed: 515151, farmers: [{ seed: 2 }] });
+        ok(r.status === 403 && r.sent.length === 0, 'non-loopback origin remains refused: ' + host);
+    }
+
     // no Origin header (non-browser / same-origin) is allowed
     r = await run({}, { townSeed: 5, farmers: [{ seed: 2, name: 'B' }] });
     ok(r.status === 200 && r.sent.length === 1, `no-Origin request allowed (non-browser client)`);
@@ -75,7 +82,7 @@ console.log('#24-3 writeback endpoint guards');
 
     // #Codex26-3: the registry lives on globalThis, so it survives the dev server re-requiring the module. A fresh
     // import of the handler must still reject a stale rev for a customId already committed above.
-    const bust = await import('/Users/ryanhaigh/ry-farms/api/memory-writeback.js?bust=' + Math.floor(performance.now()));
+    const bust = await import('../api/memory-writeback.js?bust=' + Math.floor(performance.now()));
     const h2 = bust.default || bust;
     sent = [];
     { const m = mockReqRes({}, { townSeed: 77, rev: 5, farmers: [{ seed: 3, name: 'stale-after-reload' }] }); await h2(m.req, m.res); }

@@ -12,7 +12,8 @@ _setBackendForTests({
     del: async (k) => { mem.delete(k); },
     all: async () => [...mem.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)),
 });
-globalThis.fetch = () => Promise.resolve({ ok: true });   // the echo lands silently
+globalThis.location = { hostname: 'propagate.world' };
+globalThis.fetch = () => { throw new Error('public persistence must not send a server echo'); };
 
 let pass = true; const ok = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ FAIL ') + m); if (!c) pass = false; };
 

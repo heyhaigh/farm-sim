@@ -29,7 +29,7 @@ function send(res, status, payload) {
 // wildcard/guessed customId. So: same-origin (loopback) only, and every customId must be keyed to a REAL
 // numeric town+farmer identity (no `?? 'x'` catch-all doc anyone can clobber).
 function isLoopbackOrigin(origin) {
-    try { const h = new URL(origin).hostname; return h === 'localhost' || h === '127.0.0.1' || h === '::1'; }
+    try { const h = new URL(origin).hostname; return h === 'localhost' || h === '127.0.0.1' || h === '[::1]'; }
     catch { return false; }
 }
 // #Codex25-7: a STRICT non-negative-integer parse. `+v` coerces null/''/[]/false all to 0 and true to 1, so
