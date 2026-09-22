@@ -281,14 +281,14 @@
         html.entry-game.game-booting #entry-poster { display: none; }
         html.entry-game #entry-poster .desktop-entry { display: block; }
         html.entry-mobile #entry-poster .entry-art { width: min(600px, 94vw); }
-        /* The phone poster keeps a CRT texture, but it must read as texture rather than a second animation.
-           A moving/flickering high-contrast scan layer produced a visible vertical crawl on dense phone
-           displays. Keep this layer static and faint; z-index 3 deliberately leaves it above BOTH the art
-           and the device copy, so the whole composition still belongs to the same tube. */
+        /* The phone poster keeps a clearly visible CRT texture without animating a full-screen layer.
+           The static scanlines and vignette are painted once, while only the tiny title canvas loops; that
+           removes the traveling sweep and continuous full-viewport repaints without flattening the look.
+           z-index 3 deliberately leaves the texture above BOTH the art and the device copy. */
         html.entry-mobile #entry-poster::before {
             background:
-                repeating-linear-gradient(180deg, rgba(0,0,0,0.08) 0 1px, rgba(0,0,0,0) 1px 4px),
-                radial-gradient(ellipse at center, rgba(0,0,0,0) 64%, rgba(0,0,0,0.24) 100%);
+                repeating-linear-gradient(180deg, rgba(0,0,0,0.14) 0 1px, rgba(0,0,0,0) 1px 4px),
+                radial-gradient(ellipse at center, rgba(0,0,0,0) 62%, rgba(0,0,0,0.34) 100%);
             animation: none;
         }
         html.entry-mobile #entry-poster .mobile-live-art {

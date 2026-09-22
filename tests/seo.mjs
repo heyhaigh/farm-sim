@@ -48,6 +48,8 @@ assert.doesNotMatch(html, /@keyframes entry-scan|animation: entry-scan/);
 assert.match(html, /<span>Load on a different device<\/span>/);
 assert.doesNotMatch(html, /Load on a different device[.!?]<\/span>/);
 assert.match(html, /html\.entry-mobile #entry-poster::before \{[\s\S]*?animation: none;/);
+assert.match(html, /repeating-linear-gradient\(180deg, rgba\(0,0,0,0\.14\)/);
+assert.match(html, /radial-gradient\(ellipse at center, rgba\(0,0,0,0\) 62%, rgba\(0,0,0,0\.34\) 100%\)/);
 assert.match(html, /html\.entry-mobile \.mobile-tagline,\s*html\.entry-mobile #entry-poster \.mobile-message \{[\s\S]*?font-family: ui-monospace/);
 assert.match(html, /document\.documentElement\.classList\.add\('game-loading'\)/);
 assert.match(html, /html\.entry-game\.game-booting #entry-poster \{ display: none; \}/);
