@@ -43,13 +43,14 @@ const BUDGET_MAX = 26;
 // enrichment cadence against one server-side key, so the protection has to live here, on the server,
 // where all of them meet. A client timer cannot enforce a shared boundary.
 //
-// 5000 sits under BOTH published ceilings, leaving room for clock skew between our window and
-// theirs, and for whatever else the org key is doing.
+// 5000 remains the conservative fallback for unrecognized providers/models. capacityPolicy below
+// uses independent allowances for the verified Groq gpt-oss pair rather than pooling both at 5000.
 // Validated, not merely parsed (Codex #107 P2-4). `Number('5_000')` is NaN, and every comparison
 // against NaN is false — so a typo in an env var silently turned the whole guard off and let all 26
 // requests through, reserving 23,400 tokens. A cost control that can be disabled by a typo is not a
 // cost control. Anything not finite and positive falls back to the safe default, loudly.
 const TOKEN_BUDGET_DEFAULT = 5000;
+const TOKEN_BUDGET_OVERRIDDEN = Boolean(process.env.RY_FARMS_TOKEN_BUDGET);
 const TOKEN_BUDGET_MAX = (() => {
     const raw = process.env.RY_FARMS_TOKEN_BUDGET;
     if (raw == null || raw === '') return TOKEN_BUDGET_DEFAULT;
@@ -426,10 +427,10 @@ class LLMDisabledError extends Error {
 }   // typed so callers can suppress permanently, not treat as transient
 
 // Earliest expiry at which THIS request fits both rolling limits. New traffic can extend it.
-function budgetRetryAfter(cost, ceiling, now = Date.now()) {
-    let tokens = _budget.spend.reduce((n, e) => n + e.cost, 0);
-    let requests = _budget.spend.length;
-    for (const entry of _budget.spend) {
+function budgetRetryAfter(cost, ceiling, now = Date.now(), spend = _budget.spend) {
+    let tokens = spend.reduce((n, e) => n + e.cost, 0);
+    let requests = spend.length;
+    for (const entry of spend) {
         tokens -= entry.cost;
         requests--;
         if (requests < BUDGET_MAX && tokens + cost <= ceiling) {
@@ -437,6 +438,21 @@ function budgetRetryAfter(cost, ceiling, now = Date.now()) {
         }
     }
     return BUDGET_WINDOW_MS / 1000;
+}
+
+// Groq meters these models separately (8k TPM each, verified 2026-09-22). Keep 1k
+// headroom per model and the existing 26-attempt global cap. Other providers/models
+// retain the original budget; an explicit token-budget override remains a global cap.
+function capacityPolicy(cfg, chain) {
+    const models = [...new Set(chain)];
+    const groq = cfg.base === 'https://api.groq.com/openai/v1'
+        && models.length > 0
+        && models.every(m => m === 'openai/gpt-oss-120b' || m === 'openai/gpt-oss-20b');
+    const perModel = groq ? 7000 : null;
+    const total = groq && !TOKEN_BUDGET_OVERRIDDEN
+        ? perModel * models.length : TOKEN_BUDGET_MAX;
+    // Added capacity is for player exchanges. Automatic narration gets no larger allowance.
+    return { perModel, total, background: groq ? Math.min(3000, total * BACKGROUND_CEILING) : total * BACKGROUND_CEILING };
 }
 
 // Call the model and return the parsed JSON object. Throws LLMDisabledError when off/blocked/over-budget/tripped
@@ -460,8 +476,10 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
     while (_budget.spend.length && now - _budget.spend[0].at >= BUDGET_WINDOW_MS) _budget.spend.shift();
     const spent = _budget.spend.reduce((n, e) => n + e.cost, 0);
 
+    const chain = modelChain();
+    const policy = capacityPolicy(cfg, chain);
     const cost = estimateTokens(system, user, maxTokens);
-    const ceiling = priority === 'background' ? TOKEN_BUDGET_MAX * BACKGROUND_CEILING : TOKEN_BUDGET_MAX;
+    const ceiling = priority === 'background' ? policy.background : policy.total;
 
     // The REQUEST cap rolls off the same ledger (Codex #108 P2-3). It used to reset wholesale at a
     // boundary while the comment above it promised a rolling limit — 25 calls at t=59.999s and 26 at
@@ -474,7 +492,7 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
     // work that could never fit the window before any request is made.
     if (spent + cost > ceiling) {
         throw new LLMDisabledError(
-            `LLM token budget exceeded (${spent}+${cost} > ${Math.round(ceiling)} of ${TOKEN_BUDGET_MAX}/min${priority === 'background' ? ', background' : ''})`, 'budget', budgetRetryAfter(cost, ceiling, now));
+            `LLM token budget exceeded (${spent}+${cost} > ${Math.round(ceiling)} of ${policy.total}/min${priority === 'background' ? ', background' : ''})`, 'budget', budgetRetryAfter(cost, ceiling, now));
     }
 
     const headers = { 'Content-Type': 'application/json' };
@@ -487,8 +505,8 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
 
     // #modelchain try each live model in turn. A model the provider has RETIRED is remembered and
     // skipped; anything else (a format rejection, a size rejection) is handled per-model below.
-    const chain = modelChain();
     let lastErr;
+    let modelRetryAfter = Infinity;
 
     try {
         for (const model of chain) {
@@ -550,7 +568,20 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
                         giveUp = true;
                         break;
                     }
-                    const attemptEntry = { at: attemptAt, cost: attemptCost };
+                    if (policy.perModel != null) {
+                        // Untagged reservations from a module reload count against either model
+                        // until expiry; never assume unknown in-flight spend is free capacity.
+                        const spend = _budget.spend.filter(e => !e.model || e.model === model);
+                        const modelTokens = spend.reduce((n, e) => n + e.cost, 0);
+                        if (modelTokens + attemptCost > policy.perModel) {
+                            modelRetryAfter = Math.min(modelRetryAfter,
+                                budgetRetryAfter(attemptCost, policy.perModel, attemptAt, spend));
+                            lastErr = new LLMDisabledError('LLM model token budget exceeded', 'budget', modelRetryAfter);
+                            tryNextModel = true;
+                            break;
+                        }
+                    }
+                    const attemptEntry = { at: attemptAt, cost: attemptCost, model };
                     _budget.spend.push(attemptEntry);
 
                     const controller = new AbortController();
