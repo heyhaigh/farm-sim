@@ -739,8 +739,8 @@ const CHAT_LINE_MAX = 120;  // #113 bubbles now WRAP + animate line-by-line, so 
 const CHAT_MEMORY_MAX = 110;
 const LLM_CHAT_ENDPOINT = '/api/ry-farms-chat';
 const LLM_CHAT_TIMEOUT_MS = 6500;
-const LLM_CHAT_REQUEST_COOLDOWN = 45;   // cost guardrail: at most one chat request per 45 sim-seconds
-const LLM_CHAT_FAIL_COOLDOWN = 180;
+const LLM_CHAT_REQUEST_COOLDOWN = 45_000;   // real milliseconds; fast-forward cannot accelerate network work
+const LLM_CHAT_FAIL_COOLDOWN = 180_000;
 
 export function d20(rand, modifier) {
     const roll = 1 + Math.floor(rand() * 20);
@@ -2622,7 +2622,7 @@ export class World {
             endpoint = LLM_CHAT_ENDPOINT;
         }
         if (!endpoint || endpoint === 'off' || endpoint === 'false') return { enabled: false };
-        return { enabled: true, endpoint, inflight: 0, lastAt: -999, disabledUntil: 0, failures: 0 };
+        return { enabled: true, endpoint, inflight: 0, lastAt: -Infinity, disabledUntil: 0, failures: 0 };
     }
 
     #journalBrief(farmer, other = null, limit = 7) {
@@ -2720,11 +2720,12 @@ export class World {
         const cfg = this.llmChat;
         if (!cfg?.enabled || typeof fetch !== 'function') return false;
         if (this._tabHidden) return false;   // #101 a backgrounded tab makes no network chat calls (belt-and-braces to the visibility guard on the writeback loops)
-        if (cfg.inflight >= 1 || this.time < cfg.disabledUntil) return false;
-        if (Date.now() < (cfg.retryAfterAt || 0)) return false; // provider limits use real time, not fast-forward time
-        if (this.time - cfg.lastAt < LLM_CHAT_REQUEST_COOLDOWN) return false;
+        const now = Date.now();
+        if (cfg.inflight >= 1 || now < cfg.disabledUntil) return false;
+        if (now < (cfg.retryAfterAt || 0)) return false;
+        if (now - cfg.lastAt < LLM_CHAT_REQUEST_COOLDOWN) return false;
         cfg.inflight++;
-        cfg.lastAt = this.time;
+        cfg.lastAt = now;
         this.#runLlmChat(speaker, listener, ctx);
         return true;
     }
@@ -2753,16 +2754,16 @@ export class World {
             }
             const data = await res.json();
             if (data?.fallback) {
-                const err = new Error(data.error || 'chat endpoint requested fallback');
-                err.status = data.status || 503;
-                throw err;
+                // Keep the scripted lines already on screen; an explicit fallback is not a failed request.
+                cfg.disabledUntil = Date.now() + LLM_CHAT_FAIL_COOLDOWN;
+                return;
             }
             if (!this.#applyGeneratedChat(speaker, listener, data)) throw new Error('empty generated chat');
             cfg.failures = 0;
         } catch (err) {
             cfg.failures++;
             if (err?.name !== 'AbortError' && ([401, 403, 404, 405, 501, 503].includes(err?.status) || cfg.failures >= 2)) {
-                cfg.disabledUntil = this.time + LLM_CHAT_FAIL_COOLDOWN;
+                cfg.disabledUntil = Date.now() + LLM_CHAT_FAIL_COOLDOWN;
             }
             // no fallback re-apply: the deterministic scripted bubbles + effects already showed at chat time,
             // so a failed LLM request simply leaves the scripted lines standing (display-only, nothing to undo).

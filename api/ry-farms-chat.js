@@ -49,9 +49,11 @@ const { asText } = require('./_text.js');   // #111 P2 type boundary: coercion i
 function normalizeConversation(raw) {
     const first = Array.isArray(raw?.lines) ? raw.lines[0] : null;
     const second = Array.isArray(raw?.lines) ? raw.lines[1] : null;
-    const speakerLine = cleanText(asText(raw?.speakerLine) || asText(raw?.speaker_line) || asText(first?.text), LINE_MAX);
-    const listenerLine = cleanText(asText(raw?.listenerLine) || asText(raw?.listener_line) || asText(second?.text), LINE_MAX);
-    if (!speakerLine || !listenerLine) throw new Error('model returned empty lines');
+    // Sanitize before selecting an alias: whitespace or unsupported glyphs must not hide a usable line.
+    const line = (...values) => values.map(v => cleanText(asText(v), LINE_MAX)).find(Boolean) || '';
+    const speakerLine = line(raw?.speakerLine, raw?.speaker_line, first?.text);
+    const listenerLine = line(raw?.listenerLine, raw?.listener_line, second?.text);
+    if (!speakerLine || !listenerLine) return null;
     return {
         speakerLine,
         listenerLine,
@@ -68,11 +70,12 @@ const responseSchema = {
     additionalProperties: false,
     required: ['speakerLine', 'listenerLine', 'speakerTone', 'listenerTone', 'memory', 'relationshipDelta', 'relationshipReason'],
     properties: {
-        speakerLine: { type: 'string', maxLength: LINE_MAX },
-        listenerLine: { type: 'string', maxLength: LINE_MAX },
+        // Display limits are enforced by cleanText; long but usable prose should not trigger provider retries.
+        speakerLine: { type: 'string', minLength: 1 },
+        listenerLine: { type: 'string', minLength: 1 },
         speakerTone: { type: 'string' },
         listenerTone: { type: 'string' },
-        memory: { type: 'string', maxLength: MEMORY_MAX },
+        memory: { type: 'string' },
         relationshipDelta: { type: 'number', minimum: -0.05, maximum: 0.05 },
         relationshipReason: { type: 'string', maxLength: 70 },
     },
@@ -131,15 +134,25 @@ module.exports = async function handler(req, res) {
             // starve a player waiting on a two-stage whisper.
             schema: responseSchema, schemaName: 'ry_farms_chat', maxTokens: 600, priority: 'background',
         });
-        return send(res, 200, normalizeConversation(raw));
+        const conversation = normalizeConversation(raw);
+        if (!conversation) {
+            console.warn('[ry-farms-chat]', 'empty_dialogue');
+            // One generation only. The browser already has deterministic dialogue to display.
+            return send(res, 200, { fallback: true, reason: 'empty_dialogue' });
+        }
+        return send(res, 200, conversation);
     } catch (err) {
         if (err instanceof LLMDisabledError) {
             if (err.code === 'budget') {
-                res.setHeader('Retry-After', '60');
+                const retryAfter = Number.isFinite(err.retryAfter) && err.retryAfter > 0
+                    ? Math.min(86400, Math.ceil(err.retryAfter)) : 60;
+                console.warn('[api-throttle]', JSON.stringify({ path: '/api/ry-farms-chat', status: 429, reason: 'model_budget', retryAfter }));
+                res.setHeader('Retry-After', String(retryAfter));
                 return send(res, 429, { fallback: true, reason: 'budget', error: 'AI budget temporarily exhausted' });
             }
             if (err.code === 'disabled') return send(res, 200, { fallback: true, reason: 'disabled' });
             if (err.code === 'circuit_open') {
+                console.warn('[api-throttle]', JSON.stringify({ path: '/api/ry-farms-chat', status: 503, reason: 'circuit_open', retryAfter: 20 }));
                 res.setHeader('Retry-After', '20');
                 return send(res, 503, { fallback: true, reason: 'circuit_open' });
             }

@@ -121,3 +121,17 @@ remaining generation failures without logging prompts or raw provider response b
 - `node tests/llm-model-capacity.mjs`: independent Groq model allowances, concurrent reservations,
   capacity failover, timed recovery, unchanged background/request caps, unknown-model safety,
   explicit overrides, and complete two-stage whispers after a 4,804-token starting load. Mocked only.
+
+## Background chat reliability
+
+- `node tests/chat-retry.mjs`: success pacing, explicit fallback pauses and repeated failure pauses
+  use real elapsed time, even when simulation time jumps; Retry-After remains authoritative.
+- `node tests/error-reporting.mjs`: alternate dialogue fields recover after sanitization; long lines
+  are shortened locally; unusable dialogue returns an explicit scripted fallback after one generation.
+  Provider/transport exceptions remain 5xx; model-budget rejections log a reason and calculated retry.
+- `node tests/server-security.mjs`: quota rejections log only path, status, reason and retryAfter.
+
+`[api-throttle]` events distinguish background/player quota and concurrency, service capacity,
+chat model budget and chat circuit pauses. They exclude IPs, prompts and provider bodies.
+An `empty_dialogue` fallback remains logged even though HTTP delivery succeeds. Spending ceilings,
+model allowances, the provider retry chain and the 600-token chat output budget are unchanged.

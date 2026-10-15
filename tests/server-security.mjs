@@ -10,6 +10,8 @@ await once(spy, 'listening');
 const reservation = net.createServer().listen(0, '127.0.0.1'); await once(reservation, 'listening');
 const port = reservation.address().port; await new Promise(resolve => reservation.close(resolve));
 const child = spawn(process.execPath, ['server.mjs', String(port)], { cwd: new URL('../', import.meta.url), env: { ...process.env, NODE_ENV: 'production', RAILWAY_ENVIRONMENT_ID: '', OPENAI_API_KEY: '', GROQ_API_KEY: '', RY_FARMS_LLM_OFF: '1', SUPERMEMORY_URL: `http://127.0.0.1:${spy.address().port}`, SUPERMEMORY_API_KEY: 'test-only' }, stdio: ['ignore', 'pipe', 'pipe'] });
+let diagnostics = '';
+child.stderr.on('data', b => { diagnostics += b; });
 const base = `http://127.0.0.1:${port}`;
 const post = (path, body = '{}', headers = {}) => fetch(base + path, { method: 'POST', body, headers });
 try {
@@ -56,5 +58,10 @@ try {
     assert.equal((await fetch(base + '/%ZZ')).status, 400);
     for (const route of ['/server.mjs', '/api/_llm.js', '//api/_request-guards.js']) assert.equal((await fetch(base + route)).status, 404);
     assert.equal((await fetch(base + '/')).status, 200, 'server survives malformed input');
+    await new Promise(resolve => setImmediate(resolve));
+    const throttles = diagnostics.split('\n').filter(line => line.startsWith('[api-throttle] ')).map(line => JSON.parse(line.slice('[api-throttle] '.length)));
+    assert(throttles.some(e => e.reason === 'background_quota' && e.path === '/api/ry-farms-chat' && e.retryAfter > 0));
+    assert(throttles.some(e => e.reason === 'player_quota' && e.status === 429));
+    for (const event of throttles) assert.deepEqual(Object.keys(event).sort(), ['path', 'reason', 'retryAfter', 'status']);
     console.log('server-security: PASS');
 } finally { child.kill(); await once(child, 'exit'); await new Promise(resolve => spy.close(resolve)); }

@@ -24,8 +24,11 @@ _resetEchoForTests();
 process.env.OPENAI_BASE_URL = 'http://127.0.0.1:9/v1';
 const llm = require('../api/_llm.js');
 const realCall = llm.callLLM;
-let outcome;
-llm.callLLM = async () => { if (outcome instanceof Error) throw outcome; return outcome; };
+let outcome, generations = 0, options;
+llm.callLLM = async opts => { generations++; options = opts; if (outcome instanceof Error) throw outcome; return outcome; };
+const warnings = [];
+const warn = console.warn;
+console.warn = (...args) => warnings.push(args);
 const handler = require('../api/ry-farms-chat.js');
 async function invoke() {
     const headers = {};
@@ -42,12 +45,35 @@ for (const [code, status, retry] of [['budget', 429, '60'], ['disabled', 200, un
     assert.equal(res.headers['Retry-After'], retry);
     assert.equal(res.headers['Cache-Control'], 'no-store');
 }
-for (const failure of [new Error('LLM request failed (429)'), new Error('LLM request failed (500)'), {}, new Error('unexpected')]) {
+for (const failure of [new Error('LLM request failed (429)'), new Error('LLM request failed (500)'), new Error('unexpected')]) {
     outcome = failure;
     assert.equal((await invoke()).statusCode, 500, 'real failures remain visible');
 }
 outcome = { speakerLine: 'Hello neighbor', listenerLine: 'Good morning' };
 assert.equal((await invoke()).body.speakerLine, 'HELLO NEIGHBOR');
+
+for (const malformed of [{}, null, { speakerLine: 'hello', listenerLine: '   ' }, { speakerLine: {}, listenerLine: [] }]) {
+    outcome = malformed;
+    const before = generations;
+    const res = await invoke();
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(res.body, { fallback: true, reason: 'empty_dialogue' });
+    assert.equal(generations, before + 1, 'no extra generation for unusable dialogue');
+}
+outcome = { speakerLine: '   ', listenerLine: '🌿', lines: [{ text: 'hello' }, { text: 'welcome' }] };
+assert.equal((await invoke()).body.listenerLine, 'WELCOME');
+outcome = { speakerLine: 'a'.repeat(100), listenerLine: 'b'.repeat(100), memory: 'c'.repeat(200) };
+const long = await invoke();
+assert.equal(long.statusCode, 200);
+assert(long.body.speakerLine.length <= 34 && long.body.listenerLine.length <= 34 && long.body.memory.length <= 110);
+assert.equal(options.maxTokens, 600);
+assert.equal(options.priority, 'background');
+assert.equal(options.schema.properties.speakerLine.maxLength, undefined);
+outcome = new llm.LLMDisabledError('private diagnostic', 'budget', 17);
+assert.equal((await invoke()).headers['Retry-After'], '17');
+assert(warnings.some(([tag, body]) => tag === '[api-throttle]' && JSON.parse(body).reason === 'model_budget'));
+assert(!JSON.stringify(warnings).includes('private diagnostic'));
+console.warn = warn;
 
 // Exercise the real admission guards, not just the handler's translation.
 const state = globalThis.__ryFarmsLlmState;

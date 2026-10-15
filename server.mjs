@@ -198,6 +198,7 @@ http.createServer(async (req, res) => {
                         : permit.reason === 'concurrency'
                             ? (url.pathname === '/api/ry-farms-conscience' ? 'player_concurrency' : 'background_concurrency')
                             : 'service_capacity';
+                    console.warn('[api-throttle]', JSON.stringify({ path: url.pathname, status: permit.status, reason, retryAfter: permit.retry }));
                     rejectRequest(req, res, permit.status, permit.retry, reason); return;
                 }
                 try { req.body = await readJSON(req); }
