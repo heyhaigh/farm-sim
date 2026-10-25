@@ -143,11 +143,12 @@ If art starts changing often, the real fix is a content hash or `?v=` on asset U
 
 - **Source:** `heyhaigh/farm-sim-deploy`, branch `main`. Not the public repo — that produces art-less builds.
 - **Variables:** `PORT=8080`, plus the FREE-TIER LLM set (2026-07-30, owner-approved): `OPENAI_BASE_URL=
-  https://api.groq.com/openai/v1`, `OPENAI_API_KEY=gsk_…` (a Groq free-tier key), `RY_FARMS_LLM_MODEL=
-  llama-3.1-8b-instant`, `RY_FARMS_ALLOW_PAID_LLM=1`. The flag's name is scarier than the reality: it means
-  "remote endpoint permitted" — the Groq account holds **no payment card**, so billing is structurally
-  impossible; the free quota (~14.4k req/day) just 429s when exhausted and every endpoint falls back to the
-  offline keyword/template path. Kill switch: set `RY_FARMS_LLM_OFF=1`. **Never** the personal
+  https://api.groq.com/openai/v1`, `OPENAI_API_KEY=gsk_…` (a Groq free-tier key — the name says OPENAI but
+  the value is the GROQ key; there is no GROQ-named variable), `RY_FARMS_LLM_MODEL=openai/gpt-oss-120b,
+  openai/gpt-oss-20b` (comma list, read like the plural), `RY_FARMS_ALLOW_PAID_LLM=1`. The flag's name is
+  scarier than the reality: it means "remote endpoint permitted" — the Groq account holds **no payment card**,
+  so billing is structurally impossible; the free quota just 429s when exhausted and every endpoint falls back
+  to the offline keyword/template path. Kill switch: set `RY_FARMS_LLM_OFF=1`. **Never** the personal
   `SUPERMEMORY_URL` / `SUPERMEMORY_API_KEY`, and never a key from an account that has a card on file.
 - **Free-quota fair share:** the player whisper endpoint has its own per-IP allowance of 120 requests
   per 10 minutes and 600/day (normally two requests per whisper: classify + reply). Automatic chat, DM,
@@ -162,6 +163,18 @@ If art starts changing often, the real fix is a content hash or `?v=` on asset U
   remains. An explicit `RY_FARMS_TOKEN_BUDGET` remains a global override; remove an old
   `5000` override to use the new default. Other providers/models keep the conservative default.
   Groq's organization/day quotas still apply; credit balance does not raise throughput limits.
+- **Groq free-tier limits (measured 2026-10-25 from `x-ratelimit-*` response headers):** per model,
+  **8,000 tokens/minute** and **1,000 requests/day** — so the real daily ceiling is ~2,000 model calls
+  across both models (the old "~14.4k req/day" was the retired Llama model's quota). A whisper costs two
+  calls. Limits are per Groq organization, not per key: load-testing any key in the production org drains
+  live players' quota. Read the limits with one tiny request and its headers instead of a flood. When the
+  day's quota runs out, everything falls back to canned text until it resets.
+- **A bad key fails silently.** On 2026-10-25 `OPENAI_API_KEY` held an OpenAI `sk-` key while the base URL
+  pointed at Groq: every call got a 401, the game played on canned text, and the only visible symptom was a
+  flood of 500s in Cloudflare (the LLM routes answer HTTP 500 with `fallback: true` on failure). Live check
+  after any key change: `curl -X POST https://propagate.heyhaigh.ai/api/ry-farms-conscience -H
+  'content-type: application/json' -d '{"stage":"classify","message":"go and get some rest"}'` → expect
+  `{"kind":"rest",…}`, not `"fallback":true`. A variable-only redeploy keeps the same `/api/build` SHA.
 - **HTTP boundary:** model JSON bodies are capped at 128 KiB (including chunked uploads), with a 10-second
   upload deadline and 4 in-flight requests per IP / 32 per process. Counters retain at most 10,000 IPs;
   a full non-expired table refuses new identities rather than evicting their daily limits. This is a
