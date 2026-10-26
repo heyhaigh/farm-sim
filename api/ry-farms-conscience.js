@@ -75,7 +75,7 @@ function parseBody(req) {
     });
 }
 
-const { callLLM, LLMDisabledError } = require('./_llm.js');
+const { callLLM, LLMDisabledError, sendUnavailable } = require('./_llm.js');
 const { asText } = require('./_text.js');   // #111 P2 type boundary: coercion is not a type check
 
 // ---- stage 1: CLASSIFY ------------------------------------------------------
@@ -293,6 +293,7 @@ module.exports = async function handler(req, res) {
             }
             if (err.code === 'disabled') return send(res, 200, { fallback: true, reason: 'disabled' });
         }
+        if (sendUnavailable(res, err, send)) return;   // the first upstream 429 of a burst
         return send(res, 500, { fallback: true, error: msg || 'conscience generation failed' });
     }
 };

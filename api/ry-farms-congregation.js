@@ -44,7 +44,7 @@ function parseBody(req) {
     });
 }
 
-const { callLLM } = require('./_llm.js');
+const { callLLM, sendUnavailable } = require('./_llm.js');
 const { asText } = require('./_text.js');   // #111 P2 type boundary: coercion is not a type check
 
 const scriptSchema = {
@@ -233,6 +233,7 @@ module.exports = async function handler(req, res) {
         const body = await parseBody(req);
         return send(res, 200, await (body.scene === 'election' ? generateElection(body) : generate(body)));
     } catch (err) {
+        if (sendUnavailable(res, err, send)) return;
         return send(res, 500, { fallback: true, error: err?.message || 'congregation generation failed' });
     }
 };

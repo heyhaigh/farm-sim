@@ -45,7 +45,16 @@ for (const [code, status, retry] of [['budget', 429, '60'], ['disabled', 200, un
     assert.equal(res.headers['Retry-After'], retry);
     assert.equal(res.headers['Cache-Control'], 'no-store');
 }
-for (const failure of [new Error('LLM request failed (429)'), new Error('LLM request failed (500)'), new Error('unexpected')]) {
+// 2026-10-26 (owner decision): the provider's own 429 is the expected free-tier limit, not a crash. It
+// answers 429 with the breaker's 20 s and a reason of its own, so it stays distinct from our local budget.
+outcome = new Error('LLM request failed (429)');
+{
+    const res = await invoke();
+    assert.equal(res.statusCode, 429);
+    assert.equal(res.body.reason, 'upstream_rate_limit');
+    assert.equal(res.headers['Retry-After'], '20');
+}
+for (const failure of [new Error('LLM request failed (500)'), new Error('unexpected')]) {
     outcome = failure;
     assert.equal((await invoke()).statusCode, 500, 'real failures remain visible');
 }

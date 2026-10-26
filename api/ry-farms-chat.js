@@ -43,7 +43,7 @@ function parseBody(req) {
     });
 }
 
-const { callLLM, LLMDisabledError } = require('./_llm.js');
+const { callLLM, LLMDisabledError, sendUnavailable } = require('./_llm.js');
 const { asText } = require('./_text.js');   // #111 P2 type boundary: coercion is not a type check
 
 function normalizeConversation(raw) {
@@ -162,6 +162,7 @@ module.exports = async function handler(req, res) {
             : /^LLM request failed \(\d{3}\)$/.test(err?.message || '') ? err.message
             : err?.message === 'model returned empty lines' ? 'empty_dialogue' : 'generation_failed';
         console.warn('[ry-farms-chat]', category);
+        if (sendUnavailable(res, err, send)) return;   // the first upstream 429 of a burst
         return send(res, 500, { fallback: true, error: err?.message || 'chat generation failed' });
     }
 };

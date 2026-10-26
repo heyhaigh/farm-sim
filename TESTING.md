@@ -92,6 +92,10 @@ untestable, write that down rather than faking it.
   still can. Chat budget limits return 429 with Retry-After, intentional offline mode returns an
   explicit fallback, and genuine generation failures remain 5xx. A budget refusal during a retry
   does not trip the provider-failure circuit breaker. All upstream calls are mocked.
+- `node tests/llm-route-status.mjs`: every LLM route answers the expected fallbacks as 429 (local budget, or
+  the provider's own 429 with reason `upstream_rate_limit` and `Retry-After: 20`), 503 (breaker cooling down)
+  or 200 (`RY_FARMS_LLM_OFF`), while a bad key (401) still answers 500. Each case asserts the request
+  reached the stubbed model, so a route that refuses the input early cannot pass vacuously.
 - `node tests/chat-retry.mjs`: an actual chat request receiving 429 pauses for real elapsed time,
   even if the simulation is fast-forwarded.
 - `node tests/writeback-smoke.mjs`: public-host browser persistence still stores and acknowledges

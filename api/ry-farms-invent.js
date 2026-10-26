@@ -6,7 +6,7 @@
 // Display-only, off the sim loop: the client stores the result in a shadow store excluded from the digest,
 // and the procedural name stands if the LLM is unavailable — so determinism is untouched either way.
 
-const { callLLM } = require('./_llm.js');
+const { callLLM, sendUnavailable } = require('./_llm.js');
 const { asText } = require('./_text.js');   // #111 P2 type boundary: coercion is not a type check
 
 const NAME_MAX = 30, LORE_MAX = 120;
@@ -83,6 +83,7 @@ module.exports = async function handler(req, res) {
         if (!name || !lore || BANNED.test(lore) || BANNED.test(name)) return send(res, 200, { fallback: true, error: 'invalid or over-claiming output' });
         return send(res, 200, { name, lore });
     } catch (err) {
+        if (sendUnavailable(res, err, send)) return;
         return send(res, 500, { fallback: true, error: err?.message || 'invent naming failed' });
     }
 };

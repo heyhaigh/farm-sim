@@ -46,7 +46,7 @@ function parseBody(req) {
     });
 }
 
-const { callLLM } = require('./_llm.js');
+const { callLLM, sendUnavailable } = require('./_llm.js');
 const { asText } = require('./_text.js');   // #111 P2 type boundary: coercion is not a type check
 
 // Codex #106 P2-5: ONE definition. This was a literal in the call AND a separately exported
@@ -150,6 +150,7 @@ module.exports = async function handler(req, res) {
         }
         return send(res, 200, { tales });
     } catch (err) {
+        if (sendUnavailable(res, err, send)) return;
         return send(res, 500, { fallback: true, error: err?.message || 'tale generation failed' });
     }
 };

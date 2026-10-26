@@ -171,7 +171,11 @@ If art starts changing often, the real fix is a content hash or `?v=` on asset U
   day's quota runs out, everything falls back to canned text until it resets.
 - **A bad key fails silently.** On 2026-10-25 `OPENAI_API_KEY` held an OpenAI `sk-` key while the base URL
   pointed at Groq: every call got a 401, the game played on canned text, and the only visible symptom was a
-  flood of 500s in Cloudflare (the LLM routes answer HTTP 500 with `fallback: true` on failure). Live check
+  flood of 500s in Cloudflare (a real model failure such as a 401 answers HTTP 500 with `fallback: true`).
+  Since 2026-10-26 every LLM route answers the EXPECTED fallbacks differently, so a 500 in Cloudflare means
+  something broke: budget or upstream 429 → 429, breaker cooling down → 503, `RY_FARMS_LLM_OFF` → 200
+  (`sendUnavailable` in `api/_llm.js`, used by every LLM route). An upstream 429 suggests `Retry-After: 20`,
+  the breaker's cooldown; the chat and whisper clients honour it. Live check
   after any key change: `curl -X POST https://propagate.heyhaigh.ai/api/ry-farms-conscience -H
   'content-type: application/json' -d '{"stage":"classify","message":"go and get some rest"}'` → expect
   `{"kind":"rest",…}`, not `"fallback":true`. A variable-only redeploy keeps the same `/api/build` SHA.

@@ -778,4 +778,24 @@ async function callLLM({ system, user, schema, schemaName = 'ry_farms', maxToken
 const lastFormatFor = (schemaName) => _lastFormat.get(schemaName) || null;
 const lastRefusalFor = (schemaName) => _lastRefusal.get(schemaName) || null;
 
-module.exports = { callLLM, parseJson, resolveLLM, llmStatus, LLMDisabledError, modelChain, isModelGone, parseProviderError, lastFormatFor, lastRefusalFor };
+// An LLM that is switched off, over its free-tier budget, rate limited upstream, or cooling down
+// behind the breaker is the EXPECTED fallback path, not a server fault. Answer it the way chat and
+// conscience do (200 disabled / 429 budget or upstream 429 / 503 circuit open) so a 500 in Cloudflare keeps
+// meaning something actually broke — a bad key (401) still 500s. Returns false for anything else.
+function sendUnavailable(res, err, send) {
+    if (err instanceof LLMDisabledError && err.code === 'disabled') { send(res, 200, { fallback: true, reason: 'disabled' }); return true; }
+    const upstream429 = err?.message === 'LLM request failed (429)';
+    const code = upstream429 ? 'budget' : err instanceof LLMDisabledError ? err.code : null;
+    if (code !== 'budget' && code !== 'circuit_open') return false;
+    // An upstream 429 carries no wait of its own; suggest the breaker's cooldown, which is when requests
+    // start reaching the model again (chat and whisper clients honour this Retry-After).
+    const wait = err.retryAfter > 0 ? err.retryAfter : upstream429 ? BREAKER_COOLDOWN_MS / 1000 : code === 'budget' ? 60 : 20;
+    const retryAfter = Math.min(86400, Math.ceil(wait));
+    res.setHeader('Retry-After', String(retryAfter));
+    // Same 429 status, its own reason: our local budget and the provider's limit stay distinguishable.
+    send(res, code === 'budget' ? 429 : 503, { fallback: true, reason: upstream429 ? 'upstream_rate_limit' : code, retryAfter,
+        error: upstream429 ? 'AI provider rate limited' : code === 'budget' ? 'AI budget temporarily exhausted' : 'AI temporarily unavailable' });
+    return true;
+}
+
+module.exports = { callLLM, sendUnavailable, parseJson, resolveLLM, llmStatus, LLMDisabledError, modelChain, isModelGone, parseProviderError, lastFormatFor, lastRefusalFor };
