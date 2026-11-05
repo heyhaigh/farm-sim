@@ -75,7 +75,7 @@ outcome = { speakerLine: 'a'.repeat(100), listenerLine: 'b'.repeat(100), memory:
 const long = await invoke();
 assert.equal(long.statusCode, 200);
 assert(long.body.speakerLine.length <= 34 && long.body.listenerLine.length <= 34 && long.body.memory.length <= 110);
-assert.equal(options.maxTokens, 600);
+assert.equal(options.maxTokens, 1000);
 assert.equal(options.priority, 'background');
 assert.equal(options.schema.properties.speakerLine.maxLength, undefined);
 outcome = new llm.LLMDisabledError('private diagnostic', 'budget', 17);

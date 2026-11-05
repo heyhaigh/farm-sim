@@ -134,7 +134,12 @@ module.exports = async function handler(req, res) {
             // BACKGROUND (Codex #107 P1-3): nobody is synchronously waiting — cosmetic: the scripted lines are already on screen when this runs.
             // Only DM was classified, so every other async caller could spend the whole minute and
             // starve a player waiting on a two-stage whisper.
-            schema: responseSchema, schemaName: 'ry_farms_chat', maxTokens: 600, priority: 'background',
+            //
+            // 1000, not 600 (2026-11-05). Probed against the real handler: gpt-oss-120b came back EMPTY under
+            // json_schema AND json_object at 600 (Groq reports it as json_validate_failed, not as a token
+            // limit), then the unformatted retry spent 513 tokens to return 2 of 7 fields. Every chat cost
+            // three attempts, ~1,800 tokens reserved, and that is what filled the background budget.
+            schema: responseSchema, schemaName: 'ry_farms_chat', maxTokens: 1000, priority: 'background',
         });
         const conversation = normalizeConversation(raw);
         if (!conversation) {

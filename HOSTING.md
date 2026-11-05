@@ -166,7 +166,9 @@ If art starts changing often, the real fix is a content hash or `?v=` on asset U
 - **Groq free-tier limits (measured 2026-10-25 from `x-ratelimit-*` response headers):** per model,
   **8,000 tokens/minute** and **1,000 requests/day** — so the real daily ceiling is ~2,000 model calls
   across both models (the old "~14.4k req/day" was the retired Llama model's quota). A whisper costs two
-  calls. Limits are per Groq organization, not per key: load-testing any key in the production org drains
+  calls. **gpt-oss-120b also has a 200,000 tokens/day cap** (hit 2026-11-05: "tokens per day (TPD):
+  Limit 200000"). At ~2,000 tokens a call that is ~100 calls/day, so TPD, not requests/day, is the limit
+  players hit first. Limits are per Groq organization, not per key: load-testing any key in the production org drains
   live players' quota. Read the limits with one tiny request and its headers instead of a flood. When the
   day's quota runs out, everything falls back to canned text until it resets.
 - **A bad key fails silently.** On 2026-10-25 `OPENAI_API_KEY` held an OpenAI `sk-` key while the base URL
