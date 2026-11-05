@@ -137,8 +137,10 @@ module.exports = async function handler(req, res) {
             //
             // 1000, not 600 (2026-11-05). Probed against the real handler: gpt-oss-120b came back EMPTY under
             // json_schema AND json_object at 600 (Groq reports it as json_validate_failed, not as a token
-            // limit), then the unformatted retry spent 513 tokens to return 2 of 7 fields. Every chat cost
-            // three attempts, ~1,800 tokens reserved, and that is what filled the background budget.
+            // limit), then the unformatted retry spent 513 tokens to return 2 of 7 fields. Every chat took
+            // three attempts and three of the 26 requests/minute; the refused two cost 0 ledger tokens
+            // (cost zeroed on a 400 in _llm.js). Trade-off: 1000 reserves ~2,166 of the 3,000 background
+            // tokens, so a chat fits only when little else ran that minute (Codex review, 2026-11-05).
             schema: responseSchema, schemaName: 'ry_farms_chat', maxTokens: 1000, priority: 'background',
         });
         const conversation = normalizeConversation(raw);
