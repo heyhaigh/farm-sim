@@ -76,8 +76,10 @@ const responseSchema = {
         speakerTone: { type: 'string' },
         listenerTone: { type: 'string' },
         memory: { type: 'string' },
-        relationshipDelta: { type: 'number', minimum: -0.05, maximum: 0.05 },
-        relationshipReason: { type: 'string', maxLength: 70 },
+        // No range or length here either (2026-11-05): normalizeConversation clamps the delta and trims
+        // the reason, and these bounds drew 32 json_validate_failed refusals from gpt-oss-120b in a week.
+        relationshipDelta: { type: 'number' },
+        relationshipReason: { type: 'string' },
     },
 };
 

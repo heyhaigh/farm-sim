@@ -120,5 +120,24 @@ for (const route of Object.keys(ROUTES)) {
     });
 }
 
+// 2026-11-05 audit: Cloudflare counted 75 DM 4xx in a week and the Railway logs held none of them.
+await check('dm: 429 and 503 fallbacks write an [api-throttle] line; switched off writes none', async () => {
+    const warn = console.warn, lines = [];
+    console.warn = (tag, body) => { if (tag === '[api-throttle]') lines.push(JSON.parse(body)); };
+    try {
+        stubFetch(429);
+        const handler = freshRoute('dm');
+        await call(handler, ROUTES.dm);
+        await call(handler, ROUTES.dm);
+        assert.deepStrictEqual(lines.map(l => [l.path, l.status, l.reason]), [
+            ['/api/ry-farms-dm', 429, 'upstream_rate_limit'], ['/api/ry-farms-dm', 503, 'circuit_open']]);
+        assert.strictEqual(lines[0].retryAfter, 20);
+        lines.length = 0;
+        process.env.RY_FARMS_LLM_OFF = '1';
+        try { await call(freshRoute('dm'), ROUTES.dm); } finally { delete process.env.RY_FARMS_LLM_OFF; }
+        assert.strictEqual(lines.length, 0, 'a 200 fallback is not a throttle');
+    } finally { console.warn = warn; }
+});
+
 console.log(`\n${passes} passed, ${failures} failed\n`);
 process.exit(failures ? 1 : 0);

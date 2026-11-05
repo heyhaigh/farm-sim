@@ -10,6 +10,9 @@ const { callLLM, sendUnavailable } = require('./_llm.js');
 const { asText } = require('./_text.js');   // #111 P2 type boundary: coercion is not a type check
 
 const NAME_MAX = 30, LORE_MAX = 120;
+// Looser schema bounds so the model finishes its thought before clean() trims, as conscience and
+// congregation do. The display caps in the schema drew 11 json_validate_failed refusals in a week.
+const NAME_SCHEMA_MAX = 48, LORE_SCHEMA_MAX = 180;
 // what each mechanical effect actually DOES — the LLM must stay within this, so the lore can't imply a
 // healing potion for a charm or "resurrects the dead".
 const EFFECT_MEANING = {
@@ -45,7 +48,7 @@ function parseBody(req) {
 
 const schema = {
     type: 'object', additionalProperties: false, required: ['name', 'lore'],
-    properties: { name: { type: 'string', maxLength: NAME_MAX }, lore: { type: 'string', maxLength: LORE_MAX } },
+    properties: { name: { type: 'string', maxLength: NAME_SCHEMA_MAX }, lore: { type: 'string', maxLength: LORE_SCHEMA_MAX } },
 };
 
 module.exports = async function handler(req, res) {

@@ -150,7 +150,13 @@ module.exports = async function handler(req, res) {
         }
         return send(res, 200, { tales });
     } catch (err) {
-        if (sendUnavailable(res, err, send)) return;
+        // Log the expected fallbacks like chat does, so a Cloudflare 429/503 on this route can be
+        // traced to a reason in the Railway logs (2026-11-05 audit: 75 DM 4xx, zero log lines).
+        let unavailable;
+        if (sendUnavailable(res, err, (r, status, payload) => { unavailable = payload; send(r, status, payload); })) {
+            if (res.statusCode >= 400) console.warn('[api-throttle]', JSON.stringify({ path: '/api/ry-farms-dm', status: res.statusCode, reason: unavailable.reason, retryAfter: unavailable.retryAfter }));
+            return;
+        }
         return send(res, 500, { fallback: true, error: err?.message || 'tale generation failed' });
     }
 };
